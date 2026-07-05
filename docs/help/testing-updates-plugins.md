@@ -158,8 +158,8 @@ older trusted releases.
 
 Candidate sources:
 
-- `source=npm`: validate `openclaw@beta`, `openclaw@latest`, or an exact
-  published version.
+- `source=npm`: validate `openclaw@extended-stable`, `openclaw@beta`,
+  `openclaw@latest`, or an exact published version.
 - `source=ref`: pack a trusted branch, tag, or commit with the selected current
   harness.
 - `source=url`: validate a public HTTPS tarball with required `package_sha256`.
@@ -226,6 +226,10 @@ gh workflow run package-acceptance.yml \
   -f published_upgrade_survivor_scenarios=reported-issues \
   -f telegram_mode=mock-openai
 ```
+
+For a published extended-stable canary, set
+`package_spec=openclaw@extended-stable`. Package Acceptance resolves that
+selector into an exact tarball before the Docker lanes run.
 
 Use `suite_profile=product` when the release question includes MCP channels,
 cron/subagent cleanup, OpenAI web search, or OpenWebUI. Use `suite_profile=full`

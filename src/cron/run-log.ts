@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import {
@@ -150,11 +151,11 @@ export async function appendCronRunLog(params: {
       : { ...params.entry, jobId: normalizedJobId };
   const storeKey = cronStoreKey(params.storePath);
   const writeKey = cronRunLogWriteKey(params.storePath, entry.jobId);
-  const prev = writesByTarget.get(writeKey) ?? Promise.resolve();
   // Keep writes for the same store/job ordered so prune-by-count cannot race a later insert.
-  const next = prev
-    .catch(() => undefined)
-    .then(async () => {
+  await enqueueKeyedTask({
+    tails: writesByTarget,
+    key: writeKey,
+    task: async () => {
       runOpenClawStateWriteTransaction(({ db }) => {
         insertCronRunLogEntry(db, storeKey, entry);
         if (params.opts?.keepLines !== false) {
@@ -166,15 +167,8 @@ export async function appendCronRunLog(params: {
           );
         }
       });
-    });
-  writesByTarget.set(writeKey, next);
-  try {
-    await next;
-  } finally {
-    if (writesByTarget.get(writeKey) === next) {
-      writesByTarget.delete(writeKey);
-    }
-  }
+    },
+  });
 }
 
 /** Reads recent run-log entries synchronously for startup/task reconciliation paths. */

@@ -170,19 +170,20 @@ function resolveTranscriptMediaType(params: {
 }
 
 export function buildPersistedUserTurnMediaInputsFromFields(
-  fields: PersistedUserTurnMediaFieldSource | null | undefined,
+  fields: PersistedUserTurnMediaFieldSource | PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
   if (!fields) {
     return [];
   }
 
-  const paths = normalizeOptionalTextArray(fields.MediaPaths);
-  const urls = normalizeOptionalTextArray(fields.MediaUrls);
-  const types = normalizeOptionalTextArray(fields.MediaTypes);
-  const singlePath = normalizeOptionalText(fields.MediaPath);
-  const singleUrl = normalizeOptionalText(fields.MediaUrl);
-  const singleType = normalizeOptionalText(fields.MediaType);
-  const workspaceDir = normalizeOptionalText(fields.MediaWorkspaceDir);
+  const mediaFields = fields as PersistedUserTurnMediaFieldSource;
+  const paths = normalizeOptionalTextArray(mediaFields.MediaPaths);
+  const urls = normalizeOptionalTextArray(mediaFields.MediaUrls);
+  const types = normalizeOptionalTextArray(mediaFields.MediaTypes);
+  const singlePath = normalizeOptionalText(mediaFields.MediaPath);
+  const singleUrl = normalizeOptionalText(mediaFields.MediaUrl);
+  const singleType = normalizeOptionalText(mediaFields.MediaType);
+  const workspaceDir = normalizeOptionalText(mediaFields.MediaWorkspaceDir);
   const mediaCount = Math.max(paths.length, urls.length, singlePath || singleUrl ? 1 : 0);
   const media: PersistedUserTurnMediaInput[] = [];
 

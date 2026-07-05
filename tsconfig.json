@@ -106,9 +106,6 @@
       "@openclaw/media-core/read-byte-stream-with-limit": [
         "./packages/media-core/src/read-byte-stream-with-limit.ts"
       ],
-      "@openclaw/media-core/read-response-with-limit": [
-        "./packages/media-core/src/read-response-with-limit.ts"
-      ],
       "@openclaw/media-core/*": ["./packages/media-core/src/*"],
       "@openclaw/media-understanding-common": [
         "./packages/media-understanding-common/src/index.ts"

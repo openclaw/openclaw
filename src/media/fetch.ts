@@ -3,13 +3,13 @@ import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
-import { readChunkWithIdleTimeout } from "@openclaw/media-core/read-response-with-limit";
-import {
-  readResponseTextSnippet,
-  readResponseWithLimit,
-} from "@openclaw/media-core/read-response-with-limit";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  readChunkWithIdleTimeout,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
   withStrictGuardedFetchMode,

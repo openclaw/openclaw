@@ -627,13 +627,10 @@ export async function drainPendingDeliveries(opts: {
       return;
     }
 
-    opts.log.info(
-      `${opts.logLabel}: ${matchingEntries.length} pending message(s) matched ${opts.drainKey}`,
-    );
-
     for (const entry of matchingEntries) {
       if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
-        opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
+        // Poll-driven reconnect drains can repeat immediately while startup or a
+        // live send owns this claim. Logging each skip can starve that owner.
         continue;
       }
 

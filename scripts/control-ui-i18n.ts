@@ -111,7 +111,12 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const CONTROL_UI_SOURCE_DIR = path.join(ROOT, "ui", "src", "ui");
+const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
+  path.join(ROOT, "ui", "src", "app"),
+  path.join(ROOT, "ui", "src", "components"),
+  path.join(ROOT, "ui", "src", "lib"),
+  path.join(ROOT, "ui", "src", "pages"),
+] as const;
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const RAW_COPY_BASELINE_VERSION = 1;
 const MAX_BATCH_ITEMS = 20;
@@ -809,7 +814,9 @@ function collectRawCopyFromSource(params: {
 }
 
 async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
-  const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
+  const files = (
+    await Promise.all(CONTROL_UI_RAW_COPY_SOURCE_DIRS.map((dir) => walkControlUiSourceFiles(dir)))
+  ).flat();
   const findings: RawCopyFinding[] = [];
   for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
     const source = await readFile(filePath, "utf8");

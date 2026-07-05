@@ -16,6 +16,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -484,6 +485,7 @@ export async function getReplyFromConfig(
           commandAuthorized,
           requestedSessionId: internalResolvedOpts?.requestedSessionId,
           resumeRequestedSession: internalResolvedOpts?.resumeRequestedSession,
+          signal: internalResolvedOpts?.abortSignal,
         }),
       );
   const {
@@ -559,22 +561,30 @@ export async function getReplyFromConfig(
 
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
-    await applyResetModelOverride({
-      cfg,
-      agentId,
-      resetTriggered,
-      bodyStripped,
-      sessionCtx,
-      ctx: finalized,
-      sessionEntry,
-      sessionEntryHandle,
-      sessionStore,
-      sessionKey,
-      storePath,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-    });
+    try {
+      await applyResetModelOverride({
+        cfg,
+        agentId,
+        resetTriggered,
+        bodyStripped,
+        sessionCtx,
+        ctx: finalized,
+        sessionEntry,
+        sessionEntryHandle,
+        sessionStore,
+        sessionKey,
+        storePath,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+      });
+    } catch (error) {
+      if (!isSessionWorkStartInvalidatedError(error)) {
+        throw error;
+      }
+      typing.cleanup();
+      return { text: error.message };
+    }
   }
 
   const channelModelOverride = cfg.channels?.modelByChannel
@@ -902,29 +912,37 @@ export async function getReplyFromConfig(
   const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
   if (runAutoFallbackPrimaryProbe) {
-    runModelState = await createModelSelectionState({
-      cfg,
-      agentId,
-      agentCfg,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      parentSessionKey:
-        sessionEntry.parentSessionKey ??
-        sessionCtx.ModelParentSessionKey ??
-        sessionCtx.ParentSessionKey,
-      storePath,
-      defaultProvider,
-      defaultModel,
-      primaryProvider,
-      primaryModel,
-      provider: runProvider,
-      model: runModel,
-      hasModelDirective: false,
-      skipStoredModelOverride: true,
-      hasResolvedHeartbeatModelOverride,
-      isHeartbeat: opts?.isHeartbeat === true,
-    });
+    try {
+      runModelState = await createModelSelectionState({
+        cfg,
+        agentId,
+        agentCfg,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        parentSessionKey:
+          sessionEntry.parentSessionKey ??
+          sessionCtx.ModelParentSessionKey ??
+          sessionCtx.ParentSessionKey,
+        storePath,
+        defaultProvider,
+        defaultModel,
+        primaryProvider,
+        primaryModel,
+        provider: runProvider,
+        model: runModel,
+        hasModelDirective: false,
+        skipStoredModelOverride: true,
+        hasResolvedHeartbeatModelOverride,
+        isHeartbeat: opts?.isHeartbeat === true,
+      });
+    } catch (error) {
+      if (!isSessionWorkStartInvalidatedError(error)) {
+        throw error;
+      }
+      typing.cleanup();
+      return { text: error.message };
+    }
     const thinkingLevelOverride = normalizeThinkLevel(resolvedOpts?.thinkingLevelOverride);
     const hasTurnOrSessionThinkLevel =
       thinkingLevelOverride !== undefined ||

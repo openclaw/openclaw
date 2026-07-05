@@ -386,6 +386,20 @@ describe("runCommandWithTimeout", () => {
     expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
     expect(result.preservedStdoutLines).toEqual(["x".repeat(24)]);
   });
+
+  it("keeps preserved line tails on a UTF-8 boundary", async () => {
+    await loadExecModules();
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "process.stdout.write('😀' + 'x'.repeat(22))"],
+      {
+        timeoutMs: 3_000,
+        maxOutputBytes: 24,
+        preserveOutputLine: () => true,
+      },
+    );
+
+    expect(result.preservedStdoutLines).toEqual(["x".repeat(22)]);
+  });
 });
 
 describe("attachChildProcessBridge", () => {

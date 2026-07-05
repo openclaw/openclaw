@@ -351,6 +351,7 @@ type IMessageInboundDispatchDecision = {
   senderNormalized: string;
   route: ReturnType<typeof resolveAgentRoute>;
   bodyText: string;
+  agentBodyText?: string;
   createdAt?: number;
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
@@ -930,7 +931,7 @@ export async function buildIMessageInboundContext(params: {
     channel: "iMessage",
     from: fromLabel,
     timestamp: decision.createdAt,
-    body: `${decision.bodyText}${replySuffix}`,
+    body: `${decision.agentBodyText ?? decision.bodyText}${replySuffix}`,
     chatType: decision.isGroup ? "group" : "direct",
     sender: { name: decision.senderNormalized, id: decision.sender },
     previousTimestamp: params.previousTimestamp,
@@ -1028,7 +1029,7 @@ export async function buildIMessageInboundContext(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent: decision.bodyText,
+      bodyForAgent: decision.agentBodyText ?? decision.bodyText,
       inboundHistory,
       rawBody: decision.bodyText,
       commandBody: decision.bodyText,

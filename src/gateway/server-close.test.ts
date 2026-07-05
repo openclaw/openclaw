@@ -122,6 +122,7 @@ function createGatewayCloseTestDeps(
     lifecycleUnsub: null,
     chatRunState: createTestChatRunState(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     restartRecoveryCandidates: new Map(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
@@ -614,6 +615,40 @@ describe("createGatewayCloseHandler", () => {
         stopReason: "restart",
       }),
     );
+  });
+
+  it("aborts queued turns before restart shutdown continues", async () => {
+    const controller = new AbortController();
+    const chatQueuedTurns = new Map([
+      [
+        "queued-1",
+        {
+          controller,
+          sessionId: "session-1",
+          sessionKey: "session-1",
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatQueuedTurns,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatQueuedTurns.size).toBe(0);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("aborted 1 queued turn(s) during restart shutdown"),
+      ),
+    ).toBe(true);
   });
 
   it("does not drain or abort active runs for normal shutdown", async () => {

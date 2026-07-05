@@ -141,6 +141,7 @@ describe("handleCompactCommand", () => {
       ok: true,
       compacted: false,
     });
+    const abortController = new AbortController();
 
     const result = await handleCompactCommand(
       {
@@ -161,6 +162,7 @@ describe("handleCompactCommand", () => {
           SenderE164: "+15551234567",
         },
         agentDir: "/tmp/openclaw-agent-compact",
+        opts: { abortSignal: abortController.signal },
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -179,6 +181,7 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
     const call = requireCompactEmbeddedAgentSessionCall();
     expect(call.sessionId).toBe("session-1");
+    expect(call.abortSignal).toBe(abortController.signal);
     expect(call.sessionKey).toBe("agent:main:main");
     expect(call.allowGatewaySubagentBinding).toBe(true);
     expect(call.trigger).toBe("manual");
@@ -465,39 +468,35 @@ describe("handleCompactCommand", () => {
     expect(call.tokensAfter).toBe(321);
   });
 
-  it("reports started Codex native compaction without incrementing completed compaction state", async () => {
+  it("reports unknown context when terminal compaction omits the post-compaction count", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
-      compacted: false,
+      compacted: true,
       result: {
         summary: "",
         firstKeptEntryId: "",
-        tokensBefore: 199_000,
-        details: {
-          backend: "codex-app-server",
-          threadId: "thread-1",
-          signal: "thread/compact/start",
-          pending: true,
-        },
+        tokensBefore: 999,
       },
     });
 
-    const result = await handleCompactCommand(
+    await handleCompactCommand(
       {
         ...buildCompactParams("/compact", {
           commands: { text: true },
           channels: { whatsapp: { allowFrom: ["*"] } },
         } as OpenClawConfig),
         sessionEntry: {
-          sessionId: "live-session",
+          sessionId: "target-session",
           updatedAt: Date.now(),
+          totalTokens: 999,
+          totalTokensFresh: true,
         },
       } as HandleCommandsParams,
       true,
     );
 
-    expect(result?.reply?.text).toContain("Codex compaction started");
-    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+    expect(vi.mocked(incrementCompactionCount)).toHaveBeenCalledOnce();
+    expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(null, null);
   });
 
   it("resolves /compact context budget from the active Codex runtime config instead of stale session metadata", async () => {

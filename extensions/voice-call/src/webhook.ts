@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
+  normalizeWebhookPath,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -631,23 +632,8 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private normalizeWebhookPathForMatch(pathname: string): string {
-    const trimmed = pathname.trim();
-    if (!trimmed) {
-      return "/";
-    }
-    const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-    if (prefixed === "/") {
-      return prefixed;
-    }
-    return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  }
-
   private isWebhookPathMatch(requestPath: string, configuredPath: string): boolean {
-    return (
-      this.normalizeWebhookPathForMatch(requestPath) ===
-      this.normalizeWebhookPathForMatch(configuredPath)
-    );
+    return normalizeWebhookPath(requestPath) === normalizeWebhookPath(configuredPath);
   }
 
   /**
@@ -913,8 +899,8 @@ export class VoiceCallWebhookServer {
       if (!pattern) {
         return false;
       }
-      const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
-      const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
+      const normalizedPattern = normalizeWebhookPath(pattern);
+      const normalizedPathname = normalizeWebhookPath(pathname);
       if (normalizedPattern === "/") {
         return true;
       }

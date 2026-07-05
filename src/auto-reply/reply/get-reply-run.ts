@@ -1267,8 +1267,15 @@ export async function runPreparedReply(
       extractedFileImages: opts?.extractedFileImages,
     }),
   );
+  // Abort-signal attachment for queued followups:
+  // - room_event: always inherit (source admission fence / ambient cancel).
+  // - Gateway-owned lifecycle (chat.send): always inherit so Esc can cancel a
+  //   turn after chat.send terminalizes while still queued.
+  // - plain user_request without lifecycle: deliberately detach from the
+  //   source/active-lane signal so a superseded parent abort does not cancel a
+  //   still-valid queued user turn.
   const queuedFollowupAbortSignal =
-    inboundEventKind === "room_event"
+    opts?.queuedFollowupLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
