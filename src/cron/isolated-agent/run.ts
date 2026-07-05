@@ -1,6 +1,7 @@
 /** Orchestrates isolated cron agent turn setup, execution, delivery, and cleanup. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -1343,10 +1344,15 @@ async function finalizeCronRun(params: {
       sourceDeliveryOutcome,
     });
   }
+  const hasCommittedTerminalProgress =
+    finalRunResult.didSendDeterministicApprovalPrompt === true ||
+    hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns) ||
+    (finalRunResult.successfulCronAdds ?? 0) > 0;
   if (
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
     !sourceDeliveryOutcome.satisfiesSourceDelivery &&
+    !hasCommittedTerminalProgress &&
     finalRunResult.meta?.terminalReplyKind !== "silent-empty" &&
     deliveryPayloads.length === 0 &&
     normalizeOptionalString(synthesizedText) === undefined
