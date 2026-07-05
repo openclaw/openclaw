@@ -376,10 +376,8 @@ describe("runReplyAgent auto-compaction token update", () => {
       updatedAt: Date.now(),
       totalTokens: 50_000,
     };
-    const agentMeta = requireRecord(
-      requireRecord(agentResult.meta, "agent result meta").agentMeta,
-      "agent result agent meta",
-    );
+    const resultMeta = requireRecord(agentResult.meta, "agent result meta");
+    const agentMeta = requireRecord(resultMeta.agentMeta, "agent result agent meta");
     runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
       const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
       if (typeof onAgentEvent === "function") {
@@ -391,6 +389,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         payloads: [],
         ...agentResult,
         meta: {
+          ...resultMeta,
           agentMeta: {
             provider: "anthropic",
             model: "claude",
@@ -594,10 +593,15 @@ describe("runReplyAgent auto-compaction token update", () => {
     ).toBeUndefined();
   });
 
-  it("keeps empty direct replies silent after delivering runtime compaction notices", async () => {
+  it("keeps terminal direct failures silent after delivering runtime compaction notices", async () => {
     const onBlockReply = vi.fn();
     const result = await runEmptyDirectReply(
-      { meta: { agentMeta: {} } },
+      {
+        meta: {
+          agentMeta: {},
+          error: { kind: "tool_result_mismatch", message: "terminal failure after notice" },
+        },
+      },
       {
         agentEvents: [
           { stream: "compaction", data: { phase: "start" } },
