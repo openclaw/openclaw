@@ -740,22 +740,29 @@ async function runSetupWizardOnce(
           ],
         })) as OnboardMode));
 
-  if (mode === "remote") {
+  const finishRemoteGatewaySetup = async (config: OpenClawConfig): Promise<void> => {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
     const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
-    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
+    let nextConfig = await promptRemoteGatewayConfig(config, prompter, {
       secretInputMode: opts.secretInputMode,
     });
     if (opts.skipBootstrap) {
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
-    nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
+    nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, {
+      command: "onboard",
+      mode: "remote",
+    });
     await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
     });
     logConfigUpdated(runtime);
     await prompter.outro(t("wizard.setup.remoteConfigured"));
+  };
+
+  if (mode === "remote") {
+    await finishRemoteGatewaySetup(baseConfig);
     return;
   }
 
@@ -900,6 +907,10 @@ async function runSetupWizardOnce(
         quickstartGateway = resolveQuickstartGatewayDefaults(baseConfig);
         localPort = resolveGatewayPort(baseConfig);
         useAgentAssistedSetup = await canUseAgentAssistedSetupForConfig(baseConfig);
+        if (baseConfig.gateway?.mode === "remote") {
+          await finishRemoteGatewaySetup(baseConfig);
+          return;
+        }
         if (!opts.agentId && baseConfig.agents?.list?.length) {
           setupAgentId = resolveDefaultAgentId(baseConfig);
         }

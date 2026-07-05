@@ -1354,6 +1354,70 @@ describe("runSetupWizard", () => {
     expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
   });
 
+  it("routes a migrated remote Gateway through remote setup", async () => {
+    const migratedConfig = {
+      gateway: {
+        mode: "remote" as const,
+        remote: {
+          url: "wss://gateway.example.com",
+        },
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: false,
+        raw: null,
+        parsed: {},
+        resolved: {},
+        valid: true,
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      })
+      .mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: migratedConfig,
+        resolved: migratedConfig,
+        valid: true,
+        config: migratedConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      });
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      {
+        providerId: "codex",
+        label: "Codex",
+        hint: "/tmp/codex-home",
+      },
+    ]);
+    hasRunnableLocalAgent.mockResolvedValueOnce(false);
+    promptRemoteGatewayConfig.mockClear();
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?" ? "codex" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({ select }));
+
+    expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(migratedConfig, expect.any(Object), {
+      secretInputMode: undefined,
+    });
+    expect(configureGatewayForSetup).not.toHaveBeenCalled();
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+  });
+
   it("routes explicit migration flags directly into migration import", async () => {
     runSetupMigrationImport.mockClear();
     listSetupMigrationOptions.mockClear();
