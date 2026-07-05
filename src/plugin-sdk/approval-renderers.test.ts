@@ -152,6 +152,7 @@ describe("plugin-sdk/approval-renderers", () => {
     if (payload.text !== undefined) {
       textExpected(payload.text);
     }
+    expect(payload.presentation).toEqual(interactiveExpected);
     if (interactiveExpected) {
       expect(payload.interactive).toEqual(interactiveExpected);
     }

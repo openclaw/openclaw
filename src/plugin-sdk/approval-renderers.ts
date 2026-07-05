@@ -1,5 +1,6 @@
 import {
   buildApprovalInteractiveReply,
+  buildApprovalPresentation,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import {
@@ -24,12 +25,17 @@ export function buildApprovalPendingReplyPayload(params: {
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
+  const interactive = buildApprovalInteractiveReply({
+    approvalId: params.approvalId,
+    allowedDecisions,
+  });
   return {
     text: params.text,
-    interactive: buildApprovalInteractiveReply({
+    presentation: buildApprovalPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),
+    interactive,
     channelData: {
       execApproval: {
         approvalId: params.approvalId,

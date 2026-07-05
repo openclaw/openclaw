@@ -1,5 +1,10 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
+import type {
+  InteractiveReply,
+  InteractiveReplyButton,
+  MessagePresentation,
+} from "../interactive/payload.js";
+import { interactiveReplyToPresentation } from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
 import {
   normalizeOptionalLowercaseString,
@@ -169,12 +174,33 @@ export function buildApprovalInteractiveReplyFromActionDescriptors(
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
+export function buildApprovalPresentationFromActionDescriptors(
+  actions: readonly ExecApprovalActionDescriptor[],
+): MessagePresentation | undefined {
+  const interactive = buildApprovalInteractiveReplyFromActionDescriptors(actions);
+  return interactive ? interactiveReplyToPresentation(interactive) : undefined;
+}
+
 export function buildApprovalInteractiveReply(params: {
   approvalId: string;
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): InteractiveReply | undefined {
   return buildApprovalInteractiveReplyFromActionDescriptors(
+    buildExecApprovalActionDescriptors({
+      approvalCommandId: params.approvalId,
+      ask: params.ask,
+      allowedDecisions: params.allowedDecisions,
+    }),
+  );
+}
+
+export function buildApprovalPresentation(params: {
+  approvalId: string;
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined {
+  return buildApprovalPresentationFromActionDescriptors(
     buildExecApprovalActionDescriptors({
       approvalCommandId: params.approvalId,
       ask: params.ask,
@@ -333,12 +359,14 @@ export function buildExecApprovalPendingReplyPayload(
   info.push(`Full id: \`${params.approvalId}\``);
   lines.push(info.join("\n"));
 
+  const interactive = buildApprovalInteractiveReply({
+    approvalId: params.approvalId,
+    allowedDecisions,
+  });
   return {
     text: lines.join("\n\n"),
-    interactive: buildApprovalInteractiveReply({
-      approvalId: params.approvalId,
-      allowedDecisions,
-    }),
+    presentation: interactive ? interactiveReplyToPresentation(interactive) : undefined,
+    interactive,
     channelData: {
       execApproval: {
         approvalId: params.approvalId,

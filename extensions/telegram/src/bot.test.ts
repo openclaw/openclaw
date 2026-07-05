@@ -933,6 +933,39 @@ describe("createTelegramBot", () => {
     });
   });
 
+  it("accepts command pagination no-op callbacks without dispatching chat text", async () => {
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    commandSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-noop",
+        data: "commands_page_noop:kan199-smoke-a",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 15,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-noop");
+    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(commandSpy).not.toHaveBeenCalled();
+  });
+
   it("falls back to default agent for pagination callbacks without agent suffix", async () => {
     onSpy.mockClear();
     listSkillCommandsForAgents.mockClear();

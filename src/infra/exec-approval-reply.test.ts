@@ -282,6 +282,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.presentation).toEqual(payload.interactive);
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
@@ -343,6 +344,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.presentation).toEqual(payload.interactive);
   });
 
   it("stores agent and session metadata for downstream suppression checks", () => {
