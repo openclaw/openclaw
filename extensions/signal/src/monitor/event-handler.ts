@@ -1032,7 +1032,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const mentionFacts = isGroup
       ? {
           canDetectMention,
-          wasMentioned,
+          wasMentioned: effectiveWasMentioned,
           ...(hasAnyMention !== undefined ? { hasAnyMention } : {}),
           ...(mentionSource ? { mentionSource } : {}),
           requireMention,

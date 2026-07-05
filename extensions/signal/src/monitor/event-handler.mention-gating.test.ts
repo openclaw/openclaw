@@ -274,6 +274,12 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "/help" }));
     expect(getCapturedCtx().Body).toContain("/help");
+    expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(false);
+    expect(getCapturedCtx().GroupRequireMention).toBe(true);
+    expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
+    expect(getCapturedCtx().MentionShouldSkip).toBe(false);
+    expect(getCapturedCtx().MentionSource).toBeUndefined();
   });
 
   it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
