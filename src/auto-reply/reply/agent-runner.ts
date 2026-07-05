@@ -2111,6 +2111,24 @@ export async function runReplyAgent(params: {
     }
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    // A terminal fallback is built separately after normal payload filtering.
+    // Share this state across deliverable lanes so replyToMode=first still threads
+    // at most one visible payload without hidden reasoning/commentary consuming it.
+    const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
+      replyToMode,
+      replyToChannel,
+    );
+    const applyFinalReplyToMode = (payload: ReplyPayload) => {
+      const isDisabledReasoningLane =
+        payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
+      const isDisabledCommentaryLane =
+        payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+      const isFilteredPayload =
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
+      return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
+        ? payload
+        : applyDeliveredReplyToMode(payload);
+    };
     const buildFinalPayloads = (payloads: ReplyPayload[]) =>
       buildReplyPayloads({
         config: cfg,
@@ -2126,6 +2144,7 @@ export async function runReplyAgent(params: {
         replyToChannel,
         currentMessageId,
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+        applyReplyToMode: applyFinalReplyToMode,
         messageProvider: followupRun.run.messageProvider,
         messagingToolSentTexts: runResult.messagingToolSentTexts,
         messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
