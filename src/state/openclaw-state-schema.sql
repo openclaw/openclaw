@@ -898,6 +898,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
   delivery_completion_mode TEXT,

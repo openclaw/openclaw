@@ -1,6 +1,6 @@
 /** SQLite column codec for cron delivery configuration. */
 import type { CronDelivery } from "../types.js";
-import { booleanToInteger, integerToBoolean, parseJsonObject } from "./scalar-codec.js";
+import { booleanToInteger, integerToBoolean } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
 /** Maps cron delivery config into normalized SQLite columns. */
@@ -15,6 +15,7 @@ export function bindDeliveryColumns(
   | "delivery_completion_to"
   | "delivery_mode"
   | "delivery_thread_id"
+  | "delivery_thread_id_type"
   | "delivery_to"
   | "failure_delivery_account_id"
   | "failure_delivery_channel"
@@ -30,6 +31,10 @@ export function bindDeliveryColumns(
       delivery?.threadId === undefined || delivery.threadId === null
         ? null
         : String(delivery.threadId),
+    delivery_thread_id_type:
+      delivery?.threadId === undefined || delivery.threadId === null
+        ? null
+        : typeof delivery.threadId,
     delivery_account_id: delivery?.accountId ?? null,
     delivery_best_effort: booleanToInteger(delivery?.bestEffort),
     delivery_completion_mode: delivery?.completionDestination?.mode ?? null,
@@ -63,12 +68,15 @@ function cronDeliveryModeFromValue(value: unknown): CronDelivery["mode"] | undef
 }
 
 function threadIdFromRow(row: CronJobRow): string | number | undefined {
-  const config = parseJsonObject<{ delivery?: { threadId?: unknown } }>(row.job_json, {});
-  const typed = config.delivery?.threadId;
-  if (typeof typed === "number" || (typeof typed === "string" && typed)) {
-    return typed;
+  const value = row.delivery_thread_id;
+  if (!value) {
+    return undefined;
   }
-  return row.delivery_thread_id || undefined;
+  if (row.delivery_thread_id_type === "number") {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : value;
+  }
+  return value;
 }
 
 /** Reconstructs delivery config from split SQLite columns, preserving legacy partial rows. */

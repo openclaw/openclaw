@@ -251,6 +251,7 @@ export interface CronJobs {
   delivery_completion_to: string | null;
   delivery_mode: string | null;
   delivery_thread_id: string | null;
+  delivery_thread_id_type: string | null;
   delivery_to: string | null;
   description: string | null;
   enabled: number;

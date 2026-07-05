@@ -666,7 +666,7 @@ describe("cron store", () => {
     },
   );
 
-  it("recovers a numeric thread id from stored config when the split column is null", async () => {
+  it("does not resurrect a cleared thread id from the stored config copy", async () => {
     const { storePath } = await makeStorePath();
     const job = makeStore("sqlite-early-row-thread-id-job", true).jobs[0];
     job.delivery = {
@@ -682,11 +682,29 @@ describe("cron store", () => {
       .run(job.id);
 
     const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
-    expect(loadedThreadId).toBe(1008013);
-    expect(typeof loadedThreadId).toBe("number");
+    expect(loadedThreadId).toBeUndefined();
   });
 
-  it("disambiguates identical thread id text into number and string by stored config", async () => {
+  it("uses the normalized thread id when the stored config copy is stale", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-stale-thread-id-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: 1008013,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = ? WHERE job_id = ?")
+      .run("replacement", job.id);
+
+    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+    expect(loadedThreadId).toBe("replacement");
+  });
+
+  it("disambiguates identical thread id text using the normalized type marker", async () => {
     const { storePath } = await makeStorePath();
     const numberJob = makeStore("sqlite-thread-id-number", true).jobs[0];
     numberJob.delivery = { mode: "announce", channel: "telegram", to: "telegram:a", threadId: 42 };
