@@ -216,11 +216,7 @@ async function readResponsePrefix(
   try {
     while (true) {
       const { done, value } = options?.chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(
-            reader,
-            options.chunkTimeoutMs,
-            options.onIdleTimeout,
-          )
+        ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
         : await reader.read();
       if (done) {
         size = total;
