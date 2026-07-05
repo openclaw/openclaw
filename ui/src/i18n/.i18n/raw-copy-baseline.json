@@ -618,6 +618,41 @@
       "text": "No files match."
     },
     {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Closed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Draft"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Merged"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Not planned"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Open"
+    },
+    {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
