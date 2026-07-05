@@ -60,6 +60,9 @@ const readSessionMessagesAsyncMock = vi.fn(
     _opts?: unknown,
   ): Promise<unknown[]> => [],
 );
+const projectRecentChatDisplayMessagesMock = vi.hoisted(() =>
+  vi.fn((messages: unknown[], _opts?: unknown) => messages),
+);
 type LoadSessionEntryMockResult = {
   cfg: Record<string, unknown>;
   canonicalKey: string;
@@ -172,7 +175,10 @@ vi.mock("../gateway/cli-session-history.js", () => ({
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
   projectChatDisplayMessages: (messages: unknown[]) => messages,
-  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
+  projectRecentChatDisplayMessages: (
+    messages: unknown[],
+    opts?: { maxChars?: number; maxMessages?: number; redactInlineMedia?: boolean },
+  ) => projectRecentChatDisplayMessagesMock(messages, opts),
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
@@ -339,6 +345,8 @@ describe("EmbeddedTuiBackend", () => {
     loadGatewayModelCatalogMock.mockReturnValue([]);
     readSessionMessagesAsyncMock.mockReset();
     readSessionMessagesAsyncMock.mockResolvedValue([]);
+    projectRecentChatDisplayMessagesMock.mockReset();
+    projectRecentChatDisplayMessagesMock.mockImplementation((messages: unknown[]) => messages);
     loadSessionEntryMock.mockReset();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       cfg: {},
@@ -946,6 +954,10 @@ describe("EmbeddedTuiBackend", () => {
         maxBytes: 1024 * 1024,
         allowResetArchiveFallback: true,
       },
+    );
+    expect(projectRecentChatDisplayMessagesMock).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ redactInlineMedia: true }),
     );
   });
 

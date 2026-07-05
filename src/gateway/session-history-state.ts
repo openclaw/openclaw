@@ -161,6 +161,7 @@ export function buildSessionHistorySnapshot(params: {
   const visibleMessages = toSessionHistoryMessages(
     projectChatDisplayMessages(params.rawMessages, {
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      redactInlineMedia: true,
     }),
   );
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
@@ -279,6 +280,7 @@ export class SessionHistorySseState {
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
         maxChars: this.maxChars,
+        redactInlineMedia: true,
       }),
     );
     if (projectedMessages.length > this.sentHistory.messages.length) {
@@ -311,7 +313,10 @@ export class SessionHistorySseState {
       }
     }
     const [sanitizedMessage] = toSessionHistoryMessages(
-      projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),
+      projectChatDisplayMessages([nextMessage], {
+        maxChars: this.maxChars,
+        redactInlineMedia: true,
+      }),
     );
     if (!sanitizedMessage) {
       if (projectedMessages.length < this.sentHistory.messages.length) {
