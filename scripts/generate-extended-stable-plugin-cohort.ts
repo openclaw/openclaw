@@ -109,7 +109,10 @@ export function parseEligibleCohortEvidence(params: {
   };
 }
 
-export function collectExtendedStableCohortPackageNames(rootDir = resolve(".")): string[] {
+function collectExtendedStablePluginInventory(rootDir: string): {
+  cohortPackageNames: string[];
+  allPublishablePackageNames: string[];
+} {
   const support = loadExtendedStablePluginSupport(rootDir);
   const cohortPackageNames = [...resolveExtendedStableCohortPackageNames({ support })].toSorted();
   const allCatalogPackageNames = [
@@ -124,16 +127,15 @@ export function collectExtendedStableCohortPackageNames(rootDir = resolve(".")):
       "Official npm catalog package set must exactly match the all-publishable plugin release plan.",
     );
   }
-  return cohortPackageNames;
+  return { cohortPackageNames, allPublishablePackageNames: publishablePackageNames };
+}
+
+export function collectExtendedStableCohortPackageNames(rootDir = resolve(".")): string[] {
+  return collectExtendedStablePluginInventory(rootDir).cohortPackageNames;
 }
 
 export function collectAllPublishablePluginPackageNames(rootDir = resolve(".")): string[] {
-  // This also asserts that the derived catalog set has not drifted from release automation.
-  const cohort = new Set(collectExtendedStableCohortPackageNames(rootDir));
-  const covered = loadExtendedStablePluginSupport(rootDir).plugins.map(
-    (plugin) => plugin.packageName,
-  );
-  return [...cohort, ...covered].toSorted();
+  return collectExtendedStablePluginInventory(rootDir).allPublishablePackageNames;
 }
 
 export function selectExtendedStablePluginCohort(params: {

@@ -696,6 +696,17 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
   return isDisabledAfterFailureOutcome(outcome) || isClawHubTrustSkippedOutcome(outcome);
 }
 
+export function hasBlockingExtendedStablePluginTargetFailure(
+  outcomes: readonly Pick<PluginUpdateOutcome, "code" | "status">[],
+): boolean {
+  return outcomes.some(
+    (outcome) =>
+      outcome.status === "error" &&
+      (outcome.code === "exact_package_unavailable" ||
+        outcome.code === "cohort_package_unavailable"),
+  );
+}
+
 /**
  * Build the post-core-update result we return when the active config cannot
  * even be parsed. Mandatory post-core convergence requires a parseable
@@ -2280,9 +2291,16 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+  const blockingTargetFailure = hasBlockingExtendedStablePluginTargetFailure(pluginUpdateOutcomes);
+
   if (params.opts.json) {
     return {
-      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
+      status:
+        convergenceErrored || blockingTargetFailure
+          ? "error"
+          : warnings.length > 0
+            ? "warning"
+            : "ok",
       changed: pluginsChanged,
       warnings,
       sync: {
@@ -2358,7 +2376,12 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   return {
-    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
+    status:
+      convergenceErrored || blockingTargetFailure
+        ? "error"
+        : warnings.length > 0
+          ? "warning"
+          : "ok",
     changed: pluginsChanged,
     warnings,
     sync: {

@@ -23,26 +23,11 @@ const ACCEPTANCE_PROFILES = new Set([
 ]);
 const ROOT_KEYS = ["plugins", "schemaVersion"] as const;
 const ENTRY_KEYS = ["acceptanceProfile", "packageDir", "packageName", "pluginId"] as const;
-const REQUIRED_SUPPORT_ENTRIES: readonly ExtendedStablePluginSupportEntry[] = [
-  {
-    pluginId: "codex",
-    packageName: "@openclaw/codex",
-    packageDir: "extensions/codex",
-    acceptanceProfile: "codex-provider-v1",
-  },
-  {
-    pluginId: "discord",
-    packageName: "@openclaw/discord",
-    packageDir: "extensions/discord",
-    acceptanceProfile: "discord-channel-v1",
-  },
-  {
-    pluginId: "slack",
-    packageName: "@openclaw/slack",
-    packageDir: "extensions/slack",
-    acceptanceProfile: "slack-channel-v1",
-  },
-];
+const REQUIRED_SUPPORT_PROFILES = [
+  ["codex", "codex-provider-v1"],
+  ["discord", "discord-channel-v1"],
+  ["slack", "slack-channel-v1"],
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -116,7 +101,13 @@ export function parseExtendedStablePluginSupport(value: unknown): ExtendedStable
   if (plugins.some((entry, index) => entry.packageName !== sortedPackageNames[index])) {
     throw new Error("extended-stable plugin support entries must be sorted by packageName.");
   }
-  if (JSON.stringify(plugins) !== JSON.stringify(REQUIRED_SUPPORT_ENTRIES)) {
+  const requiredEntries = REQUIRED_SUPPORT_PROFILES.map(([pluginId, acceptanceProfile]) => ({
+    pluginId,
+    packageName: `@openclaw/${pluginId}`,
+    packageDir: `extensions/${pluginId}`,
+    acceptanceProfile,
+  }));
+  if (JSON.stringify(plugins) !== JSON.stringify(requiredEntries)) {
     throw new Error(
       "extended-stable plugin support must contain exactly codex, discord, and slack with their registered acceptance profiles.",
     );

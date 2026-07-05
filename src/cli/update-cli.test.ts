@@ -482,6 +482,53 @@ describe("update-cli", () => {
     });
   };
 
+  const writeExtendedStablePackageMetadata = async (root: string) => {
+    tempDirsToCleanup.add(root);
+    await fs.mkdir(path.join(root, "release"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.6.33" })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "release/extended-stable-plugin-support.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        plugins: [
+          {
+            pluginId: "codex",
+            packageName: "@openclaw/codex",
+            packageDir: "extensions/codex",
+            acceptanceProfile: "codex-provider-v1",
+          },
+          {
+            pluginId: "discord",
+            packageName: "@openclaw/discord",
+            packageDir: "extensions/discord",
+            acceptanceProfile: "discord-channel-v1",
+          },
+          {
+            pluginId: "slack",
+            packageName: "@openclaw/slack",
+            packageDir: "extensions/slack",
+            acceptanceProfile: "slack-channel-v1",
+          },
+        ],
+      })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "release/extended-stable-plugin-cohort.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        releaseLine: "2026.6",
+        baselineVersion: "2026.6.21",
+      })}\n`,
+      "utf8",
+    );
+    readPackageVersion.mockResolvedValue("2026.6.33");
+  };
+
   const expectUpdateCallChannel = (channel: string) => {
     const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
     expect(call?.channel).toBe(channel);
@@ -2543,6 +2590,7 @@ describe("update-cli", () => {
   it("installs the verified exact package and persists an explicit extended-stable channel", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    await writeExtendedStablePackageMetadata(tempDir);
 
     await updateCommand({ channel: "extended-stable", yes: true, restart: false });
 
@@ -2553,13 +2601,18 @@ describe("update-cli", () => {
     });
     expectPackageInstallSpec("openclaw@2026.6.33");
     expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
-    expect(syncPluginCall()?.channel).toBe("stable");
-    expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("stable");
+    expect(syncPluginCall()?.channel).toBe("extended-stable");
+    expect(syncPluginCall()?.extendedStableTargetContext).toMatchObject({
+      installedCoreVersion: "2026.6.33",
+      cohort: { baselineVersion: "2026.6.21" },
+    });
+    expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("extended-stable");
   });
 
   it("uses the same exact resolver for a bare update with stored extended-stable", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    await writeExtendedStablePackageMetadata(tempDir);
     const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
@@ -2578,7 +2631,11 @@ describe("update-cli", () => {
       packageName: "openclaw",
     });
     expectPackageInstallSpec("openclaw@2026.6.33");
-    expect(syncPluginCall()?.channel).toBe("stable");
+    expect(syncPluginCall()?.channel).toBe("extended-stable");
+    expect(syncPluginCall()?.extendedStableTargetContext).toMatchObject({
+      installedCoreVersion: "2026.6.33",
+      cohort: { baselineVersion: "2026.6.21" },
+    });
   });
 
   it("fails closed without config or package mutation when extended-stable resolution fails", async () => {

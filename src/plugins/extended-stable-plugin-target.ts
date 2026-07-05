@@ -70,8 +70,9 @@ export function loadExtendedStablePluginTargetContextFromRoot(params: {
       cause: error,
     });
   }
-  if (packageJson.name !== "openclaw") {
-    throw new Error("Installed core package identity must be openclaw.");
+  const packageName = typeof packageJson.name === "string" ? packageJson.name : "";
+  if (packageName !== "openclaw" && !/^@[^/]+\/openclaw$/u.test(packageName)) {
+    throw new Error("Installed core package identity must be openclaw or a scoped openclaw fork.");
   }
   const version = packageJson.version;
   if (typeof version !== "string" || !version.trim()) {

@@ -3,12 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { readBoundedResponseText } from "./bounded-response.ts";
-import {
-  parseNpmViewFields,
-  runNpmViewWithRetry,
-  verifyNpmPackage,
-  type NpmViewFields,
-} from "./npm-package-readback.ts";
+import { verifyNpmPackage, type NpmViewFields } from "./npm-package-readback.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -41,13 +36,6 @@ export type ReleaseVerifyBetaArgs = {
     npmTelegram?: string;
   };
 };
-
-export {
-  parseNpmViewFields,
-  runNpmViewWithRetry,
-  verifyNpmPackage,
-  type NpmViewFields,
-} from "./npm-package-readback.ts";
 
 type FetchWithRetryResult = {
   response: Response;

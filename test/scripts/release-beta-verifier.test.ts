@@ -1,12 +1,11 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseNpmViewFields, runNpmViewWithRetry } from "../../scripts/lib/npm-package-readback.ts";
 import {
   buildNpmReleaseEvidence,
   fetchStatusWithRetry,
-  parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
-  runNpmViewWithRetry,
 } from "../../scripts/lib/release-beta-verifier.ts";
 
 afterEach(() => {

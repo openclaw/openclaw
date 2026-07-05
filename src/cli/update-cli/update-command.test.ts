@@ -12,6 +12,7 @@ import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   formatPostUpdateGatewayRecoveryInstructions,
+  hasBlockingExtendedStablePluginTargetFailure,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   resolvePostCoreUpdateChildStdio,
@@ -31,6 +32,22 @@ describe("resolveGatewayInstallEntrypointCandidates", () => {
       path.join("/tmp/openclaw-root", "dist", "entry.js"),
       path.join("/tmp/openclaw-root", "dist", "entry.mjs"),
     ]);
+  });
+});
+
+describe("hasBlockingExtendedStablePluginTargetFailure", () => {
+  it("blocks restart only for unavailable exact extended-stable targets", () => {
+    expect(
+      hasBlockingExtendedStablePluginTargetFailure([
+        { status: "error", code: "cohort_package_unavailable" },
+      ]),
+    ).toBe(true);
+    expect(
+      hasBlockingExtendedStablePluginTargetFailure([
+        { status: "error", code: "exact_package_unavailable" },
+      ]),
+    ).toBe(true);
+    expect(hasBlockingExtendedStablePluginTargetFailure([{ status: "error" }])).toBe(false);
   });
 });
 
