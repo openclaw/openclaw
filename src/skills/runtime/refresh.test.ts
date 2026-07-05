@@ -357,7 +357,7 @@ describe("ensureSkillsWatcher", () => {
           path.join(targetSkillDir, "SKILL.md"),
           "---\nname: linked-skill\ndescription: Linked\n---\n",
         );
-        await fs.symlink(targetSkillDir, path.join(groupedLinkDir, "linked-skill"), "dir");
+        await fs.symlink(targetSkillDir, path.join(groupedLinkDir, "linked-skill"), directorySymlinkType);
 
         refreshModule.ensureSkillsWatcher({
           workspaceDir,
@@ -388,7 +388,7 @@ describe("ensureSkillsWatcher", () => {
         path.join(targetSkillsDir, "SKILL.md"),
         "---\nname: linked-root\ndescription: Linked root\n---\n",
       );
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), directorySymlinkType);
 
       refreshModule.ensureSkillsWatcher({ workspaceDir });
 
@@ -420,7 +420,7 @@ describe("ensureSkillsWatcher", () => {
           path.join(outsideDir, "SKILL.md"),
           "---\nname: untrusted\ndescription: Untrusted\n---\n",
         );
-        await fs.symlink(outsideDir, path.join(repoDir, "skills"), "dir");
+        await fs.symlink(outsideDir, path.join(repoDir, "skills"), directorySymlinkType);
 
         refreshModule.ensureSkillsWatcher({
           workspaceDir,
@@ -706,7 +706,7 @@ describe("ensureSkillsWatcher", () => {
           path.join(outsideDir, "SKILL.md"),
           "---\nname: untrusted-plugin\ndescription: Untrusted plugin\n---\n",
         );
-        await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), "dir");
+        await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), directorySymlinkType);
         const pluginSkills = await import("../loading/plugin-skills.js");
         vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
 
