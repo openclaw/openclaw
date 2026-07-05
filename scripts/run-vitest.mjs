@@ -998,9 +998,9 @@ export function resolveTestProjectsRunnerSpawnParams(env, platform = process.pla
   };
 }
 
-function spawnTestProjectsRunner(argv, env) {
+function spawnTestProjectsRunner(argv, env, options = {}) {
   let forwardedSignal = null;
-  const child = spawn(process.execPath, [testProjectsRunnerPath, ...argv], {
+  const child = spawn(process.execPath, [options.runnerPath ?? testProjectsRunnerPath, ...argv], {
     ...resolveTestProjectsRunnerSpawnParams(env),
   });
   const teardown = installVitestProcessGroupCleanup({
@@ -1012,6 +1012,30 @@ function spawnTestProjectsRunner(argv, env) {
     },
   });
   return { child, getForwardedSignal: () => forwardedSignal, teardown };
+}
+
+export function runTestProjectsDelegation(argv, env, options = {}) {
+  const { child, getForwardedSignal, teardown } = spawnTestProjectsRunner(argv, env, options);
+  child.on("exit", (code, signal) => {
+    teardown();
+    const forwardedSignal = getForwardedSignal();
+    if (forwardedSignal) {
+      forceKillVitestProcessGroup(child);
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+  child.on("error", (error) => {
+    teardown();
+    console.error(error);
+    process.exit(1);
+  });
+  return child;
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -1033,26 +1057,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    const { child, getForwardedSignal, teardown } = spawnTestProjectsRunner(delegatedArgs, env);
-    child.on("exit", (code, signal) => {
-      teardown();
-      const forwardedSignal = getForwardedSignal();
-      if (forwardedSignal) {
-        forceKillVitestProcessGroup(child);
-        process.kill(process.pid, forwardedSignal);
-        return;
-      }
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      process.exit(code ?? 1);
-    });
-    child.on("error", (error) => {
-      teardown();
-      console.error(error);
-      process.exit(1);
-    });
+    runTestProjectsDelegation(delegatedArgs, env);
     return;
   }
 

@@ -1,6 +1,11 @@
 import OpenClawKit
 import SwiftUI
 
+struct GatewaySetupRequest {
+    let id: Int
+    let link: GatewayConnectDeepLink
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
@@ -69,6 +74,8 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let gatewaySetupRequest: GatewaySetupRequest?
+    let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
@@ -76,7 +83,9 @@ struct SettingsProTab: View {
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
-        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        gatewaySetupRequest: GatewaySetupRequest? = nil,
+        onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
@@ -84,6 +93,8 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.gatewaySetupRequest = gatewaySetupRequest
+        self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
 
     var body: some View {
@@ -136,9 +147,12 @@ struct SettingsProTab: View {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                self.applyPendingGatewaySetupLinkIfNeeded()
+                self.applyGatewaySetupRequestIfNeeded()
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
+            }
+            .onChange(of: self.gatewaySetupRequest?.id) { _, _ in
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -171,9 +185,6 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
-            }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.
@@ -260,6 +271,12 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
+    }
+
+    private func applyGatewaySetupRequestIfNeeded() {
+        guard let gatewaySetupRequest else { return }
+        self.applyGatewaySetupLink(gatewaySetupRequest.link)
+        self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
     func openNotificationsRouteFromApprovals() {

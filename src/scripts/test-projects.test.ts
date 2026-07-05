@@ -916,6 +916,7 @@ describe("test-projects args", () => {
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
           "test/scripts/native-app-i18n.test.ts",
           "test/scripts/onboard-config-fixtures.test.ts",
+          "test/scripts/package-git-fixture.test.ts",
           "test/scripts/parallels-lib-helpers.test.ts",
           "test/scripts/parallels-package-log-progress-extract.test.ts",
           "test/scripts/parallels-smoke-model.test.ts",

@@ -151,10 +151,6 @@ struct TerminalHubScreen: View {
 
     /// Identity for the embedded web view: recreate it only when the gateway
     /// endpoint or credentials actually change.
-    static func webContentIdentity(config: GatewayConnectConfig?) -> Int {
-        self.webContentIdentity(config: config, storedOperatorToken: self.storedOperatorToken())
-    }
-
     static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
         var hasher = Hasher()
         hasher.combine(config?.url)

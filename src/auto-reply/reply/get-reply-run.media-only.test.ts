@@ -299,6 +299,9 @@ describe("runPreparedReply media-only handling", () => {
       await import("./inbound-meta.js"));
     ({ testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
+
+    // Load deferred reply dependencies before per-case timing starts.
+    await runPreparedReply(baseParams());
   });
 
   beforeEach(async () => {

@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 /**
  * Chrome CDP diagnostics.
  *
@@ -110,7 +111,7 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      const data = (await response.json()) as ChromeVersion;
+      const data = await readProviderJsonResponse<ChromeVersion>(response, "cdp-version");
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }
@@ -250,7 +251,11 @@ function classifyChromeVersionError(error: unknown): {
   if (/^HTTP \d+/.test(message)) {
     return { code: "http_status_failed", message };
   }
-  if (error instanceof SyntaxError || message.includes("non-object JSON")) {
+  if (
+    error instanceof SyntaxError ||
+    message.includes("cdp-version: malformed JSON response") ||
+    message.includes("non-object JSON")
+  ) {
     return { code: "invalid_json", message };
   }
   return { code: "http_unreachable", message };

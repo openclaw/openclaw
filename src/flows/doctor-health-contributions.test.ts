@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import "./doctor-tool-result-cap-advice.js";
 import {
   createDoctorHealthContribution,
   resolveDoctorContributionHealthChecks,
@@ -1558,12 +1559,22 @@ describe("doctor health contributions", () => {
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
-    const checks = [toolResultCapCheck!];
+    const detect = vi.fn(async () => [
+      {
+        checkId: "core/doctor/tool-result-cap",
+        severity: "warning" as const,
+        message: "Configured tool result cap overrides the model-window default.",
+        path: "agents.defaults.contextLimits.toolResultMaxChars",
+      },
+    ]);
+    // This case owns lint selection; the real cap detector is exercised below.
+    const checks = [{ ...toolResultCapCheck!, detect }];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
     });
+    expect(detect).not.toHaveBeenCalled();
     await expect(
       runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
     ).resolves.toMatchObject({
@@ -1582,6 +1593,7 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
@@ -1741,17 +1753,21 @@ describe("doctor health contributions", () => {
     expect(stateIntegrityCheck).toMatchObject({ defaultEnabled: false });
     expect(stateIntegrityCheck).toBeDefined();
 
+    const detect = vi.fn(async () => []);
+
     const ctx = {
       cfg: {},
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
-    const checks = [stateIntegrityCheck!];
+    // Selection behavior does not need the real state-integrity filesystem scan.
+    const checks = [{ ...stateIntegrityCheck!, detect }];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
     });
+    expect(detect).not.toHaveBeenCalled();
     await expect(
       runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
     ).resolves.toMatchObject({
@@ -1764,6 +1780,7 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 
   it("collects memory-search notes as structured findings", async () => {
