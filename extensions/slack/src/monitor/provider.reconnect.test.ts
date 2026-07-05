@@ -14,7 +14,6 @@ import {
   formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
   registerSlackSocketModeConnectionDiagnostics,
-  resolveSlackSocketModeConnectionCount,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 
@@ -148,29 +147,12 @@ describe("slack socket reconnect helpers", () => {
     );
   });
 
-  it("extracts Socket Mode connection counts from raw hello frames", () => {
-    expect(
-      resolveSlackSocketModeConnectionCount(
-        Buffer.from(JSON.stringify({ type: "hello", num_connections: 3 })),
-      ),
-    ).toBe(3);
-    expect(
-      resolveSlackSocketModeConnectionCount(
-        JSON.stringify({ type: "hello", num_connections: "4" }),
-      ),
-    ).toBe(4);
-    expect(resolveSlackSocketModeConnectionCount(JSON.stringify({ type: "events_api" }))).toBe(
-      undefined,
-    );
-    expect(resolveSlackSocketModeConnectionCount("not json")).toBe(undefined);
-  });
-
   it("formats shared Socket Mode connection warnings with remediation", () => {
     expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
-      "slack socket mode reports 2 active connections for this app token",
+      "slack socket mode reports 2 active connections for this Slack app",
     );
     expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
-      "create a separate Slack app/token for each host",
+      "equivalent routing and authorization",
     );
   });
 
@@ -182,15 +164,41 @@ describe("slack socket reconnect helpers", () => {
       onSharedConnection,
     });
 
-    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 1 }), false);
-    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
-    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "events_api", payload: { text: "hello" } })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: "2" })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 1 })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 3 })),
+      false,
+    );
 
     expect(onSharedConnection).toHaveBeenCalledTimes(1);
     expect(onSharedConnection).toHaveBeenCalledWith(2);
 
     unregister();
-    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
+      false,
+    );
     expect(onSharedConnection).toHaveBeenCalledTimes(1);
     expect(client.listenerCount("ws_message")).toBe(0);
   });

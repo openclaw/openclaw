@@ -42,7 +42,7 @@ Both transports are production-ready and reach feature parity for messaging, sla
 </Note>
 
 <Warning>
-  Slack can maintain multiple Socket Mode connections for one app and may deliver each payload to any connection. Separate OpenClaw gateways that share an app token therefore need equivalent routing and authorization configuration. Otherwise, use a separate Slack app per gateway, a single relay ingress, or HTTP Request URLs behind a load balancer. See [Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections).
+  Slack can maintain multiple Socket Mode connections for one app and may deliver each payload to any connection. Separate OpenClaw gateways that share a Slack app therefore need equivalent routing and authorization configuration. Otherwise, use a separate Slack app per gateway, a single relay ingress, or HTTP Request URLs behind a load balancer. See [Using Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections).
 </Warning>
 
 ### Relay mode
