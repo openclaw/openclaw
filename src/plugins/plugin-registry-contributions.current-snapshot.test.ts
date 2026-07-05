@@ -9,7 +9,11 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
+import {
+  listPluginContributionIds,
+  loadPluginManifestRegistryForPluginRegistry,
+  resolveProviderOwners,
+} from "./plugin-registry-contributions.js";
 
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
@@ -33,11 +37,11 @@ function createPluginRecord(id: string, enabled: boolean): InstalledPluginIndex[
   } as unknown as InstalledPluginIndex["plugins"][number];
 }
 
-function createManifest(id: string): PluginManifestRecord {
+function createManifest(id: string, origin: PluginManifestRecord["origin"] = "global"): PluginManifestRecord {
   return {
     id,
-    origin: "global",
-    providers: [],
+    origin,
+    providers: [id],
     channels: [],
     channelConfigs: {},
     cliBackends: [],
@@ -140,6 +144,61 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
         pluginIds: ["disabled"],
       }).plugins.map((plugin) => plugin.id),
     ).toEqual(["disabled"]);
+  });
+
+  it("keeps enabled load-path plugins when reusing scoped current metadata", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "load-path": { enabled: true },
+        },
+      },
+    };
+    const env = {
+      HOME: "/tmp/openclaw-test-home",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config, workspaceDir });
+    const loadPathPlugin = createManifest("load-path", "config");
+    setCurrentPluginMetadataSnapshot(
+      {
+        ...snapshot,
+        manifestRegistry: {
+          plugins: [...snapshot.manifestRegistry.plugins, loadPathPlugin],
+          diagnostics: [],
+        },
+        plugins: [...snapshot.plugins, loadPathPlugin],
+        byPluginId: new Map([...snapshot.byPluginId, [loadPathPlugin.id, loadPathPlugin]]),
+      },
+      { config, env, workspaceDir },
+    );
+
+    const lookUpTable = {
+      index: snapshot.index,
+      manifestRegistry: {
+        plugins: [...snapshot.manifestRegistry.plugins, loadPathPlugin],
+        diagnostics: [],
+      },
+      plugins: [...snapshot.plugins, loadPathPlugin],
+      normalizePluginId: snapshot.normalizePluginId,
+      owners: {
+        ...snapshot.owners,
+        providers: new Map([...snapshot.owners.providers, ["load-path", ["load-path"]]]),
+      },
+    };
+
+    expect(
+      loadPluginManifestRegistryForPluginRegistry({ config, env, workspaceDir }).plugins.map(
+        (plugin) => plugin.id,
+      ),
+    ).toContain("load-path");
+    expect(
+      listPluginContributionIds({ lookUpTable, config, contribution: "providers" }),
+    ).toContain("load-path");
+    expect(resolveProviderOwners({ lookUpTable, config, providerId: "load-path" })).toEqual([
+      "load-path",
+    ]);
   });
 
   it("does not reuse current metadata for explicit registry inputs or diagnostics", () => {

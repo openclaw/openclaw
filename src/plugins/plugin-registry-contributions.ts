@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig, resolveEnableState } from "./config-state.js";
 import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig,
@@ -179,23 +180,78 @@ function resolveContributionPluginIds(params: {
     .map((plugin) => plugin.pluginId);
 }
 
+function resolveContributionScopePluginIds(params: {
+  index: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
+  includeDisabled?: boolean;
+  config?: OpenClawConfig;
+}): readonly string[] {
+  const pluginIds = new Set(
+    resolveContributionPluginIds({
+      index: params.index,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+  );
+  if (!params.manifestRegistry) {
+    return [...pluginIds];
+  }
+  const indexedPluginIds = new Set(params.index.plugins.map((plugin) => plugin.pluginId));
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  for (const plugin of params.manifestRegistry.plugins) {
+    if (indexedPluginIds.has(plugin.id)) {
+      continue;
+    }
+    if (
+      params.includeDisabled ||
+      resolveEnableState(plugin.id, plugin.origin, normalizedConfig).enabled
+    ) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return [...pluginIds];
+}
+
+function filterManifestRegistryForContributionScope(params: {
+  manifestRegistry: PluginManifestRegistry;
+  index: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+  config?: OpenClawConfig;
+}): PluginManifestRegistry {
+  const pluginIds = new Set(
+    resolveContributionScopePluginIds({
+      index: params.index,
+      manifestRegistry: params.manifestRegistry,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+  );
+  return {
+    plugins: params.manifestRegistry.plugins.filter((plugin) => pluginIds.has(plugin.id)),
+    diagnostics: params.manifestRegistry.diagnostics.filter(
+      (diagnostic) => !diagnostic.pluginId || pluginIds.has(diagnostic.pluginId),
+    ),
+  };
+}
+
 function loadContributionManifestRegistry(
   params: LoadPluginRegistryParams & {
     index: PluginRegistrySnapshot;
     includeDisabled?: boolean;
   },
 ): PluginManifestRegistry {
-  return loadPluginManifestRegistryForInstalledIndex({
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index: params.index,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    pluginIds: resolveContributionPluginIds({
-      index: params.index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    }),
     includeDisabled: true,
+  });
+  return filterManifestRegistryForContributionScope({
+    manifestRegistry,
+    index: params.index,
+    includeDisabled: params.includeDisabled,
+    config: params.config,
   });
 }
 
@@ -207,8 +263,9 @@ function listContributionManifestPlugins(
   const plugins = params.lookUpTable?.plugins;
   if (plugins) {
     const enabledPluginIds = new Set(
-      resolveContributionPluginIds({
+      resolveContributionScopePluginIds({
         index: params.index,
+        manifestRegistry: params.lookUpTable.manifestRegistry,
         includeDisabled: params.includeDisabled,
         config: params.config,
       }),
@@ -249,12 +306,14 @@ function resolveContributionOwnerMap(
 function filterContributionOwnerIds(params: {
   owners: readonly string[];
   index: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
   includeDisabled?: boolean;
   config?: OpenClawConfig;
 }): readonly string[] {
   const enabledPluginIds = new Set(
-    resolveContributionPluginIds({
+    resolveContributionScopePluginIds({
       index: params.index,
+      manifestRegistry: params.manifestRegistry,
       includeDisabled: params.includeDisabled,
       config: params.config,
     }),
@@ -296,9 +355,12 @@ function loadCurrentManifestRegistryForPluginRegistry(
   }
   const pluginIdSet = params.pluginIds === undefined ? undefined : new Set(params.pluginIds);
   const enabledPluginIds = new Set(
-    current.index.plugins
-      .filter((plugin) => params.includeDisabled || plugin.enabled)
-      .map((plugin) => plugin.pluginId),
+    resolveContributionScopePluginIds({
+      index: current.index,
+      manifestRegistry: current.manifestRegistry,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
   );
   return {
     plugins: current.manifestRegistry.plugins.filter(
@@ -367,6 +429,7 @@ export function resolvePluginContributionOwners(
       return filterContributionOwnerIds({
         owners,
         index,
+        manifestRegistry: params.lookUpTable.manifestRegistry,
         includeDisabled: params.includeDisabled,
         config: params.config,
       });
@@ -401,6 +464,7 @@ export function resolveProviderOwners(params: ResolveProviderOwnersParams): read
     return filterContributionOwnerIds({
       owners,
       index,
+      manifestRegistry: params.lookUpTable.manifestRegistry,
       includeDisabled: params.includeDisabled,
       config: params.config,
     });

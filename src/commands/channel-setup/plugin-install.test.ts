@@ -89,8 +89,14 @@ vi.mock("../../plugins/loader.js", () => ({
 }));
 
 const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({ candidates: [], diagnostics: [] }));
+const discoverConfiguredPluginLoadPathCandidates = vi.fn((_args?: unknown) => ({
+  candidates: [],
+  diagnostics: [],
+}));
 vi.mock("../../plugins/discovery.js", () => ({
   discoverOpenClawPlugins: (args: unknown) => discoverOpenClawPlugins(args),
+  discoverConfiguredPluginLoadPathCandidates: (args: unknown) =>
+    discoverConfiguredPluginLoadPathCandidates(args),
 }));
 
 import fs from "node:fs";
@@ -223,6 +229,7 @@ beforeEach(() => {
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
   discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
+  discoverConfiguredPluginLoadPathCandidates.mockReturnValue({ candidates: [], diagnostics: [] });
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
   listChannelPluginCatalogEntries.mockReturnValue([]);
   loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
