@@ -187,6 +187,24 @@ function validateMaxBytes(maxBytes: number): void {
   }
 }
 
+async function readBufferedResponsePrefix(
+  res: Response,
+  maxBytes: number,
+): Promise<ReadResponsePrefixResult> {
+  const fallback = Buffer.from(
+    await // boundary-safety-ignore boundary/response-body-limit: no stream exists; enforce maxBytes after fallback.
+    res.arrayBuffer(),
+  );
+  if (fallback.length > maxBytes) {
+    return {
+      buffer: fallback.subarray(0, maxBytes),
+      size: fallback.length,
+      truncated: true,
+    };
+  }
+  return { buffer: fallback, size: fallback.length, truncated: false };
+}
+
 async function readResponsePrefix(
   response: Response,
   maxBytes: number,
@@ -199,7 +217,7 @@ async function readResponsePrefix(
   validateMaxBytes(maxBytes);
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
-    return { buffer: Buffer.alloc(0), size: 0, truncated: false };
+    return await readBufferedResponsePrefix(response, maxBytes);
   }
 
   const reader = body.getReader();

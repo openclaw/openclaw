@@ -30,6 +30,14 @@ function makeStallingStream(initialChunks: Uint8Array[], onCancel?: (reason?: un
   });
 }
 
+function makeBodylessResponse(bytes: Uint8Array): Response {
+  return {
+    body: null,
+    arrayBuffer: async () =>
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  } as Response;
+}
+
 async function expectIdleTimeout(
   createReadPromise: () => Promise<unknown>,
   expectedError: RegExp | string = /stalled/i,
@@ -127,6 +135,22 @@ describe("readResponseWithLimit", () => {
       });
     },
   );
+
+  it("reads body-less buffered responses within the byte limit", async () => {
+    await expectReadResponseWithLimitSuccessCase({
+      response: makeBodylessResponse(new TextEncoder().encode("hello")),
+      maxBytes: 5,
+      expected: Buffer.from("hello"),
+    });
+  });
+
+  it("rejects body-less buffered responses above the byte limit", async () => {
+    await expectReadResponseWithLimitFailureCase({
+      response: makeBodylessResponse(new TextEncoder().encode("hello")),
+      maxBytes: 4,
+      expectedError: /too large/i,
+    });
+  });
 
   it.each([
     {
@@ -267,6 +291,22 @@ describe("readResponseTextSnippet", () => {
       expected: "1234…",
     });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves body-less buffered response snippets under the byte limit", async () => {
+    await expectReadResponseTextSnippetCase({
+      response: makeBodylessResponse(new TextEncoder().encode("hello   \n world")),
+      options: { maxBytes: 64, maxChars: 50 },
+      expected: "hello world",
+    });
+  });
+
+  it("truncates body-less buffered response snippets at the byte limit", async () => {
+    await expectReadResponseTextSnippetCase({
+      response: makeBodylessResponse(new TextEncoder().encode("1234567890")),
+      options: { maxBytes: 7, maxChars: 50 },
+      expected: "1234567…",
+    });
   });
 
   it.each([
