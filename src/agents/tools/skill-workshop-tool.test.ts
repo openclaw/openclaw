@@ -128,6 +128,19 @@ describe("skill_workshop tool", () => {
             "skill-workshop",
             "proposals",
             (result.details as { id: string }).id,
+            "PROPOSAL.md",
+          ),
+        )
+        .then((buffer) => buffer.at(-1)),
+    ).resolves.toBe(0x0a);
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
             "proposal.json",
           ),
           "utf8",

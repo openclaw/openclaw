@@ -205,6 +205,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const proposalContent = readStringParam(params, "proposal_content", {
         required: true,
         label: "proposal_content",
+        trim: false,
       });
       const supportFiles = readSupportFilesParam(params);
       const goal = readStringParam(params, "goal");
