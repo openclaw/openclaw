@@ -162,8 +162,6 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  /** Callback to navigate back to Quick Settings. Shown in accordion mode. */
-  onBackToQuick?: () => void;
   webPush?: WebPushUiState;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
@@ -1390,23 +1388,6 @@ export function renderConfig(props: ConfigProps) {
   function renderAccordionNav() {
     return html`
       <div class="config-accordion-nav">
-        ${props.onBackToQuick
-          ? html`
-              <button class="config-accordion-nav__back" @click=${props.onBackToQuick}>
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  width="14"
-                  height="14"
-                >
-                  <polyline points="15 18 9 12 15 6"></polyline>
-                </svg>
-                Quick Settings
-              </button>
-            `
-          : nothing}
         ${allCategories.map(
           (cat) => html`
             <div class="config-accordion-group">
