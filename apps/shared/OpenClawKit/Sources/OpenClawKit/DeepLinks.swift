@@ -1,5 +1,9 @@
 import Foundation
 
+private func defaultGatewayPort(tls: Bool) -> Int {
+    tls ? 443 : 18789
+}
+
 public enum DeepLinkRoute: Sendable, Equatable {
     case agent(AgentDeepLink)
     case gateway(GatewayConnectDeepLink)
@@ -122,7 +126,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         }
         return GatewayConnectDeepLink(
             host: host,
-            port: payload.port ?? (tls ? 443 : 18789),
+            port: payload.port ?? defaultGatewayPort(tls: tls),
             tls: tls,
             bootstrapToken: payload.bootstrapToken,
             token: payload.token,
@@ -149,7 +153,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         }
         return GatewayConnectDeepLink(
             host: hostname,
-            port: parsed.port ?? (tls ? 443 : 18789),
+            port: parsed.port ?? defaultGatewayPort(tls: tls),
             tls: tls,
             bootstrapToken: bootstrapToken,
             token: token,
@@ -254,7 +258,7 @@ public enum DeepLinkParser {
                 return nil
             }
             let tls = (query["tls"] as NSString?)?.boolValue ?? false
-            let port = query["port"].flatMap { Int($0) } ?? (tls ? 443 : 18789)
+            let port = query["port"].flatMap { Int($0) } ?? defaultGatewayPort(tls: tls)
             if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
                 return nil
             }
