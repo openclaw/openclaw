@@ -469,8 +469,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       params.onCronRestart?.();
       const stopCronForHotReload = state.cronState.stopCronForHotReload;
       const nextCronStorePath = resolveCronJobsStorePath(nextConfig.cron?.store);
+      const nextCronEnabled =
+        process.env.OPENCLAW_SKIP_CRON !== "1" && nextConfig.cron?.enabled !== false;
       const preserveCronExitWatchers =
-        state.cronState.storePath === nextCronStorePath && stopCronForHotReload !== undefined;
+        nextCronEnabled &&
+        state.cronState.storePath === nextCronStorePath &&
+        stopCronForHotReload !== undefined;
       // Hot reload keeps unchanged, same-store on-exit watcher children alive; the
       // rebuilt cron service updates their callbacks before reconcile cancels removed jobs.
       if (preserveCronExitWatchers) {
