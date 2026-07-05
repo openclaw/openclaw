@@ -37,12 +37,13 @@ const runtime: RuntimeEnv = {
   },
 };
 
+type ReplacableRespond = (runId: string, sessionKey: string, text: string) => Promise<void>;
+
 const { backend } = await new Promise<{
   backend: {
     sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
     onEvent?: (evt: { event: string; payload?: { state?: string; errorMessage?: string } }) => void;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    respond?: any;
+    respond?: ReplacableRespond;
   };
 }>((resolve) => {
   void runCrestodianTui(

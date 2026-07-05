@@ -75,6 +75,7 @@ describe("runCrestodianTui", () => {
   });
 
   it("catches a rejecting respond promise in sendChat and emits an error event", async () => {
+    type ReplacableRespond = (runId: string, sessionKey: string, text: string) => Promise<void>;
     const backendWithEngine = await new Promise<{
       backend: {
         sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
@@ -83,8 +84,7 @@ describe("runCrestodianTui", () => {
           payload?: { state?: string; errorMessage?: string };
         }) => void;
         engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        respond?: any;
+        respond?: ReplacableRespond;
       };
       dispose: () => Promise<void>;
     }>((resolve) => {
@@ -100,8 +100,7 @@ describe("runCrestodianTui", () => {
               }) => void;
               engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
               dispose: () => Promise<void>;
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              respond: any;
+              respond: ReplacableRespond;
             };
             resolve({ backend, dispose: async () => backend.dispose() });
             return { exitReason: "exit" };
