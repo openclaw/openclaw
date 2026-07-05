@@ -104,15 +104,10 @@ type BasePluginUpdateOutcome = {
   warning?: string;
 };
 
-export type PluginUpdateOutcome =
-  | (BasePluginUpdateOutcome & {
-      status: "skipped";
-      code?: ClawHubTrustErrorCode;
-    })
-  | (BasePluginUpdateOutcome & {
-      status: Exclude<PluginUpdateStatus, "skipped">;
-      code?: string;
-    });
+export type PluginUpdateOutcome = BasePluginUpdateOutcome & {
+  status: PluginUpdateStatus;
+  code?: string;
+};
 
 export type PluginUpdateSummary = {
   config: OpenClawConfig;
@@ -1428,6 +1423,7 @@ export async function updateNpmInstalledPlugins(params: {
     pluginId: string,
     message: string,
     channelFallback?: PluginUpdateChannelFallback,
+    code?: string,
   ) => {
     if (params.disableOnFailure && !params.dryRun) {
       const disabledMessage =
@@ -1439,6 +1435,7 @@ export async function updateNpmInstalledPlugins(params: {
       outcomes.push({
         pluginId,
         status: "skipped",
+        ...(code ? { code } : {}),
         message: disabledMessage,
         ...(channelFallback ? { channelFallback } : {}),
       });
@@ -1447,6 +1444,7 @@ export async function updateNpmInstalledPlugins(params: {
     outcomes.push({
       pluginId,
       status: "error",
+      ...(code ? { code } : {}),
       message,
       ...(channelFallback ? { channelFallback } : {}),
     });
@@ -1537,6 +1535,12 @@ export async function updateNpmInstalledPlugins(params: {
           ? clawhubSpecs?.recordSpec
           : record.spec;
     const targetCode = npmSpecs?.targetCode;
+    const targetFailureCode =
+      targetCode === "monthly_cohort_target"
+        ? "cohort_package_unavailable"
+        : targetCode === "extended_stable_target"
+          ? "exact_package_unavailable"
+          : undefined;
     const officialNpmFallbackSpecs =
       record.source === "clawhub"
         ? resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate({
@@ -1827,7 +1831,12 @@ export async function updateNpmInstalledPlugins(params: {
                     logger,
                   });
       } catch (err) {
-        recordFailure(pluginId, `Failed to check ${pluginId}: ${String(err)}`);
+        recordFailure(
+          pluginId,
+          `Failed to check ${pluginId}: ${String(err)}`,
+          undefined,
+          targetFailureCode,
+        );
         continue;
       }
       let usedNpmFallback = false;
@@ -1997,6 +2006,7 @@ export async function updateNpmInstalledPlugins(params: {
                     error: probe.error,
                   }),
           npmChannelFallback,
+          targetFailureCode,
         );
         continue;
       }
@@ -2132,7 +2142,12 @@ export async function updateNpmInstalledPlugins(params: {
                   logger,
                 });
     } catch (err) {
-      recordFailure(pluginId, `Failed to update ${pluginId}: ${String(err)}`);
+      recordFailure(
+        pluginId,
+        `Failed to update ${pluginId}: ${String(err)}`,
+        undefined,
+        targetFailureCode,
+      );
       continue;
     }
     let usedNpmFallback = false;
@@ -2302,6 +2317,7 @@ export async function updateNpmInstalledPlugins(params: {
                   error: result.error,
                 }),
         npmChannelFallback,
+        targetFailureCode,
       );
       continue;
     }

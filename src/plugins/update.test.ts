@@ -772,6 +772,50 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("reports an unavailable cohort package without falling back to latest", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.20",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.6.21" });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "package unavailable",
+      code: "NPM_PACKAGE_NOT_FOUND",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.20",
+        resolvedVersion: "2026.6.20",
+      }),
+      pluginIds: ["acpx"],
+      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        support: { schemaVersion: 1, plugins: [] },
+        cohort: {
+          schemaVersion: 1,
+          releaseLine: "2026.6",
+          baselineVersion: "2026.6.21",
+        },
+        cohortPackageNames: new Set(["@openclaw/acpx"]),
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.21");
+    expect(result.outcomes[0]).toMatchObject({
+      status: "error",
+      code: "cohort_package_unavailable",
+    });
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx");
+  });
+
   it("pins unchanged official npm records during official sync", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
