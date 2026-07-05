@@ -1,19 +1,11 @@
 {
-  "fallbackKeys": [
-    "usage.costWindows.lastDays",
-    "usage.costWindows.perDay",
-    "usage.costWindows.selectedRange",
-    "usage.costWindows.subtitle",
-    "usage.costWindows.title",
-    "usage.daily.compressedScaleHint",
-    "usage.overview.costShare"
-  ],
-  "generatedAt": "2026-07-05T19:00:03.079Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-05T20:24:38.579Z",
   "locale": "hi",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
   "sourceHash": "944c4fb40108295f1f35ce0242ed991c18eacd760c77acdd63631b5288845304",
   "totalKeys": 1534,
-  "translatedKeys": 1527,
+  "translatedKeys": 1534,
   "workflow": 1
 }
