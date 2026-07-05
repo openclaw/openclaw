@@ -390,12 +390,12 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           log?.info(
             `[qqbot:${account.accountId}] Gateway disconnected${reason ? `: ${reason}` : ""}`,
           );
-          // Raw connected=false asks the shared health monitor to recover the
-          // channel. Fatal closes must not enter that restart loop; the status
-          // adapter still projects an absent connection state as disconnected.
+          // Keep the raw lifecycle snapshot truthful so readiness and the shared
+          // health monitor see the failed transport. QQBot's fatal flag only
+          // suppresses its immediate reconnect policy.
           ctx.setStatus({
             ...ctx.getStatus(),
-            connected: fatal ? undefined : false,
+            connected: false,
             ...(fatal && reason ? { lastError: reason } : {}),
           });
         },

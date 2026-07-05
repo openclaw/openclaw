@@ -75,15 +75,13 @@ describe("qqbot channel gateway status", () => {
     expect(getStatus().running).toBe(true);
   });
 
-  it("records the close reason as lastError on a fatal disconnect", async () => {
+  it("marks fatal disconnects unhealthy and records the close reason", async () => {
     const { account, options, getStatus } = await startAccountAndCaptureGatewayOptions();
 
     options.onReady?.({});
     options.onDisconnected?.({ reason: "banned", fatal: true });
 
-    // connected=false is the shared health monitor's recoverable-disconnect
-    // signal. Fatal closes clear the raw signal so they stay stopped.
-    expect(getStatus().connected).toBeUndefined();
+    expect(getStatus().connected).toBe(false);
     // `running` is owned by the gateway lifecycle store: the account task
     // stays held until an explicit stop/abort, so the plugin must not
     // flip it here (a Start action would no-op against a held task).
