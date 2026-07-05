@@ -449,6 +449,101 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("includes explicit load-path plugins when reconstructing from an installed index", () => {
+    const installedRoot = makeTempDir();
+    const configuredRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(configuredRoot, "configured", "configured-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [configuredRoot] },
+          entries: {
+            configured: { enabled: true },
+          },
+          allow: ["installed", "configured"],
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["installed", "configured"]);
+    expect(registry.plugins.map((plugin) => plugin.origin)).toEqual(["global", "config"]);
+    expect(registry.plugins.map((plugin) => plugin.modelSupport)).toEqual([
+      { modelPrefixes: ["installed-"] },
+      { modelPrefixes: ["configured-"] },
+    ]);
+  });
+
+  it("does not warn when load-path plugin requirements are already in the installed index", () => {
+    const installedRoot = makeTempDir();
+    const configuredRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(configuredRoot, "configured", "configured-");
+    fs.writeFileSync(
+      path.join(configuredRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "configured",
+        requiresPlugins: ["installed"],
+        configSchema: { type: "object" },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [configuredRoot] },
+          allow: ["installed", "configured"],
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+      pluginIds: ["configured"],
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["configured"]);
+    expect(registry.diagnostics).toStrictEqual([]);
+  });
+
+  it("hides disabled load-path plugins when reconstructing from an installed index", () => {
+    const installedRoot = makeTempDir();
+    const configuredRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(configuredRoot, "configured", "configured-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [configuredRoot] },
+          entries: {
+            configured: { enabled: false },
+          },
+          allow: ["installed", "configured"],
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["installed"]);
+    expect(registry.diagnostics).toStrictEqual([]);
+  });
+
   it("reconstructs bundle candidates with their bundle manifest format", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });

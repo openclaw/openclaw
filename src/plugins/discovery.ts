@@ -405,10 +405,22 @@ function mergeDiscoveryResult(
 
 function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): void {
   const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
+  addMissingRequiredPluginDiagnosticsForCandidates({
+    candidates: result.candidates,
+    knownCandidateIds: candidateIds,
+    diagnostics: result.diagnostics,
+  });
+}
+
+function addMissingRequiredPluginDiagnosticsForCandidates(params: {
+  candidates: readonly PluginCandidate[];
+  knownCandidateIds: ReadonlySet<string>;
+  diagnostics: PluginDiagnostic[];
+}): void {
   const seen = new Set<string>();
-  for (const candidate of result.candidates) {
+  for (const candidate of params.candidates) {
     for (const requiredPluginId of candidate.requiredPluginIds ?? []) {
-      if (candidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
+      if (params.knownCandidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
         continue;
       }
       const key = `${candidate.idHint}\0${requiredPluginId}`;
@@ -416,7 +428,7 @@ function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): voi
         continue;
       }
       seen.add(key);
-      result.diagnostics.push({
+      params.diagnostics.push({
         level: "warn",
         pluginId: candidate.idHint,
         source: candidate.requiredPluginSource ?? candidate.source,
@@ -1207,6 +1219,53 @@ function readChildDirectoryNames(dir: string | undefined): Set<string> {
   }
 }
 
+function discoverConfiguredLoadPaths(params: {
+  loadPaths?: readonly string[];
+  roots: ReturnType<typeof resolvePluginSourceRoots>;
+  workspaceDir?: string;
+  ownershipUid?: number | null;
+  env: NodeJS.ProcessEnv;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+  realpathCache: Map<string, string>;
+  packageManifestCache: Map<string, PackageManifest | null>;
+}): void {
+  for (const loadPath of params.loadPaths ?? []) {
+    if (typeof loadPath !== "string") {
+      continue;
+    }
+    const trimmed = loadPath.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const bundledAlias = resolvePackagedBundledLoadPathAlias({
+      bundledRoot: params.roots.stock,
+      loadPath: resolveUserPath(trimmed, params.env),
+    });
+    if (bundledAlias) {
+      params.diagnostics.push({
+        level: "warn",
+        source: trimmed,
+        message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
+      });
+      continue;
+    }
+    discoverFromPath({
+      rawPath: trimmed,
+      origin: "config",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      candidates: params.candidates,
+      diagnostics: params.diagnostics,
+      seen: params.seen,
+      realpathCache: params.realpathCache,
+      packageManifestCache: params.packageManifestCache,
+    });
+  }
+}
+
 function discoverFromPath(params: {
   rawPath: string;
   origin: PluginOrigin;
@@ -1447,40 +1506,18 @@ export function discoverOpenClawPlugins(params: {
     () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
-      const extra = params.extraPaths ?? [];
-      for (const extraPath of extra) {
-        if (typeof extraPath !== "string") {
-          continue;
-        }
-        const trimmed = extraPath.trim();
-        if (!trimmed) {
-          continue;
-        }
-        const bundledAlias = resolvePackagedBundledLoadPathAlias({
-          bundledRoot: roots.stock,
-          loadPath: resolveUserPath(trimmed, env),
-        });
-        if (bundledAlias) {
-          result.diagnostics.push({
-            level: "warn",
-            source: trimmed,
-            message: `ignored plugins.load.paths entry that points at OpenClaw's ${bundledAlias.kind} bundled plugin directory; remove this redundant path or run openclaw doctor --fix`,
-          });
-          continue;
-        }
-        discoverFromPath({
-          rawPath: trimmed,
-          origin: "config",
-          ownershipUid: params.ownershipUid,
-          workspaceDir,
-          env,
-          candidates: result.candidates,
-          diagnostics: result.diagnostics,
-          seen,
-          realpathCache,
-          packageManifestCache,
-        });
-      }
+      discoverConfiguredLoadPaths({
+        loadPaths: params.extraPaths,
+        roots,
+        ownershipUid: params.ownershipUid,
+        workspaceDir,
+        env,
+        candidates: result.candidates,
+        diagnostics: result.diagnostics,
+        seen,
+        realpathCache,
+        packageManifestCache,
+      });
       const workspaceMatchesBundledRoot = resolvesToSameDirectory(
         workspaceRoot,
         roots.stock,
@@ -1630,6 +1667,47 @@ export function discoverOpenClawPlugins(params: {
   const seenDiagnostics = new Set<string>();
   mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
   mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
+  addMissingRequiredPluginDiagnostics(result);
+  return result;
+}
+
+export function discoverConfiguredPluginLoadPathCandidates(params: {
+  workspaceDir?: string;
+  loadPaths?: readonly string[];
+  knownCandidates?: readonly PluginCandidate[];
+  ownershipUid?: number | null;
+  env?: NodeJS.ProcessEnv;
+}): PluginDiscoveryResult {
+  const env = params.env ?? process.env;
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
+  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const result = createDiscoveryResult();
+  const seen = new Set<string>();
+  const realpathCache = new Map<string, string>();
+  const packageManifestCache = new Map<string, PackageManifest | null>();
+  discoverConfiguredLoadPaths({
+    loadPaths: params.loadPaths,
+    roots,
+    ownershipUid: params.ownershipUid,
+    workspaceDir,
+    env,
+    candidates: result.candidates,
+    diagnostics: result.diagnostics,
+    seen,
+    realpathCache,
+    packageManifestCache,
+  });
+  if (params.knownCandidates && params.knownCandidates.length > 0) {
+    addMissingRequiredPluginDiagnosticsForCandidates({
+      candidates: result.candidates,
+      knownCandidateIds: new Set(
+        [...params.knownCandidates, ...result.candidates].map((candidate) => candidate.idHint),
+      ),
+      diagnostics: result.diagnostics,
+    });
+    return result;
+  }
   addMissingRequiredPluginDiagnostics(result);
   return result;
 }
