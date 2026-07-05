@@ -8,6 +8,40 @@ enum QRScannerResult: Equatable {
 }
 
 @MainActor
+struct GatewayPendingTargetSuppression {
+    enum Owner: Equatable {
+        case qrScanner
+        case setupLink
+    }
+
+    private var value: (owner: Owner, lease: GatewayConnectionController.AutoConnectSuppressionLease)?
+
+    mutating func replace(
+        owner: Owner,
+        lease: GatewayConnectionController.AutoConnectSuppressionLease)
+    {
+        self.value = (owner, lease)
+    }
+
+    mutating func take(ifOwnedBy owner: Owner? = nil) -> GatewayConnectionController.AutoConnectSuppressionLease? {
+        guard let value = self.value else { return nil }
+        if let owner, value.owner != owner { return nil }
+        self.value = nil
+        return value.lease
+    }
+
+    mutating func resumeAutoConnect(_ owner: Owner? = nil, controller: GatewayConnectionController) {
+        guard let lease = self.take(ifOwnedBy: owner) else { return }
+        controller.resumeAutoConnect(after: lease)
+    }
+
+    mutating func releaseAutoConnect(_ owner: Owner? = nil, controller: GatewayConnectionController) {
+        guard let lease = self.take(ifOwnedBy: owner) else { return }
+        controller.releaseAutoConnectSuppression(after: lease)
+    }
+}
+
+@MainActor
 final class QRScannerResultHandoff {
     /// SwiftUI's onDismiss can precede VisionKit's AV capture teardown. Delay
     /// pairing UI briefly so it cannot race the scanner's camera shutdown.

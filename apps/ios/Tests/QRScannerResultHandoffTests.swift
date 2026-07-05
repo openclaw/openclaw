@@ -118,3 +118,24 @@ struct GatewaySetupLinkStagingTests {
         #expect(staging.take() == replacement)
     }
 }
+
+@MainActor
+struct GatewayPendingTargetSuppressionTests {
+    @Test func `new setup target cannot be released by stale scanner dismissal`() {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        var pending = GatewayPendingTargetSuppression()
+        let scannerLease = controller.cancelPendingConnectionAttempts()
+        pending.replace(owner: .qrScanner, lease: scannerLease)
+        let setupLease = controller.cancelPendingConnectionAttempts()
+        pending.replace(owner: .setupLink, lease: setupLease)
+
+        #expect(pending.take(ifOwnedBy: .qrScanner) == nil)
+        let activeLease = pending.take(ifOwnedBy: .setupLink)
+        #expect(activeLease != nil)
+        if let activeLease {
+            controller.releaseAutoConnectSuppression(after: activeLease)
+        }
+        #expect(!controller._test_isAutoConnectSuppressed())
+    }
+}

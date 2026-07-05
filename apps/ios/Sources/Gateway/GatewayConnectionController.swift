@@ -88,6 +88,13 @@ final class GatewayConnectionController {
         }
     }
 
+    struct AutoConnectSuppressionLease {
+        fileprivate let generation: UInt64
+        fileprivate let previousAutoReconnectEnabled: Bool
+        fileprivate let restoresAutoReconnect: Bool
+        fileprivate let suspendedConfig: GatewayConnectConfig?
+    }
+
     private(set) var gateways: [GatewayDiscoveryModel.DiscoveredGateway] = []
     private(set) var discoveryStatusText: String = "Idle"
     private(set) var discoveryDebugLog: [GatewayDiscoveryModel.DebugLogEntry] = []
@@ -104,6 +111,10 @@ final class GatewayConnectionController {
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
     private var autoConnectSuppressionGeneration: UInt64?
+    private var autoConnectSuppressionBaseline: (
+        autoReconnectEnabled: Bool,
+        restoresAutoReconnect: Bool,
+        suspendedConfig: GatewayConnectConfig?)?
     @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
@@ -223,7 +234,7 @@ final class GatewayConnectionController {
         forceReconnect: Bool = false) async -> String?
     {
         let connectAttempt = self.beginConnectAttempt()
-        defer { self.finishConnectAttempt(connectAttempt.controllerGeneration) }
+        defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
         self.requestLocalNetworkAccess(reason: "connect_discovered_gateway", allowAutoReconnect: false)
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -236,7 +247,7 @@ final class GatewayConnectionController {
         } else {
             await self.resolveServiceEndpoint(gateway.endpoint)
         }
-        guard self.connectAttemptGeneration == connectAttempt.controllerGeneration else { return nil }
+        guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return nil }
         guard let target else {
             return "Failed to resolve the discovered gateway endpoint."
         }
@@ -263,7 +274,7 @@ final class GatewayConnectionController {
                 url: url,
                 queueLabel: "gateway.tls.discovered")
             else { return nil }
-            guard self.connectAttemptGeneration == connectAttempt.controllerGeneration else { return nil }
+            guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return nil }
             switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = GatewayPendingTrustConnect(
@@ -272,7 +283,7 @@ final class GatewayConnectionController {
                     isManual: false,
                     authOverride: nil,
                     allowStoredDeviceAuth: true,
-                    controllerGeneration: connectAttempt.controllerGeneration,
+                    suppressionLease: connectAttempt.suppressionLease,
                     gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
@@ -313,7 +324,7 @@ final class GatewayConnectionController {
             password: credentials.password,
             allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth,
             forceReconnect: forceReconnect,
-            suppressionGeneration: connectAttempt.controllerGeneration,
+            suppressionGeneration: connectAttempt.suppressionLease.generation,
             expectedGeneration: connectAttempt.gatewayGeneration)
         return nil
     }
@@ -330,7 +341,7 @@ final class GatewayConnectionController {
         forceReconnect: Bool = false) async
     {
         let connectAttempt = self.beginConnectAttempt()
-        defer { self.finishConnectAttempt(connectAttempt.controllerGeneration) }
+        defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
         self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = Self.resolvedManualPort(host: host, port: port)
@@ -363,7 +374,7 @@ final class GatewayConnectionController {
                 url: url,
                 queueLabel: "gateway.tls.manual")
             else { return }
-            guard self.connectAttemptGeneration == connectAttempt.controllerGeneration else { return }
+            guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return }
             switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = GatewayPendingTrustConnect(
@@ -372,7 +383,7 @@ final class GatewayConnectionController {
                     isManual: true,
                     authOverride: pendingAuthOverride,
                     allowStoredDeviceAuth: !suppressStoredDeviceAuth,
-                    controllerGeneration: connectAttempt.controllerGeneration,
+                    suppressionLease: connectAttempt.suppressionLease,
                     gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
@@ -415,7 +426,7 @@ final class GatewayConnectionController {
             password: password,
             allowStoredDeviceAuth: !suppressStoredDeviceAuth,
             forceReconnect: forceReconnect,
-            suppressionGeneration: connectAttempt.controllerGeneration,
+            suppressionGeneration: connectAttempt.suppressionLease.generation,
             expectedGeneration: connectAttempt.gatewayGeneration)
     }
 
@@ -470,11 +481,70 @@ final class GatewayConnectionController {
         self.pendingTrustConnect = nil
     }
 
-    func cancelPendingConnectionAttempts() {
+    @discardableResult
+    func cancelPendingConnectionAttempts(
+        suspendCurrentGateway: Bool = false) -> AutoConnectSuppressionLease
+    {
+        let lease = self.beginAutoConnectSuppression(restoresAutoReconnect: suspendCurrentGateway)
+        _ = self.reserveGatewayConnectAttempt()
+        if suspendCurrentGateway {
+            self.appModel?.suspendGatewayForTargetReview()
+        }
+        return lease
+    }
+
+    private func beginAutoConnectSuppression(restoresAutoReconnect: Bool) -> AutoConnectSuppressionLease {
+        let baseline = if self.autoConnectSuppressionGeneration != nil,
+                          let baseline = self.autoConnectSuppressionBaseline
+        {
+            (
+                autoReconnectEnabled: baseline.autoReconnectEnabled,
+                restoresAutoReconnect: baseline.restoresAutoReconnect || restoresAutoReconnect,
+                suspendedConfig: baseline.suspendedConfig ??
+                    (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
+        } else {
+            (
+                autoReconnectEnabled: self.appModel?.gatewayAutoReconnectEnabled ?? false,
+                restoresAutoReconnect: restoresAutoReconnect,
+                suspendedConfig: restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil)
+        }
         self.connectAttemptGeneration &+= 1
         self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
+        self.autoConnectSuppressionBaseline = baseline
         self.clearPendingTrustPrompt()
-        _ = self.reserveGatewayConnectAttempt()
+        return AutoConnectSuppressionLease(
+            generation: self.connectAttemptGeneration,
+            previousAutoReconnectEnabled: baseline.autoReconnectEnabled,
+            restoresAutoReconnect: baseline.restoresAutoReconnect,
+            suspendedConfig: baseline.suspendedConfig)
+    }
+
+    func resumeAutoConnect(after lease: AutoConnectSuppressionLease) {
+        // A dismissed older target must not release suppression owned by its replacement.
+        guard self.autoConnectSuppressionGeneration == lease.generation else { return }
+        self.clearAutoConnectSuppression(generation: lease.generation)
+        if lease.restoresAutoReconnect {
+            let currentPreference = UserDefaults.standard.bool(forKey: "gateway.autoconnect")
+            if lease.previousAutoReconnectEnabled,
+               currentPreference,
+               let suspendedConfig = lease.suspendedConfig
+            {
+                self.appModel?.resumeGatewayAfterTargetReview(suspendedConfig)
+                return
+            }
+            self.appModel?.gatewayAutoReconnectEnabled = lease.previousAutoReconnectEnabled && currentPreference
+        }
+        self.attemptAutoReconnectIfNeeded()
+    }
+
+    func releaseAutoConnectSuppression(after lease: AutoConnectSuppressionLease) {
+        self.clearAutoConnectSuppression(generation: lease.generation)
+    }
+
+    private func clearAutoConnectSuppression(generation: UInt64) {
+        guard self.autoConnectSuppressionGeneration == generation else { return }
+        self.autoConnectSuppressionGeneration = nil
+        self.autoConnectSuppressionBaseline = nil
     }
 
     func acceptPendingTrustPrompt() async {
@@ -522,16 +592,20 @@ final class GatewayConnectionController {
             bootstrapToken: bootstrapToken,
             password: password,
             allowStoredDeviceAuth: pending.allowStoredDeviceAuth && !suppressStoredDeviceAuth,
-            suppressionGeneration: pending.controllerGeneration,
+            suppressionGeneration: pending.suppressionLease.generation,
             expectedGeneration: pending.gatewayGeneration)
-        if !didStart, self.autoConnectSuppressionGeneration == pending.controllerGeneration {
-            self.autoConnectSuppressionGeneration = nil
+        if !didStart {
+            self.clearAutoConnectSuppression(generation: pending.suppressionLease.generation)
         }
     }
 
     func declinePendingTrustPrompt() {
+        let lease = self.pendingTrustConnect?.suppressionLease
         self.clearPendingTrustPrompt()
         self.appModel?.gatewayStatusText = "Offline"
+        if let lease {
+            self.resumeAutoConnect(after: lease)
+        }
     }
 
     @discardableResult
@@ -615,39 +689,7 @@ final class GatewayConnectionController {
         guard !instanceId.isEmpty else { return }
 
         if manualEnabled {
-            let manualHost = defaults.string(forKey: "gateway.manual.host")?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !manualHost.isEmpty else { return }
-
-            let manualPort = defaults.integer(forKey: "gateway.manual.port")
-            let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
-            guard let resolvedPort = Self.resolvedManualPort(host: manualHost, port: manualPort)
-            else { return }
-
-            let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
-            let credentials = GatewaySettingsStore.loadGatewayCredentials(
-                instanceId: instanceId,
-                gatewayStableID: stableID)
-            let tlsParams = self.resolveManualTLSParams(
-                stableID: stableID,
-                tlsEnabled: resolvedUseTLS)
-
-            guard let url = self.buildGatewayURL(
-                host: manualHost,
-                port: resolvedPort,
-                useTLS: tlsParams?.required == true)
-            else { return }
-
-            self.didAutoConnect = true
-            self.startAutoConnect(
-                url: url,
-                gatewayStableID: stableID,
-                tls: tlsParams,
-                token: credentials.token,
-                bootstrapToken: credentials.bootstrapToken,
-                password: credentials.password,
-                allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth)
+            self.startConfiguredManualAutoConnect(defaults: defaults, instanceId: instanceId)
             return
         }
 
@@ -689,8 +731,37 @@ final class GatewayConnectionController {
             }
             return
         }
+    }
 
-        _ = self.startSavedManualEndpointFallback()
+    private func startConfiguredManualAutoConnect(defaults: UserDefaults, instanceId: String) {
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !host.isEmpty else { return }
+
+        let configuredPort = defaults.integer(forKey: "gateway.manual.port")
+        let configuredTLS = defaults.bool(forKey: "gateway.manual.tls")
+        let useTLS = self.resolveManualUseTLS(host: host, useTLS: configuredTLS)
+        guard let port = Self.resolvedManualPort(host: host, port: configuredPort) else { return }
+
+        let stableID = self.manualStableID(host: host, port: port)
+        let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: useTLS)
+        // Manual TLS auto-connect cannot present first-use trust UI, so it requires an existing pin.
+        guard !useTLS || tlsParams?.expectedFingerprint != nil else { return }
+        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+        else { return }
+
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceId,
+            gatewayStableID: stableID)
+        self.didAutoConnect = true
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: stableID,
+            tls: tlsParams,
+            token: credentials.token,
+            bootstrapToken: credentials.bootstrapToken,
+            password: credentials.password,
+            allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth)
     }
 
     private func startLastKnownAutoConnect(
@@ -758,18 +829,6 @@ final class GatewayConnectionController {
         return SavedManualEndpoint(host: host, port: resolvedPort, useTLS: resolvedUseTLS)
     }
 
-    private func startSavedManualEndpointFallback() -> Bool {
-        guard let endpoint = self.savedManualEndpointFallback() else { return false }
-        self.didAutoConnect = true
-        Task { [weak self] in
-            await self?.connectManual(
-                host: endpoint.host,
-                port: endpoint.port,
-                useTLS: endpoint.useTLS)
-        }
-        return true
-    }
-
     private func connectSavedManualEndpointFallback() async -> Bool {
         guard let endpoint = self.savedManualEndpointFallback() else { return false }
         await self.connectManual(
@@ -832,7 +891,7 @@ final class GatewayConnectionController {
                 if let suppressionGeneration,
                    self.autoConnectSuppressionGeneration == suppressionGeneration
                 {
-                    self.autoConnectSuppressionGeneration = nil
+                    self.clearAutoConnectSuppression(generation: suppressionGeneration)
                 }
             }
             await previousTask?.value
@@ -933,14 +992,14 @@ final class GatewayConnectionController {
         return result
     }
 
-    private func beginConnectAttempt() -> (controllerGeneration: UInt64, gatewayGeneration: UInt64?) {
-        self.connectAttemptGeneration &+= 1
-        self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
-        self.clearPendingTrustPrompt()
+    private func beginConnectAttempt()
+        -> (suppressionLease: AutoConnectSuppressionLease, gatewayGeneration: UInt64?)
+    {
+        let suppressionLease = self.beginAutoConnectSuppression(restoresAutoReconnect: false)
         // Allocate both tokens before any resolution or trust work. A new explicit target must
         // invalidate queued config construction from the previous target immediately.
         let gatewayGeneration = self.reserveGatewayConnectAttempt()
-        return (self.connectAttemptGeneration, gatewayGeneration)
+        return (suppressionLease, gatewayGeneration)
     }
 
     private func reserveGatewayConnectAttempt() -> UInt64? {
@@ -982,11 +1041,15 @@ final class GatewayConnectionController {
         return generation
     }
 
-    private func finishConnectAttempt(_ generation: UInt64) {
-        guard self.connectAttemptGeneration == generation else { return }
+    private func finishConnectAttempt(_ lease: AutoConnectSuppressionLease) {
+        guard self.connectAttemptGeneration == lease.generation else { return }
         guard self.pendingTrustPrompt == nil else { return }
-        guard self.pendingAutoConnectSuppressionGeneration != generation else { return }
-        self.autoConnectSuppressionGeneration = nil
+        guard self.pendingAutoConnectSuppressionGeneration != lease.generation else { return }
+        if lease.restoresAutoReconnect {
+            self.resumeAutoConnect(after: lease)
+        } else {
+            self.releaseAutoConnectSuppression(after: lease)
+        }
     }
 
     private func tlsProbeFailureMessage(
@@ -1241,7 +1304,7 @@ private struct GatewayPendingTrustConnect {
     let isManual: Bool
     let authOverride: GatewayConnectionController.ManualAuthOverride?
     let allowStoredDeviceAuth: Bool
-    let controllerGeneration: UInt64
+    let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
     let gatewayGeneration: UInt64?
 }
 

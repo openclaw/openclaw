@@ -211,9 +211,16 @@ extension SettingsProTab {
         self.stagedGatewaySetupLink = nil
         self.pendingManualAuthOverride = nil
         self.syncSettingsState()
+        self.pendingTargetSuppression.releaseAutoConnect(controller: self.gatewayController)
     }
 
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
+        let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
+        defer {
+            if let supersededSetupLease {
+                self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
+            }
+        }
         self.connectingGatewayID = gateway.id
         defer { self.connectingGatewayID = nil }
         self.manualGatewayEnabled = false
@@ -226,6 +233,7 @@ extension SettingsProTab {
     }
 
     func applySetupCodeAndConnect() async {
+        defer { self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController) }
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -245,7 +253,8 @@ extension SettingsProTab {
         guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.showQRScanner = false
         self.scannerResultHandoff.cancel()
-        self.gatewayController.cancelPendingConnectionAttempts()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts()
+        self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
         self.setupCode = ""
         self.setupStatusText = nil
         self.stagedGatewaySetupLink = link
@@ -267,6 +276,7 @@ extension SettingsProTab {
             self.setupCode = ""
             self.setupStatusText = "Apple Review demo mode enabled."
             self.appModel.enterAppleReviewDemoMode()
+            self.pendingTargetSuppression.releaseAutoConnect(.setupLink, controller: self.gatewayController)
             return false
         }
 
@@ -308,9 +318,10 @@ extension SettingsProTab {
     }
 
     func openGatewayQRScanner() {
-        self.gatewayController.cancelPendingConnectionAttempts()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+        self.stagedGatewaySetupLink = nil
+        self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.setupStatusText = "Opening QR scanner..."
         self.showQRScanner = true
@@ -323,13 +334,16 @@ extension SettingsProTab {
     }
 
     func processQueuedScannerResult() {
-        self.scannerResultHandoff.processAfterDismissal { result in
+        let delivery = self.scannerResultHandoff.processAfterDismissal { result in
             switch result {
             case let .gatewayLink(link):
                 self.handleScannedGatewayLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
             }
+        }
+        if delivery == nil {
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
         }
     }
 
@@ -338,7 +352,10 @@ extension SettingsProTab {
         self.setupCode = ""
         self.applyGatewayLink(link)
         self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
-        Task { await self.connectAfterScannedGatewayLink() }
+        Task {
+            await self.connectAfterScannedGatewayLink()
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        }
     }
 
     func handleScannedSetupCode(_ code: String) {
@@ -348,6 +365,18 @@ extension SettingsProTab {
         self.stagedGatewaySetupLink = nil
         self.setupStatusText = "Apple Review demo mode enabled."
         self.appModel.enterAppleReviewDemoMode()
+        self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
+    }
+
+    func clearStagedGatewaySetupLink() {
+        guard self.stagedGatewaySetupLink != nil else { return }
+        self.stagedGatewaySetupLink = nil
+        self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
+    }
+
+    private func takeStagedGatewaySetupSuppression() -> GatewayConnectionController.AutoConnectSuppressionLease? {
+        self.stagedGatewaySetupLink = nil
+        return self.pendingTargetSuppression.take(ifOwnedBy: .setupLink)
     }
 
     func connectAfterScannedGatewayLink() async {
@@ -361,6 +390,12 @@ extension SettingsProTab {
     }
 
     func connectManual() async {
+        let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
+        defer {
+            if let supersededSetupLease {
+                self.gatewayController.resumeAutoConnect(after: supersededSetupLease)
+            }
+        }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
             self.setupStatusText = "Failed: host required"

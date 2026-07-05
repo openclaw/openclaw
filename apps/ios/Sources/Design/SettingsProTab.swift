@@ -46,6 +46,7 @@ struct SettingsProTab: View {
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
     @State var scannerScanID: UInt64 = 0
+    @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
@@ -148,6 +149,7 @@ struct SettingsProTab: View {
             }
             .onDisappear {
                 self.scannerResultHandoff.cancel()
+                self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -169,7 +171,7 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.stagedGatewaySetupLink = nil
+                    self.clearStagedGatewaySetupLink()
                 }
             }
             .onChange(of: self.defaultShareInstruction) { _, newValue in

@@ -87,6 +87,7 @@ struct OnboardingWizardView: View {
     @State private var scannerError: String?
     @State private var scannerResultHandoff = QRScannerResultHandoff()
     @State private var scannerScanID: UInt64 = 0
+    @State private var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
@@ -250,6 +251,7 @@ struct OnboardingWizardView: View {
                 self.discoveryRestartTask?.cancel()
                 self.discoveryRestartTask = nil
                 self.scannerResultHandoff.cancel()
+                self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
             }
             .onChange(of: self.discoveryDomain) { _, _ in
                 self.scheduleDiscoveryRestart()
@@ -916,13 +918,16 @@ extension OnboardingWizardView {
     }
 
     private func processQueuedScannerResult() {
-        self.scannerResultHandoff.processAfterDismissal { result in
+        let delivery = self.scannerResultHandoff.processAfterDismissal { result in
             switch result {
             case let .gatewayLink(link):
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
             }
+        }
+        if delivery == nil {
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
         }
     }
 
@@ -932,7 +937,10 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
-        Task { await self.connectManual() }
+        Task {
+            await self.connectManual()
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        }
     }
 
     private func applyPendingGatewaySetupLinkIfNeeded() {
@@ -940,7 +948,8 @@ extension OnboardingWizardView {
         self.showQRScanner = false
         self.scannerResultHandoff.cancel()
         self.showGatewayProblemDetails = false
-        self.gatewayController.cancelPendingConnectionAttempts()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts()
+        self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
         if self.selectedMode == nil {
             self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
         }
@@ -962,7 +971,9 @@ extension OnboardingWizardView {
         }
         self.connectingGatewayID = "manual"
         defer { self.connectingGatewayID = nil }
-        self.gatewayController.cancelPendingConnectionAttempts()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts()
+        self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
+        defer { self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController) }
         await self.appModel.resetGatewaySessionsForTargetSwitch()
         guard self.setupLinkStaging.link == link else { return }
         _ = self.setupLinkStaging.take()
@@ -976,6 +987,7 @@ extension OnboardingWizardView {
 
     private func clearStagedGatewaySetupLink() {
         guard self.setupLinkStaging.cancel() else { return }
+        self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
         let message = "Setup link cleared."
         self.setupCodeStatus = message
         self.statusLine = message
@@ -1024,14 +1036,15 @@ extension OnboardingWizardView {
         self.statusLine = "Apple Review demo mode enabled."
         self.selectedMode = .homeNetwork
         self.appModel.enterAppleReviewDemoMode()
+        self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
     private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
         // Stop active reconnect loops before scanning new credentials.
-        self.clearStagedGatewaySetupLink()
-        self.gatewayController.cancelPendingConnectionAttempts()
+        let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+        _ = self.setupLinkStaging.cancel()
+        self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.connectMessage = nil
         self.issue = .none

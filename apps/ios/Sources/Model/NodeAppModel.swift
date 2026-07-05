@@ -2342,11 +2342,24 @@ extension NodeAppModel {
     }
 
     func disconnectGateway() {
+        self.disconnectGateway(disablePersistedAutoConnect: true)
+    }
+
+    func suspendGatewayForTargetReview() {
+        // Target review pauses live reconnects without changing the user's launch preference.
+        self.disconnectGateway(disablePersistedAutoConnect: false)
+    }
+
+    private func disconnectGateway(disablePersistedAutoConnect: Bool) {
         invalidateExecApprovalSurfacesForGatewayChange()
         self.invalidateGatewayConnectAttempts()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
-        self.disableGatewayAutoReconnect()
+        if disablePersistedAutoConnect {
+            self.disableGatewayAutoReconnect()
+        } else {
+            self.gatewayAutoReconnectEnabled = false
+        }
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
@@ -2381,6 +2394,18 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
+    func resumeGatewayAfterTargetReview(_ config: GatewayConnectConfig) {
+        let generation = self.beginGatewayConnectAttempt()
+        self.gatewayStatusText = "Connecting…"
+        // Reapply the exact suspended route only after teardown; a newer target invalidates the generation.
+        Task { [weak self] in
+            guard let self else { return }
+            await self.waitForGatewaySessionResetIfNeeded()
+            guard generation == self.gatewayConnectGeneration else { return }
+            self.applyGatewayConnectConfig(config, expectedGeneration: generation)
+        }
+    }
+
     private func prepareForGatewayConnect(stableID: String) {
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false

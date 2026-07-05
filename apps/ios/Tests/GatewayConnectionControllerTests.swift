@@ -1130,7 +1130,7 @@ import UIKit
 
     @Test @MainActor func `newer explicit connect immediately invalidates queued config`() async throws {
         let host = "new-target.gateway.invalid"
-        let stableID = "manual|\(host)|443"
+        let stableID = "manual|\(host.lowercased())|443"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
         GatewayTLSStore.clearFingerprint(stableID: stableID)
 
@@ -1428,7 +1428,7 @@ import UIKit
         #expect(appModel.activeGatewayConnectConfig?.stableID == replacementStableID)
     }
 
-    @Test @MainActor func `explicit connection suppresses persisted auto connect while suspended`() async {
+    @Test @MainActor func `trust decline releases suppression without reconnecting unpinned target`() async {
         let defaults = UserDefaults.standard
         let updates: [String: Any?] = [
             "gateway.autoconnect": false,
@@ -1492,10 +1492,199 @@ import UIKit
         #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "explicit-fingerprint")
 
         controller.declinePendingTrustPrompt()
-        controller._test_triggerAutoReconnect()
 
         #expect(!controller._test_didAutoConnect())
+        #expect(!controller._test_isAutoConnectSuppressed())
         #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func `manual TLS auto connect requires stored pin`() {
+        let host = "manual-autoconnect-\(UUID().uuidString).example.com"
+        let stableID = "manual|\(host.lowercased())|443"
+        let previousStableID = "manual|previous-gateway.example.com|443"
+        let priorPreviousFingerprint = GatewayTLSStore.loadFingerprint(stableID: previousStableID)
+        let priorLastConnection = KeychainStore.loadString(
+            service: "ai.openclawfoundation.app.gateway",
+            account: "lastConnection")
+        defer {
+            GatewayTLSStore.clearFingerprint(stableID: stableID)
+            if let priorPreviousFingerprint {
+                GatewayTLSStore.saveFingerprint(priorPreviousFingerprint, stableID: previousStableID)
+            } else {
+                GatewayTLSStore.clearFingerprint(stableID: previousStableID)
+            }
+            if let priorLastConnection {
+                _ = KeychainStore.saveString(
+                    priorLastConnection,
+                    service: "ai.openclawfoundation.app.gateway",
+                    account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(
+                    service: "ai.openclawfoundation.app.gateway",
+                    account: "lastConnection")
+            }
+        }
+        GatewayTLSStore.saveFingerprint("previous-certificate", stableID: previousStableID)
+        GatewaySettingsStore.saveLastGatewayConnectionManual(
+            host: "previous-gateway.example.com",
+            port: 443,
+            useTLS: true,
+            stableID: previousStableID)
+
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": host,
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+            "gateway.last.host": nil,
+            "gateway.last.port": nil,
+            "gateway.last.tls": nil,
+            "gateway.last.stableID": nil,
+            "gateway.last.kind": nil,
+            "gateway.preferredStableID": nil,
+            "gateway.lastDiscoveredStableID": nil,
+        ]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            controller._test_triggerAutoConnect()
+            #expect(!controller._test_didAutoConnect())
+
+            GatewayTLSStore.saveFingerprint("trusted-certificate", stableID: stableID)
+            controller._test_triggerAutoConnect()
+            #expect(controller._test_didAutoConnect())
+        }
+    }
+
+    @Test @MainActor func `stale cancellation lease cannot release newer suppression`() {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        let staleLease = controller.cancelPendingConnectionAttempts()
+        let currentLease = controller.cancelPendingConnectionAttempts()
+
+        controller.resumeAutoConnect(after: staleLease)
+        #expect(controller._test_isAutoConnectSuppressed())
+
+        controller.resumeAutoConnect(after: currentLease)
+        #expect(!controller._test_isAutoConnectSuppressed())
+    }
+
+    @Test @MainActor func `cancellation lease restores previous auto connect state`() {
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "gateway.preferredStableID": nil,
+            "gateway.lastDiscoveredStableID": nil,
+        ]) {
+            let appModel = NodeAppModel()
+            appModel.gatewayAutoReconnectEnabled = true
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let scannerLease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+
+            #expect(!appModel.gatewayAutoReconnectEnabled)
+            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
+
+            let replacementLease = controller.cancelPendingConnectionAttempts()
+            controller.resumeAutoConnect(after: scannerLease)
+            #expect(!appModel.gatewayAutoReconnectEnabled)
+
+            controller.resumeAutoConnect(after: replacementLease)
+            #expect(appModel.gatewayAutoReconnectEnabled)
+            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
+        }
+    }
+
+    @Test @MainActor func `completed target switch does not restore auto connect state`() {
+        withUserDefaults(["gateway.autoconnect": true]) {
+            let appModel = NodeAppModel()
+            appModel.gatewayAutoReconnectEnabled = true
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let lease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+
+            controller.releaseAutoConnectSuppression(after: lease)
+
+            #expect(!controller._test_isAutoConnectSuppressed())
+            #expect(!appModel.gatewayAutoReconnectEnabled)
+            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
+        }
+    }
+
+    @Test @MainActor func `auto connect choice made during target review wins`() throws {
+        try withUserDefaults(["gateway.autoconnect": true]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let suspendedConfig = try Self.makeGatewayConnectConfig(
+                url: #require(URL(string: "wss://127.0.0.1:1")),
+                stableID: "manual|127.0.0.1|1")
+            appModel.applyGatewayConnectConfig(suspendedConfig)
+            appModel.gatewayAutoReconnectEnabled = true
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let lease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+
+            UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
+            controller.resumeAutoConnect(after: lease)
+
+            #expect(!appModel.gatewayAutoReconnectEnabled)
+            #expect(appModel.activeGatewayConnectConfig == nil)
+            #expect(!UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
+        }
+    }
+
+    @Test @MainActor func `failed replacement restores inherited scanner reconnect state`() async throws {
+        let defaults = UserDefaults.standard
+        let updates: [String: Any?] = [
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "node.instanceId": "ios-test",
+            "gateway.preferredStableID": nil,
+            "gateway.lastDiscoveredStableID": nil,
+        ]
+        var snapshot: [String: Any?] = [:]
+        for key in updates.keys {
+            snapshot[key] = defaults.object(forKey: key)
+        }
+        for (key, value) in updates {
+            if let value {
+                defaults.set(value, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        defer {
+            for (key, value) in snapshot {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let suspendedConfig = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "ws://127.0.0.1:1")),
+            stableID: "manual|127.0.0.1|1")
+        appModel.applyGatewayConnectConfig(suspendedConfig)
+        appModel.gatewayAutoReconnectEnabled = true
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        _ = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+
+        await controller.connectManual(host: "invalid.example.com", port: 70000, useTLS: true)
+
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: suspendedConfig) != true,
+              ContinuousClock().now < deadline
+        {
+            await Task.yield()
+        }
+        #expect(!controller._test_isAutoConnectSuppressed())
+        #expect(appModel.gatewayAutoReconnectEnabled)
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: suspendedConfig) == true)
+        #expect(defaults.bool(forKey: "gateway.autoconnect"))
     }
 
     @Test @MainActor func `foreground reconnect cannot replace queued explicit handoff`() async {
