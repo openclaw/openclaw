@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FastMode } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
@@ -574,7 +574,6 @@ export class ConfigPage extends LitElement {
       excludeSections,
       includeVirtualSections: this.pageId === "communications" || this.pageId === "appearance",
       settingsLayout: this.pageId === "config" ? "accordion" : undefined,
-      onBackToQuick: this.pageId === "config" ? () => (this.settingsMode = "quick") : undefined,
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.enable(),
       onWebPushUnsubscribe: () => void this.context.webPush.disable(),
@@ -656,6 +655,10 @@ export class ConfigPage extends LitElement {
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configObject,
+      savedConfigObject:
+        asConfigRecord(
+          runtimeConfig.state.configFormOriginal ?? runtimeConfig.state.configSnapshot?.config,
+        ) ?? {},
       configDirty: runtimeConfig.state.configFormDirty,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
@@ -669,9 +672,6 @@ export class ConfigPage extends LitElement {
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
-      onAdvancedSettings: () => {
-        this.settingsMode = "advanced";
-      },
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
       onFastModeChange: (mode: FastMode) =>
@@ -703,6 +703,34 @@ export class ConfigPage extends LitElement {
     });
   }
 
+  private renderSettingsModeToggle() {
+    if (this.pageId !== "config") {
+      return nothing;
+    }
+    const modes = [
+      ["quick", "Simple"],
+      ["advanced", "Advanced"],
+    ] as const;
+    return html`
+      <div class="config-view-toggle qs-segmented" role="tablist" aria-label="Settings view">
+        ${modes.map(
+          ([mode, label]) => html`
+            <button
+              class="qs-segmented__btn ${this.settingsMode === mode
+                ? "qs-segmented__btn--active"
+                : ""}"
+              role="tab"
+              aria-selected=${this.settingsMode === mode}
+              @click=${() => (this.settingsMode = mode)}
+            >
+              ${label}
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
   override render() {
     const configState = this.context.runtimeConfig.state;
     const configObject =
@@ -717,7 +745,11 @@ export class ConfigPage extends LitElement {
           <div class="page-title">${configPageTitle(this.pageId)}</div>
           <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
+        ${this.renderSettingsModeToggle()}
       </section>
+      ${this.pageId === "config"
+        ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
+        : nothing}
       ${renderSettingsWorkspace(
         this.context.basePath,
         body,
