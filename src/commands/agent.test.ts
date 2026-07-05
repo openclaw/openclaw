@@ -460,6 +460,56 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
+  it("reuses a Discord voice session after one stale-session rollover", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:voice-1";
+      const staleStartedAt = Date.now() - 2 * 24 * 60 * 60_000;
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "stale-voice-session",
+          updatedAt: staleStartedAt,
+          sessionStartedAt: staleStartedAt,
+        },
+      });
+
+      const runVoiceTurn = async (message: string) =>
+        await agentCommandFromIngress(
+          {
+            message,
+            sessionKey,
+            agentId: "main",
+            messageChannel: "discord",
+            messageProvider: "discord-voice",
+            allowModelOverride: false,
+            deliver: false,
+          },
+          runtime,
+        );
+
+      await runVoiceTurn("remember 42");
+      const firstSessionId = getLastEmbeddedCall()?.sessionId;
+      expect(firstSessionId).toBeTruthy();
+      expect(firstSessionId).not.toBe("stale-voice-session");
+      const firstPersisted = readSessionStore<{
+        sessionId: string;
+        sessionStartedAt?: number;
+      }>(store)[sessionKey];
+      expect(firstPersisted?.sessionId).toBe(firstSessionId);
+      expect(firstPersisted?.sessionStartedAt).toBeGreaterThan(staleStartedAt);
+
+      await runVoiceTurn("what number?");
+      expect(getLastEmbeddedCall()?.sessionId).toBe(firstSessionId);
+
+      const persisted = readSessionStore<{ sessionId: string; sessionStartedAt?: number }>(store)[
+        sessionKey
+      ];
+      expect(persisted?.sessionId).toBe(firstSessionId);
+      expect(persisted?.sessionStartedAt).toBeGreaterThan(staleStartedAt);
+    });
+  });
+
   it("rejects archived sessions selected by session id", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
