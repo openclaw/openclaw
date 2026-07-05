@@ -140,20 +140,6 @@ enum GatewaySettingsStore {
         defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
     }
 
-    static func clearGatewayBootstrapToken(instanceId: String, gatewayStableID: String) {
-        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
-        guard let bundle = self.loadGatewayCredentialBundle(instanceId: instanceId),
-              bundle.gatewayStableID == stableID
-        else { return }
-        _ = self.saveGatewayCredentials(
-            token: bundle.token,
-            bootstrapToken: nil,
-            password: bundle.password,
-            gatewayStableID: bundle.gatewayStableID,
-            suppressStoredDeviceAuth: bundle.suppressStoredDeviceAuth,
-            instanceId: instanceId)
-    }
-
     static func loadGatewayCredentialMetadata(instanceId: String) -> GatewayCredentialMetadata? {
         guard let bundle = self.loadGatewayCredentialBundle(instanceId: instanceId) else { return nil }
         return GatewayCredentialMetadata(

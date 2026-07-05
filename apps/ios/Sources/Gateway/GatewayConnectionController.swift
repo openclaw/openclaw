@@ -1370,12 +1370,6 @@ extension GatewayConnectionController {
         !LoopbackHost.isLocalNetworkHost(host)
     }
 
-    private func shouldForceTLS(host: String) -> Bool {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.isEmpty { return false }
-        return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
-    }
-
     private func manualStableID(host: String, port: Int) -> String {
         ManualAuthOverride.manualStableID(host: host, port: port)
     }
