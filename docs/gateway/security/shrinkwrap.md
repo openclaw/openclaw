@@ -32,7 +32,7 @@ OpenClaw is a gateway, plugin host, model router, and agent runtime, so a defaul
 
 ## Generating and checking
 
-The root `openclaw` npm package and OpenClaw-owned npm plugin packages (for example `@openclaw/discord`) include `npm-shrinkwrap.json` when they publish. Suitable plugin packages can also publish with explicit `bundledDependencies`, carrying their runtime dependency files in the plugin tarball instead of relying only on install-time resolution.
+The root `openclaw` npm package, OpenClaw-owned npm plugin packages (for example `@openclaw/discord`), and publishable workspace packages such as [`@openclaw/ai`](/reference/openclaw-ai) include `npm-shrinkwrap.json` when they publish. Workspace dependencies are omitted from the root shrinkwrap because they publish beside the root package; each publishable workspace package pins its own transitive tree instead. Suitable plugin packages can also publish with explicit `bundledDependencies`, carrying their runtime dependency files in the plugin tarball instead of relying only on install-time resolution.
 
 ```bash
 # All shrinkwrap-managed packages (root + publishable plugins)

@@ -355,6 +355,44 @@ describe("tui command handlers", () => {
     });
   });
 
+  it.each(["/status", "/compact", "/commands", "/context", "/context detail"])(
+    "keeps unsupported shared command %s out of local model prompts",
+    async (command) => {
+      const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
+        opts: { local: true },
+      });
+
+      await handleCommand(command);
+
+      expect(sendChat).not.toHaveBeenCalled();
+      expect(addPendingUser).not.toHaveBeenCalled();
+      expect(addSystem).toHaveBeenCalledWith(
+        expect.stringMatching(/not available in local embedded mode; message not sent$/),
+      );
+    },
+  );
+
+  it("preserves local side prompts and unknown slash text", async () => {
+    const emptySide = createHarness({ opts: { local: true } });
+    await emptySide.handleCommand("/side");
+    expect(emptySide.sendChat).not.toHaveBeenCalled();
+    expect(emptySide.addSystem).toHaveBeenCalledWith("Usage: /btw [side question]");
+
+    const side = createHarness({ opts: { local: true } });
+    await side.handleCommand("/side check this");
+    expectSendChatFields(side.sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/side check this",
+    });
+
+    const unknown = createHarness({ opts: { local: true } });
+    await unknown.handleCommand("/not-a-real-command");
+    expectSendChatFields(unknown.sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/not-a-real-command",
+    });
+  });
+
   it("starts local goals and sends the objective to the model", async () => {
     const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started: ship" });
     const { handleCommand, sendChat, addSystem, refreshSessionInfo, addPendingUser } =
@@ -1090,18 +1128,18 @@ describe("tui command handlers", () => {
       activityStatus: "streaming",
     });
 
-    await handleCommand("/context detail");
+    await handleCommand("continue here");
 
     expect(sendChat).toHaveBeenCalledTimes(1);
     expectSendChatFields(sendChat, {
-      message: "/context detail",
+      message: "continue here",
       sessionKey: "agent:main:main",
     });
     expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
     const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
     const addPendingUserCallOrder = addPendingUser.mock.invocationCallOrder[0];
     expect(reserveCallOrder).toBeLessThan(addPendingUserCallOrder);
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "continue here");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
@@ -1186,10 +1224,10 @@ describe("tui command handlers", () => {
       activityStatus: "finishing context",
     });
 
-    await handleCommand("/context detail");
+    await handleCommand("continue after compaction");
 
     expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context detail");
+    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "continue after compaction");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
