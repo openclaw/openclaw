@@ -1435,6 +1435,14 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       port: 3000,
       runtime: "node",
       platform: "darwin",
+      existingEnvironment: {
+        BRAVE_API_KEY: "stale-generated-value",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "BRAVE_API_KEY",
+      },
+      existingEnvironmentValueSources: {
+        BRAVE_API_KEY: "file",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+      },
       config: {
         env: {
           vars: {

@@ -524,9 +524,9 @@ function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
     string,
     GatewayServiceEnvironmentValueSource | undefined
   >;
-  managedKeys: ReadonlySet<string>;
+  configSecretRefKeys: ReadonlySet<string>;
 }): Record<string, string | undefined> {
-  if (!params.existingEnvironment || params.managedKeys.size === 0) {
+  if (!params.existingEnvironment || params.configSecretRefKeys.size === 0) {
     return {};
   }
   const preserved: Record<string, string | undefined> = {};
@@ -536,7 +536,7 @@ function collectExistingEnvironmentFileManagedServiceEnvVars(params: {
       continue;
     }
     const normalizedKey = key.toUpperCase();
-    if (!params.managedKeys.has(normalizedKey)) {
+    if (!params.configSecretRefKeys.has(normalizedKey)) {
       continue;
     }
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
@@ -674,14 +674,11 @@ async function buildGatewayInstallEnvironment(params: {
     },
     { omitKeys: Object.keys(params.serviceEnvironment) },
   );
-  const managedKeys = readManagedServiceEnvKeysFromEnvironment({
-    OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedServiceEnvKeys,
-  });
   const existingEnvironmentFileRenderEnvironment = omitEnvironmentEntriesShadowedBy(
     collectExistingEnvironmentFileManagedServiceEnvVars({
       existingEnvironment: params.existingEnvironment,
       existingEnvironmentValueSources: params.existingEnvironmentValueSources,
-      managedKeys,
+      configSecretRefKeys: new Set(configSecretRefKeys),
     }),
     [
       stateDirDotEnvRenderEnvironment,
