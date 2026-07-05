@@ -695,21 +695,31 @@ run_mantis_remote_body() {
   set -e
   echo "remote pwd: $(pwd)"
   sudo corepack enable >/dev/null 2>&1 || true
-  pnpm_version="$(node -e '
+  read -r pnpm_version pnpm_sha512 < <(node -e '
 const value = require("./package.json").packageManager ?? "";
-const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)(?:\\+sha512\\.[0-9a-f]+)?$/.exec(value);
+const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)\\+sha512\\.([0-9a-f]{128})$/.exec(value);
 if (!match) process.exit(1);
-process.stdout.write(match[1]);
-')"
+process.stdout.write(match[1] + " " + match[2]);
+')
   active_pnpm_version="$(pnpm --version 2>/dev/null || true)"
   if [ "$active_pnpm_version" != "$pnpm_version" ]; then
     # Some desktop images ship an old distro Corepack that enables its shim but
-    # cannot execute current pnpm. Keep the exact fallback scoped to this run;
-    # sudo's restricted PATH may not expose the image's user-local npm or Node.
-    pnpm_prefix="$out/pnpm-global"
-    npm install --global --prefix "$pnpm_prefix" --force "pnpm@$pnpm_version"
-    export PATH="$pnpm_prefix/bin:$PATH"
-    hash -r
+    # cannot execute current pnpm and may omit npm. Download the exact package,
+    # verify the repository-pinned digest, and run its bundled CLI with Node.
+    pnpm_root="$out/pnpm-$pnpm_version"
+    pnpm_archive="$pnpm_root/pnpm.tgz"
+    mkdir -p "$pnpm_root"
+    curl -fsSL --retry 3 --retry-all-errors \
+      "https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz" \
+      -o "$pnpm_archive"
+    downloaded_pnpm_sha512="$(sha512sum "$pnpm_archive" | awk '{print $1}')"
+    if [ "$downloaded_pnpm_sha512" != "$pnpm_sha512" ]; then
+      echo "pnpm $pnpm_version SHA-512 mismatch." >&2
+      exit 3
+    fi
+    tar -xzf "$pnpm_archive" -C "$pnpm_root"
+    pnpm_cli="$pnpm_root/package/bin/pnpm.cjs"
+    pnpm() { node "$pnpm_cli" "$@"; }
     active_pnpm_version="$(pnpm --version)"
   fi
   if [ "$active_pnpm_version" != "$pnpm_version" ]; then
