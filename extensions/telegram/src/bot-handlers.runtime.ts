@@ -190,10 +190,7 @@ function resolvePromptContextTextDedupeKey(
   if (typeof message.body !== "string" || !message.body.trim()) {
     return undefined;
   }
-  if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
-    return undefined;
-  }
-  return `${message.timestamp_ms}:${message.body.trim()}`;
+  return message.body.trim();
 }
 
 export const registerTelegramHandlers = ({
