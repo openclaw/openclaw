@@ -1962,13 +1962,6 @@
       "text": "Activity"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "Context"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
