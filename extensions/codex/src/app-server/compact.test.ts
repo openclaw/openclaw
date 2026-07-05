@@ -860,8 +860,18 @@ describe("maybeCompactCodexAppServerSession", () => {
       rejectInterrupt: true,
     });
     const sessionFile = await writeTestBinding();
+    const nativeSetTimeout = globalThis.setTimeout;
+    let triggerCompletionTimeout: (() => void) | undefined;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay === 1_000 && !triggerCompletionTimeout) {
+          triggerCompletionTimeout = () => callback(...args);
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, delay, ...args);
+      });
 
-    vi.useFakeTimers();
     try {
       const pendingResult = maybeCompactCodexAppServerSessionImpl(
         {
@@ -886,7 +896,9 @@ describe("maybeCompactCodexAppServerSession", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      expect(triggerCompletionTimeout).toBeDefined();
+      triggerCompletionTimeout?.();
       expect(fake.request).toHaveBeenCalledWith(
         "turn/interrupt",
         {
@@ -895,14 +907,13 @@ describe("maybeCompactCodexAppServerSession", () => {
         },
         { timeoutMs: 10 },
       );
-      await vi.advanceTimersByTimeAsync(10);
       await expect(pendingResult).resolves.toMatchObject({
         ok: false,
         compacted: false,
         reason: "codex app-server compaction did not reach terminal state after interruption",
       });
     } finally {
-      vi.useRealTimers();
+      setTimeoutSpy.mockRestore();
     }
   });
 
