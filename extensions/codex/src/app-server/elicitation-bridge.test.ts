@@ -1687,7 +1687,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
 
     const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
-    const description = String(approvalCallParams.description ?? "");
+    const description = approvalCallParams.description ?? "";
     expect(hasLoneSurrogate(description)).toBe(false);
   });
 });

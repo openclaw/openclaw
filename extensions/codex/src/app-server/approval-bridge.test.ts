@@ -2752,7 +2752,7 @@ describe("Codex app-server approval bridge", () => {
     });
 
     const event = findApprovalEvent(params, { status: "pending" });
-    expect(hasLoneSurrogate(String(event.command ?? ""))).toBe(false);
+    expect(hasLoneSurrogate(typeof event.command === "string" ? event.command : "")).toBe(false);
 
     const description = String(gatewayRequestPayload().description);
     expect(hasLoneSurrogate(description)).toBe(false);
