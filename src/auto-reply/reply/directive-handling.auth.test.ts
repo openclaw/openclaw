@@ -16,7 +16,7 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
   ),
 );
 const resolveProviderEntryApiKeyProfileReferenceMock = vi.hoisted(() =>
-  vi.fn(() => ({ kind: "none" as const })),
+  vi.fn<() => unknown>(() => ({ kind: "none" })),
 );
 const githubCopilotTokenRefProfile: AuthProfileStore["profiles"][string] = {
   type: "token",
