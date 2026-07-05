@@ -1206,6 +1206,7 @@ jobs:
               --clawhub-workflow-ref "${clawhub_workflow_ref}"
               --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
               --plugin-npm-run "${plugin_npm_run_id}"
+              --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
               --openclaw-npm-run "${openclaw_npm_run_id}"
               --evidence-out "${evidence_path}"
               --skip-github-release

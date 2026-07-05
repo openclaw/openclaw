@@ -2,11 +2,18 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { loadExtendedStablePluginCohort } from "../src/plugins/extended-stable-plugin-cohort.js";
+import {
+  collectAllPublishablePluginPackageNames,
+  collectExtendedStableCohortPackageNames,
+  parseEligibleCohortEvidence,
+} from "./generate-extended-stable-plugin-cohort.js";
 import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
+import { verifyNpmPackage } from "./lib/release-beta-verifier.js";
 import { verifySelectorHandoff } from "./verify-extended-stable-selector-handoff.js";
 
 type Args = {
@@ -282,6 +289,72 @@ function verifyJsonScript(script: string, args: string[], env?: NodeJS.ProcessEn
   );
 }
 
+async function verifyMonthlyCohortProof(params: {
+  repository: string;
+  releaseVersion: string;
+  rootDir: string;
+  outputDir: string;
+}) {
+  const cohort = loadExtendedStablePluginCohort(params.rootDir);
+  const [releaseYear, releaseMonth] = params.releaseVersion.split(".");
+  if (cohort.releaseLine !== `${releaseYear}.${releaseMonth}`) {
+    throw new Error("Packaged monthly cohort release line does not match the candidate release.");
+  }
+  const evidenceAsset = `openclaw-${cohort.baselineVersion}-postpublish-evidence.json`;
+  const checksumAsset = `${evidenceAsset}.sha256`;
+  const evidenceDir = join(params.outputDir, "monthly-cohort-evidence");
+  rmSync(evidenceDir, { force: true, recursive: true });
+  mkdirSync(evidenceDir, { recursive: true });
+  command("gh", [
+    "release",
+    "download",
+    `v${cohort.baselineVersion}`,
+    "--repo",
+    params.repository,
+    "--pattern",
+    evidenceAsset,
+    "--pattern",
+    checksumAsset,
+    "--dir",
+    evidenceDir,
+  ]);
+  const evidenceBytes = readFileSync(join(evidenceDir, evidenceAsset));
+  const evidenceSha256 = createHash("sha256").update(evidenceBytes).digest("hex");
+  const checksum = readFileSync(join(evidenceDir, checksumAsset), "utf8").trim();
+  if (checksum !== `${evidenceSha256}  ${evidenceAsset}`) {
+    throw new Error("Monthly cohort source evidence does not match its immutable checksum asset.");
+  }
+  const evidence = parseEligibleCohortEvidence({
+    value: JSON.parse(evidenceBytes.toString("utf8")) as unknown,
+    releaseLine: cohort.releaseLine,
+    expectedPackageNames: collectAllPublishablePluginPackageNames(params.rootDir),
+  });
+  if (!evidence || evidence.releaseVersion !== cohort.baselineVersion) {
+    throw new Error("Monthly cohort source evidence is not an eligible full regular release.");
+  }
+  const evidenceByPackage = new Map(
+    evidence.pluginNpmPackages.map((plugin) => [plugin.packageName, plugin.npmIntegrity]),
+  );
+  const packages: Array<{ packageName: string; version: string; npmIntegrity: string }> = [];
+  for (const packageName of collectExtendedStableCohortPackageNames(params.rootDir)) {
+    const readback = await verifyNpmPackage(packageName, cohort.baselineVersion);
+    const npmIntegrity = readback.integrity;
+    if (!npmIntegrity || npmIntegrity !== evidenceByPackage.get(packageName)) {
+      throw new Error(
+        `${packageName}@${cohort.baselineVersion} integrity differs from cohort evidence.`,
+      );
+    }
+    packages.push({ packageName, version: cohort.baselineVersion, npmIntegrity });
+  }
+  return {
+    releaseLine: cohort.releaseLine,
+    baselineVersion: cohort.baselineVersion,
+    sourceReleaseTag: evidence.releaseTag,
+    sourceEvidenceSha256: evidenceSha256,
+    packages,
+  };
+}
+
 export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<void> {
   const repository = process.env.GITHUB_REPOSITORY;
   const parentRunId = process.env.GITHUB_RUN_ID;
@@ -290,6 +363,12 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
   }
   const releaseVersion = args.releaseTag.replace(/^v/u, "");
   const support = loadExtendedStablePluginSupport(rootDir);
+  const monthlyCohort = await verifyMonthlyCohortProof({
+    repository,
+    releaseVersion,
+    rootDir,
+    outputDir: dirname(args.output),
+  });
   const packageNames = ["openclaw", ...support.plugins.map((plugin) => plugin.packageName)];
   const selectorsBefore = Object.fromEntries(
     packageNames.map((packageName) => [packageName, selectorSnapshot(packageName)]),
@@ -474,6 +553,7 @@ export async function orchestrate(args: Args, rootDir = resolve(".")): Promise<v
     handoffId: `${repository}:${parentRunId}:${releaseVersion}`,
     releaseVersion,
     sourceSha: args.sourceSha,
+    monthlyCohort,
     core: {
       publicationRunId: String(coreRunId),
       publicationRunAttempt: String(coreRun.run_attempt),

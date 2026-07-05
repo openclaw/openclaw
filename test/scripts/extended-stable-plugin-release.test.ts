@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -53,6 +55,19 @@ function validSelectorHandoff() {
     handoffId: "openclaw/openclaw:123:2026.6.33",
     releaseVersion: "2026.6.33",
     sourceSha: "a".repeat(40),
+    monthlyCohort: {
+      releaseLine: "2026.6",
+      baselineVersion: "2026.6.21",
+      sourceReleaseTag: "v2026.6.21",
+      sourceEvidenceSha256: "0".repeat(64),
+      packages: [
+        {
+          packageName: "@openclaw/example-cohort",
+          version: "2026.6.21",
+          npmIntegrity: "sha512-cohort",
+        },
+      ],
+    },
     core: {
       publicationRunId: "100",
       publicationRunAttempt: "1",
@@ -111,16 +126,32 @@ describe("extended-stable plugin release artifacts", () => {
   });
 
   it("binds candidate tags, package integrities, and unchanged shared selectors", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-selector-handoff-"));
+    mkdirSync(join(rootDir, "release"));
+    writeFileSync(
+      join(rootDir, "release/extended-stable-plugin-support.json"),
+      readFileSync("release/extended-stable-plugin-support.json", "utf8"),
+    );
+    writeFileSync(
+      join(rootDir, "release/extended-stable-plugin-cohort.json"),
+      '{"schemaVersion":1,"releaseLine":"2026.6","baselineVersion":"2026.6.21"}\n',
+    );
     const handoff = validSelectorHandoff();
-    expect(() => verifySelectorHandoff(handoff)).not.toThrow();
+    const cohortPackages = ["@openclaw/example-cohort"];
+    expect(() => verifySelectorHandoff(handoff, rootDir, cohortPackages)).not.toThrow();
 
     const mismatched = validSelectorHandoff();
     mismatched.acceptances[0]!.npmIntegrity = "sha512-wrong";
-    expect(() => verifySelectorHandoff(mismatched)).toThrow(/integrity does not match/u);
+    expect(() => verifySelectorHandoff(mismatched, rootDir, cohortPackages)).toThrow(
+      /integrity does not match/u,
+    );
 
     const moved = validSelectorHandoff();
     moved.selectorsAfter.openclaw!.extendedStable = "2026.6.33";
-    expect(() => verifySelectorHandoff(moved)).toThrow(/shared selectors changed/u);
+    expect(() => verifySelectorHandoff(moved, rootDir, cohortPackages)).toThrow(
+      /shared selectors changed/u,
+    );
+    rmSync(rootDir, { force: true, recursive: true });
   });
 
   it("keeps acceptance on protected main with two closed inputs and immutable evidence", () => {
@@ -167,6 +198,7 @@ describe("extended-stable plugin release artifacts", () => {
     expect(source).toContain("- extended-stable");
     expect(source).toContain("plugin_publish_scope=extended-stable");
     expect(source).toContain("scripts/orchestrate-extended-stable-plugin-release.ts");
+    expect(source).toContain('--plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"');
     expect(source).toContain("extended-stable-selector-handoff-${{ github.run_id }}");
     expect(source).toContain("inputs.npm_dist_tag != 'extended-stable'");
     expect(source).toContain("inputs.npm_dist_tag == 'extended-stable'");
@@ -180,6 +212,9 @@ describe("extended-stable plugin release artifacts", () => {
     expect(orchestrator).toContain('"extended-stable-plugin-acceptance.yml"');
     expect(orchestrator).toContain('selectorOrder: ["plugins", "core"]');
     expect(orchestrator).toContain('conclusion: "ready_for_protected_selector_promotion"');
+    expect(orchestrator).toContain("verifyMonthlyCohortProof");
+    expect(orchestrator).toContain("parseEligibleCohortEvidence");
+    expect(orchestrator).toContain("await verifyNpmPackage(packageName, cohort.baselineVersion)");
     expect(orchestrator).toContain("verifySelectorHandoff(handoff, rootDir)");
     expect(orchestrator).toContain('extendedStable: read("extended-stable")');
     expect(orchestrator).toContain("Candidate publication moved one or more shared selectors");

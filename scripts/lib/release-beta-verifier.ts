@@ -20,6 +20,7 @@ export type ReleaseVerifyBetaArgs = {
   workflowRef?: string;
   clawHubWorkflowRef?: string;
   pluginSelection: string[];
+  pluginPublishScope: "selected" | "all-publishable" | "extended-stable";
   evidenceOut?: string;
   skipPostpublish: boolean;
   skipGitHubRelease: boolean;
@@ -53,6 +54,25 @@ type WorkflowRunSummary = {
   url?: string;
   durationSeconds?: number;
 };
+
+export function buildNpmReleaseEvidence(params: {
+  args: Pick<
+    ReleaseVerifyBetaArgs,
+    "distTag" | "pluginPublishScope" | "pluginSelection" | "version"
+  >;
+  openclawNpm: NpmViewFields;
+  pluginNpmPackages: Array<{ packageName: string; version: string; npmIntegrity: string }>;
+}) {
+  return {
+    releaseVersion: params.args.version,
+    npmDistTag: params.args.distTag,
+    pluginSelection: params.args.pluginSelection,
+    pluginPublishScope: params.args.pluginPublishScope,
+    openclawNpmIntegrity: params.openclawNpm.integrity,
+    openclawNpmTarball: params.openclawNpm.tarball,
+    pluginNpmPackages: params.pluginNpmPackages,
+  };
+}
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
@@ -178,6 +198,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     workflowRef: undefined,
     clawHubWorkflowRef: undefined,
     pluginSelection: [],
+    pluginPublishScope: "all-publishable",
     evidenceOut: undefined,
     skipPostpublish: false,
     skipGitHubRelease: false,
@@ -185,6 +206,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     rerunFailedClawHub: false,
     workflowRuns: {},
   };
+  let pluginPublishScopeProvided = false;
 
   for (let index = 0; index < values.length; index += 1) {
     const arg = values[index];
@@ -222,6 +244,15 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
           throw new Error("--plugins requires at least one plugin package name.");
         }
         break;
+      case "--plugin-publish-scope": {
+        const scope = next();
+        if (scope !== "selected" && scope !== "all-publishable" && scope !== "extended-stable") {
+          throw new Error(`Unknown plugin publish scope: ${scope}.`);
+        }
+        parsed.pluginPublishScope = scope;
+        pluginPublishScopeProvided = true;
+        break;
+      }
       case "--evidence-out":
         parsed.evidenceOut = next();
         break;
@@ -258,6 +289,16 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+
+  if (!pluginPublishScopeProvided && parsed.pluginSelection.length > 0) {
+    parsed.pluginPublishScope = "selected";
+  }
+  if (parsed.pluginPublishScope === "selected" && parsed.pluginSelection.length === 0) {
+    throw new Error("Plugin publish scope selected requires --plugins.");
+  }
+  if (parsed.pluginPublishScope === "all-publishable" && parsed.pluginSelection.length > 0) {
+    throw new Error("Plugin publish scope all-publishable must not use --plugins.");
   }
 
   return parsed;
@@ -328,27 +369,31 @@ export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"):
   }
 }
 
-async function verifyNpmPackage(
+export async function verifyNpmPackage(
   packageName: string,
   version: string,
-  distTag: string,
+  distTag?: string,
 ): Promise<NpmViewFields> {
+  const readbackDistTag = distTag ?? "latest";
+  const fieldsToRead = [
+    "version",
+    `dist-tags.${readbackDistTag}`,
+    "dist.integrity",
+    "dist.tarball",
+  ];
   const raw = await runNpmViewWithRetry([
     "view",
     `${packageName}@${version}`,
-    "version",
-    `dist-tags.${distTag}`,
-    "dist.integrity",
-    "dist.tarball",
+    ...fieldsToRead,
     "--json",
   ]);
-  const fields = parseNpmViewFields(raw, distTag);
+  const fields = parseNpmViewFields(raw, readbackDistTag);
   if (fields.version !== version) {
     throw new Error(
       `${packageName}: expected npm version ${version}, got ${fields.version ?? "<missing>"}.`,
     );
   }
-  if (fields.distTagVersion !== version) {
+  if (distTag && fields.distTagVersion !== version) {
     throw new Error(
       `${packageName}: npm dist-tag ${distTag} points to ${fields.distTagVersion ?? "<missing>"}, expected ${version}.`,
     );
@@ -583,13 +628,23 @@ export async function verifyBetaRelease(
   const npmPlugins = collectPublishablePluginPackages(rootDir, {
     packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
   });
+  const pluginNpmPackages: Array<{
+    packageName: string;
+    version: string;
+    npmIntegrity: string;
+  }> = [];
   assertSelectedPackagesResolved({
     label: "npm plugin",
     selection: args.pluginSelection,
     packages: npmPlugins,
   });
   for (const plugin of npmPlugins) {
-    await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+    const verified = await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+    pluginNpmPackages.push({
+      packageName: plugin.packageName,
+      version: args.version,
+      npmIntegrity: verified.integrity!,
+    });
   }
   lines.push(`plugin npm OK: ${npmPlugins.length}`);
 
@@ -706,12 +761,8 @@ export async function verifyBetaRelease(
       `${JSON.stringify(
         {
           version: 1,
-          releaseVersion: args.version,
           releaseTag: args.tag,
-          npmDistTag: args.distTag,
-          pluginSelection: args.pluginSelection,
-          openclawNpmIntegrity: openclawNpm.integrity,
-          openclawNpmTarball: openclawNpm.tarball,
+          ...buildNpmReleaseEvidence({ args, openclawNpm, pluginNpmPackages }),
           npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
           npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
           githubReleaseUrl: releaseUrl ?? null,

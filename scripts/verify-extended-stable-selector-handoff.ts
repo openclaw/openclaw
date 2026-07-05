@@ -3,6 +3,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadExtendedStablePluginCohort } from "../src/plugins/extended-stable-plugin-cohort.js";
+import { collectExtendedStableCohortPackageNames } from "./generate-extended-stable-plugin-cohort.js";
 import { assertExtendedStableReleaseVersion } from "./lib/extended-stable-plugin-acceptance.js";
 import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
 
@@ -50,7 +52,11 @@ function positiveInteger(value: unknown, label: string): number {
   return parsed;
 }
 
-export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): void {
+export function verifySelectorHandoff(
+  value: unknown,
+  rootDir = resolve("."),
+  expectedCohortPackages = collectExtendedStableCohortPackageNames(rootDir),
+): void {
   const handoff = record(value, "selector handoff");
   keys(
     handoff,
@@ -59,6 +65,7 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
       "handoffId",
       "releaseVersion",
       "sourceSha",
+      "monthlyCohort",
       "core",
       "pluginPublication",
       "acceptances",
@@ -85,6 +92,47 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     JSON.stringify(handoff.selectorOrder) !== JSON.stringify(["plugins", "core"])
   ) {
     throw new Error("selector handoff must be ready with plugin-first/core-last order.");
+  }
+
+  const cohort = loadExtendedStablePluginCohort(rootDir);
+  const monthlyCohort = record(handoff.monthlyCohort, "selector handoff.monthlyCohort");
+  keys(
+    monthlyCohort,
+    ["releaseLine", "baselineVersion", "sourceReleaseTag", "sourceEvidenceSha256", "packages"],
+    "selector handoff.monthlyCohort",
+  );
+  if (
+    monthlyCohort.releaseLine !== cohort.releaseLine ||
+    monthlyCohort.baselineVersion !== cohort.baselineVersion ||
+    monthlyCohort.sourceReleaseTag !== `v${cohort.baselineVersion}`
+  ) {
+    throw new Error("selector handoff monthly cohort identity must match packaged metadata.");
+  }
+  sha256(monthlyCohort.sourceEvidenceSha256, "selector handoff monthly cohort evidence SHA-256");
+  if (!Array.isArray(monthlyCohort.packages)) {
+    throw new Error("selector handoff monthly cohort packages must be an array.");
+  }
+  const cohortPackages = monthlyCohort.packages.map((entry, index) => {
+    const packageEntry = record(entry, `monthly cohort packages[${index}]`);
+    keys(
+      packageEntry,
+      ["packageName", "version", "npmIntegrity"],
+      `monthly cohort packages[${index}]`,
+    );
+    if (packageEntry.version !== cohort.baselineVersion) {
+      throw new Error(`monthly cohort packages[${index}] version must match the baseline.`);
+    }
+    const integrity = text(
+      packageEntry.npmIntegrity,
+      `monthly cohort packages[${index}] integrity`,
+    );
+    if (!integrity.startsWith("sha512-")) {
+      throw new Error(`monthly cohort packages[${index}] integrity must be sha512.`);
+    }
+    return text(packageEntry.packageName, `monthly cohort packages[${index}] package name`);
+  });
+  if (JSON.stringify(cohortPackages) !== JSON.stringify(expectedCohortPackages)) {
+    throw new Error("selector handoff monthly cohort must contain exactly the derived packages.");
   }
 
   const core = record(handoff.core, "selector handoff.core");
@@ -117,6 +165,9 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
 
   const support = loadExtendedStablePluginSupport(rootDir);
   const expectedPackages = support.plugins.map((plugin) => plugin.packageName);
+  if (cohortPackages.some((packageName) => expectedPackages.includes(packageName))) {
+    throw new Error("selector handoff monthly cohort must exclude covered packages.");
+  }
   const publication = record(handoff.pluginPublication, "selector handoff.pluginPublication");
   keys(
     publication,

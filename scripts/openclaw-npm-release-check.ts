@@ -71,6 +71,8 @@ const REQUIRED_PACKED_PATHS = [
   "dist/control-ui/index.html",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
+const EXTENDED_STABLE_SUPPORT_PATH = "release/extended-stable-plugin-support.json";
+const EXTENDED_STABLE_COHORT_PATH = "release/extended-stable-plugin-cohort.json";
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
   ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
@@ -638,7 +640,22 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
   return errors;
 }
 
-function collectPackedTarballErrors(): string[] {
+export function collectExtendedStableMetadataPackErrors(
+  paths: Iterable<string>,
+  packageVersion: string,
+): string[] {
+  const packedPaths = new Set(paths);
+  const required = [EXTENDED_STABLE_SUPPORT_PATH];
+  const parsed = parseReleaseVersion(packageVersion);
+  if (parsed?.channel === "stable" && parsed.correctionNumber === undefined && parsed.patch >= 33) {
+    required.push(EXTENDED_STABLE_COHORT_PATH);
+  }
+  return required
+    .filter((path) => !packedPaths.has(path))
+    .map((path) => `npm package is missing required extended-stable metadata "${path}".`);
+}
+
+function collectPackedTarballErrors(packageVersion: string): string[] {
   const errors: string[] = [];
   let stdout;
   try {
@@ -672,6 +689,7 @@ function collectPackedTarballErrors(): string[] {
 
   return [
     ...collectControlUiPackErrors(packedPaths),
+    ...collectExtendedStableMetadataPackErrors(packedPaths, packageVersion),
     ...collectForbiddenPackedPathErrors(packedPaths),
     ...collectForbiddenPackedContentErrors(packedPaths),
     ...collectPackedTestCargoErrors(packedPaths),
@@ -767,7 +785,7 @@ async function main(): Promise<number> {
     await writePackageDistInventory(process.cwd());
   }
   const shrinkwrapErrors = skipPackValidation ? [] : collectNpmShrinkwrapErrors();
-  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
+  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors(pkg.version ?? "");
   const errors = [...metadataErrors, ...tagErrors, ...shrinkwrapErrors, ...tarballErrors];
 
   if (errors.length > 0) {

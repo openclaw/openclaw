@@ -1,6 +1,7 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildNpmReleaseEvidence,
   fetchStatusWithRetry,
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
@@ -24,6 +25,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       workflowRef: undefined,
       clawHubWorkflowRef: undefined,
       pluginSelection: [],
+      pluginPublishScope: "all-publishable",
       evidenceOut: undefined,
       skipPostpublish: false,
       skipGitHubRelease: false,
@@ -72,6 +74,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       workflowRef: "release/2026.5.10",
       clawHubWorkflowRef: "v2026.5.10-beta.3",
       pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
+      pluginPublishScope: "selected",
       evidenceOut: ".artifacts/release-evidence.json",
       skipPostpublish: true,
       skipGitHubRelease: true,
@@ -127,6 +130,35 @@ describe("parseNpmViewFields", () => {
       distTagVersion: "2026.5.10-beta.3",
       integrity: "sha512-test",
       tarball: "https://registry.example/openclaw.tgz",
+    });
+  });
+});
+
+describe("buildNpmReleaseEvidence", () => {
+  it("records exact plugin scope, versions, and integrities for cohort selection", () => {
+    expect(
+      buildNpmReleaseEvidence({
+        args: {
+          version: "2026.6.21",
+          distTag: "latest",
+          pluginSelection: [],
+          pluginPublishScope: "all-publishable",
+        },
+        openclawNpm: { integrity: "sha512-core", tarball: "https://registry/openclaw.tgz" },
+        pluginNpmPackages: [
+          { packageName: "@openclaw/a", version: "2026.6.21", npmIntegrity: "sha512-a" },
+        ],
+      }),
+    ).toEqual({
+      releaseVersion: "2026.6.21",
+      npmDistTag: "latest",
+      pluginSelection: [],
+      pluginPublishScope: "all-publishable",
+      openclawNpmIntegrity: "sha512-core",
+      openclawNpmTarball: "https://registry/openclaw.tgz",
+      pluginNpmPackages: [
+        { packageName: "@openclaw/a", version: "2026.6.21", npmIntegrity: "sha512-a" },
+      ],
     });
   });
 });

@@ -8,6 +8,7 @@ import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstra
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectExtendedStableMetadataPackErrors,
   collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
   collectPackedTestCargoErrors,
@@ -551,6 +552,22 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
     ).toStrictEqual([]);
+  });
+});
+
+describe("collectExtendedStableMetadataPackErrors", () => {
+  it("requires support metadata always and cohort metadata from patch 33", () => {
+    expect(collectExtendedStableMetadataPackErrors([], "2026.6.21")).toEqual([
+      'npm package is missing required extended-stable metadata "release/extended-stable-plugin-support.json".',
+    ]);
+    expect(
+      collectExtendedStableMetadataPackErrors(
+        ["release/extended-stable-plugin-support.json"],
+        "2026.6.33",
+      ),
+    ).toEqual([
+      'npm package is missing required extended-stable metadata "release/extended-stable-plugin-cohort.json".',
+    ]);
   });
 });
 
