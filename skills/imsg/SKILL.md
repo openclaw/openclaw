@@ -205,14 +205,11 @@ Use `send-rich --reply-to <message-guid>` for threaded replies. Confirm the refe
 
 Native Apple Messages polls require the bridge. Creation needs at least two `--option` values. Voting requires one of `--option-id`, `--option-index`, or `--option`.
 
-Messages renders only the options on a poll balloon — the poll title is never shown to recipients. So `poll send` automatically echoes `--question` as a reply comment on the poll (a text whose `reply_to` is the poll guid, exactly what the native "comment or Send" field produces). Just set `--question` and the visible caption appears for free — no extra step. Use `--comment` only to make the visible caption differ from the stored title.
+Messages renders only the options on a poll balloon; the `--question` title is not shown to recipients. Set `--question` (required) plus at least two `--option` values.
 
 ```bash
 imsg poll send --chat 'iMessage;-;+15551234567' \
   --question "Dinner?" --option "Pizza" --option "Sushi"
-# --comment overrides the echoed caption when it should differ from --question:
-imsg poll send --chat 'iMessage;-;+15551234567' \
-  --question "Dinner?" --comment "Vote by 5pm 🍽️" --option "Pizza" --option "Sushi"
 imsg poll send --chat 'iMessage;+;chat0000' --reply-to <message-guid> \
   --question "Approve?" --option "Yes" --option "No"
 imsg poll vote --chat 'iMessage;+;chat0000' \
@@ -226,8 +223,6 @@ imsg history --chat-id 42 --limit 20 --json | jq -s '.[] | select(.poll != null)
 ```
 
 Poll vote rows are `poll` events, not tapbacks; `watch --reactions` is not required to see them.
-
-Inbound native polls carry no title of their own, so imsg backfills the poll's `question` from its caption (the reply-to-the-poll message) — a native poll read back from history/watch shows the real question, not an empty one.
 
 ## Watch and Long-Running Agents
 
