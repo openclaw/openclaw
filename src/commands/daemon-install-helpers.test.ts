@@ -1324,12 +1324,15 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       existingEnvironment: {
         TELEGRAM_DEFAULT_BOTTOKEN: "telegram-existing-env-file-token",
         TELEGRAM_HERMES_BOTTOKEN: "telegram-existing-hermes-env-file-token",
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENROUTER_API_KEY",
+        RETIRED_BOTTOKEN: "retired-env-file-token",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS:
+          "RETIRED_BOTTOKEN,TELEGRAM_DEFAULT_BOTTOKEN,TELEGRAM_HERMES_BOTTOKEN",
       },
       existingEnvironmentValueSources: {
         TELEGRAM_DEFAULT_BOTTOKEN: "file",
         TELEGRAM_HERMES_BOTTOKEN: "file",
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "file",
+        RETIRED_BOTTOKEN: "file",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
       },
       config: {
         env: {
@@ -1366,6 +1369,10 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.TELEGRAM_HERMES_BOTTOKEN).toBe(
       "telegram-existing-hermes-env-file-token",
     );
+    expect(plan.environmentValueSources?.TELEGRAM_DEFAULT_BOTTOKEN).toBe("file");
+    expect(plan.environmentValueSources?.TELEGRAM_HERMES_BOTTOKEN).toBe("file");
+    expect(plan.environment.RETIRED_BOTTOKEN).toBeUndefined();
+    expect(plan.environmentValueSources?.RETIRED_BOTTOKEN).toBeUndefined();
     expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "OPENROUTER_API_KEY,TELEGRAM_DEFAULT_BOTTOKEN,TELEGRAM_HERMES_BOTTOKEN",
