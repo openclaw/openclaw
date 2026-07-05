@@ -25,9 +25,9 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
   readonly effects?: readonly HealthRepairEffect[];
 }
 
-/** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
+/** Selection metadata shared by split and runnable health-check shapes. */
 export interface HealthCheckSelectionOptions {
-  readonly defaultEnabled?: boolean;
+  readonly defaultEnabled?: HealthCheck["defaultEnabled"];
 }
 
 export type SplitHealthCheckInput = HealthCheck & HealthCheckSelectionOptions;

@@ -80,7 +80,9 @@ cat ~/.openclaw/openclaw.json
 
 ## Read-only lint mode
 
-`openclaw doctor --lint` is the automation-friendly sibling of `openclaw doctor --fix`. Both run the same health checks; only the posture differs:
+`openclaw doctor --lint` is the automation-friendly sibling of
+`openclaw doctor --fix`. They share the same Doctor rule registry, but they do
+not select or act on rules in the same way:
 
 | Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
 | ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
@@ -88,7 +90,27 @@ cat ~/.openclaw/openclaw.json
 | `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
 | `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
 
-Health checks may provide an optional `repair()` implementation; `doctor --fix` applies it when present and falls back to the legacy doctor repair flow otherwise. The contract separates `detect()` (reports findings) from `repair()` (reports changes/diffs/side effects), which keeps a path open for a future `doctor --fix --dry-run` without turning lint checks into mutation planners.
+Default `doctor --lint` runs the broad-safe automation profile: checks that are
+static, local, and useful in CI or preflight output. It skips opt-in checks that
+are advisory, environment-sensitive, live-service dependent, account/workspace
+inventory, or historical cleanup. Use `doctor --lint --all` when you want the
+full registered lint audit, including those opt-in checks, or `--only <id>` for
+a targeted check.
+
+`doctor --fix` does not use the lint default profile and does not accept
+`--all`. It runs Doctor's ordered repair path: modern health checks may provide
+an optional `repair()` implementation, and older areas still use their legacy
+Doctor repair flow. Some lint findings are intentionally diagnostic only, so a
+check appearing in `--lint --all` does not mean `--fix` will mutate that area.
+The contract separates `detect()` (reports findings) from `repair()` (reports
+changes/diffs/side effects), which keeps a path open for a future
+`doctor --fix --dry-run` without turning lint checks into mutation planners.
+
+Core and plugin health checks can set `defaultEnabled: false` in their public
+registration to opt out of default `doctor --lint` while remaining available to
+`--all`, `--only`, and Doctor repair flows. Finding severity is still emitted per
+finding (`info`, `warning`, or `error`); default selection is not a severity
+level.
 
 ```bash
 openclaw doctor --lint
@@ -115,7 +137,7 @@ Exit codes:
 Flags:
 
 - `--severity-min info|warning|error` (default `warning`): controls both what prints and what causes a non-zero exit.
-- `--all`: runs every registered check, including opt-in checks excluded from the default automation set.
+- `--all`: runs every registered lint check, including opt-in checks excluded from the default automation set.
 - `--only <id>` (repeatable): run only the named check id(s); an unknown id is reported as an error finding.
 - `--skip <id>` (repeatable): exclude a check while keeping the rest of the run active.
 - `--json`, `--severity-min`, `--all`, `--only`, and `--skip` require `--lint`; plain `openclaw doctor` and `--fix` runs reject them.
