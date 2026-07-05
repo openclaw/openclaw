@@ -2391,8 +2391,10 @@ export class AgentSession {
             this.extensionAbortHandler();
             return;
           }
-          void this.abort().catch((err: unknown) => {
-            process.stderr.write(`agent-session: extension abort failed: ${String(err)}\n`);
+          void this.abort().catch(() => {
+            // Keep the diagnostic generic: abort failures may carry provider/config
+            // details, so we deliberately do not echo the raw error text.
+            process.stderr.write("agent-session: extension abort failed\n");
           });
         },
         hasPendingMessages: () => this.pendingMessageCount > 0,

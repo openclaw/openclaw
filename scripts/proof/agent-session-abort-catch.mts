@@ -85,13 +85,9 @@ await new Promise((resolve) => {
 process.stderr.write = originalStderrWrite;
 
 const stderr = stderrChunks.join("");
-if (stderr.includes("agent-session: extension abort failed: Error: simulated abort rejection")) {
-  console.log("Captured stderr:");
-  console.log(stderr.trimEnd());
+if (stderr.includes("agent-session: extension abort failed")) {
   console.log("\nPASS: rejecting abort is caught and logged instead of becoming an unhandled rejection.");
 } else {
   console.log("FAIL: expected diagnostic not found in stderr.");
-  console.log("Stderr captured:");
-  console.log(stderr);
   process.exitCode = 1;
 }

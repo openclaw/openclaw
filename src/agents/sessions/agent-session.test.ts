@@ -87,8 +87,6 @@ describe("AgentSession", () => {
     });
 
     const stderr = stderrChunks.join("");
-    expect(stderr).toContain(
-      "agent-session: extension abort failed: Error: simulated abort rejection",
-    );
+    expect(stderr).toContain("agent-session: extension abort failed");
   });
 });
