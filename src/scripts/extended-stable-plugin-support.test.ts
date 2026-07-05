@@ -87,7 +87,7 @@ describe("extended-stable plugin support policy", () => {
           { ...validPolicy.plugins[2], packageDir: "../slack" },
         ],
       }),
-    ).toThrow(/packageDir must match pluginId/u);
+    ).toThrow(/packageDir must be a safe relative path ending in pluginId/u);
 
     expect(() =>
       parseExtendedStablePluginSupport({

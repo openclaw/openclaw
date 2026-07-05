@@ -65,8 +65,12 @@ function parseEntry(value: unknown, index: number): ExtendedStablePluginSupportE
   if (entry.packageName !== `@openclaw/${entry.pluginId}`) {
     throw new Error(`${label}.packageName must match pluginId.`);
   }
-  if (entry.packageDir !== `extensions/${entry.pluginId}`) {
-    throw new Error(`${label}.packageDir must match pluginId.`);
+  const packageDirSegments = entry.packageDir.split("/");
+  if (
+    packageDirSegments.some((segment) => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(segment)) ||
+    packageDirSegments.at(-1) !== entry.pluginId
+  ) {
+    throw new Error(`${label}.packageDir must be a safe relative path ending in pluginId.`);
   }
   if (!ACCEPTANCE_PROFILES.has(entry.acceptanceProfile)) {
     throw new Error(`${label}.acceptanceProfile is not registered.`);

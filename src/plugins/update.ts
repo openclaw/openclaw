@@ -33,9 +33,9 @@ import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import {
-  type ExtendedStablePluginTargetCode,
-  type ExtendedStablePluginTargetContext,
+import type {
+  ExtendedStablePluginTargetCode,
+  ExtendedStablePluginTargetContext,
 } from "./extended-stable-plugin-target.js";
 import {
   getExternalizedBundledPluginLegacyPathSuffix,
