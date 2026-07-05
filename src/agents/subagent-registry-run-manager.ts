@@ -107,10 +107,12 @@ export function markSubagentRunPausedAfterYield(params: {
   const { entry } = params;
   if (
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
-    entry.suppressAnnounceReason === "killed"
+    entry.suppressAnnounceReason === "killed" ||
+    (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))
   ) {
     // agent.wait and lifecycle events can report the old yield after control
-    // killed the run. Cleanup rechecks pauseReason before destructive work.
+    // killed the run. Once delete dispatch starts, reviving the row would expose
+    // a live run whose backing session may already be gone.
     return false;
   }
   let mutated = false;
@@ -655,6 +657,7 @@ export function createSubagentRunManager(params: {
       pauseReason: undefined,
       endedHookEmittedAt: undefined,
       browserCleanupDispatchedAt: undefined,
+      deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,
       execution: {

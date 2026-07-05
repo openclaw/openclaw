@@ -762,6 +762,67 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it("rejects a yield after direct delete cleanup has been dispatched", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
+    const runs = new Map([[entry.runId, entry]]);
+    let releaseDelete: (() => void) | undefined;
+    gatewayMocks.callGateway.mockImplementation((opts) => {
+      if (opts.method !== "sessions.delete") {
+        return Promise.resolve({});
+      }
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseDelete = () => resolve({});
+      });
+    });
+    const controller = createLifecycleController({ entry, runs });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+    await vi.waitFor(() => expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number"));
+
+    expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_001 })).toBe(false);
+    expect(entry.pauseReason).toBeUndefined();
+    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
+
+    releaseDelete?.();
+    await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
+  });
+
+  it("rejects a yield after announce cleanup hands off delete dispatch", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+    const runs = new Map([[entry.runId, entry]]);
+    let releaseAnnounce: (() => void) | undefined;
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      (announceParams) =>
+        new Promise<boolean>((resolve) => {
+          expect(announceParams.onBeforeDeleteChildSession?.()).toBe(true);
+          releaseAnnounce = () => resolve(true);
+        }),
+    );
+    const controller = createLifecycleController({ entry, runs, runSubagentAnnounceFlow });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+    await vi.waitFor(() => expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number"));
+
+    expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_001 })).toBe(false);
+    expect(entry.pauseReason).toBeUndefined();
+    expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
+
+    releaseAnnounce?.();
+    await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
+  });
+
   it("discards completion capture when an authoritative yield arrives during the await", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     let finishCapture: ((result: string) => void) | undefined;

@@ -56,6 +56,9 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     entry.generation > 0
       ? entry.generation
       : undefined;
+  entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
+    ? entry.deleteCleanupDispatchedAt
+    : undefined;
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
   const killReconciliation = entry.killReconciliation;
   if (

@@ -41,6 +41,14 @@ describe("normalizeSubagentRunState", () => {
     expect(nonString.taskRunId).toBeUndefined();
   });
 
+  it("normalizes the durable delete-dispatch boundary", () => {
+    const valid = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: 200 }));
+    const malformed = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: Number.NaN }));
+
+    expect(valid.deleteCleanupDispatchedAt).toBe(200);
+    expect(malformed.deleteCleanupDispatchedAt).toBeUndefined();
+  });
+
   it("preserves valid killed reconciliation ownership metadata", () => {
     const entry = normalizeSubagentRunState(
       baseRun({

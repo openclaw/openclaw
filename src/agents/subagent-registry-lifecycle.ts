@@ -1193,6 +1193,10 @@ export function createSubagentRegistryLifecycleController(params: {
           return;
         }
         if (cleanup === "delete") {
+          // This durable boundary prevents a late yield from reviving a run
+          // after deletion may already have reached the gateway.
+          entry.deleteCleanupDispatchedAt ??= Date.now();
+          params.persist();
           await deleteSubagentSessionForCleanup({
             callGateway: params.callGateway,
             childSessionKey: entry.childSessionKey,
@@ -1289,6 +1293,19 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        onBeforeDeleteChildSession:
+          cleanup === "delete"
+            ? () => {
+                if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+                  return false;
+                }
+                // Announce owns delete submission; fence late yields at the
+                // exact handoff instead of when cleanup merely starts.
+                entry.deleteCleanupDispatchedAt ??= Date.now();
+                params.persist();
+                return true;
+              }
+            : undefined,
         onDeliveryResult: (delivery) => {
           if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
             void retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);

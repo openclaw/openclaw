@@ -137,6 +137,8 @@ export type SubagentRunRecord = {
   endedHookEmittedAt?: number;
   /** Set after cleanupBrowserSessionsForLifecycleEnd has been dispatched once. */
   browserCleanupDispatchedAt?: number;
+  /** Set immediately before irreversible sessions.delete cleanup is dispatched. */
+  deleteCleanupDispatchedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
   attachmentsDir?: string;
