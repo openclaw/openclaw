@@ -392,13 +392,13 @@ export function loadSessionStore(
     }
   }
 
-  // Retry a few times on Windows because readers can briefly observe empty or
+  // Retry a few times because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
   const fileStat = getFileStatSnapshot(storePath);
   const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
-  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  const maxReadAttempts = 3;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
     try {
@@ -416,7 +416,12 @@ export function loadSessionStore(
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const isPermanentReadError = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+      if (isPermanentReadError) {
+        break;
+      }
       if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
