@@ -372,10 +372,7 @@ export default definePluginEntry({
     };
 
     const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
-      const history = await rt.manager.getCallHistory(100);
-      const call = history
-        .toReversed()
-        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      const call = await rt.manager.getCallFromMemoryOrStore(callId);
       if (!call) {
         return undefined;
       }
@@ -386,25 +383,6 @@ export default definePluginEntry({
         endedAt ? `endedAt=${endedAt}` : undefined,
       ].filter(Boolean);
       return `call is not active (${details.join(", ")})`;
-    };
-
-    const resolveCallFromMemoryOrStore = async (
-      rt: VoiceCallRuntime,
-      callId: string,
-    ): Promise<CallRecord | undefined> => {
-      const active = rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
-      if (active) {
-        return active;
-      }
-      // Fall back to the persisted call store. Once a call is evicted from the
-      // in-memory manager (finalize, gateway restart, or max-duration expiry) it
-      // is gone from memory even though its full record remains on disk. Pick the
-      // NEWEST matching snapshot: history is sorted oldest-first, so a forward
-      // find() would return a stale record. See #96586.
-      const history = await rt.manager.getCallHistory(100);
-      return history
-        .toReversed()
-        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
     };
 
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
@@ -677,7 +655,7 @@ export default definePluginEntry({
             });
             return;
           }
-          const call = await resolveCallFromMemoryOrStore(rt, raw);
+          const call = await rt.manager.getCallFromMemoryOrStore(raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -809,7 +787,7 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const call = await resolveCallFromMemoryOrStore(rt, callId);
+                const call = await rt.manager.getCallFromMemoryOrStore(callId);
                 return json(
                   call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
                 );
@@ -823,7 +801,7 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = await resolveCallFromMemoryOrStore(rt, sid);
+            const call = await rt.manager.getCallFromMemoryOrStore(sid);
             return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 

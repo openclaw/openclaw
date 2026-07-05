@@ -129,33 +129,24 @@ describe("voice-call CLI status fallback", () => {
     return JSON.parse(capturer.output().trim());
   }
 
-  it("resolves the newest persisted snapshot when the gateway is unavailable", async () => {
-    // History is oldest-first; the fallback must pick the newest (completed)
-    // snapshot, not the stale ringing one. See #96586.
+  it("uses the manager's persisted fallback when the gateway is unavailable", async () => {
     const result = await runStatusWithUnavailableGateway({
-      getCall: () => undefined,
-      getCallByProviderCallId: () => undefined,
       getActiveCalls: () => [],
-      getCallHistory: async () => [
-        { callId: "call-1", providerCallId: "CA123", state: "ringing" },
-        {
-          callId: "call-1",
-          providerCallId: "CA123",
-          state: "completed",
-          endReason: "completed",
-          endedAt: 1,
-        },
-      ],
+      getCallFromMemoryOrStore: async () => ({
+        callId: "call-1",
+        providerCallId: "CA123",
+        state: "completed",
+        endReason: "completed",
+        endedAt: 1,
+      }),
     });
     expect(result).toMatchObject({ callId: "call-1", state: "completed" });
   });
 
   it("reports found:false when the call is neither active nor persisted", async () => {
     const result = await runStatusWithUnavailableGateway({
-      getCall: () => undefined,
-      getCallByProviderCallId: () => undefined,
       getActiveCalls: () => [],
-      getCallHistory: async () => [],
+      getCallFromMemoryOrStore: async () => undefined,
     });
     expect(result).toEqual({ found: false });
   });

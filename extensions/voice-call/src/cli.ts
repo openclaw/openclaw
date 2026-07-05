@@ -733,19 +733,7 @@ export function registerVoiceCallCli(params: {
       }
       const rt = await ensureRuntime();
       if (options.callId) {
-        const id = options.callId;
-        const active = rt.manager.getCall(id) || rt.manager.getCallByProviderCallId(id);
-        let call = active;
-        if (!call) {
-          // Gateway is unavailable; fall back to the persisted call store so a
-          // completed/evicted call is still resolvable. Pick the NEWEST matching
-          // snapshot — history is oldest-first, so a forward find() would return
-          // a stale record. Mirrors the gateway/tool status paths. See #96586.
-          const history = await rt.manager.getCallHistory(100);
-          call = history
-            .toReversed()
-            .find((candidate) => candidate.callId === id || candidate.providerCallId === id);
-        }
+        const call = await rt.manager.getCallFromMemoryOrStore(options.callId);
         writeStdoutJson(call ?? { found: false });
         return;
       }
