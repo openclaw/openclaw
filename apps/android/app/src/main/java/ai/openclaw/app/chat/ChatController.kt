@@ -1280,7 +1280,7 @@ class ChatController internal constructor(
     val totalCount = root["totalCount"].asLongOrNull()
     val isTruncated =
       root["hasMore"].asBooleanOrNull() == true ||
-         (totalCount != null && totalCount > sessions.size)
+        (totalCount != null && totalCount > sessions.size)
     return SessionListResult(sessions, isTruncated)
   }
 

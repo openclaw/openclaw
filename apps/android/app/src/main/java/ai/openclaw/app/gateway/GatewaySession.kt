@@ -452,6 +452,7 @@ class GatewaySession(
     private val closedDeferred = CompletableDeferred<Unit>()
     private val connectNonceDeferred = CompletableDeferred<String>()
     private val terminalCallbackClaimed = AtomicBoolean(false)
+    private val connectResponseAccepted = AtomicBoolean(false)
 
     @Volatile
     private var connectHandshakeJob: Job? = null
@@ -610,16 +611,35 @@ class GatewaySession(
       socket?.cancel() ?: closedDeferred.complete(Unit)
     }
 
-    private fun finishTransport(message: String) {
+    private fun finishTransport(
+      message: String,
+      connectError: Throwable,
+    ) {
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
       incomingMessages.close()
       try {
         if (shouldNotify) onDisconnected(message)
       } finally {
-        socket = null
-        closedDeferred.complete(Unit)
+        messagePumpJob.invokeOnCompletion {
+          // OkHttp can deliver onClosed immediately after onMessage. Let an accepted connect
+          // response finish so auth retry state and issued device tokens survive the close.
+          if (connectResponseAccepted.get()) {
+            connectHandshakeJob?.invokeOnCompletion {
+              finalizeTransport(connectError)
+            } ?: finalizeTransport(connectError)
+          } else {
+            connectNonceDeferred.completeExceptionally(connectError)
+            finalizeTransport(connectError)
+          }
+        }
       }
+    }
+
+    private fun finalizeTransport(connectError: Throwable) {
+      if (!connectDeferred.isCompleted) connectDeferred.completeExceptionally(connectError)
+      socket = null
+      closedDeferred.complete(Unit)
     }
 
     private fun buildClient(): OkHttpClient {
@@ -669,10 +689,19 @@ class GatewaySession(
         t: Throwable,
         response: Response?,
       ) {
-        if (!connectDeferred.isCompleted) {
-          connectDeferred.completeExceptionally(t)
-        }
-        finishTransport("Gateway error: ${t.message ?: t::class.java.simpleName}")
+        finishTransport(
+          message = "Gateway error: ${t.message ?: t::class.java.simpleName}",
+          connectError = t,
+        )
+      }
+
+      override fun onClosing(
+        webSocket: WebSocket,
+        code: Int,
+        reason: String,
+      ) {
+        // OkHttp requires the client to acknowledge a peer-initiated close before onClosed fires.
+        webSocket.close(code, reason)
       }
 
       override fun onClosed(
@@ -680,10 +709,10 @@ class GatewaySession(
         code: Int,
         reason: String,
       ) {
-        if (!connectDeferred.isCompleted) {
-          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
-        }
-        finishTransport("Gateway closed: $reason")
+        finishTransport(
+          message = "Gateway closed: $reason",
+          connectError = IllegalStateException("Gateway closed: $reason"),
+        )
       }
     }
 
@@ -994,6 +1023,7 @@ class GatewaySession(
 
     private fun handleResponse(frame: JsonObject) {
       val id = frame["id"].asStringOrNull() ?: return
+      if (id == connectRequestId) connectResponseAccepted.set(true)
       val ok = frame["ok"].asBooleanOrNull() ?: false
       val payloadJson = frame["payload"]?.let { payload -> payload.toString() }
       val error =

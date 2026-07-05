@@ -19,9 +19,10 @@ import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -39,6 +40,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.lang.reflect.Field
 import java.util.UUID
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 private class FailingClearTranscriptCache : ChatTranscriptCache {
@@ -827,8 +829,9 @@ class GatewayBootstrapAuthTest {
       connectWithAuth.isAccessible = true
       val lockHeld = CompletableDeferred<Unit>()
       val releaseLock = CompletableDeferred<Unit>()
+      val lifecycleDispatcher = Executors.newFixedThreadPool(3).asCoroutineDispatcher()
       val lockHolder =
-        async(Dispatchers.Default) {
+        async(lifecycleDispatcher) {
           synchronized(lifecycleLock) {
             lockHeld.complete(Unit)
             runBlocking { releaseLock.await() }
@@ -837,7 +840,7 @@ class GatewayBootstrapAuthTest {
       lockHeld.await()
 
       val connect =
-        async(Dispatchers.Default) {
+        async(lifecycleDispatcher) {
           connectWithAuth.invoke(runtime, endpoint, auth, false, { Unit })
         }
       try {
@@ -845,7 +848,7 @@ class GatewayBootstrapAuthTest {
           while (readField<Int>(runtime, "gatewayConnectOperationsInFlight") == 0) delay(10)
         }
         val callback =
-          async(Dispatchers.Default) {
+          async(lifecycleDispatcher) {
             val method =
               runtime.javaClass.getDeclaredMethod(
                 "maybeStartOperatorSessionAfterNodeConnect",
@@ -858,11 +861,18 @@ class GatewayBootstrapAuthTest {
         withTimeout(1_000) { callback.await() }
       } finally {
         releaseLock.complete(Unit)
-        withTimeout(5_000) {
-          lockHolder.await()
-          connect.await()
+        try {
+          withTimeout(5_000) {
+            lockHolder.await()
+            connect.await()
+          }
+        } finally {
+          lifecycleDispatcher.close()
+          runtime.disconnect()
+          withTimeout(5_000) {
+            readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin()
+          }
         }
-        runtime.disconnect()
       }
       Unit
     }

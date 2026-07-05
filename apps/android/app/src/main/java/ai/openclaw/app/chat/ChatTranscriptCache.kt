@@ -39,7 +39,7 @@ internal fun deleteDatabaseFiles(
       File(databasePath.path + "-journal"),
       File(databasePath.path + "-shm"),
       File(databasePath.path + "-wal"),
-  )
+    )
   if (fixedFiles.any(File::exists)) return false
   val parent = databasePath.parentFile ?: return true
   val siblings = parent.listFiles() ?: return !parent.exists()
