@@ -1,6 +1,10 @@
 // Dispatches reply turns through ACP runtimes and projects their events.
+import { statSync } from "node:fs";
 import { formatAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
-import { resolveAcpThreadSessionDetailLines } from "@openclaw/acp-core/runtime/session-identifiers";
+import {
+  resolveAcpSessionCwd,
+  resolveAcpThreadSessionDetailLines,
+} from "@openclaw/acp-core/runtime/session-identifiers";
 import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
@@ -259,20 +263,46 @@ function finishAcpDispatchAttempt(params: {
 
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
-function isStaleSessionInitError(params: { code: string; message: string }): boolean {
-  if (params.code !== "ACP_SESSION_INIT_FAILED") {
+// Filesystem-confirmed absence of a bound session's persisted runtime cwd. Only ENOENT
+// (the path is gone) and ENOTDIR (a parent component is now a file, so the cwd cannot
+// exist either) count as missing; a present-but-unreadable cwd (EACCES) is reported as
+// present so a transient permission or mount issue never severs a live conversation.
+function isMissingAcpSessionCwd(cwd: string | undefined): boolean {
+  if (!cwd?.trim()) {
     return false;
   }
+  try {
+    return !statSync(cwd).isDirectory();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+}
+
+function isStaleSessionInitError(
+  error: { code: string; message: string },
+  sessionCwd?: string,
+): boolean {
+  if (error.code !== "ACP_SESSION_INIT_FAILED") {
+    return false;
+  }
+  // A bound session whose persisted runtime cwd has vanished is unrecoverable. That live
+  // failure usually surfaces as a generic spawn error, so confirm staleness from the
+  // filesystem rather than relying on the error message alone.
+  if (isMissingAcpSessionCwd(sessionCwd)) {
+    return true;
+  }
   return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
-    params.message,
+    error.message,
   );
 }
 
 async function maybeUnbindStaleBoundConversations(params: {
   targetSessionKey: string;
   error: { code: string; message: string };
+  sessionCwd?: string;
 }): Promise<void> {
-  if (!isStaleSessionInitError(params.error)) {
+  if (!isStaleSessionInitError(params.error, params.sessionCwd)) {
     return;
   }
   try {
@@ -551,6 +581,12 @@ export async function tryDispatchAcpReply(params: {
       recordProcessed: params.recordProcessed,
       markIdle: params.markIdle,
     });
+  // The cwd-based stale probe is a runtime-failure signal only. Pre-runtime policy
+  // rejections (dispatch-disabled, toolsAllow, allowedAgents) throw the same
+  // ACP_SESSION_INIT_FAILED code but are not runtime init failures, so the cwd probe
+  // must not run for them — otherwise a ready session with a missing cwd loses all
+  // bindings from a policy rejection alone.
+  let runtimeInitStarted = false;
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -660,6 +696,7 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
+    runtimeInitStarted = true;
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
@@ -727,6 +764,10 @@ export async function tryDispatchAcpReply(params: {
     await maybeUnbindStaleBoundConversations({
       targetSessionKey: canonicalSessionKey,
       error: acpError,
+      sessionCwd:
+        runtimeInitStarted && acpResolution.kind === "ready"
+          ? resolveAcpSessionCwd(acpResolution.meta)
+          : undefined,
     });
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),
