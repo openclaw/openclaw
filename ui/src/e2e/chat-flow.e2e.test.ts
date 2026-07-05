@@ -244,6 +244,42 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("renders a direct tool-result image from Gateway history", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const imageData =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X3q8AAAAAElFTkSuQmCC";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [
+            { alt: "Tool result preview", data: imageData, mimeType: "image/png", type: "image" },
+          ],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const image = page.getByAltText("Tool result preview");
+      await image.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
+      await gateway.waitForRequest("chat.startup");
+      await expect
+        .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+        .toBe(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("opens current context and latest-run usage from the composer ring", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1002,9 +1038,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await waitForChatScrollIdle(page);
-      await scrollChatThreadToTop(page);
       await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .poll(
+          async () => {
+            await scrollChatThreadToTop(page);
+            return chatThreadDistanceFromBottom(page);
+          },
+          { timeout: 10_000 },
+        )
         .toBeGreaterThan(200);
 
       await gateway.deferNext("chat.send");

@@ -7134,6 +7134,36 @@
       "translated": "Mod Seçimine Geri Dön"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "Düz metin (yerel ağ)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "Güvenlik"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "Manuel Kurulumu Kullan"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "Kurulum Bağlantısı"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "Düz metin kimlik bilgilerini açığa çıkarabilir. Yalnızca bu yerel ağa ve ana makineye güveniyorsanız devam edin."
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "Bu uç noktayı gözden geçirin. Kimlik bilgileri yalnızca Bağlan’a dokunduktan sonra uygulanır."
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "Henüz gateway bulunamadı."

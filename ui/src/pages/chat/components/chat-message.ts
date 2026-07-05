@@ -359,6 +359,15 @@ function extractImages(message: unknown): ImageBlock[] {
             }),
             ...imageMeta,
           });
+        } else if (typeof b.data === "string") {
+          // Direct tool-result image block from imageResult() / read tool.
+          appendImageBlock(images, {
+            url: buildBase64ImageUrl({
+              data: b.data,
+              mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
+            }),
+            ...imageMeta,
+          });
         } else if (typeof b.url === "string") {
           appendImageBlock(images, { url: b.url, ...imageMeta });
         }

@@ -7134,6 +7134,36 @@
       "translated": "Wróć do wyboru trybu"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "Tekst jawny (sieć lokalna)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "Bezpieczeństwo"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "Użyj konfiguracji ręcznej"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "Link konfiguracji"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "Tekst jawny może ujawnić dane uwierzytelniające. Kontynuuj tylko wtedy, gdy ufasz tej sieci lokalnej i hostowi."
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "Sprawdź ten punkt końcowy. Dane uwierzytelniające zostaną zastosowane dopiero po stuknięciu Połącz."
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "Nie znaleziono jeszcze żadnych gateway."

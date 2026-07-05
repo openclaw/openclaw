@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -94,7 +95,272 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 }
 
 @Suite(.serialized) struct GatewaySettingsStoreTests {
-    @Test func bootstrapCopiesDefaultsToKeychainWhenMissing() {
+    @Test func `credentials stay bound to their gateway`() {
+        let instanceID = "credential-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let firstGatewayID = "manual|first.example.com|443"
+        let secondGatewayID = "manual|second.example.com|443"
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "first-token",
+            bootstrapToken: nil,
+            password: "first-password",
+            gatewayStableID: firstGatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID)
+
+        let first = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: firstGatewayID)
+        #expect(first.token == "first-token")
+        #expect(first.password == "first-password")
+        #expect(first.suppressStoredDeviceAuth)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: secondGatewayID) == .empty)
+
+        GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: secondGatewayID) == .empty)
+    }
+
+    @Test func `shared tls certificate does not alias distinct routes`() {
+        let instanceID = "tls-owner-\(UUID().uuidString)"
+        let discoveredID = "bonjour|_openclaw._tcp|local|gateway-\(UUID().uuidString)"
+        let manualID = "manual|gateway-\(UUID().uuidString).local|443"
+        let fingerprint = "AA:BB:CC:DD"
+        defer {
+            GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID)
+            GatewayTLSStore.clearFingerprint(stableID: discoveredID)
+            GatewayTLSStore.clearFingerprint(stableID: manualID)
+        }
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "shared-token",
+            bootstrapToken: nil,
+            password: "shared-password",
+            gatewayStableID: discoveredID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID)
+        GatewayTLSStore.saveFingerprint(fingerprint, stableID: discoveredID)
+        GatewayTLSStore.saveFingerprint(fingerprint, stableID: manualID)
+
+        let manualCredentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: manualID)
+        #expect(manualCredentials == .empty)
+        #expect(GatewaySettingsStore.authenticationOwnerID(routeStableID: discoveredID) == discoveredID)
+        #expect(GatewaySettingsStore.authenticationOwnerID(routeStableID: manualID) == manualID)
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID)?.gatewayStableID ==
+            discoveredID)
+    }
+
+    @Test func `ambiguous legacy credentials are discarded`() {
+        let instanceID = "legacy-credential-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let firstGatewayID = "manual|first.example.com|443"
+        let secondGatewayID = "manual|second.example.com|443"
+        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest("legacy-token", instanceId: instanceID)
+
+        GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
+
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: firstGatewayID) == .empty)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: secondGatewayID) == .empty)
+        #expect(KeychainStore.loadString(
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)") == nil)
+        #expect(KeychainStore.loadString(
+            service: gatewayService,
+            account: "gateway-credentials.\(instanceID)") == nil)
+    }
+
+    @Test func `proven relay migration does not overwrite a canonical credential bundle`() {
+        let instanceID = "relay-migration-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "current-token",
+            bootstrapToken: "current-bootstrap",
+            password: "current-password",
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID)
+        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+            "obsolete-token",
+            instanceId: instanceID)
+
+        #expect(GatewaySettingsStore.migrateProvenRelayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID,
+            token: "stale-relay-token",
+            password: "stale-relay-password"))
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(credentials.token == "current-token")
+        #expect(credentials.bootstrapToken == "current-bootstrap")
+        #expect(credentials.password == "current-password")
+        #expect(credentials.suppressStoredDeviceAuth)
+        #expect(KeychainStore.loadString(
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)") == nil)
+    }
+
+    @Test func `proven relay credentials are not reimported after legacy cleanup`() {
+        let instanceID = "completed-relay-migration-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+
+        #expect(GatewaySettingsStore.migrateProvenRelayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID,
+            token: "stale-relay-token",
+            password: "stale-relay-password"))
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID) == .empty)
+    }
+
+    @Test func `credentialless setup suppresses stored auth until handoff completes`() {
+        let instanceID = "credentialless-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID)
+
+        let pending = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(!pending.hasCredentials)
+        #expect(pending.suppressStoredDeviceAuth)
+
+        GatewaySettingsStore.completeGatewayCredentialHandoff(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID) == .empty)
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID) == nil)
+    }
+
+    @Test func `bootstrap handoff clears bootstrap while enabling stored auth`() {
+        let instanceID = "bootstrap-handoff-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "shared-token",
+            bootstrapToken: "one-time-bootstrap",
+            password: nil,
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID)
+
+        #expect(GatewaySettingsStore.completeGatewayCredentialHandoff(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID))
+        let completed = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(completed.token == "shared-token")
+        #expect(completed.bootstrapToken == nil)
+        #expect(!completed.suppressStoredDeviceAuth)
+    }
+
+    @Test func `field edits preserve pending bootstrap handoff for the same gateway`() {
+        let instanceID = "edited-credential-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: nil,
+            bootstrapToken: "bootstrap-token",
+            password: nil,
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID)
+        GatewaySettingsStore.updateGatewayCredentials(
+            token: "edited-token",
+            password: "edited-password",
+            gatewayStableID: gatewayID,
+            instanceId: instanceID)
+
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(credentials.token == "edited-token")
+        #expect(credentials.bootstrapToken == "bootstrap-token")
+        #expect(credentials.password == "edited-password")
+        #expect(credentials.suppressStoredDeviceAuth)
+    }
+
+    @Test func `field edits do not carry pending handoff to another gateway`() {
+        let instanceID = "switched-credential-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let firstGatewayID = "manual|first.example.com|443"
+        let secondGatewayID = "manual|second.example.com|443"
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "first-token",
+            bootstrapToken: "first-bootstrap-token",
+            password: "first-password",
+            gatewayStableID: firstGatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID)
+        GatewaySettingsStore.updateGatewayCredentials(
+            token: "second-token",
+            password: nil,
+            gatewayStableID: secondGatewayID,
+            instanceId: instanceID)
+
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: firstGatewayID) == .empty)
+        let second = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: secondGatewayID)
+        #expect(second.token == "second-token")
+        #expect(second.bootstrapToken == nil)
+        #expect(second.password == nil)
+        #expect(!second.suppressStoredDeviceAuth)
+    }
+
+    @Test func `clearing ordinary credentials removes their owner metadata`() {
+        let instanceID = "cleared-credential-owner-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+
+        GatewaySettingsStore.saveGatewayCredentials(
+            token: "one-time-token",
+            bootstrapToken: nil,
+            password: nil,
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: false,
+            instanceId: instanceID)
+        GatewaySettingsStore.updateGatewayCredentials(
+            token: nil,
+            password: nil,
+            gatewayStableID: gatewayID,
+            instanceId: instanceID)
+
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID) == nil)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID) == .empty)
+    }
+
+    @Test func `bootstrap copies defaults to keychain when missing`() {
         withBootstrapSnapshots {
             applyDefaults([
                 "node.instanceId": "node-test",
@@ -115,7 +381,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func bootstrapCopiesKeychainToDefaultsWhenMissing() {
+    @Test func `bootstrap copies keychain to defaults when missing`() {
         withBootstrapSnapshots {
             applyDefaults([
                 "node.instanceId": nil,
@@ -137,7 +403,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func lastGateway_manualRoundTrip() {
+    @Test func `last gateway manual round trip`() {
         withLastGatewaySnapshot {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: "example.com",
@@ -150,7 +416,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func lastGateway_discoveredOverwritesManual() {
+    @Test func `last gateway discovered overwrites manual`() {
         withLastGatewaySnapshot {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: "10.0.0.99",
@@ -164,7 +430,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
-    @Test func lastGateway_migratesFromUserDefaults() {
+    @Test func `last gateway migrates from user defaults`() {
         withLastGatewaySnapshot {
             // Clear Keychain entry and plant legacy UserDefaults values.
             applyKeychain([lastGatewayKeychainEntry: nil])
@@ -177,7 +443,11 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             ])
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
+            #expect(loaded == .manual(
+                host: "example.org",
+                port: 18789,
+                useTLS: false,
+                stableID: "manual|example.org|18789"))
 
             // Legacy keys should be cleaned up after migration.
             let defaults = UserDefaults.standard

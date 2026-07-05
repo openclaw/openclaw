@@ -7134,6 +7134,36 @@
       "translated": "모드 선택으로 돌아가기"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "일반 텍스트(로컬 네트워크)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "보안"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "수동 설정 사용"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "설정 링크"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "일반 텍스트는 자격 증명을 노출할 수 있습니다. 이 로컬 네트워크와 호스트를 신뢰하는 경우에만 계속하세요."
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "이 엔드포인트를 검토하세요. 자격 증명은 연결을 탭한 후에만 적용됩니다."
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "아직 게이트웨이를 찾지 못했습니다."

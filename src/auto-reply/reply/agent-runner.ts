@@ -96,6 +96,7 @@ import {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -1774,6 +1775,7 @@ export async function runReplyAgent(params: {
       fallbackAttempts,
       directlySentBlockKeys,
       directlySentBlockPayloads,
+      terminalFailurePayload,
     } = runOutcome;
     const { autoCompactionCount } = runOutcome;
     let { didLogHeartbeatStrip } = runOutcome;
@@ -1991,6 +1993,11 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+    const shouldDeliverTerminalFailure = Boolean(
+      terminalFailurePayload &&
+      !successfulSideEffectDelivery &&
+      !committedMessagingToolSourceReplyDelivery,
+    );
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
       committedMessagingToolSourceReplyDelivery
@@ -2091,7 +2098,11 @@ export async function runReplyAgent(params: {
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
-    if (payloadArray.length === 0 && fallbackNoticePayloads.length === 0) {
+    if (
+      payloadArray.length === 0 &&
+      fallbackNoticePayloads.length === 0 &&
+      !shouldDeliverTerminalFailure
+    ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -2100,39 +2111,73 @@ export async function runReplyAgent(params: {
     }
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-    const payloadResult = await buildReplyPayloads({
-      config: cfg,
-      payloads:
-        fallbackNoticePayloads.length > 0
-          ? [...fallbackNoticePayloads, ...payloadArray]
-          : payloadArray,
-      isHeartbeat,
-      didLogHeartbeatStrip,
-      silentExpected: followupRun.run.silentExpected,
-      blockStreamingEnabled,
-      blockReplyPipeline,
-      directlySentBlockKeys,
-      directlySentBlockPayloads,
+    // A terminal fallback is built separately after normal payload filtering.
+    // Share this state across deliverable lanes so replyToMode=first still threads
+    // at most one visible payload without hidden reasoning/commentary consuming it.
+    const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
       replyToMode,
       replyToChannel,
-      currentMessageId,
-      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-      messageProvider: followupRun.run.messageProvider,
-      messagingToolSentTexts: runResult.messagingToolSentTexts,
-      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-      messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingChannel: sessionCtx.OriginatingChannel,
-      originatingChatType: sessionCtx.ChatType,
-      originatingTo: resolveOriginMessageTo({
-        originatingTo: sessionCtx.OriginatingTo,
-        to: sessionCtx.To,
-      }),
-      originatingThreadId: replyRouteThreadId,
-      accountId: sessionCtx.AccountId,
-      normalizeMediaPaths: replyMediaContext.normalizePayload,
-    });
-    const { replyPayloads } = payloadResult;
+    );
+    const applyFinalReplyToMode = (payload: ReplyPayload) => {
+      const isDisabledReasoningLane =
+        payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
+      const isDisabledCommentaryLane =
+        payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+      const isFilteredPayload =
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
+      return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
+        ? payload
+        : applyDeliveredReplyToMode(payload);
+    };
+    const buildFinalPayloads = (payloads: ReplyPayload[]) =>
+      buildReplyPayloads({
+        config: cfg,
+        payloads,
+        isHeartbeat,
+        didLogHeartbeatStrip,
+        silentExpected: followupRun.run.silentExpected,
+        blockStreamingEnabled,
+        blockReplyPipeline,
+        directlySentBlockKeys,
+        directlySentBlockPayloads,
+        replyToMode,
+        replyToChannel,
+        currentMessageId,
+        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+        applyReplyToMode: applyFinalReplyToMode,
+        messageProvider: followupRun.run.messageProvider,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        originatingChannel: sessionCtx.OriginatingChannel,
+        originatingChatType: sessionCtx.ChatType,
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+        originatingThreadId: replyRouteThreadId,
+        accountId: sessionCtx.AccountId,
+        normalizeMediaPaths: replyMediaContext.normalizePayload,
+      });
+    const payloadCandidates =
+      fallbackNoticePayloads.length > 0
+        ? [...fallbackNoticePayloads, ...payloadArray]
+        : payloadArray;
+    const payloadResult = await buildFinalPayloads(payloadCandidates);
+    let { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
+    const hasTerminalReplyPayload = replyPayloads.some(
+      (payload) =>
+        !payload.isReasoning &&
+        !payload.isCommentary &&
+        !isReplyPayloadStatusNotice(payload) &&
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
+    );
+    if (shouldDeliverTerminalFailure && !hasTerminalReplyPayload && terminalFailurePayload) {
+      const terminalPayloadResult = await buildFinalPayloads([terminalFailurePayload]);
+      replyPayloads = [...replyPayloads, ...terminalPayloadResult.replyPayloads];
+      didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
+    }
 
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
       (payload) => !isReplyPayloadStatusNotice(payload),
