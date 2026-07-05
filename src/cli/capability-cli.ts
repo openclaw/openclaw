@@ -199,6 +199,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     transports: ["local"],
     flags: [
       "--prompt",
+      "--file",
       "--model",
       "--count",
       "--size",
@@ -2303,6 +2304,12 @@ export function registerCapabilityCli(program: Command) {
     .command("generate")
     .description("Generate images")
     .requiredOption("--prompt <text>", "Prompt text")
+    .option(
+      "--file <path>",
+      "Input file(s) for reference-image-conditioned generation",
+      collectOption,
+      [],
+    )
     .option("--model <provider/model>", "Model override")
     .option("--count <n>", "Number of images")
     .option("--size <size>", "Size hint like 1024x1024")
@@ -2318,6 +2325,11 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const files = Array.isArray(opts.file)
+          ? (opts.file as string[])
+          : opts.file
+            ? [String(opts.file)]
+            : [];
         const result = await runImageGenerate({
           capability: "image.generate",
           prompt: String(opts.prompt),
@@ -2336,6 +2348,7 @@ export function registerCapabilityCli(program: Command) {
           quality: normalizeImageQuality(opts.quality as string | undefined),
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
+          file: files.length > 0 ? files : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

@@ -1999,6 +1999,42 @@ describe("capability cli", () => {
     expect(inputImages[0]?.mimeType).toBe("image/png");
   });
 
+  it("passes --file inputs through to the image generate runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        { buffer: Buffer.from("gen-png"), mimeType: "image/png", fileName: "branded-cover.png" },
+      ],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-input-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("reference-logo"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--file",
+        inputPath,
+        "--prompt",
+        "create a branded cover using this logo",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("create a branded cover using this logo");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
+  });
+
   it("reports the expanded image.edit flags in capability inspect", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -2034,6 +2070,7 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.id).toBe("image.generate");
     expect(firstJsonOutput()?.flags).toEqual([
       "--prompt",
+      "--file",
       "--model",
       "--count",
       "--size",
