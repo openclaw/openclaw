@@ -1,6 +1,10 @@
 // Policy doctor metadata tests cover rule metadata.
 import { describe, expect, it } from "vitest";
-import { POLICY_FIX_METADATA, POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import {
+  POLICY_FIX_METADATA,
+  POLICY_FIX_METADATA_BY_CHECK_ID,
+  type PolicyFixMetadata,
+} from "./fix-metadata.js";
 import { POLICY_CHECK_IDS, POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
 
 describe("policy doctor metadata", () => {
@@ -170,14 +174,38 @@ describe("policy doctor metadata", () => {
   });
 
   it("keeps policy fix class assignments explicit", () => {
-    const grouped = Object.groupBy(POLICY_FIX_METADATA, (rule) => rule.fixClass);
+    const grouped = new Map<PolicyFixMetadata["fixClass"], PolicyFixMetadata[]>();
+    for (const rule of POLICY_FIX_METADATA) {
+      const rules = grouped.get(rule.fixClass);
+      if (rules) {
+        rules.push(rule);
+      } else {
+        grouped.set(rule.fixClass, [rule]);
+      }
+    }
 
     expect({
-      automatic: grouped.automatic?.map((rule) => rule.checkId).toSorted(),
-      manual: grouped.manual?.map((rule) => rule.checkId).toSorted(),
-      reviewRequired: grouped.reviewRequired?.map((rule) => rule.checkId).toSorted(),
-      unsupported: grouped.unsupported?.map((rule) => rule.checkId).toSorted(),
-      validateOnly: grouped.validateOnly?.map((rule) => rule.checkId).toSorted() ?? [],
+      automatic: grouped
+        .get("automatic")
+        ?.map((rule) => rule.checkId)
+        .toSorted(),
+      manual: grouped
+        .get("manual")
+        ?.map((rule) => rule.checkId)
+        .toSorted(),
+      reviewRequired: grouped
+        .get("reviewRequired")
+        ?.map((rule) => rule.checkId)
+        .toSorted(),
+      unsupported: grouped
+        .get("unsupported")
+        ?.map((rule) => rule.checkId)
+        .toSorted(),
+      validateOnly:
+        grouped
+          .get("validateOnly")
+          ?.map((rule) => rule.checkId)
+          .toSorted() ?? [],
     }).toEqual({
       automatic: [
         "policy/agents-tool-not-denied",
