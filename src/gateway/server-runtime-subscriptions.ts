@@ -50,6 +50,14 @@ export function startGatewayEventSubscriptions(params: {
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
             sessionMessageSubscribers: params.sessionMessageSubscribers,
+            updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
+              for (const candidateRunId of new Set([runId, clientRunId])) {
+                const entry = params.chatAbortControllers.get(candidateRunId);
+                if (entry) {
+                  entry.toolErrorSummary = summary;
+                }
+              }
+            },
             clearTrackedActiveRun: ({ runId, clientRunId }) => {
               const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
               for (const candidateRunId of candidateRunIds) {

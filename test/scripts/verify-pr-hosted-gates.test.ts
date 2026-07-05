@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence,
   parseArgs,
-  parseWorkflowRunPages,
+  parseWorkflowRunPage,
   SCHEDULED_HOSTED_WORKFLOWS,
+  workflowRunPageCount,
 } from "../../scripts/verify-pr-hosted-gates.mjs";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
@@ -394,9 +395,17 @@ describe("verify-pr-hosted-gates", () => {
     }
   });
 
-  it("accepts JSON emitted through a colorizing GitHub CLI shim", () => {
+  it("accepts one workflow-runs page emitted through a colorizing GitHub CLI shim", () => {
     expect(
-      parseWorkflowRunPages('\u001B[1;37m[{"workflow_runs":[{"id":1,"name":"CI"}]}]\u001B[0m'),
-    ).toEqual([{ id: 1, name: "CI" }]);
+      parseWorkflowRunPage(
+        '\u001B[1;37m{"total_count":101,"workflow_runs":[{"id":1,"name":"CI"}]}\u001B[0m',
+      ),
+    ).toEqual({ totalCount: 101, workflowRuns: [{ id: 1, name: "CI" }] });
+  });
+
+  it("bounds workflow-run pagination to GitHub's search result limit", () => {
+    expect(workflowRunPageCount(0)).toBe(0);
+    expect(workflowRunPageCount(101)).toBe(2);
+    expect(workflowRunPageCount(10_000)).toBe(10);
   });
 });

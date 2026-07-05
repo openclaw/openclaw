@@ -1,8 +1,10 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
+import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -292,6 +294,11 @@ export type AgentEventHandlerOptions = {
     persistence: Promise<void>;
   }) => void;
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
+  updateRunToolErrorSummary?: (params: {
+    runId: string;
+    clientRunId: string;
+    summary: string | undefined;
+  }) => void;
 };
 
 function roundedChatSendTimingMs(value: number): number {
@@ -316,6 +323,7 @@ export function createAgentEventHandler({
   markTrackedRunTerminalPersisted,
   trackTrackedRunTerminalPersistence,
   resolveActiveLifecycleGenerationForRun = () => undefined,
+  updateRunToolErrorSummary,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = {
     skipChatErrorFinal?: boolean;
@@ -573,6 +581,7 @@ export function createAgentEventHandler({
     const isAborted =
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
+    const lifecycleAborted = evt.data?.aborted === true;
     const deliverySessionKey = sessionKey
       ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
       : undefined;
@@ -613,42 +622,50 @@ export function createAgentEventHandler({
       if (!isAborted) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
-        const evtErrorKind =
-          readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error);
-        if (chatLink) {
-          const finished = chatRunState.registry.shift(evt.runId);
-          if (!finished) {
-            clearAgentRunContext(evt.runId);
-            return;
-          }
-          if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
-            emitChatFinal(
-              finished.sessionKey,
-              finished.clientRunId,
-              evt.runId,
-              evt.seq,
-              lifecyclePhase === "error" ? "error" : "done",
-              evt.data?.error,
-              evtStopReason,
-              evtErrorKind,
-              {
-                agentId: finished.agentId,
-                controlUiVisible: isControlUiVisible,
-                firstAssistantTimingEntry: finished,
-              },
-            );
-          }
-        } else if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
-          emitChatFinal(
-            sessionKey,
-            eventRunId,
+        const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
+        if (chatLink && !finished) {
+          clearAgentRunContext(evt.runId);
+          return;
+        }
+
+        const terminalSessionKey = finished?.sessionKey ?? sessionKey;
+        const terminalRunId = finished?.clientRunId ?? eventRunId;
+        const terminalAgentId = finished?.agentId ?? sessionAgentId;
+        // Some local lifecycle sources only carry the aborted flag. Preserve
+        // that terminal state instead of misclassifying the run as a timeout.
+        const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
+        const terminalOutcome = buildAgentRunTerminalOutcome({
+          status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
+          error: evt.data?.error,
+          stopReason: terminalStopReason,
+          livenessState: evt.data?.livenessState,
+          timeoutPhase: evt.data?.timeoutPhase,
+          providerStarted: evt.data?.providerStarted,
+          startedAt: evt.data?.startedAt,
+          endedAt: evt.data?.endedAt ?? evt.ts,
+        });
+        const terminalState =
+          terminalOutcome.reason === "completed"
+            ? "done"
+            : terminalOutcome.reason === "cancelled" || terminalOutcome.reason === "aborted"
+              ? "aborted"
+              : "error";
+        if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
+          emitChatTerminal(
+            terminalSessionKey,
+            terminalRunId,
             evt.runId,
             evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
-            evt.data?.error,
-            evtStopReason,
-            evtErrorKind,
-            { agentId: sessionAgentId, controlUiVisible: isControlUiVisible },
+            terminalState,
+            terminalOutcome.error ?? evt.data?.error,
+            terminalOutcome.stopReason,
+            readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error),
+            {
+              agentId: terminalAgentId,
+              controlUiVisible: isControlUiVisible,
+              firstAssistantTimingEntry: finished,
+              abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+            },
           );
         }
       } else {
@@ -912,12 +929,12 @@ export function createAgentEventHandler({
     }
   };
 
-  const emitChatFinal = (
+  const emitChatTerminal = (
     sessionKey: string,
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    jobState: "done" | "error",
+    jobState: "done" | "error" | "aborted",
     error?: unknown,
     stopReason?: string,
     errorKind?: ErrorKind,
@@ -925,6 +942,7 @@ export function createAgentEventHandler({
       agentId?: string;
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
+      abortErrorMessage?: string;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -937,14 +955,17 @@ export function createAgentEventHandler({
     flushBufferedChatDeltaIfNeeded(sessionKey, opts?.agentId, clientRunId, sourceRunId, seq, opts);
     chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
-    if (jobState === "done") {
+    if (jobState !== "error") {
       const payload = {
         runId: clientRunId,
         sessionKey,
         ...(opts?.agentId ? { agentId: opts.agentId } : {}),
         ...(spawnedBy && { spawnedBy }),
         seq,
-        state: "final" as const,
+        state: jobState === "done" ? ("final" as const) : ("aborted" as const),
+        ...(jobState === "aborted" && opts?.abortErrorMessage
+          ? { errorMessage: opts.abortErrorMessage }
+          : {}),
         ...(stopReason && { stopReason }),
         message:
           text && !shouldSuppressSilent
@@ -968,6 +989,7 @@ export function createAgentEventHandler({
       errorMessage: error ? formatForLog(error) : undefined,
       message: buildChatErrorMessage(error),
       ...(errorKind && { errorKind }),
+      ...(stopReason && { stopReason }),
     };
     sendChatPayload(sessionKey, payload, opts);
   };
@@ -1242,8 +1264,20 @@ export function createAgentEventHandler({
       });
     }
     agentRunSeq.set(evt.runId, evt.seq);
+    if (evt.stream === "assistant") {
+      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (toolPhase === "start") {
+        updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+      } else if (toolPhase === "result") {
+        updateRunToolErrorSummary?.({
+          runId: evt.runId,
+          clientRunId,
+          summary: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+        });
+      }
       // Flush pending assistant text before tool-start events so clients can
       // render complete pre-tool text above tool cards (not truncated by delta throttle).
       if (
