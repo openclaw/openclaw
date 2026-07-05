@@ -9,6 +9,7 @@ enum WatchPayloadType: String, Codable, Equatable {
     case appSnapshot = "watch.app.snapshot"
     case appSnapshotRequest = "watch.app.snapshotRequest"
     case appCommand = "watch.app.command"
+    case chatCompletion = "watch.chat.completion"
     case execApprovalPrompt = "watch.execApproval.prompt"
     case execApprovalResolve = "watch.execApproval.resolve"
     case execApprovalResolved = "watch.execApproval.resolved"
@@ -108,6 +109,12 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var chatStatusText: String?
     var sentAtMs: Int?
     var snapshotId: String?
+}
+
+struct WatchChatCompletionMessage: Codable, Equatable {
+    var commandId: String
+    var replyText: String
+    var sentAtMs: Int?
 }
 
 struct WatchChatItem: Codable, Equatable, Identifiable {
@@ -301,6 +308,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var appSnapshotUpdatedAt: Date?
     var appSnapshotStatusText: String?
     var appCommandStatusText: String?
+    var chatCompletion: WatchChatCompletionMessage?
     var greetingTextOverride: String?
     var isExecApprovalReviewLoading = false
     var execApprovalReviewStatusText: String?
@@ -616,6 +624,10 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             }
         }
         self.persistState()
+    }
+
+    func consume(chatCompletion message: WatchChatCompletionMessage) {
+        self.chatCompletion = message
     }
 
     func markAppSnapshotRequestStarted() {

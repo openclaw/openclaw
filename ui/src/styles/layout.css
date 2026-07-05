@@ -618,15 +618,6 @@
   padding: 0 8px 2px;
 }
 
-.sidebar-quota {
-  display: grid;
-  padding: 0 2px 4px;
-}
-
-.sidebar-quota .chat-controls__quota {
-  justify-content: space-between;
-}
-
 .sidebar-agent-filter .chat-controls__agent {
   width: 100%;
 }

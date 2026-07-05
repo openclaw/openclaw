@@ -1,6 +1,11 @@
 import OpenClawKit
 import SwiftUI
 
+struct GatewaySetupRequest {
+    let id: Int
+    let link: GatewayConnectDeepLink
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
@@ -42,6 +47,7 @@ struct SettingsProTab: View {
     @State var gatewayCredentialFieldStableID: String?
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
+    @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
@@ -74,6 +80,8 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let gatewaySetupRequest: GatewaySetupRequest?
+    let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
@@ -82,7 +90,9 @@ struct SettingsProTab: View {
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
-        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        gatewaySetupRequest: GatewaySetupRequest? = nil,
+        onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
@@ -91,6 +101,8 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.gatewaySetupRequest = gatewaySetupRequest
+        self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
 
     var body: some View {
@@ -139,17 +151,23 @@ struct SettingsProTab: View {
 
     private func settingsLifecycle(_ content: some View) -> some View {
         content
+            .onDisappear {
+                self.invalidateGatewaySetupAttempt()
+            }
             .task {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                self.applyPendingGatewaySetupLinkIfNeeded()
+                self.applyGatewaySetupRequestIfNeeded()
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
             }
             .onDisappear {
                 self.scannerResultHandoff.cancel()
                 self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
+            }
+            .onChange(of: self.gatewaySetupRequest?.id) { _, _ in
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -177,12 +195,9 @@ struct SettingsProTab: View {
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
             }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                self.applyPendingGatewaySetupLinkIfNeeded()
-            }
             .onChange(of: self.acceptsGatewaySetupRequests) { _, acceptsRequests in
                 guard acceptsRequests else { return }
-                self.applyPendingGatewaySetupLinkIfNeeded()
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.
@@ -190,6 +205,7 @@ struct SettingsProTab: View {
                 self.syncAfterOnboardingReset()
             }
             .onChange(of: self.navigationPath) { _, _ in
+                self.invalidateGatewaySetupAttempt()
                 self.notifyRouteChange()
             }
     }
@@ -275,6 +291,13 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
+    }
+
+    private func applyGatewaySetupRequestIfNeeded() {
+        guard self.acceptsGatewaySetupRequests else { return }
+        guard let gatewaySetupRequest else { return }
+        self.applyGatewaySetupLink(gatewaySetupRequest.link)
+        self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
     func openNotificationsRouteFromApprovals() {

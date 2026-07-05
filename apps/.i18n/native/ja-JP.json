@@ -8389,6 +8389,26 @@
       "translated": "一部: \\(self.summary.totals.missingCostEntries) 件のエントリにコストがありません"
     },
     {
+      "id": "native.apple.84f1d9ae4965cfe0",
+      "source": "Crestodian",
+      "translated": "Crestodian"
+    },
+    {
+      "id": "native.apple.69557562fe99d402",
+      "source": "Your setup helper. It can check status, fix config, switch models, ",
+      "translated": "セットアップヘルパーです。ステータスの確認、設定の修正、モデルの切り替え、"
+    },
+    {
+      "id": "native.apple.648423d89aec0c13",
+      "source": "Chat",
+      "translated": "チャット"
+    },
+    {
+      "id": "native.apple.bd180b943ee89cfe",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "ヒント：「status」、「doctor」、「set default model …」、「connect telegram」を試してみてください。"
+    },
+    {
       "id": "native.apple.779f488d2ddd9eaf",
       "source": "Edit cron job",
       "translated": "cron ジョブを編集"
@@ -10354,6 +10374,126 @@
       "translated": "次へ"
     },
     {
+      "id": "native.apple.99c49ed9c135cdcd",
+      "source": "Claude (Anthropic)",
+      "translated": "Claude (Anthropic)"
+    },
+    {
+      "id": "native.apple.5c0a3a27717239d6",
+      "source": "OpenAI",
+      "translated": "OpenAI"
+    },
+    {
+      "id": "native.apple.f85f71cced8225d6",
+      "source": "Google Gemini",
+      "translated": "Google Gemini"
+    },
+    {
+      "id": "native.apple.0a6a895baa7f708e",
+      "source": "Looking for AI you already use…",
+      "translated": "すでにお使いのAIを探しています…"
+    },
+    {
+      "id": "native.apple.9d19cb7eb5fa6d79",
+      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
+      "translated": "Claude Code、Codex、Gemini、保存済みのAPIキーを確認しています。"
+    },
+    {
+      "id": "native.apple.7e1e827f427bc317",
+      "source": "Couldn’t check this Mac for AI accounts",
+      "translated": "このMacのAIアカウントを確認できませんでした"
+    },
+    {
+      "id": "native.apple.87a3b9052eedd7eb",
+      "source": "Try again",
+      "translated": "再試行"
+    },
+    {
+      "id": "native.apple.3a585b31d77507d8",
+      "source": "None of the found options worked",
+      "translated": "見つかったオプションはいずれも機能しませんでした"
+    },
+    {
+      "id": "native.apple.86f29266102f1bf3",
+      "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key below.",
+      "translated": "詳細は上記の各オプションに記載されています。ログインを修正して再試行するか、下のAPIキーで接続できます。"
+    },
+    {
+      "id": "native.apple.ff87d5ec9e15e581",
+      "source": "Check again",
+      "translated": "もう一度確認"
+    },
+    {
+      "id": "native.apple.dc51d7deab7b6c1e",
+      "source": "Need help? Chat with Crestodian",
+      "translated": "お困りですか？Crestodianにチャットで相談"
+    },
+    {
+      "id": "native.apple.6bf2e2bdd950a97d",
+      "source": "Your AI is ready",
+      "translated": "AIの準備ができました"
+    },
+    {
+      "id": "native.apple.c3ed46eded513a65",
+      "source": "No AI accounts found on this Mac",
+      "translated": "このMacでAIアカウントが見つかりませんでした"
+    },
+    {
+      "id": "native.apple.f87ba9e9eb97d8bb",
+      "source": "That’s fine — you can connect one with an API key. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
+      "translated": "問題ありません — APIキーで接続できます。このMacでClaude Code、Codex、またはGemini CLIを使用している場合は、先にそちらでサインインしてから「もう一度確認」を押してください。"
+    },
+    {
+      "id": "native.apple.f51a11c7f56bdb29",
+      "source": "Recommended",
+      "translated": "推奨"
+    },
+    {
+      "id": "native.apple.361c4a91a6aef57b",
+      "source": "Connect with an API key instead…",
+      "translated": "代わりにAPIキーで接続…"
+    },
+    {
+      "id": "native.apple.99c1034543042eca",
+      "source": "Connect with an API key",
+      "translated": "API キーで接続"
+    },
+    {
+      "id": "native.apple.9da1d31635dca50b",
+      "source": "Provider",
+      "translated": "プロバイダー"
+    },
+    {
+      "id": "native.apple.41d117fdc784999f",
+      "source": "Connect",
+      "translated": "接続"
+    },
+    {
+      "id": "native.apple.3863947506f62f17",
+      "source": "Create a key at \\(self.model.manualProvider.consoleName), paste it here, and OpenClaw checks it with a real test question.",
+      "translated": "\\(self.model.manualProvider.consoleName) でキーを作成し、ここに貼り付けると、OpenClaw が実際のテスト用の質問で確認します。"
+    },
+    {
+      "id": "native.apple.ce55144c35473419",
+      "source": "That key didn’t work",
+      "translated": "そのキーは機能しませんでした"
+    },
+    {
+      "id": "native.apple.95ba6710c48389ae",
+      "source": "Crestodian — setup helper",
+      "translated": "Crestodian — セットアップヘルパー"
+    },
+    {
+      "id": "native.apple.06d9df11b5b462b4",
+      "source": "Done",
+      "translated": "完了"
+    },
+    {
+      "id": "native.apple.c3460290224a3ed3",
+      "source": "Open help…",
+      "translated": "ヘルプを開く…"
+    },
+    {
       "id": "native.apple.6124d93872cfcfe4",
       "source": "Crestodian is working…",
       "translated": "Crestodian が作業中…"
@@ -10374,14 +10514,9 @@
       "translated": "Crestodian に返信…（yes ですべて設定されます）"
     },
     {
-      "id": "native.apple.a63c9bf74cc6fa3e",
-      "source": "Talk to Crestodian",
-      "translated": "Crestodian と話す"
-    },
-    {
-      "id": "native.apple.c29bee62e4f63d1c",
-      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
-      "translated": "Crestodian は OpenClaw のセットアップ管理者です。Claude Code や Codex のログイン情報、または API キーなど、すでにお持ちの AI アクセスを見つけ、yes と答えるとすべてを設定します。やりたいことを伝えるだけです。"
+      "id": "native.apple.78d1ad73762a7ce8",
+      "source": "Connect your AI",
+      "translated": "AI を接続"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
@@ -10394,9 +10529,14 @@
       "translated": "OpenClaw へようこそ"
     },
     {
-      "id": "native.apple.dd7411f18b0fe203",
-      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
-      "translated": "OpenClaw はあなた専用の AI アシスタントです。質問に答え、ファイルやアプリを操作し、あなたが管理する Gateway を通じて WhatsApp や Telegram などのサービスに接続できます。"
+      "id": "native.apple.0629bbbd6db95199",
+      "source": "Your personal AI assistant, living on your own Mac.",
+      "translated": "自分の Mac 上で動作する、あなた専用の AI アシスタント。"
+    },
+    {
+      "id": "native.apple.ff6f4069f0185b9b",
+      "source": "It answers questions, works with your files and apps, and can chat with you on WhatsApp or Telegram. Setup takes about two minutes.",
+      "translated": "質問に答え、ファイルやアプリを扱い、WhatsApp や Telegram であなたとチャットできます。セットアップは約 2 分で完了します。"
     },
     {
       "id": "native.apple.86e4509eb0626ec8",
@@ -10409,14 +10549,14 @@
       "translated": "アシスタントにタスクを任せて、Mac 全体でサポートを受けましょう。"
     },
     {
-      "id": "native.apple.16ab10ed9293b718",
-      "source": "Connect the tools you use",
-      "translated": "使用しているツールを接続"
+      "id": "native.apple.8496e933d9cbc56d",
+      "source": "Chat wherever you like",
+      "translated": "好きな場所でチャット"
     },
     {
-      "id": "native.apple.687c1c2abdb8581e",
-      "source": "Bring conversations and services together in one assistant.",
-      "translated": "会話とサービスを 1 つのアシスタントにまとめます。"
+      "id": "native.apple.d6ca07ea4a825a3f",
+      "source": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "translated": "このアプリ、WhatsApp、Telegram、Discord、Slack — お好みで選べます。"
     },
     {
       "id": "native.apple.caf822c2d393914f",
@@ -10424,9 +10564,9 @@
       "translated": "コントロールを維持"
     },
     {
-      "id": "native.apple.203bfa5e80135faa",
-      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
-      "translated": "Gateway を実行する場所と、OpenClaw に付与する権限を選択します。"
+      "id": "native.apple.46514f735df5cddc",
+      "source": "Everything runs where you decide, with permissions you grant.",
+      "translated": "すべてはあなたが決めた場所で、あなたが許可した権限で実行されます。"
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
@@ -10434,24 +10574,39 @@
       "translated": "OpenClaw は、有効にした権限とサービスを使用して操作を実行できます。プロンプトを確認し、信頼できるツールのみ接続してください。"
     },
     {
-      "id": "native.apple.2033d33228ce52d7",
-      "source": "Where should OpenClaw run?",
-      "translated": "OpenClaw をどこで実行しますか？"
+      "id": "native.apple.a5d02aaf6208e924",
+      "source": "Where should your assistant live?",
+      "translated": "アシスタントをどこで動かしますか？"
     },
     {
-      "id": "native.apple.4791cce2ae762f19",
-      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
-      "translated": "最も簡単にセットアップするには、この Mac で Gateway を実行します。OpenClaw がインストールし、実行状態を維持します。"
+      "id": "native.apple.e6acb60b10ef1206",
+      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "ほとんどの人はこの Mac を選びます — OpenClaw がすべてをインストールし、バックグラウンドで実行し続けます。これはいつでも設定で変更できます。"
     },
     {
-      "id": "native.apple.300a583f28880928",
-      "source": "This Mac",
-      "translated": "この Mac"
+      "id": "native.apple.21f1053c1054db24",
+      "source": "On this Mac",
+      "translated": "この Mac 上"
     },
     {
-      "id": "native.apple.43f381cd291c5e11",
-      "source": "Don’t start the Gateway yet.",
-      "translated": "まだ Gateway を起動しない。"
+      "id": "native.apple.848c45dfcda2c160",
+      "source": "On another computer",
+      "translated": "別のコンピューター上"
+    },
+    {
+      "id": "native.apple.1921bcc57bcd747d",
+      "source": "Set up later",
+      "translated": "あとで設定"
+    },
+    {
+      "id": "native.apple.3647303a73877ecf",
+      "source": "Skip Gateway setup for now; pick Local or Remote later in Settings → General.",
+      "translated": "今は Gateway のセットアップをスキップします。あとで設定 → 一般で Local または Remote を選択してください。"
+    },
+    {
+      "id": "native.apple.d54084b48f40aa0a",
+      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "OK — OpenClaw はまだ何も開始しません。後で Settings → General で Local または Remote を選択してください。"
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -10469,19 +10624,29 @@
       "translated": "（\\(probe.command) pid \\(probe.pid)）"
     },
     {
-      "id": "native.apple.ea066347e0bcb237",
-      "source": "Retry remote discovery (Tailscale DNS-SD + Serve probe).",
-      "translated": "リモート検出を再試行（Tailscale DNS-SD + Serve probe）。"
+      "id": "native.apple.9ab228a4cb7d4403",
+      "source": "1 gateway found on your network — click to choose it.",
+      "translated": "ネットワーク上に 1 件の gateway が見つかりました — クリックして選択してください。"
     },
     {
-      "id": "native.apple.d8b14de6ceb397fb",
-      "source": "Searching for nearby gateways…",
-      "translated": "近くの gateway を検索中…"
+      "id": "native.apple.279c63b244b85ece",
+      "source": "\\(count) gateways found on your network — click to choose one.",
+      "translated": "ネットワーク上に \\(count) 件の gateway が見つかりました — クリックして 1 つ選択してください。"
     },
     {
-      "id": "native.apple.98436332aec81f9b",
-      "source": "Nearby gateways",
-      "translated": "近くの Gateway"
+      "id": "native.apple.43777eabc068e240",
+      "source": "No gateways found on your network yet.",
+      "translated": "ネットワーク上に gateway はまだ見つかっていません。"
+    },
+    {
+      "id": "native.apple.b485089ad79067a9",
+      "source": "Look again",
+      "translated": "再検索"
+    },
+    {
+      "id": "native.apple.e39798604090ef9c",
+      "source": "Retry discovery (Bonjour + Tailscale DNS-SD).",
+      "translated": "検出を再試行します（Bonjour + Tailscale DNS-SD）。"
     },
     {
       "id": "native.apple.94575e6937b47f7b",
@@ -10619,44 +10784,49 @@
       "translated": "これらの macOS 権限により、OpenClaw はこの Mac 上のアプリを自動操作し、コンテキストを取得できます。ステータスは自動的に更新されます。"
     },
     {
-      "id": "native.apple.8d7590f1d8f61a1d",
-      "source": "Setting up OpenClaw",
-      "translated": "OpenClaw をセットアップ中"
+      "id": "native.apple.42af85cdf91d0264",
+      "source": "Getting things ready",
+      "translated": "準備中"
     },
     {
-      "id": "native.apple.e88512a0fe7fb140",
-      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
-      "translated": "OpenClaw はローカル Gateway とその管理対象ランタイムをインストールしています。"
+      "id": "native.apple.183aee003b44ede6",
+      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
+      "translated": "OpenClaw がこの Mac でバックグラウンドサービスを設定しています。通常は 1 分未満で完了します — Terminal も管理者パスワードも不要です。"
     },
     {
-      "id": "native.apple.0c05ab4b362710de",
-      "source": "Checking existing setup…",
-      "translated": "既存のセットアップを確認中…"
+      "id": "native.apple.d0b8cf59f852b3d0",
+      "source": "Install OpenClaw",
+      "translated": "OpenClaw をインストール"
     },
     {
-      "id": "native.apple.56b68eb592ecf449",
-      "source": "Installing the Gateway…",
-      "translated": "Gateway をインストール中…"
+      "id": "native.apple.0112e18fa97e7c0c",
+      "source": "Start the background service",
+      "translated": "バックグラウンドサービスを開始"
     },
     {
-      "id": "native.apple.80155398d97fbe63",
-      "source": "Gateway installed",
-      "translated": "Gateway がインストールされました"
+      "id": "native.apple.d1f9f278b55fe9b0",
+      "source": "Runs quietly and starts again after a restart.",
+      "translated": "静かに実行され、再起動後も再度開始します。"
     },
     {
-      "id": "native.apple.2d2acbf2e16f8604",
-      "source": "Retry setup",
-      "translated": "セットアップを再試行"
+      "id": "native.apple.0357f1eea66db068",
+      "source": "Ready for the next step",
+      "translated": "次のステップの準備ができました"
     },
     {
-      "id": "native.apple.4d58294df8d0b1e6",
-      "source": "Check again",
-      "translated": "もう一度確認"
+      "id": "native.apple.9f58badc863cbf2b",
+      "source": "Once the service answers, you’ll connect your AI.",
+      "translated": "サービスが応答したら、AI に接続します。"
     },
     {
-      "id": "native.apple.15cfa96c75b57b04",
-      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
-      "translated": "プライベートなユーザー空間インストールを使用します。Terminal、管理者アクセス、Homebrew は不要です。"
+      "id": "native.apple.3bcb83316b3d90bb",
+      "source": "The Gateway didn’t start",
+      "translated": "Gateway が起動しませんでした"
+    },
+    {
+      "id": "native.apple.f36edc58238aa8ce",
+      "source": "Try again",
+      "translated": "もう一度試す"
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10719,14 +10889,19 @@
       "translated": "エージェントに会う"
     },
     {
-      "id": "native.apple.2c5c8568a34d4f0f",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
-      "translated": "これは専用のオンボーディングチャットです。エージェントが自己紹介し、あなたのことを把握し、必要に応じて Discord、Slack、Telegram、WhatsApp、または別のチャンネルへの接続を支援します。"
+      "id": "native.apple.6c35dc9becd6ca0f",
+      "source": "Your agent introduces itself, picks a name with you, and helps you connect WhatsApp, Telegram, or another channel — just chat.",
+      "translated": "エージェントが自己紹介し、あなたと一緒に名前を決め、WhatsApp、Telegram、または別のチャネルへの接続を手伝います — チャットするだけです。"
     },
     {
-      "id": "native.apple.5e1277166b2ad41a",
-      "source": "All set",
-      "translated": "すべて完了"
+      "id": "native.apple.25e82538dc9e9aad",
+      "source": "You’re all set!",
+      "translated": "すべて設定完了です！"
+    },
+    {
+      "id": "native.apple.9f73f753266a9fa2",
+      "source": "Finish opens the chat — say hi to your new agent.",
+      "translated": "Finish でチャットが開きます — 新しいエージェントにあいさつしてみましょう。"
     },
     {
       "id": "native.apple.678dee9dedd72ce4",
@@ -11362,6 +11537,11 @@
       "id": "native.apple.f5f4ff67674093ec",
       "source": "Voice & Talk",
       "translated": "音声と会話"
+    },
+    {
+      "id": "native.apple.f5aa19bc071cf585",
+      "source": "Crestodian",
+      "translated": "Crestodian"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",

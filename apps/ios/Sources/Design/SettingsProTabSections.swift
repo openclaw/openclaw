@@ -708,6 +708,7 @@ extension SettingsProTab {
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .disabled(self.connectingGatewayID != nil)
             self.gatewayActionButton(
                 title: "Scan QR",
                 icon: "qrcode.viewfinder",
@@ -809,6 +810,7 @@ extension SettingsProTab {
                 Task { await self.connectManual() }
             }
         }
+        .disabled(self.setupAttemptID != nil)
     }
 
     var gatewayAdvancedCard: some View {

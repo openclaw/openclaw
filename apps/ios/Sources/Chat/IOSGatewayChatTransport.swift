@@ -214,8 +214,19 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        try await self.requestHistory(sessionKey: sessionKey, ifCurrentRoute: nil)
+    }
+
+    func requestHistory(
+        sessionKey: String,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?) async throws -> OpenClawChatHistoryPayload
+    {
         let json = try Self.makeHistoryParamsJSON(sessionKey: sessionKey)
-        let res = try await self.gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
+        let res = try await self.gateway.request(
+            method: "chat.history",
+            paramsJSON: json,
+            timeoutSeconds: 15,
+            ifCurrentRoute: expectedRoute)
         return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: res)
     }
 

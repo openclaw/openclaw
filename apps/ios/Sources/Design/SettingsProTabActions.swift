@@ -206,7 +206,7 @@ extension SettingsProTab {
     }
 
     func syncAfterOnboardingReset() {
-        self.connectingGatewayID = nil
+        self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
         self.stagedGatewaySetupLink = nil
         self.pendingManualAuthOverride = nil
@@ -233,9 +233,13 @@ extension SettingsProTab {
     }
 
     func applySetupCodeAndConnect() async {
-        defer { self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController) }
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
+        defer {
+            self.finishGatewaySetupAttempt(attemptID)
+            self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController)
+        }
         self.setupStatusText = nil
-        guard self.applySetupCode() else { return }
+        guard await self.applySetupCode(attemptID: attemptID) else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
@@ -243,14 +247,12 @@ extension SettingsProTab {
         }
         guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func applyPendingGatewaySetupLinkIfNeeded() {
+    func applyGatewaySetupLink(_ link: GatewayConnectDeepLink) {
         // Only the root-selected Gateway destination may destructively claim a
         // setup link; other Settings views can remain mounted behind onboarding.
-        guard self.acceptsGatewaySetupRequests else { return }
-        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.showQRScanner = false
         self.scannerResultHandoff.cancel()
         let lease = self.gatewayController.cancelPendingConnectionAttempts()
@@ -263,7 +265,7 @@ extension SettingsProTab {
     }
 
     @discardableResult
-    func applySetupCode() -> Bool {
+    func applySetupCode(attemptID: UUID) async -> Bool {
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
         let stagedLink = self.stagedGatewaySetupLink
         guard !raw.isEmpty || stagedLink != nil else {
@@ -280,10 +282,12 @@ extension SettingsProTab {
             return false
         }
 
-        guard let link = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
+        guard let parsedLink = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return false
         }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return false }
         self.stagedGatewaySetupLink = nil
         self.applyGatewayLink(link)
         return true
@@ -318,6 +322,7 @@ extension SettingsProTab {
     }
 
     func openGatewayQRScanner() {
+        self.invalidateGatewaySetupAttempt()
         let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
         self.stagedGatewaySetupLink = nil
         self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
@@ -349,13 +354,9 @@ extension SettingsProTab {
 
     func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
         self.showQRScanner = false
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         self.setupCode = ""
-        self.applyGatewayLink(link)
-        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
-        Task {
-            await self.connectAfterScannedGatewayLink()
-            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
-        }
+        Task { await self.connectAfterScannedGatewayLink(link, attemptID: attemptID) }
     }
 
     func handleScannedSetupCode(_ code: String) {
@@ -379,17 +380,30 @@ extension SettingsProTab {
         return self.pendingTargetSuppression.take(ifOwnedBy: .setupLink)
     }
 
-    func connectAfterScannedGatewayLink() async {
+    func connectAfterScannedGatewayLink(_ parsedLink: GatewayConnectDeepLink, attemptID: UUID) async {
+        defer {
+            self.finishGatewaySetupAttempt(attemptID)
+            self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return }
+        self.applyGatewayLink(link)
+        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
         guard await self.preflightGateway(host: host) else { return }
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func connectManual() async {
+    func connectManual(setupAttemptID: UUID? = nil) async {
+        if let setupAttemptID {
+            guard self.setupAttemptID == setupAttemptID else { return }
+        } else {
+            self.invalidateGatewaySetupAttempt()
+        }
         let supersededSetupLease = self.takeStagedGatewaySetupSuppression()
         defer {
             if let supersededSetupLease {
@@ -462,7 +476,7 @@ extension SettingsProTab {
     }
 
     func resetOnboarding() {
-        self.connectingGatewayID = nil
+        self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
         self.setupCode = ""
         self.gatewayAutoConnect = false
@@ -478,6 +492,24 @@ extension SettingsProTab {
         self.manualGatewayEnabled = false
         self.manualGatewayHost = ""
         self.onboardingRequestID += 1
+    }
+
+    func beginGatewaySetupAttempt() -> UUID? {
+        guard self.connectingGatewayID == nil else { return nil }
+        let attemptID = UUID()
+        self.setupAttemptID = attemptID
+        self.connectingGatewayID = "setup-code"
+        return attemptID
+    }
+
+    func finishGatewaySetupAttempt(_ attemptID: UUID) {
+        guard self.setupAttemptID == attemptID else { return }
+        self.invalidateGatewaySetupAttempt()
+    }
+
+    func invalidateGatewaySetupAttempt() {
+        self.setupAttemptID = nil
+        self.connectingGatewayID = nil
     }
 
     func handleLocationModeChange(_ newValue: String) {

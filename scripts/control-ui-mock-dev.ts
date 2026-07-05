@@ -10,6 +10,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import {
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
@@ -629,7 +630,11 @@ const server = await createServer({
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
-    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+    alias: [
+      ...resolveExternalPackageAliasesForVite(),
+      ...resolveSourcePackageAliasesForVite(),
+      ...resolveTsconfigPathAliasesForVite(),
+    ],
   },
   root: uiRoot,
   server: {

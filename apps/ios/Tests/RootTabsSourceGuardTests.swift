@@ -782,8 +782,8 @@ struct RootTabsSourceGuardTests {
         let settingsContent = try #require(settingsScannerSheet.range(of: "content: {"))
         let settingsPendingSetupHandler = try Self.extract(
             actionsSource,
-            from: "func applyPendingGatewaySetupLinkIfNeeded()",
-            to: "@discardableResult\n    func applySetupCode()")
+            from: "func applyGatewaySetupLink(_ link: GatewayConnectDeepLink)",
+            to: "@discardableResult\n    func applySetupCode(attemptID: UUID)")
         let settingsScannerCancel = try #require(
             settingsPendingSetupHandler.range(of: "self.scannerResultHandoff.cancel()"))
         let settingsSetupStaging = try #require(
@@ -803,10 +803,10 @@ struct RootTabsSourceGuardTests {
             rootSource,
             from: "private func maybeOpenSettingsForGatewaySetup()",
             to: "private func maybeRequestLocalNetworkAccess")
-        let handledGatewaySetup = try #require(
-            gatewaySetupSource.range(of: "self.handledGatewaySetupRequestID = requestID"))
-        let onboardingSetupGuard = try #require(
-            gatewaySetupSource.range(of: "guard !self.showOnboarding else { return }"))
+        let consumedGatewaySetup = try #require(
+            gatewaySetupSource.range(of: "self.appModel.consumePendingGatewaySetupLink()"))
+        let deliveredGatewaySetup = try #require(
+            gatewaySetupSource.range(of: "self.gatewaySetupRequest = GatewaySetupRequest"))
         let pendingSetupHandler = try Self.extract(
             onboardingSource,
             from: "private func applyPendingGatewaySetupLinkIfNeeded()",
@@ -853,7 +853,7 @@ struct RootTabsSourceGuardTests {
             to: "private func retryLastAttempt(")
         let settingsManualConnect = try Self.extract(
             actionsSource,
-            from: "func connectManual() async",
+            from: "func connectManual(setupAttemptID: UUID? = nil) async",
             to: "func preflightGateway(host: String)")
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
@@ -900,7 +900,7 @@ struct RootTabsSourceGuardTests {
         #expect(settingsSource.contains(".onChange(of: self.onboardingRequestID)"))
         #expect(settingsSource.contains("self.syncAfterOnboardingReset()"))
         #expect(settingsSource.contains("let acceptsGatewaySetupRequests: Bool"))
-        #expect(actionsSource.contains("guard self.acceptsGatewaySetupRequests else { return }"))
+        #expect(settingsSource.contains("guard self.acceptsGatewaySetupRequests else { return }"))
         #expect(settingsSource.contains(".onChange(of: self.acceptsGatewaySetupRequests)"))
         #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 2)
         #expect(actionsSource.contains("func syncAfterOnboardingReset()"))
@@ -914,7 +914,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
-        #expect(handledGatewaySetup.lowerBound < onboardingSetupGuard.lowerBound)
+        #expect(consumedGatewaySetup.lowerBound < deliveredGatewaySetup.lowerBound)
         #expect(settingsSource.contains("QRScannerView("))
         #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
         #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
@@ -1120,6 +1120,36 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("\"watch.execApproval.\\(approvalID)\""))
     }
 
+    @Test func `setup route probes yield to newer manual actions`() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+
+        let welcomeStep = try Self.extract(
+            onboardingSource,
+            from: "private var welcomeStep: some View",
+            to: "@ViewBuilder\n    private var modeStep")
+        #expect(welcomeStep.contains("self.openQRScannerFromOnboarding()"))
+        #expect(welcomeStep.contains("self.invalidateSetupAttempt()"))
+
+        let onboardingManualConnect = try Self.extract(
+            onboardingSource,
+            from: "private func connectManual(setupAttemptID: UUID? = nil) async",
+            to: "private func connectCurrentManualGateway")
+        #expect(onboardingManualConnect.contains("guard self.setupAttemptID == setupAttemptID else { return }"))
+        #expect(onboardingManualConnect.contains("self.invalidateSetupAttempt()"))
+        #expect(onboardingSource.contains("await self.connectManual(setupAttemptID: attemptID)"))
+
+        let settingsManualConnect = try Self.extract(
+            actionsSource,
+            from: "func connectManual(setupAttemptID: UUID? = nil) async",
+            to: "func preflightGateway")
+        #expect(settingsManualConnect.contains("guard self.setupAttemptID == setupAttemptID else { return }"))
+        #expect(settingsManualConnect.contains("self.invalidateGatewaySetupAttempt()"))
+        #expect(actionsSource.contains("await self.connectManual(setupAttemptID: attemptID)"))
+        #expect(sectionsSource.contains(".disabled(self.setupAttemptID != nil)"))
+    }
+
     @Test func `local network access is requested from visible gateway flows`() throws {
         let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
@@ -1194,7 +1224,7 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
         #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
         #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
-        #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 2)
+        #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 3)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
         #expect(channelsSource.contains("label: \"ClickClack\""))
         #expect(channelsSource.contains("Self-hosted chat bot routing."))
