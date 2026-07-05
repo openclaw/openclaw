@@ -152,6 +152,19 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
+  it("matches wildcard preservation without treating a bare wildcard as an override", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { experimental: { localModelLean: true } } },
+    };
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "image_generate", "video_generate", "browser"]),
+        config: cfg,
+        preserveToolNames: ["image_*", "*"],
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "image_generate"]);
+  });
+
   it("lets an agent opt out of an inherited global lean setting", () => {
     const cfg: OpenClawConfig = {
       agents: {
