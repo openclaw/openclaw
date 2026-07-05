@@ -484,13 +484,18 @@ function isLoopbackGatewayUrl(rawUrl: string): boolean {
 function shouldOmitDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
   url: string;
+  authMode: ReturnType<typeof resolveGatewayAuth>["mode"];
   token?: string;
   password?: string;
   allowAuthNone?: boolean;
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasSharedSecretAuth = Boolean(params.token || params.password);
+  // Inactive ambient credentials must not turn an auth-none CLI call device-less.
+  // Omit identity only when the Gateway will actually authenticate the supplied secret.
+  const hasSharedSecretAuth =
+    (params.authMode === "token" && Boolean(params.token)) ||
+    (params.authMode === "password" && Boolean(params.password));
   const isLoopback = isLoopbackGatewayUrl(params.url);
   const isLocalBackendSharedAuth =
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
@@ -505,15 +510,7 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
-function resolveDeviceIdentityForGatewayCall(params: {
-  opts: CallGatewayBaseOptions;
-  url: string;
-  token?: string;
-  password?: string;
-}): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
-  if (shouldOmitDeviceIdentityForGatewayCall(params)) {
-    return null;
-  }
+function resolveDeviceIdentityForGatewayCall(): DeviceIdentity | null {
   try {
     return gatewayCallDeps.loadOrCreateDeviceIdentity();
   } catch {
@@ -1168,12 +1165,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  const allowAuthNone =
-    opts.requireLocalBackendSharedAuth === true &&
-    resolveGatewayCallAuth(context.config).mode === "none";
+  const authMode = resolveGatewayCallAuth(context.config).mode;
+  const allowAuthNone = opts.requireLocalBackendSharedAuth === true && authMode === "none";
   const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
     opts,
     url,
+    authMode,
     token,
     password,
     allowAuthNone,
@@ -1187,7 +1184,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
         ? null
-        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+        : resolveDeviceIdentityForGatewayCall()
       : opts.deviceIdentity;
   if (useStoredDeviceAuth) {
     const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);

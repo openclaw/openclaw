@@ -567,6 +567,19 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
+  it("keeps CLI device identity when an ambient token is inactive under auth mode none", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "inactive-env-token";
+
+    await callGatewayCli({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("inactive-env-token");
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
   it("falls back to token/password auth when device identity cannot be persisted", async () => {
     setLocalLoopbackGatewayConfig();
     deviceIdentityState.throwOnLoad = true;
