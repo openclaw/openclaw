@@ -3,8 +3,12 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  archiveLegacyStateSource,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
   buildMSTeamsConversationStateKey,
@@ -82,8 +86,6 @@ async function listKnownSessionKeys(storePath: string): Promise<string[]> {
   const candidates = [storePath, path.join(storePath, "sessions.json")];
   for (const candidate of candidates) {
     try {
-      // This doctor migration can run before session metadata import; legacy
-      // JSON keys are needed to map old sanitized learning filenames.
       const parsed = JSON.parse(await fs.readFile(candidate, "utf8")) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         continue;
@@ -134,15 +136,6 @@ function listCandidateStorePaths(params: {
   return [...paths];
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 function resolveStateFilePath(stateDir: string, filename: string): string {
   return path.join(stateDir, filename);
 }
@@ -156,10 +149,6 @@ async function readLegacyJsonFile<T>(
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -270,28 +259,6 @@ async function listLegacyLearningFiles(
   return files;
 }
 
-async function archiveLegacySource(params: {
-  filePath: string;
-  label?: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  const label = params.label ?? "Microsoft Teams feedback-learning";
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived ${label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ${label} legacy source: ${String(err)}`);
-  }
-}
-
 function mergeLearnings(legacy: string[], existing?: FeedbackLearningEntry): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -352,7 +319,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       changes.push(
         `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} conversation ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
-      await archiveLegacySource({
+      await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} conversation`,
         changes,
@@ -427,7 +394,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       changes.push(
         `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} poll ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
-      await archiveLegacySource({
+      await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} poll`,
         changes,
@@ -491,7 +458,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           `Skipped ${skipped} malformed ${MSTEAMS_PLUGIN_ID} SSO token ${skipped === 1 ? "entry" : "entries"} during migration`,
         );
       }
-      await archiveLegacySource({
+      await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} SSO-token`,
         changes,
@@ -560,7 +527,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           updatedAt: Date.now(),
         });
         imported++;
-        await archiveLegacySource({ filePath: file.filePath, changes, warnings });
+        await archiveLegacyStateSource({
+          filePath: file.filePath,
+          label: "Microsoft Teams feedback-learning",
+          changes,
+          warnings,
+        });
       }
       if (imported > 0) {
         changes.unshift(

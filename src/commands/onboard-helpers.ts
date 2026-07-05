@@ -21,10 +21,13 @@ import {
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { clearExistingSqliteSessionStore } from "../config/sessions/store-sqlite.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
+import {
+  resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+} from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
 import {
@@ -42,7 +45,7 @@ export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
-export { resolveControlUiLinks };
+export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
@@ -316,9 +319,7 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent();
-  clearExistingSqliteSessionStore(path.join(sessionsDir, "sessions.json"), { compact: true });
-  await moveToTrash(sessionsDir, runtime);
+  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
     for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(

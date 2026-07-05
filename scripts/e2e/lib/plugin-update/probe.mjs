@@ -87,7 +87,8 @@ async function waitRegistry() {
 
 function registryHealthy() {
   return new Promise((resolve) => {
-    const req = http.get("http://127.0.0.1:4873/@example%2flossless-claw", (res) => {
+    const registry = process.env.NPM_CONFIG_REGISTRY ?? "http://127.0.0.1:4873";
+    const req = http.get(`${registry.replace(/\/$/u, "")}/@example%2flossless-claw`, (res) => {
       resolve(res.statusCode === 200);
       res.resume();
     });
@@ -240,12 +241,12 @@ function assertCorruptPluginDetails(plugins, pluginId) {
     ? [
         `Disabled "${pluginId}" after plugin update failure`,
         "OpenClaw will continue without it",
-        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw update repair to retry post-update plugin repair.",
         `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
       ]
     : [
         "package.json is missing",
-        "Run openclaw doctor --fix to attempt automatic repair.",
+        "Run openclaw update repair to retry post-update plugin repair.",
         `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
       ];
   for (const expected of expectedFragments) {

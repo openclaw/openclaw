@@ -547,7 +547,8 @@ export async function runGatewayLoop(params: {
               // Best-effort abort for compacting runs so long compaction operations
               // don't hold session write locks across restart boundaries.
               if (activeRuns > 0) {
-                abortEmbeddedAgentRun(undefined, { mode: "compacting" });
+                await markActiveMainSessionsForRestart("gateway restart drain");
+                abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
               }
 
               if (activeTasks > 0 || activeRuns > 0) {
@@ -565,7 +566,7 @@ export async function runGatewayLoop(params: {
                   await markActiveMainSessionsForRestart(
                     restartIntent.reason ?? "forced gateway restart",
                   );
-                  abortEmbeddedAgentRun(undefined, { mode: "all" });
+                  abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                 } else {
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
                   let abortedAfterRunTimeout = false;
@@ -584,7 +585,7 @@ export async function runGatewayLoop(params: {
                       gatewayLog.warn(
                         "active embedded run drain timeout reached; aborting active run(s) before restart",
                       );
-                      abortEmbeddedAgentRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                       abortedAfterRunTimeout = true;
                     }
                     tasksDrain = await tasksDrainPromise;
@@ -600,7 +601,7 @@ export async function runGatewayLoop(params: {
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
                     if (!abortedAfterRunTimeout) {
-                      abortEmbeddedAgentRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                     }
                   }
                 }
@@ -722,6 +723,7 @@ export async function runGatewayLoop(params: {
     gatewayLog.info("signal SIGUSR1 received");
     void (async () => {
       const {
+        abortPendingChannelReloads,
         consumeGatewayRestartIntentPayloadSync,
         consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
@@ -732,6 +734,7 @@ export async function runGatewayLoop(params: {
       } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
+        abortPendingChannelReloads();
         if (consumeGatewaySigusr1RestartAuthorization()) {
           markGatewaySigusr1RestartHandled();
         }
@@ -758,9 +761,11 @@ export async function runGatewayLoop(params: {
         }
         // External SIGUSR1 requests should still reuse the in-process restart
         // scheduler so idle drain and restart coalescing stay consistent.
+        abortPendingChannelReloads();
         scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
         return;
       }
+      abortPendingChannelReloads();
       const sigusr1RestartIntent = consumeGatewaySigusr1RestartIntent();
       const restartReason = peekGatewaySigusr1RestartReason();
       markGatewaySigusr1RestartHandled();
@@ -799,10 +804,30 @@ export async function runGatewayLoop(params: {
       // deferral timers and reloads the task registry from durable state so
       // cancelled/completed work is not kept alive by old in-memory maps.
       const {
+        abortActiveCronTaskRuns,
+        advanceCronActiveJobGeneration,
         reloadTaskRegistryFromStore,
+        retireActiveCronTaskRunTracking,
+        resetCronActiveJobs,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
+        rotateAgentEventLifecycleGeneration,
+        waitForActiveCronJobs,
+        waitForActiveCronTaskRuns,
       } = await loadGatewayLifecycleRuntimeModule();
+      // Rotate ownership before reset pumps preserved queue entries.
+      rotateAgentEventLifecycleGeneration();
+      advanceCronActiveJobGeneration();
+      abortActiveCronTaskRuns("Gateway restarting.");
+      const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
+      const cronDrain = await waitForActiveCronJobs(1_000);
+      if (!cronTaskDrain.drained || !cronDrain.drained) {
+        gatewayLog.warn(
+          `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
+        );
+      }
+      retireActiveCronTaskRunTracking();
+      resetCronActiveJobs();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();

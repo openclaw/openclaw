@@ -19,6 +19,7 @@ function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
 async function runLoadedScenarioFlow(
   scenarioId: string,
   params: {
+    omitOutboundSequence?: boolean;
     onWaitForOutboundMessage?: (params: {
       waitCount: number;
       state: ReturnType<typeof createQaBusState>;
@@ -33,14 +34,65 @@ async function runLoadedScenarioFlow(
 
   const state = createQaBusState();
   let waitCount = 0;
+  const transport = {
+    state,
+    reset: async () => {
+      state.reset();
+    },
+    sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+      state.addInboundMessage(input),
+    sendNativeCommand: async (
+      input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
+        command: string;
+      },
+    ) => {
+      const { command, ...message } = input;
+      state.addInboundMessage({
+        ...message,
+        text: `/${command}`,
+        nativeCommand: { name: command },
+      });
+    },
+    waitForNoOutbound: async () => undefined,
+    waitForOutbound: async (input: {
+      conversation?: { id: string; kind: string };
+      textIncludes?: string;
+      timeoutMs?: number;
+    }) => {
+      waitCount += 1;
+      params.onWaitForOutboundMessage?.({ waitCount, state });
+      const match = state
+        .getSnapshot()
+        .messages.find(
+          (candidate) =>
+            candidate.direction === "outbound" &&
+            (!input.conversation || candidate.conversation.id === input.conversation.id) &&
+            (!input.conversation || candidate.conversation.kind === input.conversation.kind) &&
+            (!input.textIncludes || candidate.text.includes(input.textIncludes)),
+        );
+      if (match) {
+        return match;
+      }
+      throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
+    },
+    ...(params.omitOutboundSequence
+      ? {}
+      : {
+          waitForOutboundSequence: async () => {
+            throw new Error("outbound sequence not configured for this fixture");
+          },
+        }),
+  };
   const api = {
-    env: {},
+    env: { providerMode: "mock-openai" },
+    transport,
     state,
     scenario,
     config: scenario.execution.config ?? {},
     randomUUID: () => "00000000-0000-4000-8000-000000000000",
     liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     waitForGatewayHealthy: async () => undefined,
+    waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
     sleep: async () => undefined,
@@ -95,6 +147,16 @@ async function runLoadedScenarioFlow(
 }
 
 describe("scenario-flow-runner", () => {
+  it("fails when a flow calls a transport method the adapter does not implement", async () => {
+    await expect(
+      runLoadedScenarioFlow("channel-message-flows", {
+        omitOutboundSequence: true,
+      }),
+    ).rejects.toThrow(
+      'QA scenario "channel-message-flows" cannot run "waitForOutboundSequence": the active transport adapter does not implement this method.',
+    );
+  });
+
   it("supports qaImport inside flow expressions", async () => {
     const result = await runScenarioFlow({
       api: {
@@ -102,7 +164,7 @@ describe("scenario-flow-runner", () => {
         scenario: {
           id: "qa-import",
           title: "qa-import",
-          sourcePath: "qa/scenarios/qa-import.md",
+          sourcePath: "qa/scenarios/qa-import.yaml",
           surface: "test",
           objective: "test",
           successCriteria: ["test"],
@@ -173,7 +235,7 @@ describe("scenario-flow-runner", () => {
         scenario: {
           id: "qa-fixture-import",
           title: "qa-fixture-import",
-          sourcePath: "qa/scenarios/qa-fixture-import.md",
+          sourcePath: "qa/scenarios/qa-fixture-import.yaml",
           surface: "test",
           objective: "test",
           successCriteria: ["test"],
@@ -235,7 +297,7 @@ describe("scenario-flow-runner", () => {
         scenario: {
           id: "qa-gated-promise",
           title: "qa-gated-promise",
-          sourcePath: "qa/scenarios/qa-gated-promise.md",
+          sourcePath: "qa/scenarios/qa-gated-promise.yaml",
           surface: "test",
           objective: "test",
           successCriteria: ["test"],

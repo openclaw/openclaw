@@ -82,31 +82,30 @@ export function summarizeCommandSegmentsForDisplay(
   };
 }
 
-export function resolveCommandAnalysisSummaryForDisplay(params: {
+export async function resolveCommandAnalysisSummaryForDisplay(params: {
   host?: string | null;
   commandText: string;
   commandArgv?: string[];
   cwd?: string | null;
   sanitizeText?: (value: string) => string;
-}): CommandExplanationSummary | null {
-  const analysis =
+}): Promise<CommandExplanationSummary | null> {
+  const summary =
     params.host === "node"
-      ? Array.isArray(params.commandArgv) && params.commandArgv.length > 0
-        ? analyzeCommandForPolicy({
+      ? (() => {
+          if (!Array.isArray(params.commandArgv) || params.commandArgv.length === 0) {
+            return null;
+          }
+          const analysis = analyzeCommandForPolicy({
             source: "argv",
             argv: params.commandArgv,
             cwd: params.cwd ?? undefined,
-          })
-        : null
-      : analyzeCommandForPolicy({
-          source: "shell",
-          command: params.commandText,
-          cwd: params.cwd ?? undefined,
-        });
-  if (!analysis?.ok) {
+          });
+          return analysis.ok ? summarizeCommandSegmentsForDisplay(analysis.segments) : null;
+        })()
+      : (await explainCommandForDisplay(params.commandText))?.summary;
+  if (!summary) {
     return null;
   }
-  const summary = summarizeCommandSegmentsForDisplay(analysis.segments);
   const sanitizeText = params.sanitizeText;
   if (!sanitizeText) {
     return summary;

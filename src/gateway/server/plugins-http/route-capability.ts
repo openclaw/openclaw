@@ -55,11 +55,6 @@ export function findMatchingPluginNodeCapabilityRoute(
   return findMatchingPluginNodeCapabilityRoutes(registry, context)[0];
 }
 
-/** Lists node-capability surface names advertised by the active plugin registry. */
-export function listPluginNodeCapabilitySurfaces(registry: PluginRegistry): string[] {
-  return listPluginNodeCapabilities(registry).map((entry) => entry.surface);
-}
-
 /** Lists unique node-capability surfaces, preferring the shortest TTL per surface. */
 export function listPluginNodeCapabilities(
   registry: PluginRegistry,

@@ -4,6 +4,7 @@
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
@@ -19,6 +20,7 @@ import {
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -49,12 +51,6 @@ import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
 
@@ -633,7 +629,10 @@ export function registerBrowserAgentActRoutes(
                       profileName,
                       profile: profileCtx.profile,
                       targetId: tab.targetId,
-                      fn: action.fn,
+                      fn: normalizeBrowserEvaluateFunctionSource(
+                        action.fn,
+                        action.ref ? { argumentName: "el" } : undefined,
+                      ),
                       args: action.ref ? [action.ref] : undefined,
                     }),
                   guard: existingSessionNavigationGuard,

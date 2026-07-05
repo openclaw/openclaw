@@ -5,6 +5,7 @@
  */
 import crypto from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -16,6 +17,7 @@ import {
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
+  resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
   type ExecSecurity,
@@ -437,7 +439,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
-    "Stricter values from tools.exec and ~/.openclaw/exec-approvals.json both apply.",
+    `Stricter values from tools.exec and ${resolveExecApprovalsTranscriptPath()} both apply.`,
     "Fix one of these:",
     '- align both files to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
@@ -480,6 +482,9 @@ export async function sendExecApprovalFollowupResult(
         }
       : {}),
   }).catch((error: unknown) => {
+    if (isApprovalNotFoundError(error)) {
+      return;
+    }
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

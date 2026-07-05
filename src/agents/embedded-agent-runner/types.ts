@@ -15,6 +15,7 @@ import type {
 } from "../embedded-agent-messaging.types.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { ContextUsage } from "../usage.js";
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -59,6 +60,7 @@ export type EmbeddedAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    contextUsage?: ContextUsage;
     reasoningTokens?: number;
     total?: number;
   };
@@ -74,6 +76,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
+    | "same_model_rate_limit"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -83,7 +86,7 @@ export type TraceAttempt = {
   status?: number;
 };
 
-export type ExecutionTrace = {
+type ExecutionTrace = {
   winnerProvider?: string;
   winnerModel?: string;
   attempts?: TraceAttempt[];
@@ -91,7 +94,7 @@ export type ExecutionTrace = {
   runner?: "embedded" | "cli";
 };
 
-export type RequestShapingTrace = {
+type RequestShapingTrace = {
   authMode?: string;
   thinking?: string;
   reasoning?: string;
@@ -101,7 +104,7 @@ export type RequestShapingTrace = {
   blockStreaming?: string;
 };
 
-export type PromptSegmentTrace = {
+type PromptSegmentTrace = {
   key: string;
   chars: number;
 };
@@ -113,13 +116,13 @@ export type ToolSummaryTrace = {
   totalToolTimeMs?: number;
 };
 
-export type CompletionTrace = {
+type CompletionTrace = {
   finishReason?: string;
   stopReason?: string;
   refusal?: boolean;
 };
 
-export type ContextManagementTrace = {
+type ContextManagementTrace = {
   sessionCompactions?: number;
   lastTurnCompactions?: number;
   preflightCompactionApplied?: boolean;
@@ -159,8 +162,13 @@ export type EmbeddedAgentRunMeta = {
       | "role_ordering"
       | "image_size"
       | "retry_limit"
+      | "incomplete_turn"
       | "hook_block";
     message: string;
+    /** True only when model fallback can retry this terminal error without repeating side effects. */
+    fallbackSafe?: boolean;
+    /** True when the payload includes a trusted structured terminal tool summary. */
+    terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
@@ -187,6 +195,8 @@ export type EmbeddedAgentRunResult = {
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+    isCommentary?: boolean;
     audioAsVoice?: boolean;
     trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;

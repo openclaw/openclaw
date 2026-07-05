@@ -4,17 +4,14 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
-type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
-
-let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
-
-const loadChannelMessageRuntimeModule = async () => {
-  // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
-  // message runtime internals into registration/discovery-only paths.
-  channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
-  return await channelMessageRuntimeModulePromise;
-};
+// Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
+// message runtime internals into registration/discovery-only paths.
+const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
+  () => import("../channels/message/runtime.js"),
+);
 
 export type {
   DurableInboundReplyDeliveryOptions,
@@ -45,6 +42,8 @@ export {
 export type { FinalizableDraftStreamState } from "../channels/draft-stream-controls.js";
 export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { resolveChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
+export type { ChannelDraftStreamingChunking } from "../channels/draft-streaming-chunking.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
 export { createChannelRunQueue } from "./channel-lifecycle.core.js";
 export type {
@@ -76,7 +75,13 @@ export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export { logAckFailure, logTypingFailure } from "../channels/logging.js";
 export * from "../channels/streaming.js";
-export * from "../channels/progress-draft-compositor.js";
+export {
+  createChannelProgressDraftCompositor,
+  type ChannelProgressDraftCompositor,
+  type ChannelProgressDraftCompositorLine,
+  type ChannelProgressDraftMode,
+  type ChannelProgressDraftUpdateOptions,
+} from "../channels/progress-draft-compositor.js";
 export {
   classifyDurableSendRecoveryState,
   createChannelMessageAdapterFromOutbound,

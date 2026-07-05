@@ -1,7 +1,6 @@
 // Assertions for Codex npm plugin live E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -38,7 +37,10 @@ const MAX_TRANSCRIPT_SCAN_BYTES = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
   2 * 1024 * 1024,
 );
-const SESSION_STORE_SCOPE = "session_entries";
+const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS",
+  420,
+);
 
 function readPositiveIntEnv(name, fallback) {
   const text = String(process.env[name] ?? fallback).trim();
@@ -78,30 +80,6 @@ function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
   }
 }
 
-function readSqliteSessionStore(agentId = "main") {
-  const dbPath = path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`session SQLite store was not persisted: ${dbPath}`);
-  }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ? ORDER BY key ASC")
-      .all(SESSION_STORE_SCOPE);
-    const store = {};
-    for (const row of rows) {
-      if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
-        continue;
-      }
-      store[row.key] = JSON.parse(row.value_json);
-    }
-    return store;
-  } finally {
-    db?.close();
-  }
-}
-
 function configure() {
   const modelRef = process.argv[3] || "codex/gpt-5.4";
   const state = stateDir();
@@ -126,7 +104,7 @@ function configure() {
             mode: "yolo",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
-            requestTimeoutMs: 420_000,
+            requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000,
           },
         },
       },
@@ -143,7 +121,7 @@ function configure() {
       },
       workspace: path.join(state, "workspace"),
       skipBootstrap: true,
-      timeoutSeconds: 420,
+      timeoutSeconds: AGENT_TURN_TIMEOUT_SECONDS,
     },
   };
   fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
@@ -424,7 +402,9 @@ function assertAgentTurn() {
     );
   }
 
-  const store = readSqliteSessionStore("main");
+  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const store = readJson(storePath);
   const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
   if (!entry) {
     throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
@@ -441,7 +421,7 @@ function assertAgentTurn() {
 
   const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
   const binding = readJson(bindingPath);
-  if (binding.schemaVersion !== 1 || typeof binding.threadId !== "string") {
+  if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {

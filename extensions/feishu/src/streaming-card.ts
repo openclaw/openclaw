@@ -9,7 +9,9 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -137,7 +139,10 @@ function truncateSummary(text: string, max = 50): string {
     return "";
   }
   const clean = text.replace(/\n/g, " ").trim();
-  return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
+  // Slice on a code-point boundary so a surrogate pair (emoji / astral char)
+  // straddling the limit is dropped whole, instead of leaving a lone surrogate
+  // half that Feishu renders as the replacement char.
+  return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
 }
 
 function hasNaturalStreamingBoundary(text: string): boolean {
@@ -295,32 +300,44 @@ export class FeishuStreamingSession {
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
     if (sendMode === "reply") {
-      sendRes = await this.client.im.message.reply({
-        path: { message_id: sendOptions.replyToMessageId! },
-        data: {
-          msg_type: "interactive",
-          content: cardContent,
-          ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.reply({
+            path: { message_id: sendOptions.replyToMessageId! },
+            data: {
+              msg_type: "interactive",
+              content: cardContent,
+              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
+            },
+          }),
+        "Send card failed",
+      );
     } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: Object.assign(
-          { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-          { root_id: sendOptions.rootId },
-        ),
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: Object.assign(
+              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+              { root_id: sendOptions.rootId },
+            ),
+          }),
+        "Send card failed",
+      );
     } else {
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          msg_type: "interactive",
-          content: cardContent,
-        },
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: {
+              receive_id: receiveId,
+              msg_type: "interactive",
+              content: cardContent,
+            },
+          }),
+        "Send card failed",
+      );
     }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
@@ -435,7 +452,9 @@ export class FeishuStreamingSession {
       if (!pending || this.closed) {
         return;
       }
-      void this.update(pending);
+      void this.update(pending).catch((error: unknown) =>
+        this.log?.(`Scheduled flush update failed: ${String(error)}`),
+      );
     }, delayMs);
   }
 

@@ -1,8 +1,10 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -23,7 +25,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     if (!response.ok) {
       throw new Error(`request failed ${response.status}: ${url}`);
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
   } finally {
     await release();
   }
@@ -50,7 +52,7 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
     }
     await sleep(250);
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }
 
 async function waitForTransportReady(
@@ -74,10 +76,11 @@ async function waitForConfigRestartSettle(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
+  settleBufferMs = 750,
 ) {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  const readyAfterMs = restartDelayMs + 750;
+  const readyAfterMs = restartDelayMs + settleBufferMs;
   let lastHealthError: unknown = null;
 
   while (Date.now() < deadline) {
@@ -94,7 +97,8 @@ async function waitForConfigRestartSettle(
     await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
   }
 
-  throw new Error(
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
     `timed out after ${timeoutMs}ms waiting for config restart readiness${
       lastHealthError ? `: ${formatErrorMessage(lastHealthError)}` : ""
     }`,
@@ -241,6 +245,8 @@ async function runConfigMutation(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
+  replacePaths?: readonly string[];
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
@@ -263,10 +269,16 @@ async function runConfigMutation(params: {
           ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
         },
         { timeoutMs },
       );
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       return result;
     } catch (error) {
       if (isConfigHashConflict(error)) {
@@ -287,7 +299,12 @@ async function runConfigMutation(params: {
       if (!isGatewayRestartRace(error)) {
         throw error;
       }
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       const postRestartSnapshot = await readConfigSnapshot(params.env);
       if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
         return { ok: true, restarted: true };
@@ -298,7 +315,7 @@ async function runConfigMutation(params: {
       continue;
     }
   }
-  throw toLintErrorObject(
+  throw toQaErrorObject(
     lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
     "Non-Error thrown",
   );
@@ -316,6 +333,8 @@ async function patchConfig(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
+  replacePaths?: readonly string[];
 }) {
   return await runConfigMutation({
     env: params.env,
@@ -325,6 +344,8 @@ async function patchConfig(params: {
     deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
+    restartSettleBufferMs: params.restartSettleBufferMs,
+    replacePaths: params.replacePaths,
   });
 }
 
@@ -366,17 +387,3 @@ export {
   waitForQaChannelReady,
   waitForTransportReady,
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

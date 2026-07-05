@@ -11,6 +11,7 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -52,15 +53,6 @@ export type ControlUiMockGatewayScenario = {
   sessionKey?: string;
 };
 
-export type ControlUiMockGatewayMethodResponseCase = {
-  match?: Record<string, unknown>;
-  response: unknown;
-};
-
-export type ControlUiMockGatewayMethodResponseCases = {
-  cases: ControlUiMockGatewayMethodResponseCase[];
-};
-
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
 
 export type ControlUiE2eServer = {
@@ -70,11 +62,13 @@ export type ControlUiE2eServer = {
 
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
+  deliverLatest: (frame: unknown) => Promise<void>;
   deferNext: (method: string) => Promise<void>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
   emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
   getRequests: (method?: string) => Promise<MockGatewayRequest[]>;
   getSocketCount: () => Promise<number>;
+  getSocketUrls: () => Promise<string[]>;
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
@@ -150,6 +144,7 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],
@@ -265,6 +260,7 @@ function installControlUiMockGateway(input: {
   };
   type ExposedGateway = {
     closeLatest: (code?: number, reason?: string) => void;
+    deliverLatest: (frame: unknown) => void;
     deferNext: (method: string) => void;
     emit: (event: string, payload?: unknown) => void;
     findRequests: (method?: string) => BrowserRequest[];
@@ -276,6 +272,7 @@ function installControlUiMockGateway(input: {
     resolveDeferred: (method: string, payload?: unknown) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     socketCount: () => number;
+    socketUrls: () => string[];
   };
   type WindowWithGateway = Window & {
     openclawControlUiE2eGateway?: ExposedGateway;
@@ -286,7 +283,7 @@ function installControlUiMockGateway(input: {
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
-  const sockets: unknown[] = [];
+  const sockets: Array<{ readonly url: string }> = [];
   let seq = 0;
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -433,6 +430,23 @@ function installControlUiMockGateway(input: {
         };
       case "agents.files.get":
         return null;
+      case "sessions.files.list":
+        return {
+          browser: {
+            entries: [],
+            path: "",
+          },
+          files: [],
+          root: "",
+          sessionKey:
+            isRecord(params) && typeof params.sessionKey === "string" ? params.sessionKey : "main",
+        };
+      case "sessions.files.get":
+        return null;
+      case "artifacts.list":
+        return { artifacts: [] };
+      case "artifacts.download":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,
@@ -454,6 +468,9 @@ function installControlUiMockGateway(input: {
             scope: "agent",
           },
           messages: scenario.historyMessages,
+          metadata: {
+            models: scenario.models,
+          },
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
         };
@@ -620,6 +637,9 @@ function installControlUiMockGateway(input: {
     closeLatest(code, reason) {
       MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");
     },
+    deliverLatest(frame) {
+      MockWebSocket.latest?.deliver(frame);
+    },
     deferNext(method) {
       deferredMethods.push(method);
     },
@@ -672,6 +692,9 @@ function installControlUiMockGateway(input: {
     socketCount() {
       return sockets.length;
     },
+    socketUrls() {
+      return sockets.map((socket) => socket.url);
+    },
   };
 
   (window as WindowWithGateway).openclawControlUiE2eGateway = exposed;
@@ -714,6 +737,22 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
     );
   };
 
+  const deliverLatest = async (frame: unknown) => {
+    await page.evaluate((payload) => {
+      const gateway = (
+        window as Window & {
+          openclawControlUiE2eGateway?: {
+            deliverLatest: (frame: unknown) => void;
+          };
+        }
+      ).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      gateway.deliverLatest(payload);
+    }, frame);
+  };
+
   const getRequests = async (method?: string) =>
     page.evaluate((targetMethod) => {
       const gateway = (
@@ -745,6 +784,7 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         { closeCode: code, closeReason: reason },
       );
     },
+    deliverLatest,
     async deferNext(method) {
       await page.evaluate((targetMethod) => {
         const gateway = (
@@ -784,6 +824,18 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
           }
         ).openclawControlUiE2eGateway;
         return gateway?.socketCount() ?? 0;
+      });
+    },
+    async getSocketUrls() {
+      return await page.evaluate(() => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              socketUrls: () => string[];
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        return gateway?.socketUrls() ?? [];
       });
     },
     async rejectDeferred(method, error) {

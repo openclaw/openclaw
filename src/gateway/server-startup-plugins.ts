@@ -2,17 +2,18 @@
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectUnregisteredConfiguredMemoryEmbeddingProviders } from "../plugins/channel-plugin-ids.js";
-import { listRegisteredEmbeddingProviders } from "../plugins/embedding-providers.js";
+import {
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+} from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
-import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
+import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
 type GatewayPluginBootstrapLog = {
@@ -62,19 +63,26 @@ export async function prepareGatewayPluginBootstrap(params: {
   const shouldRunStartupMaintenance =
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
   if (shouldRunStartupMaintenance) {
-    if (!params.minimalTestGateway) {
-      const { ensureSessionStateMigrated } = await import("../infra/session-state-migration.js");
-      // Session metadata is SQLite-only at runtime; starting after a failed import
-      // would make legacy sessions disappear and allow divergent new rows.
-      await ensureSessionStateMigrated(params.cfgAtStart);
-    }
     const { runChannelPluginStartupMaintenance } =
       await import("../channels/plugins/lifecycle-startup.js");
-    await runChannelPluginStartupMaintenance({
-      cfg: startupMaintenanceConfig,
-      env: process.env,
-      log: params.log,
-    });
+    const startupTasks = [
+      runChannelPluginStartupMaintenance({
+        cfg: startupMaintenanceConfig,
+        env: process.env,
+        log: params.log,
+      }),
+    ];
+    if (!params.minimalTestGateway) {
+      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
+      startupTasks.push(
+        runStartupSessionMigration({
+          cfg: params.cfgAtStart,
+          env: process.env,
+          log: params.log,
+        }),
+      );
+    }
+    await Promise.all(startupTasks);
   }
 
   initSubagentRegistry();
@@ -83,16 +91,14 @@ export async function prepareGatewayPluginBootstrap(params: {
   // defaults injected while loading runtime config; runtime-only plugin config still merges in.
   const gatewayPluginConfig = params.minimalTestGateway
     ? params.cfgAtStart
-    : mergeActivationSectionsIntoRuntimeConfig({
+    : resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.cfgAtStart,
-        activationConfig: applyPluginAutoEnable({
-          config: activationSourceConfig,
-          env: process.env,
-          ...(params.pluginMetadataSnapshot?.manifestRegistry
-            ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
-            : {}),
-          discovery: params.pluginMetadataSnapshot?.discovery,
-        }).config,
+        activationSourceConfig,
+        env: process.env,
+        ...(params.pluginMetadataSnapshot?.manifestRegistry
+          ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
+          : {}),
+        discovery: params.pluginMetadataSnapshot?.discovery,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
@@ -190,16 +196,9 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
-  const registeredProviderIds = new Set(
-    [
-      ...(params.pluginRegistry.memoryEmbeddingProviders ?? []),
-      ...(params.pluginRegistry.embeddingProviders ?? []),
-      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
-    ].map((entry) => entry.provider.id),
-  );
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.config,
-    registeredProviderIds,
+    registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
   });
   for (const provider of unregistered) {
     const path = `memorySearch.${provider.source}`;

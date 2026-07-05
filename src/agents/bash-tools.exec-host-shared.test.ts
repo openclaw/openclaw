@@ -16,6 +16,7 @@ import {
   createExecApprovalPendingState,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
+  resolveBaseExecApprovalDecision,
   resolveExecApprovalUnavailableState,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
@@ -164,6 +165,39 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).toHaveBeenCalledWith(
       "exec approval followup dispatch failed (id=approval-log-once): Channel is required",
     );
+  });
+
+  it.each([
+    {
+      name: "direct gateway code",
+      error: Object.assign(new Error("approval not found"), {
+        gatewayCode: "APPROVAL_NOT_FOUND",
+      }),
+    },
+    {
+      name: "structured invalid-request details",
+      error: Object.assign(new Error("approval not found"), {
+        gatewayCode: "INVALID_REQUEST",
+        details: { reason: "APPROVAL_NOT_FOUND" },
+      }),
+    },
+    {
+      name: "legacy message-only error",
+      error: new Error("unknown or expired approval id"),
+    },
+  ])("suppresses approval-not-found followup dispatch failures ($name)", async ({ error }) => {
+    sendExecApprovalFollowup.mockRejectedValue(error);
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-expired",
+        sessionKey: "agent:main:main",
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
@@ -443,6 +477,19 @@ describe("resolveExecHostApprovalContext", () => {
 });
 
 describe("enforceStrictInlineEvalApprovalBoundary", () => {
+  it("denies unanswered approvals when ask fallback is fail-closed", () => {
+    expect(
+      resolveBaseExecApprovalDecision({
+        decision: null,
+        askFallback: "deny",
+      }),
+    ).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+      timedOut: true,
+    });
+  });
+
   it("denies timeout-based fallback when strict inline-eval approval is required", () => {
     expect(
       enforceStrictInlineEvalApprovalBoundary({

@@ -5,7 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
 class FakeSocket extends EventEmitter {
+  emitErrorOnClose = false;
+
   close = vi.fn(() => {
+    if (this.emitErrorOnClose) {
+      this.emit("error", new Error("socket closed while connecting"));
+    }
     this.emit("close");
   });
 }
@@ -189,5 +194,102 @@ describe("ClickClack gateway", () => {
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
     abort.abort();
     await run;
+  });
+
+  it("reconnects after ClickClack websocket errors", async () => {
+    const firstSocket = new FakeSocket();
+    firstSocket.emitErrorOnClose = true;
+    const secondSocket = new FakeSocket();
+    mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    firstSocket.emit("error", new Error("gateway dropped"));
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(2));
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      "[default] ClickClack websocket error; reconnecting: gateway dropped",
+    );
+    abort.abort();
+    await run;
+  });
+
+  it("does not log reconnect warnings when abort closes a connecting websocket", async () => {
+    const socket = new FakeSocket();
+    socket.emitErrorOnClose = true;
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    abort.abort();
+    await run;
+
+    expect(ctx.log?.warn).not.toHaveBeenCalledWith(
+      "[default] ClickClack websocket error; reconnecting: socket closed while connecting",
+    );
+    expect(mocks.client.websocket).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears running status when backlog polling fails", async () => {
+    mocks.client.events.mockRejectedValue(new Error("clickclack unavailable"));
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+
+    await expect(startClickClackGatewayAccount(ctx)).rejects.toThrow("clickclack unavailable");
+
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      running: true,
+      configured: true,
+      enabled: true,
+      baseUrl: "https://clickclack.example",
+    });
+    expect(ctx.setStatus).toHaveBeenLastCalledWith({
+      accountId: "default",
+      running: false,
+    });
+  });
+
+  it("wraps non-Error ws message rejections with the original value in the message", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const rejection = { code: "ECONNRESET", retryable: true };
+    mocks.resolveClickClackInboundAccess.mockRejectedValue(rejection);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          id: "evt-1",
+          cursor: "cursor-1",
+          type: "message.created",
+          workspace_id: "workspace-1",
+          channel_id: "chan-1",
+          seq: 2,
+          created_at: "2026-01-01T00:00:00.000Z",
+          payload: { message_id: "msg-1", author_id: "human-1" },
+        }),
+      ),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      message: 'ClickClack ws message failed: {"code":"ECONNRESET","retryable":true}',
+      cause: rejection,
+    });
+    expect(ctx.setStatus).toHaveBeenLastCalledWith({
+      accountId: "default",
+      running: false,
+    });
   });
 });

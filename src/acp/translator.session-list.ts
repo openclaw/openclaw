@@ -12,7 +12,7 @@ export const ACP_LIST_SESSIONS_MAX_FETCH_LIMIT =
   ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET + ACP_LIST_SESSIONS_MAX_PAGE_SIZE + 1;
 
 /** Opaque cursor payload used to page ACP session list results. */
-export type ListSessionsCursor = {
+type ListSessionsCursor = {
   offset: number;
   cwd?: string;
 };

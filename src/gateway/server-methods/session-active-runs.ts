@@ -1,5 +1,6 @@
 // Session active-run helpers decide whether session operations should treat a
 // session as busy based on Control UI-visible active chat/agent runs.
+import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -10,7 +11,8 @@ import type { GatewayRequestContext } from "./types.js";
  * do not make a session look busy to user-facing session operations.
  */
 type TrackedActiveSessionRun = {
-  sessionKey: string;
+  sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
 };
 
@@ -22,14 +24,15 @@ function collectTrackedActiveSessionRuns(
     return runs;
   }
   for (const active of context.chatAbortControllers.values()) {
-    if (
-      active.projectSessionActive !== false &&
-      active.controlUiVisible !== false &&
-      typeof active.sessionKey === "string" &&
-      active.sessionKey.trim()
-    ) {
+    if (active.projectSessionActive !== false && active.controlUiVisible !== false) {
+      const sessionKey = active.sessionKey?.trim();
+      const sessionId = active.sessionId?.trim();
+      if (!sessionKey && !sessionId) {
+        continue;
+      }
       runs.push({
-        sessionKey: active.sessionKey,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(sessionId ? { sessionId } : {}),
         agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
       });
     }
@@ -43,7 +46,7 @@ function isTrackedActiveSessionRunForKey(
   agentId?: string,
   defaultAgentId?: string,
 ): boolean {
-  if (active.sessionKey !== key) {
+  if (!active.sessionKey || active.sessionKey !== key) {
     return false;
   }
   if (key !== "global") {
@@ -83,4 +86,27 @@ export function hasTrackedActiveSessionRun(params: {
         params.defaultAgentId,
       ),
   );
+}
+
+export function hasVisibleActiveSessionRun(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): boolean {
+  if (hasTrackedActiveSessionRun(params)) {
+    return true;
+  }
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return false;
+  }
+  if (
+    collectTrackedActiveSessionRuns(params.context).some((active) => active.sessionId === sessionId)
+  ) {
+    return true;
+  }
+  return isEmbeddedAgentRunActive(sessionId);
 }

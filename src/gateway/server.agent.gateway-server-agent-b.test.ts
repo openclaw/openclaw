@@ -1,10 +1,10 @@
 // Gateway agent integration tests cover channel routing, session context,
 // WebSocket requests, agent event delivery, and provider/runtime error handling.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
@@ -21,7 +21,6 @@ import {
   connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
-  readSessionStore,
   rpcReq,
   startConnectedServerWithClient,
   startServerWithClient,
@@ -175,10 +174,16 @@ async function sendAgentWsRequestAndWaitFinal(
   return await finalP;
 }
 
+const gwSessionTempDirs: string[] = [];
+
 async function useTempSessionStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+  const dir = makeTempDir(gwSessionTempDirs, "openclaw-gw-");
   testState.sessionStorePath = path.join(dir, "sessions.json");
 }
+
+afterAll(() => {
+  cleanupTempDirs(gwSessionTempDirs);
+});
 
 describe("gateway server agent", () => {
   beforeEach(() => {
@@ -268,7 +273,14 @@ describe("gateway server agent", () => {
     if (!sessionStorePath) {
       throw new Error("expected session store path");
     }
-    const stored = readSessionStore(sessionStorePath);
+    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+      string,
+      {
+        cliSessionBindings?: Record<string, unknown>;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
+      }
+    >;
     expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
       "claude-cli": {
         sessionId: "cli-session-123",
@@ -490,7 +502,10 @@ describe("gateway server agent", () => {
       expect(viaAgent.ok).toBe(false);
       expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
 
-      const store = readSessionStore(storePath);
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
       expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 

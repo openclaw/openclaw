@@ -20,6 +20,7 @@ import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
+import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -155,6 +156,7 @@ export type GatewayWsSharedHandlerParams = {
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
+  nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
   gatewayMethods: string[];
@@ -232,6 +234,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       ),
     rateLimiter,
     browserRateLimiter,
+    nodeReapprovalCoordinator,
     isStartupPending,
     gatewayMethods,
     events,
@@ -476,6 +479,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
+      // Detach (or, with a zero grace period, kill) any PTY shells this
+      // connection owned; detached sessions stay reattachable via
+      // terminal.attach until their reaper fires.
+      context.terminalSessions?.handleDisconnect(connId);
       let currentDisconnectedNodeId: string | null = null;
       if (client?.connect?.role === "node") {
         currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
@@ -528,6 +535,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       getRequiredSharedGatewaySessionGeneration,
       rateLimiter,
       browserRateLimiter,
+      nodeReapprovalCoordinator,
       isStartupPending,
       gatewayMethods,
       events,

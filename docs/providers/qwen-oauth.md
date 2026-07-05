@@ -7,19 +7,27 @@ read_when:
 title: "Qwen OAuth / Portal"
 ---
 
-`qwen-oauth` is the Qwen Portal provider id. It targets the Qwen Portal endpoint
-and keeps older Qwen OAuth / portal setups addressable through a distinct
-provider id.
+`qwen-oauth` is the Qwen Portal provider id, registered by the Qwen plugin
+(`@openclaw/qwen-provider`). It targets the Qwen Portal endpoint at
+`https://portal.qwen.ai/v1` and keeps older Qwen OAuth / portal setups
+addressable through a distinct provider id, separate from the canonical `qwen`
+provider.
 
-Use this provider when you specifically have a current Qwen Portal token for
-`https://portal.qwen.ai/v1`, or when you are migrating an older Qwen Portal /
-Qwen CLI setup and want to keep those credentials separate from the canonical
-Qwen Cloud provider. It is not the recommended first choice for new Qwen users.
-
-For new Qwen Cloud setups, prefer [Qwen](/providers/qwen) with the Standard
-ModelStudio endpoint unless you specifically have a current Qwen Portal token.
+Choose `qwen-oauth` if you already have a working Qwen Portal token, are
+migrating a legacy Qwen OAuth or Qwen CLI workflow, or need to test the Qwen
+Portal endpoint specifically. For new setups, prefer
+[Qwen](/providers/qwen) with the Standard ModelStudio endpoint: it covers new
+API-key setups, broader endpoint choices, Standard pay-as-you-go, Coding Plan,
+and the full Qwen plugin catalog.
 
 ## Setup
+
+Install the Qwen plugin if you have not already:
+
+```bash
+openclaw plugins install @openclaw/qwen-provider
+openclaw gateway restart
+```
 
 Provide your portal token through onboarding:
 
@@ -27,11 +35,15 @@ Provide your portal token through onboarding:
 openclaw onboard --auth-choice qwen-oauth
 ```
 
-Or set:
+Non-interactive runs read the token from `--qwen-oauth-token <token>`, or set:
 
 ```bash
 export QWEN_API_KEY="<your-qwen-portal-token>" # pragma: allowlist secret
 ```
+
+Onboarding stores the token under a `qwen-oauth` auth profile, seeds the portal
+model catalog, and sets `qwen-oauth/qwen3.5-plus` as the default model when
+none is configured.
 
 ## Defaults
 
@@ -56,25 +68,26 @@ surfaces. A token stored for `qwen-oauth` should not be treated as a DashScope
 or ModelStudio key, and a new DashScope key should use the canonical `qwen`
 provider instead.
 
-## When to choose Qwen OAuth / Portal
-
-- You already have a working Qwen Portal token.
-- You are preserving a legacy Qwen OAuth or Qwen CLI workflow while moving to
-  OpenClaw's provider model.
-- You need to test compatibility with the Qwen Portal endpoint specifically.
-
-Choose [Qwen](/providers/qwen) for new setup, broader endpoint choices, Standard
-ModelStudio, Coding Plan, and the full bundled Qwen catalog.
-
 ## Models
 
-The bundled catalog seeds the Qwen Portal default:
+The Qwen plugin seeds this static catalog for the Qwen Portal endpoint. All
+entries use a 65,536-token max output; availability depends on the current Qwen
+Portal account and token.
 
-- `qwen-oauth/qwen3.5-plus`
+| Model ref                         | Input       | Context   | Notes         |
+| --------------------------------- | ----------- | --------- | ------------- |
+| `qwen-oauth/qwen3.5-plus`         | text, image | 1,000,000 | Default model |
+| `qwen-oauth/qwen3.6-plus`         | text, image | 1,000,000 |               |
+| `qwen-oauth/qwen3-max-2026-01-23` | text        | 262,144   |               |
+| `qwen-oauth/qwen3-coder-next`     | text        | 262,144   |               |
+| `qwen-oauth/qwen3-coder-plus`     | text        | 1,000,000 |               |
+| `qwen-oauth/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning     |
+| `qwen-oauth/glm-5`                | text        | 202,752   |               |
+| `qwen-oauth/glm-4.7`              | text        | 202,752   |               |
+| `qwen-oauth/kimi-k2.5`            | text, image | 262,144   |               |
 
-Availability depends on the current Qwen Portal account and token. If your
-account uses ModelStudio / DashScope API keys instead, configure the canonical
-`qwen` provider:
+If your account uses ModelStudio / DashScope API keys instead, configure the
+canonical `qwen` provider:
 
 ```bash
 openclaw onboard --auth-choice qwen-standard-api-key
@@ -83,9 +96,9 @@ openclaw models set qwen/qwen3-coder-plus
 
 ## Migration
 
-Legacy Qwen Portal OAuth profiles may not be refreshable. If a portal profile
-stops working, re-authenticate with a current token or switch to the Standard
-Qwen provider:
+Legacy Qwen Portal OAuth profiles are not refreshable; `openclaw doctor` flags
+them. If a portal profile stops working, re-run onboarding with a current token
+or switch to the Standard Qwen provider:
 
 ```bash
 openclaw onboard --auth-choice qwen-standard-api-key
@@ -99,7 +112,7 @@ https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
 ## Troubleshooting
 
-- Portal OAuth refresh failures: legacy Qwen Portal OAuth profiles may not be
+- Portal OAuth refresh failures: legacy Qwen Portal OAuth profiles are not
   refreshable. Re-run onboarding with a current token.
 - Wrong endpoint errors: confirm the model ref starts with `qwen-oauth/` when
   using a portal token. Use `qwen/` refs only for the canonical Qwen provider.

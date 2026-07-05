@@ -1,5 +1,13 @@
 // Public gateway protocol entrypoint. Keep this barrel aligned with schema.ts
 // so clients can import wire types, JSON schemas, and validators from one place.
+export {
+  buildClawHubTrustErrorDetails,
+  ClawHubTrustErrorCodes,
+  isClawHubTrustErrorCode,
+  readClawHubTrustErrorDetails,
+  type ClawHubTrustErrorCode,
+  type ClawHubTrustErrorDetails,
+} from "./clawhub-trust-error-details.js";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import {
   type AgentEvent,
@@ -182,6 +190,9 @@ import {
   DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
+  type DevicePairSetupCodeParams,
+  DevicePairSetupCodeParamsSchema,
+  type DevicePairSetupCodeResult,
   type DeviceTokenRevokeParams,
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
@@ -210,7 +221,9 @@ import {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
+  type PluginsUiDescriptorsResult,
   PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -237,6 +250,36 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
+  type TerminalAckResult,
+  TerminalAckResultSchema,
+  type TerminalAttachParams,
+  TerminalAttachParamsSchema,
+  type TerminalAttachResult,
+  TerminalAttachResultSchema,
+  type TerminalCloseParams,
+  TerminalCloseParamsSchema,
+  type TerminalDataEvent,
+  TerminalDataEventSchema,
+  type TerminalEvent,
+  TerminalEventSchema,
+  type TerminalExitEvent,
+  TerminalExitEventSchema,
+  type TerminalInputParams,
+  TerminalInputParamsSchema,
+  type TerminalListResult,
+  TerminalListResultSchema,
+  type TerminalOpenParams,
+  TerminalOpenParamsSchema,
+  type TerminalOpenResult,
+  TerminalOpenResultSchema,
+  type TerminalResizeParams,
+  TerminalResizeParamsSchema,
+  type TerminalSessionInfo,
+  TerminalSessionInfoSchema,
+  type TerminalTextParams,
+  TerminalTextParamsSchema,
+  type TerminalTextResult,
+  TerminalTextResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -321,6 +364,16 @@ import {
   SessionsCompactionListParamsSchema,
   type SessionsCompactionRestoreParams,
   SessionsCompactionRestoreParamsSchema,
+  type SessionFileBrowserEntry,
+  SessionFileBrowserEntrySchema,
+  type SessionFileBrowserResult,
+  SessionFileBrowserResultSchema,
+  type SessionFileEntry,
+  SessionFileEntrySchema,
+  type SessionFileKind,
+  SessionFileKindSchema,
+  type SessionFileRelevance,
+  SessionFileRelevanceSchema,
   type SessionOperationEvent,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
@@ -328,6 +381,14 @@ import {
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
   SessionsDescribeParamsSchema,
+  type SessionsFilesGetParams,
+  SessionsFilesGetParamsSchema,
+  type SessionsFilesGetResult,
+  SessionsFilesGetResultSchema,
+  type SessionsFilesListParams,
+  SessionsFilesListParamsSchema,
+  type SessionsFilesListResult,
+  SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -444,6 +505,18 @@ import {
   WebLoginStartParamsSchema,
   type WebLoginWaitParams,
   WebLoginWaitParamsSchema,
+  type CrestodianChatParams,
+  CrestodianChatParamsSchema,
+  type CrestodianChatResult,
+  CrestodianChatResultSchema,
+  type CrestodianSetupDetectParams,
+  CrestodianSetupDetectParamsSchema,
+  type CrestodianSetupDetectResult,
+  CrestodianSetupDetectResultSchema,
+  type CrestodianSetupActivateParams,
+  CrestodianSetupActivateParamsSchema,
+  type CrestodianSetupActivateResult,
+  CrestodianSetupActivateResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -630,6 +703,12 @@ export const validateSessionsDescribeParams = lazyCompile<SessionsDescribeParams
 export const validateSessionsResolveParams = lazyCompile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
 );
+export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListParams>(
+  SessionsFilesListParamsSchema,
+);
+export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
+  SessionsFilesGetParamsSchema,
+);
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
 );
@@ -681,6 +760,15 @@ export const validateConfigSchemaLookupParams = lazyCompile<ConfigSchemaLookupPa
 );
 export const validateConfigSchemaLookupResult = lazyCompile<ConfigSchemaLookupResult>(
   ConfigSchemaLookupResultSchema,
+);
+export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
+  CrestodianChatParamsSchema,
+);
+export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
+  CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
+  CrestodianSetupActivateParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
@@ -826,6 +914,9 @@ export const validateDevicePairRejectParams = lazyCompile<DevicePairRejectParams
 export const validateDevicePairRemoveParams = lazyCompile<DevicePairRemoveParams>(
   DevicePairRemoveParamsSchema,
 );
+export const validateDevicePairSetupCodeParams = lazyCompile<DevicePairSetupCodeParams>(
+  DevicePairSetupCodeParamsSchema,
+);
 export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
 );
@@ -856,6 +947,9 @@ export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsUiDescriptorsResult = lazyCompile<PluginsUiDescriptorsResult>(
+  PluginsUiDescriptorsResultSchema,
+);
 export const validatePluginsSessionActionParams = lazyCompile<PluginsSessionActionParams>(
   PluginsSessionActionParamsSchema,
 );
@@ -869,6 +963,19 @@ export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
+export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
+export const validateTerminalInputParams =
+  lazyCompile<TerminalInputParams>(TerminalInputParamsSchema);
+export const validateTerminalResizeParams = lazyCompile<TerminalResizeParams>(
+  TerminalResizeParamsSchema,
+);
+export const validateTerminalCloseParams =
+  lazyCompile<TerminalCloseParams>(TerminalCloseParamsSchema);
+export const validateTerminalAttachParams = lazyCompile<TerminalAttachParams>(
+  TerminalAttachParamsSchema,
+);
+export const validateTerminalTextParams = lazyCompile<TerminalTextParams>(TerminalTextParamsSchema);
+export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
@@ -1005,6 +1112,15 @@ export {
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
+  SessionFileBrowserEntrySchema,
+  SessionFileBrowserResultSchema,
+  SessionFileEntrySchema,
+  SessionFileKindSchema,
+  SessionFileRelevanceSchema,
+  SessionsFilesGetParamsSchema,
+  SessionsFilesGetResultSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
@@ -1038,6 +1154,12 @@ export {
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
+  CrestodianChatParamsSchema,
+  CrestodianChatResultSchema,
+  CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResultSchema,
+  CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1100,6 +1222,7 @@ export {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -1141,6 +1264,21 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
+  TerminalOpenParamsSchema,
+  TerminalOpenResultSchema,
+  TerminalInputParamsSchema,
+  TerminalResizeParamsSchema,
+  TerminalCloseParamsSchema,
+  TerminalAttachParamsSchema,
+  TerminalAttachResultSchema,
+  TerminalSessionInfoSchema,
+  TerminalListResultSchema,
+  TerminalTextParamsSchema,
+  TerminalTextResultSchema,
+  TerminalAckResultSchema,
+  TerminalDataEventSchema,
+  TerminalExitEventSchema,
+  TerminalEventSchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -1187,12 +1325,20 @@ export type {
   DevicePairListParams,
   DevicePairApproveParams,
   DevicePairRejectParams,
+  DevicePairSetupCodeParams,
+  DevicePairSetupCodeResult,
   ConfigGetParams,
   ConfigSetParams,
   ConfigApplyParams,
   ConfigPatchParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
+  CrestodianChatParams,
+  CrestodianChatResult,
+  CrestodianSetupDetectParams,
+  CrestodianSetupDetectResult,
+  CrestodianSetupActivateParams,
+  CrestodianSetupActivateResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1248,6 +1394,15 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  SessionFileBrowserEntry,
+  SessionFileBrowserResult,
+  SessionFileEntry,
+  SessionFileKind,
+  SessionFileRelevance,
+  SessionsFilesListParams,
+  SessionsFilesListResult,
+  SessionsFilesGetParams,
+  SessionsFilesGetResult,
   ArtifactSummary,
   ArtifactsListParams,
   ArtifactsListResult,
@@ -1354,6 +1509,21 @@ export type {
   ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
+  TerminalOpenParams,
+  TerminalOpenResult,
+  TerminalInputParams,
+  TerminalResizeParams,
+  TerminalCloseParams,
+  TerminalAttachParams,
+  TerminalAttachResult,
+  TerminalSessionInfo,
+  TerminalListResult,
+  TerminalTextParams,
+  TerminalTextResult,
+  TerminalAckResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalEvent,
   PollParams,
   WebPushVapidPublicKeyParams,
   WebPushSubscribeParams,

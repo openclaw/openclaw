@@ -16,6 +16,7 @@ import {
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
+import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
   createCodexCliSessionNodeHostCommands,
   createCodexCliSessionNodeInvokePolicies,
@@ -23,6 +24,7 @@ import {
   resumeCodexCliSessionOnNode,
   resolveCodexCliSessionForBindingOnNode,
 } from "./src/node-cli-sessions.js";
+import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
 export default definePluginEntry({
   id: "codex",
@@ -46,7 +48,26 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
+    api.registerWebSearchProvider(
+      createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
+    );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
+    api.registerTool(
+      (context) =>
+        createCodexThreadsTool({
+          context,
+          runtime: api.runtime,
+          getPluginConfig: resolveCurrentPluginConfig,
+        }),
+      { name: "codex_threads" },
+    );
+    api.registerToolMetadata({
+      toolName: "codex_threads",
+      displayName: "Codex Threads",
+      description: "Manage native Codex threads in the shared user Codex home.",
+      risk: "high",
+      tags: ["codex", "sessions"],
+    });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
     }

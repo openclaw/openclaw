@@ -4,6 +4,7 @@ export * from "./env-limits.ts";
 export * from "./host-command.ts";
 export * from "./host-server.ts";
 export * from "./lane-runner.ts";
+export * from "./macos-users.ts";
 export * from "./package-artifact.ts";
 export * from "./parallels-vm.ts";
 export * from "./plugin-isolation.ts";

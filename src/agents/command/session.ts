@@ -9,6 +9,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
@@ -29,6 +30,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
+  classifySessionKeyShape,
   DEFAULT_AGENT_ID,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -40,7 +42,7 @@ import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 
 /** Resolved command session identity plus backing store metadata. */
-export type SessionResolution = {
+type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: SessionEntry;
@@ -57,12 +59,7 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
-function clearRotatedTerminalMainSessionMetadata(
-  entry: SessionEntry | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
+export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
   const next = {
     ...entry,
     sessionFile: undefined,
@@ -252,8 +249,14 @@ export function resolveSessionKeyForRequest(opts: {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const requestedSessionKey = opts.sessionKey?.trim() || undefined;
+  const toSessionKey =
+    !requestedSessionKey && !requestedSessionId && classifySessionKeyShape(opts.to) === "agent"
+      ? opts.to?.trim()
+      : undefined;
   const explicitSessionKey =
-    opts.sessionKey?.trim() ||
+    requestedSessionKey ||
+    toSessionKey ||
     (!requestedSessionId
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
@@ -379,24 +382,27 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const skipImplicitExpiry =
+    resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
     ? !terminalMainTranscriptNewerThanRegistry &&
-      evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: sessionAgentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+      (skipImplicitExpiry ||
+        evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry: sessionEntry,
+            agentId: sessionAgentId,
+            storePath,
+          }),
+          now,
+          policy: resetPolicy,
+        }).fresh)
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
-    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
+  const resolvedSessionEntry = isNewSession && sessionEntry
+    ? clearRotatedSessionMetadata(sessionEntry)
     : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({

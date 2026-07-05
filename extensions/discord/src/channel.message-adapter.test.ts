@@ -142,17 +142,22 @@ describe("discord channel message adapter", () => {
         payload: { text: "payload" },
         accountId: "default",
       });
-      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith("channel:123456", "payload", {
-        verbose: false,
-        replyTo: undefined,
-        accountId: "default",
-        silent: undefined,
-        cfg: {},
-        textLimit: undefined,
-        maxLinesPerMessage: undefined,
-        tableMode: undefined,
-        chunkMode: undefined,
-      });
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith(
+        "channel:123456",
+        "payload",
+        expect.objectContaining({
+          verbose: false,
+          replyTo: undefined,
+          accountId: "default",
+          silent: undefined,
+          cfg: {},
+          textLimit: undefined,
+          maxLinesPerMessage: undefined,
+          tableMode: undefined,
+          chunkMode: undefined,
+          onDeliveryResult: expect.any(Function),
+        }),
+      );
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
     };
 

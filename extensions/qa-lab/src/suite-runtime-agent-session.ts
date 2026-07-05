@@ -4,12 +4,14 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createDirectReplyTranscriptSentinelScanner } from "./gateway-log-sentinel.js";
+import {
+  createDirectReplyTranscriptSentinelScanner,
+  extractGatewayMessageText,
+} from "./gateway-log-sentinel.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -46,41 +48,6 @@ function isSessionStoreLockTimeout(error: unknown) {
     text.includes("session file locked") ||
     text.includes("session file lock stale")
   );
-}
-
-function extractSessionTranscriptText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const content = readNonEmptyString(block.content);
-    if (
-      content &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
-    ) {
-      parts.push(content);
-    }
-  }
-  return parts.join("\n").trim();
 }
 
 function readSessionTranscriptLineMessage(line: string) {
@@ -133,7 +100,7 @@ async function readSessionTranscriptFileSummary(
     if (!message || message.role !== "assistant") {
       return;
     }
-    const text = extractSessionTranscriptText(message);
+    const text = extractGatewayMessageText(message);
     if (text) {
       finalText = text;
     }
@@ -301,7 +268,15 @@ async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
     "sessions",
     "sessions.json",
   );
-  return loadSessionStore(storePath, { skipCache: true }) as Record<string, QaRawSessionStoreEntry>;
+  try {
+    const raw = await fs.readFile(storePath, "utf8");
+    return JSON.parse(raw) as Record<string, QaRawSessionStoreEntry>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
 }
 
 async function readSessionTranscriptSummary(

@@ -5,7 +5,10 @@ import path from "node:path";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  createMattermostReplyDeliveryBarrier,
+  deliverMattermostReplyPayload,
+} from "./reply-delivery.js";
 
 type DeliverMattermostReplyPayloadParams = Parameters<typeof deliverMattermostReplyPayload>[0];
 type ReplyDeliveryMarkdownTableMode = Parameters<
@@ -37,6 +40,68 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
     },
   } as unknown as PluginRuntime;
 }
+
+describe("createMattermostReplyDeliveryBarrier", () => {
+  it("extends while direct deliveries or DM resolution remain unsettled", async () => {
+    const barrier = createMattermostReplyDeliveryBarrier({ isDirect: true });
+    const policy = barrier.resolveTimeoutPolicy({
+      queuedCounts: { tool: 1, block: 0, final: 1 },
+      humanDelayBudgetMs: 0,
+    });
+    expect(policy?.maxTimeoutMs).toBe(420_000);
+    expect(policy?.shouldExtend()).toBe(true);
+
+    let resolveResolution: () => void = () => {};
+    const resolution = new Promise<void>((resolve) => {
+      resolveResolution = resolve;
+    });
+    barrier.trackDmChannelResolution(resolution);
+    expect(policy?.shouldExtend()).toBe(true);
+
+    resolveResolution();
+    await resolution;
+    await Promise.resolve();
+    expect(policy?.shouldExtend()).toBe(true);
+
+    barrier.markDeliverySettled();
+    expect(policy?.shouldExtend()).toBe(true);
+
+    barrier.markDeliverySettled();
+    expect(policy?.shouldExtend()).toBe(false);
+  });
+
+  it("stays extended between failed retries until queued deliveries settle", async () => {
+    const barrier = createMattermostReplyDeliveryBarrier({ isDirect: true });
+    const policy = barrier.resolveTimeoutPolicy({
+      queuedCounts: { tool: 1, block: 0, final: 1 },
+      humanDelayBudgetMs: 0,
+    });
+    let rejectResolution: (error: Error) => void = () => {};
+    const resolution = new Promise<void>((_resolve, reject) => {
+      rejectResolution = reject;
+    });
+    barrier.trackDmChannelResolution(resolution);
+
+    rejectResolution(new Error("DM creation failed"));
+    await expect(resolution).rejects.toThrow("DM creation failed");
+    await Promise.resolve();
+    barrier.markDeliverySettled();
+    expect(policy?.shouldExtend()).toBe(true);
+
+    barrier.markDeliverySettled();
+    expect(policy?.shouldExtend()).toBe(false);
+  });
+
+  it("does not extend non-DM delivery", () => {
+    const barrier = createMattermostReplyDeliveryBarrier({ isDirect: false });
+    expect(
+      barrier.resolveTimeoutPolicy({
+        queuedCounts: { tool: 1, block: 1, final: 1 },
+        humanDelayBudgetMs: 0,
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("deliverMattermostReplyPayload", () => {
   it("suppresses payloads flagged as reasoning", async () => {
@@ -151,11 +216,11 @@ describe("deliverMattermostReplyPayload", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "channel:town-square",
       "Intro line\nReasoning: appears in content but is not a prefix",
-      {
+      expect.objectContaining({
         cfg,
         accountId: "default",
         replyToId: "root-post",
-      },
+      }),
     );
   });
 
@@ -186,19 +251,23 @@ describe("deliverMattermostReplyPayload", () => {
       });
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "caption", {
-        cfg,
-        accountId: "default",
-        mediaUrl,
-        replyToId: "root-post",
-        mediaLocalRoots: expect.arrayContaining([
-          path.join(stateDir, "media"),
-          path.join(stateDir, "canvas"),
-          path.join(stateDir, "workspace"),
-          path.join(stateDir, "sandboxes"),
-          path.join(stateDir, `workspace-${agentId}`),
-        ]),
-      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        "channel:town-square",
+        "caption",
+        expect.objectContaining({
+          cfg,
+          accountId: "default",
+          mediaUrl,
+          replyToId: "root-post",
+          mediaLocalRoots: expect.arrayContaining([
+            path.join(stateDir, "media"),
+            path.join(stateDir, "canvas"),
+            path.join(stateDir, "workspace"),
+            path.join(stateDir, "sandboxes"),
+            path.join(stateDir, `workspace-${agentId}`),
+          ]),
+        }),
+      );
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -229,11 +298,15 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "hello", {
-      cfg,
-      accountId: "default",
-      replyToId: "root-post",
-    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "channel:town-square",
+      "hello",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        replyToId: "root-post",
+      }),
+    );
     expect(outcome).toBe("text");
   });
 });

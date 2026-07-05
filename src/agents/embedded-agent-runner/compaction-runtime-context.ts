@@ -3,6 +3,7 @@
  */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -11,15 +12,22 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
+  resolveModelRefFromString,
+} from "../model-selection-shared.js";
 import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
 
-export type EmbeddedCompactionRuntimeContext = {
+type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -62,6 +70,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   provider: string | undefined;
   runtimeProvider?: string;
   contextProvider?: string;
+  nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
 } {
@@ -91,6 +100,7 @@ export function resolveEmbeddedCompactionTarget(params: {
     return {
       runtimeProvider: routedRuntimeProvider,
       contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
+      ...(useCodexHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
     };
   };
   if (!override) {
@@ -109,13 +119,64 @@ export function resolveEmbeddedCompactionTarget(params: {
     // When switching provider via override, drop the primary auth profile to
     // avoid sending the wrong credentials.
     const authProfileId =
-      overrideProvider !== (params.provider ?? "")?.trim()
-        ? undefined
-        : (params.authProfileId ?? undefined);
+      overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
       provider: overrideProvider,
       ...resolveTargetProviders(overrideProvider, authProfileId),
       model: overrideModel,
+      authProfileId,
+    };
+  }
+  const config = params.config ?? {};
+  const currentProvider = provider?.trim();
+  if (
+    currentProvider &&
+    hasBareConfiguredModelForProvider({
+      cfg: config,
+      provider: currentProvider,
+      model: override,
+    })
+  ) {
+    const authProfileId = params.authProfileId ?? undefined;
+    return {
+      provider: currentProvider,
+      ...resolveTargetProviders(currentProvider, authProfileId),
+      model: override,
+      authProfileId,
+    };
+  }
+  const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: config,
+    model: override,
+  });
+  if (inferredLiteralProvider) {
+    const authProfileId =
+      inferredLiteralProvider !== provider ? undefined : (params.authProfileId ?? undefined);
+    return {
+      provider: inferredLiteralProvider,
+      ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
+      model: override,
+      authProfileId,
+    };
+  }
+  const defaultProvider = provider || DEFAULT_PROVIDER;
+  const aliasResolution = resolveModelRefFromString({
+    cfg: config,
+    raw: override,
+    defaultProvider,
+    aliasIndex: buildModelAliasIndex({
+      cfg: config,
+      defaultProvider,
+    }),
+  });
+  if (aliasResolution?.alias) {
+    const resolvedProvider = aliasResolution.ref.provider;
+    const authProfileId =
+      resolvedProvider !== provider ? undefined : (params.authProfileId ?? undefined);
+    return {
+      provider: resolvedProvider,
+      ...resolveTargetProviders(resolvedProvider, authProfileId),
+      model: aliasResolution.ref.model,
       authProfileId,
     };
   }
@@ -126,6 +187,42 @@ export function resolveEmbeddedCompactionTarget(params: {
     model: override,
     authProfileId,
   };
+}
+
+function normalizeCompactionConfigKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function hasBareConfiguredModelForProvider(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  const providerKey = normalizeCompactionConfigKey(params.provider);
+  const modelKey = normalizeCompactionConfigKey(params.model);
+  if (!providerKey || !modelKey || params.model.includes("/")) {
+    return false;
+  }
+  for (const rawRef of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
+    const slashIdx = rawRef.indexOf("/");
+    if (slashIdx <= 0 || rawRef.endsWith("/*")) {
+      continue;
+    }
+    const rawProvider = rawRef.slice(0, slashIdx);
+    const rawModel = rawRef.slice(slashIdx + 1);
+    if (
+      normalizeCompactionConfigKey(rawProvider) === providerKey &&
+      normalizeCompactionConfigKey(rawModel) === modelKey
+    ) {
+      return true;
+    }
+  }
+  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(([key]) => {
+    return normalizeCompactionConfigKey(key) === providerKey;
+  })?.[1];
+  return (configuredProvider?.models ?? []).some((entry) => {
+    return normalizeCompactionConfigKey(entry?.id ?? "") === modelKey;
+  });
 }
 
 function shouldUseCodexRuntimeProviderForCompaction(params: {
@@ -146,6 +243,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  chatType?: ChatType | null;
   agentAccountId?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
@@ -188,6 +286,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
+    chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,

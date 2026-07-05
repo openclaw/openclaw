@@ -1,6 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.parseChatSendAck
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,13 +19,24 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-class ChatController(
+class ChatController internal constructor(
   private val scope: CoroutineScope,
-  private val session: GatewaySession,
   private val json: Json,
+  private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
 ) {
+  constructor(
+    scope: CoroutineScope,
+    session: GatewaySession,
+    json: Json,
+  ) : this(
+    scope = scope,
+    json = json,
+    requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+  )
+
   private var appliedMainSessionKey = "main"
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
@@ -59,6 +72,9 @@ class ChatController(
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
+  private val _commands = MutableStateFlow<List<ChatCommandEntry>>(emptyList())
+  val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
+
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
 
@@ -68,13 +84,17 @@ class ChatController(
 
   // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
+  private val newChatCreateInFlight = AtomicBoolean(false)
 
   private var lastHealthPollAtMs: Long? = null
+  private var commandsAgentId: String? = null
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     _healthOk.value = false
     _errorText.value = null
+    _commands.value = emptyList()
+    commandsAgentId = null
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
@@ -128,6 +148,59 @@ class ChatController(
     scope.launch { fetchSessions(limit = limit) }
   }
 
+  /** Starts a fresh chat for the active gateway session key. */
+  fun startNewChat() {
+    scope.launch { startNewChatAwait() }
+  }
+
+  /** Starts a fresh chat and returns whether the gateway created the session. */
+  suspend fun startNewChatAwait(): Boolean {
+    val parentKey = normalizeRequestedSessionKey(_sessionKey.value)
+    if (parentKey.isEmpty()) return false
+    if (_pendingRunCount.value > 0) {
+      _errorText.value = "Wait for the current response to finish before starting a new chat."
+      return false
+    }
+    if (!newChatCreateInFlight.compareAndSet(false, true)) {
+      return false
+    }
+    val requestGeneration = historyLoadGeneration.get()
+    _errorText.value = null
+    _historyLoading.value = true
+    return try {
+      val label = nextNewChatSessionLabel(_sessions.value)
+      val hasLoadedParentSession = !_sessionId.value.isNullOrBlank()
+      val params =
+        buildJsonObject {
+          put("agentId", JsonPrimitive(resolveAgentIdForSessionKey(parentKey)))
+          if (hasLoadedParentSession) {
+            put("parentSessionKey", JsonPrimitive(parentKey))
+            put("emitCommandHooks", JsonPrimitive(true))
+          }
+          put("label", JsonPrimitive(label))
+        }
+      val res = requestGateway("sessions.create", params.toString())
+      if (!isCurrentHistoryLoad(parentKey, _sessionKey.value, requestGeneration, historyLoadGeneration.get())) {
+        return false
+      }
+      val createdKey = parseCreatedSessionKey(json, res) ?: parentKey
+      val generation = beginHistoryLoad(createdKey, clearMessages = true)
+      bootstrap(sessionKey = createdKey, generation = generation, forceHealth = true, refreshSessions = true)
+      true
+    } catch (err: Throwable) {
+      _errorText.value = err.message
+      _historyLoading.value = false
+      false
+    } finally {
+      newChatCreateInFlight.set(false)
+    }
+  }
+
+  /** Refreshes the available text slash commands for the current gateway. */
+  fun refreshCommands() {
+    scope.launch { fetchCommands() }
+  }
+
   /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
@@ -152,6 +225,11 @@ class ChatController(
   ): Long {
     val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
+    val nextAgentId = resolveAgentIdForSessionKey(key)
+    if (commandsAgentId != nextAgentId) {
+      _commands.value = emptyList()
+      commandsAgentId = null
+    }
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -172,6 +250,9 @@ class ChatController(
     if (key == "main" && appliedMainSessionKey != "main") return appliedMainSessionKey
     return key
   }
+
+  private fun resolveAgentIdForSessionKey(parentKey: String): String =
+    resolveAgentIdFromMainSessionKey(parentKey) ?: "main"
 
   /** Queues a chat send without waiting for gateway acceptance. */
   fun sendMessage(
@@ -267,8 +348,9 @@ class ChatController(
             )
           }
         }
-      val res = session.request("chat.send", params.toString())
-      val actualRunId = parseRunId(res) ?: runId
+      val res = requestGateway("chat.send", params.toString())
+      val ack = parseChatSendAck(json, res)
+      val actualRunId = ack.runId ?: runId
       if (actualRunId != runId) {
         // Gateway may return a canonical run id; move all pending bookkeeping to that id.
         optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
@@ -279,7 +361,24 @@ class ChatController(
           _pendingRunCount.value = pendingRuns.size
         }
       }
-      true
+      if (ack.isTerminal) {
+        clearPendingRun(actualRunId)
+        removeOptimisticMessage(actualRunId)
+        pendingToolCallsById.clear()
+        publishPendingToolCalls()
+        _streamingAssistantText.value = null
+        if (ack.isTerminalSuccess) {
+          refreshCurrentHistoryBestEffort()
+          true
+        } else {
+          // Terminal timeout/error means the gateway did not accept a runnable turn.
+          // Surface failed acceptance instead of letting a cleared composer look successful.
+          _errorText.value = "Chat failed before the run started; try again."
+          false
+        }
+      } else {
+        true
+      }
     } catch (err: Throwable) {
       clearPendingRun(runId)
       removeOptimisticMessage(runId)
@@ -303,7 +402,7 @@ class ChatController(
               put("sessionKey", JsonPrimitive(_sessionKey.value))
               put("runId", JsonPrimitive(runId))
             }
-          session.request("chat.abort", params.toString())
+          requestGateway("chat.abort", params.toString())
         } catch (_: Throwable) {
           // best-effort
         }
@@ -311,7 +410,6 @@ class ChatController(
     }
   }
 
-  /** Applies gateway chat/agent stream events to local transcript and pending-run state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -321,8 +419,8 @@ class ChatController(
         scope.launch { pollHealthIfNeeded(force = false) }
       }
       "health" -> {
-        // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
+        refreshCommandsAfterReconnect()
       }
       "seqGap" -> {
         _errorText.value = "Event stream interrupted; try refreshing."
@@ -331,6 +429,17 @@ class ChatController(
       "chat" -> {
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
+      }
+      "sessions.changed" -> {
+        if (payloadJson.isNullOrBlank()) {
+          refreshSessionsForCurrentWindow()
+        } else {
+          handleSessionsChangedEvent(payloadJson)
+        }
+      }
+      "session.message" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleSessionMessageEvent(payloadJson)
       }
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
@@ -347,12 +456,13 @@ class ChatController(
   ) {
     try {
       val historyJson =
-        session.request(
+        requestGateway(
           "chat.history",
           buildJsonObject { put("sessionKey", JsonPrimitive(sessionKey)) }.toString(),
         )
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+      updateSessionFromHistory(history)
       prunePersistedOptimisticMessages(history.messages)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
@@ -381,11 +491,37 @@ class ChatController(
           put("includeUnknown", JsonPrimitive(false))
           if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
         }
-      val res = session.request("sessions.list", params.toString())
+      val res = requestGateway("sessions.list", params.toString())
       _sessions.value = parseSessions(res)
     } catch (_: Throwable) {
       // best-effort
     }
+  }
+
+  private suspend fun fetchCommands() {
+    val agentId = resolveAgentIdForSessionKey(_sessionKey.value)
+    try {
+      val params =
+        buildJsonObject {
+          put("agentId", JsonPrimitive(agentId))
+          put("scope", JsonPrimitive("text"))
+          put("includeArgs", JsonPrimitive(true))
+        }
+      val res = requestGateway("commands.list", params.toString())
+      if (agentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
+        _commands.value = parseChatCommands(json, res)
+        commandsAgentId = agentId
+      }
+    } catch (_: Throwable) {
+      if (agentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
+        _commands.value = emptyList()
+        commandsAgentId = null
+      }
+    }
+  }
+
+  private fun refreshSessionsForCurrentWindow() {
+    scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
   }
 
   private suspend fun pollHealthIfNeeded(force: Boolean) {
@@ -394,11 +530,19 @@ class ChatController(
     if (!force && last != null && now - last < 10_000) return
     lastHealthPollAtMs = now
     try {
-      session.request("health", null)
+      requestGateway("health", null)
       _healthOk.value = true
+      if (_commands.value.isEmpty() || commandsAgentId != resolveAgentIdForSessionKey(_sessionKey.value)) {
+        fetchCommands()
+      }
     } catch (_: Throwable) {
       _healthOk.value = false
     }
+  }
+
+  private fun refreshCommandsAfterReconnect() {
+    if (_commands.value.isNotEmpty() && commandsAgentId == resolveAgentIdForSessionKey(_sessionKey.value)) return
+    scope.launch { fetchCommands() }
   }
 
   private fun handleChatEvent(payloadJson: String) {
@@ -437,7 +581,7 @@ class ChatController(
             val currentSessionKey = _sessionKey.value
             val currentGeneration = historyLoadGeneration.get()
             val historyJson =
-              session.request(
+              requestGateway(
                 "chat.history",
                 buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
               )
@@ -457,6 +601,7 @@ class ChatController(
                 sessionKey = currentSessionKey,
                 previousMessages = _messages.value,
               )
+            updateSessionFromHistory(history)
             prunePersistedOptimisticMessages(history.messages)
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
@@ -471,6 +616,30 @@ class ChatController(
       }
     }
   }
+
+  private fun handleSessionsChangedEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (payload["reason"].asStringOrNull() == "delete") {
+      removeSessionEntry(payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull())
+      return
+    }
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    } else {
+      refreshSessionsForCurrentWindow()
+    }
+  }
+
+  private fun handleSessionMessageEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    }
+  }
+
+  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
@@ -592,6 +761,45 @@ class ChatController(
     optimisticMessagesByRunId.entries.removeAll { entry -> entry.value !in retained }
   }
 
+  private fun refreshCurrentHistoryBestEffort() {
+    scope.launch {
+      try {
+        val currentSessionKey = _sessionKey.value
+        val currentGeneration = historyLoadGeneration.get()
+        val historyJson =
+          requestGateway(
+            "chat.history",
+            buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
+          )
+        if (
+          !isCurrentHistoryLoad(
+            currentSessionKey,
+            _sessionKey.value,
+            currentGeneration,
+            historyLoadGeneration.get(),
+          )
+        ) {
+          return@launch
+        }
+        val history =
+          parseHistory(
+            historyJson,
+            sessionKey = currentSessionKey,
+            previousMessages = _messages.value,
+          )
+        prunePersistedOptimisticMessages(history.messages)
+        _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+        _sessionId.value = history.sessionId
+        history.thinkingLevel
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { _thinkingLevel.value = it }
+      } catch (_: Throwable) {
+        // best-effort
+      }
+    }
+  }
+
   private fun parseHistory(
     historyJson: String,
     sessionKey: String,
@@ -600,6 +808,7 @@ class ChatController(
     val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return ChatHistory(sessionKey, null, null, emptyList())
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
+    val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val messages =
@@ -622,32 +831,77 @@ class ChatController(
       sessionId = sid,
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
+      sessionInfo = sessionInfo,
     )
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return emptyList()
     val sessions = root["sessions"].asArrayOrNull() ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObjectOrNull() ?: return@mapNotNull null
-      val key = obj["key"].asStringOrNull()?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      val updatedAt = obj["updatedAt"].asLongOrNull()
-      val displayName = obj["displayName"].asStringOrNull()?.trim()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
-    }
+    return sessions.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
   }
 
-  private fun parseRunId(resJson: String): String? =
-    try {
-      json
-        .parseToJsonElement(resJson)
-        .asObjectOrNull()
-        ?.get("runId")
+  private fun parseSessionEntry(
+    obj: JsonObject?,
+    fallbackKey: String? = null,
+  ): ChatSessionEntry? {
+    if (obj == null) return null
+    val key =
+      obj["key"]
         .asStringOrNull()
-    } catch (_: Throwable) {
-      null
-    }
+        ?.trim()
+        .orEmpty()
+        .ifEmpty {
+          obj["sessionKey"]
+            .asStringOrNull()
+            ?.trim()
+            .orEmpty()
+        }.ifEmpty { fallbackKey?.trim().orEmpty() }
+    if (key.isEmpty()) return null
+    return ChatSessionEntry(
+      key = key,
+      updatedAtMs = obj["updatedAt"].asLongOrNull(),
+      displayName = obj["displayName"].asStringOrNull()?.trim(),
+      totalTokens = obj["totalTokens"].asLongOrNull(),
+      totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
+      contextTokens = obj["contextTokens"].asLongOrNull(),
+      hasContextUsageMetadata =
+        "totalTokens" in obj ||
+          "totalTokensFresh" in obj ||
+          "contextTokens" in obj,
+    )
+  }
+
+  private fun updateSessionFromHistory(history: ChatHistory) {
+    val info = history.sessionInfo ?: return
+    upsertSessionEntry(info, preserveExistingContextUsageWithoutTotal = true)
+  }
+
+  private fun upsertSessionEntry(
+    entry: ChatSessionEntry,
+    preserveExistingContextUsageWithoutTotal: Boolean = false,
+  ) {
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == entry.key }
+    _sessions.value =
+      if (index >= 0) {
+        current.toMutableList().also {
+          it[index] =
+            mergeChatSessionEntry(
+              existing = it[index],
+              next = entry,
+              preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+            )
+        }
+      } else {
+        listOf(entry) + current
+      }
+  }
+
+  private fun removeSessionEntry(sessionKey: String?) {
+    val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    _sessions.value = _sessions.value.filterNot { it.key == key }
+  }
 
   private fun normalizeThinking(raw: String): String =
     when (raw.trim().lowercase()) {
@@ -657,6 +911,25 @@ class ChatController(
       else -> "off"
     }
 }
+
+private const val NEW_CHAT_SESSION_LABEL = "New chat"
+
+internal fun nextNewChatSessionLabel(sessions: List<ChatSessionEntry>): String {
+  val baseLabel = NEW_CHAT_SESSION_LABEL
+  val existingLabels =
+    sessions
+      .mapNotNull { session -> session.displayName?.trim()?.takeIf { it.isNotEmpty() } }
+      .toSet()
+  if (baseLabel !in existingLabels) return baseLabel
+
+  var suffix = 2
+  while (newChatSessionLabelWithSuffix(suffix) in existingLabels) {
+    suffix += 1
+  }
+  return newChatSessionLabelWithSuffix(suffix)
+}
+
+private fun newChatSessionLabelWithSuffix(suffix: Int): String = NEW_CHAT_SESSION_LABEL + ' ' + suffix
 
 internal fun isCurrentHistoryLoad(
   requestedSessionKey: String,
@@ -700,6 +973,50 @@ internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent>
     return listOf(ChatMessageContent(type = "text", text = text))
   }
   return emptyList()
+}
+
+private fun parseCreatedSessionKey(json: Json, sessionJson: String): String? {
+  val root = runCatching { json.parseToJsonElement(sessionJson).asObjectOrNull() }.getOrNull() ?: return null
+  fun clean(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
+  return clean(root["key"].asStringOrNull())
+    ?: clean(root["sessionKey"].asStringOrNull())
+    ?: root["session"].asObjectOrNull()?.let { session ->
+      clean(session["key"].asStringOrNull()) ?: clean(session["sessionKey"].asStringOrNull())
+    }
+}
+
+internal fun parseChatCommands(
+  json: Json,
+  commandsJson: String,
+): List<ChatCommandEntry> {
+  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
+  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
+  return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
+}
+
+private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
+  if (obj == null) return null
+  val aliases =
+    obj["textAliases"]
+      .asArrayOrNull()
+      ?.mapNotNull { alias -> alias.asStringOrNull()?.trim()?.takeIf { it.startsWith("/") && it.length > 1 } }
+      ?.distinct()
+      .orEmpty()
+  val name =
+    obj["name"]
+      .asStringOrNull()
+      ?.trim()
+      ?.removePrefix("/")
+      ?.takeIf { it.isNotEmpty() }
+      ?: aliases.firstOrNull()?.removePrefix("/")
+      ?: return null
+  return ChatCommandEntry(
+    name = name,
+    description = obj["description"].asStringOrNull()?.trim().orEmpty(),
+    category = obj["category"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    textAliases = aliases,
+    acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
+  )
 }
 
 internal data class MainSessionState(
@@ -857,3 +1174,44 @@ private fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
+
+private fun JsonElement?.asBooleanOrNull(): Boolean? =
+  when (this) {
+    is JsonPrimitive -> content.toBooleanStrictOrNull()
+    else -> null
+  }
+
+internal fun mergeChatSessionEntry(
+  existing: ChatSessionEntry,
+  next: ChatSessionEntry,
+  preserveExistingContextUsageWithoutTotal: Boolean = false,
+): ChatSessionEntry {
+  val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  return existing.copy(
+    updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
+    displayName = next.displayName ?: existing.displayName,
+    totalTokens =
+      when {
+        preserveExistingContextUsage -> existing.totalTokens
+        next.hasContextUsageMetadata -> next.totalTokens
+        else -> null
+      },
+    totalTokensFresh =
+      when {
+        preserveExistingContextUsage -> existing.totalTokensFresh
+        next.hasContextUsageMetadata -> next.totalTokensFresh
+        else -> null
+      },
+    contextTokens =
+      when {
+        preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens
+        next.hasContextUsageMetadata -> next.contextTokens
+        else -> null
+      },
+    hasContextUsageMetadata =
+      when {
+        preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
+        else -> next.hasContextUsageMetadata
+      },
+  )
+}

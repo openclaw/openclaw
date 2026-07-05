@@ -220,6 +220,45 @@ describe("persisted auth profile boundary", () => {
     expect(merged.lastGood?.anthropic).toBe(profileId);
   });
 
+  it("tracks persisted profile provenance with override precedence", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimePersistedProfileIds: ["openai:base", "openai:overridden"],
+        profiles: {
+          "openai:base": {
+            type: "api_key",
+            provider: "openai",
+            key: "base-key",
+          },
+          "openai:overridden": {
+            type: "api_key",
+            provider: "openai",
+            key: "old-key",
+          },
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimePersistedProfileIds: ["openai:added"],
+        profiles: {
+          "openai:overridden": {
+            type: "api_key",
+            provider: "openai",
+            key: "scoped-key",
+          },
+          "openai:added": {
+            type: "api_key",
+            provider: "openai",
+            key: "added-key",
+          },
+        },
+      },
+    );
+
+    expect(merged.runtimePersistedProfileIds).toEqual(["openai:added", "openai:base"]);
+  });
+
   it("preserves config-only order fallbacks during agent-store merges", () => {
     const merged = mergeAuthProfileStores(
       {

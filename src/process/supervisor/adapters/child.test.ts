@@ -1,8 +1,13 @@
 // Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getWindowsInstallRoots,
+  resetWindowsInstallRootsForTests,
+} from "../../../infra/windows-install-roots.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
@@ -83,6 +88,8 @@ type SpawnWithFallbackParams = {
     detached?: boolean;
     env?: NodeJS.ProcessEnv | Record<string, string>;
     stdio?: string[];
+    windowsHide?: boolean;
+    windowsVerbatimArguments?: boolean;
   };
   fallbacks?: Array<{ options?: { detached?: boolean } }>;
 };
@@ -107,6 +114,10 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: st
   return call[0];
 }
 
+function expectedTrustedCmdExe(): string {
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+}
+
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -123,6 +134,7 @@ describe("createChildAdapter", () => {
   });
 
   beforeEach(() => {
+    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
@@ -390,6 +402,28 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options?.env).toBeUndefined();
   });
 
+  it("wraps Windows command shims through trusted cmd.exe", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3335,
+      argv: ["pnpm", "--version"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "pnpm.cmd --version",
+    ]);
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.options?.windowsHide).toBe(true);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
   it("wraps Linux child spawns and strips shell-init env", async () => {
     const originalBashEnv = process.env.BASH_ENV;
     const originalEnv = process.env.ENV;
@@ -476,5 +510,43 @@ describe("createChildAdapter", () => {
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+  });
+
+  it("guards stream errors before output listeners are registered", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    const { child, emitExit } = createStubChild(6666);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    const stdoutErr = new Error("simulated stdout pipe error");
+    const stderrErr = new Error("simulated stderr pipe error");
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    emitExit(0, null);
+    expect(() => child.stdout?.emit("error", stdoutErr)).not.toThrow();
+    expect(() => child.stderr?.emit("error", stderrErr)).not.toThrow();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(settled).not.toHaveBeenCalled();
+
+    adapter.onStdout(() => {});
+    adapter.onStdout(() => {});
+    adapter.onStderr(() => {});
+    adapter.onStderr(() => {});
+
+    expect(child.stdout?.listenerCount("error")).toBe(1);
+    expect(child.stderr?.listenerCount("error")).toBe(1);
+
+    child.stdout?.emit("close");
+    child.stderr?.emit("close");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 });

@@ -9,15 +9,16 @@ import {
   hydrateSessionStoreSkillPromptRefs,
   resolveSessionSkillPromptBlobPath,
 } from "../config/sessions/skill-prompt-blobs.js";
-import { loadSqliteSessionStore } from "../config/sessions/store-sqlite.js";
-import { saveSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { shortenHomePath } from "../utils.js";
+
+const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
 
 type SnapshotPathSource =
   | "skillsSnapshot.prompt"
@@ -29,11 +30,15 @@ type CachedSnapshotPath = {
   path: string;
 };
 
-export type StaleSessionSnapshotPathFinding = {
+type StaleSessionSnapshotPathFinding = {
   sessionKey: string;
   field: SnapshotPathSource;
   cachedPath: string;
   expectedPath: string;
+};
+
+export type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
+  storePath: string;
 };
 
 function decodeXmlText(value: string): string {
@@ -261,6 +266,7 @@ async function listSessionStorePaths(stateDir: string): Promise<string[]> {
   return agentEntries
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(agentsDir, entry.name, "sessions", "sessions.json"))
+    .filter((storePath) => fs.existsSync(storePath))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -273,13 +279,84 @@ function resolveSessionStorePaths(params: {
   }
   return resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })
     .map((target) => target.storePath)
+    .filter((storePath) => fs.existsSync(storePath))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
-  const store = loadSqliteSessionStore(storePath);
+  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  const store = parsed as Record<string, SessionEntry>;
   hydrateSessionStoreSkillPromptRefs({ storePath, store });
   return store;
+}
+
+export async function detectSessionSnapshotHealthIssues(params?: {
+  storePaths?: string[];
+  bundledSkillsDir?: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<SessionSnapshotHealthIssue[]> {
+  const bundledSkillsDir = params?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  if (!bundledSkillsDir) {
+    return [];
+  }
+  const storePaths =
+    params?.storePaths ??
+    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
+    (await listSessionStorePaths(resolveStateDir(params?.env)));
+  const issues: SessionSnapshotHealthIssue[] = [];
+  for (const storePath of storePaths) {
+    let store: Record<string, SessionEntry>;
+    try {
+      store = loadSessionStoreForSnapshotScan(storePath);
+    } catch {
+      continue;
+    }
+    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+      store,
+      bundledSkillsDir,
+      env: params?.env,
+    });
+    for (const finding of findings) {
+      issues.push({
+        sessionKey: finding.sessionKey,
+        field: finding.field,
+        cachedPath: finding.cachedPath,
+        expectedPath: finding.expectedPath,
+        storePath,
+      });
+    }
+  }
+  return issues;
+}
+
+export function sessionSnapshotIssueToHealthFinding(
+  issue: SessionSnapshotHealthIssue,
+): HealthFinding {
+  return {
+    checkId: SESSION_SNAPSHOTS_CHECK_ID,
+    severity: "info",
+    message: `${issue.sessionKey} cached session metadata references an inactive runtime root that can be cleaned up.`,
+    path: issue.storePath,
+    target: issue.cachedPath,
+    requirement: `Current bundled skill path: ${issue.expectedPath}`,
+    fixHint:
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite stale cached session metadata paths, or start a fresh session after confirming history can be retired.",
+  };
+}
+
+export function sessionSnapshotIssueToRepairEffect(
+  issue: SessionSnapshotHealthIssue,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: "would-rewrite-session-snapshot-path",
+    target: issue.storePath,
+    dryRunSafe: false,
+  };
 }
 
 /** Replaces stale paths in raw, JSON-escaped, and XML-escaped prompt text. */
@@ -369,10 +446,8 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        const sessions = loadSessionStoreForSnapshotScan(storePath) as Record<
-          string,
-          Record<string, unknown>
-        >;
+        const raw = fs.readFileSync(storePath, "utf-8");
+        const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
         let modified = false;
 
         let storeCount = 0;
@@ -512,9 +587,13 @@ export async function noteSessionSnapshotHealth(params?: {
         }
 
         if (modified && storeCount > 0) {
-          await saveSessionStore(storePath, sessions as Record<string, SessionEntry>, {
-            skipMaintenance: true,
-          });
+          // Create backup before writing
+          const backupPath = `${storePath}.bak.${Date.now()}`;
+          await writeTextAtomic(backupPath, raw, { mode: 0o600 });
+
+          // Atomic write — only modified fields changed, no hydration side effects
+          const fixed = JSON.stringify(sessions, null, 2);
+          await writeTextAtomic(storePath, fixed, { mode: 0o600 });
           totalReplacements += storeCount;
           repairedStores++;
 

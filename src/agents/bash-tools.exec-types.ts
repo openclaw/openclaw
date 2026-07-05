@@ -15,6 +15,8 @@ import type {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { TerminationReason } from "../process/supervisor/types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
@@ -71,7 +73,10 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+  /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
+  channelContext?: PluginHookChannelContext;
   accountId?: string;
+  approvalReviewerDeviceId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
@@ -120,9 +125,13 @@ export type ExecToolDetails =
   | {
       status: "completed" | "failed";
       exitCode: number | null;
+      exitSignal?: NodeJS.Signals | number | null;
+      failureKind?: string;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut?: boolean;
+      noOutputTimedOut?: boolean;
       cwd?: string;
     }
   | {

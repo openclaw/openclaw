@@ -12,6 +12,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { listOfficialExternalProviderEndpointManifests } from "../plugins/official-external-provider-endpoints.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -331,6 +332,14 @@ function collectManifestProviderEndpoints(): ManifestProviderEndpointCacheEntry[
   for (const { manifest } of listOpenClawPluginManifestMetadata()) {
     entries.push(...readManifestProviderEndpoints(manifest));
   }
+  // Externalized official provider plugins are excluded from dist builds, so
+  // their manifests are invisible unless installed. The bundled catalog keeps
+  // their endpoint classes resolvable: users can point a generic provider key
+  // at DashScope/Moonshot/... and still need native request policy. Matching
+  // is first-wins, so installed/bundled manifests stay authoritative.
+  for (const manifest of listOfficialExternalProviderEndpointManifests()) {
+    entries.push(...readManifestProviderEndpoints(manifest));
+  }
   return entries;
 }
 
@@ -616,17 +625,6 @@ export function resolveProviderAttributionPolicy(
   return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
 }
 
-export function resolveProviderAttributionHeaders(
-  provider?: string | null,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  const policy = resolveProviderAttributionPolicy(provider, env);
-  if (!policy?.enabledByDefault) {
-    return undefined;
-  }
-  return policy.headers;
-}
-
 export function resolveProviderRequestPolicy(
   input: ProviderRequestPolicyInput,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -692,13 +690,6 @@ export function resolveProviderRequestPolicy(
     usesVerifiedOpenAIAttributionHost,
     usesExplicitProxyLikeEndpoint,
   };
-}
-
-export function resolveProviderRequestAttributionHeaders(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  return resolveProviderRequestPolicy(input, env).attributionHeaders;
 }
 
 export function resolveProviderRequestCapabilities(

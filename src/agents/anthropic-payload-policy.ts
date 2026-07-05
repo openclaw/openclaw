@@ -1,19 +1,19 @@
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 /**
  * Anthropic-family request payload policy helpers.
  * Applies service-tier and cache-control markers only when provider endpoint
  * capabilities allow them.
  */
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
-import {
-  splitSystemPromptCacheBoundary,
-  stripSystemPromptCacheBoundary,
-} from "./system-prompt-cache-boundary.js";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-export type AnthropicServiceTier = "auto" | "standard_only";
+type AnthropicServiceTier = "auto" | "standard_only";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-export type AnthropicEphemeralCacheControl = {
+type AnthropicEphemeralCacheControl = {
   type: "ephemeral";
   ttl?: "1h";
 };
@@ -30,7 +30,7 @@ type AnthropicPayloadPolicyInput = {
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
-export type AnthropicPayloadPolicy = {
+type AnthropicPayloadPolicy = {
   allowsServiceTier: boolean;
   cacheControl: AnthropicEphemeralCacheControl | undefined;
   serviceTier: AnthropicServiceTier | undefined;

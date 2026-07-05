@@ -21,7 +21,7 @@ import {
 // Node connect reconciliation turns declared caps/commands/permissions into the
 // effective runtime surface. New or upgraded surfaces create a pending pairing
 // request while already-approved surfaces are intersected with the declaration.
-export type NodeConnectPairingReconcileResult = {
+type NodeConnectPairingReconcileResult = {
   nodeId: string;
   declaredCaps: string[];
   effectiveCaps: string[];
@@ -30,6 +30,7 @@ export type NodeConnectPairingReconcileResult = {
   declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
+  shouldClearPendingPairings?: boolean;
 };
 
 function resolveApprovedReconnectCommands(params: {
@@ -221,5 +222,6 @@ export async function reconcileNodePairingOnConnect(params: {
     effectiveCommands: declared,
     declaredPermissions,
     effectivePermissions: declaredPermissions,
+    shouldClearPendingPairings: true,
   };
 }

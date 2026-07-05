@@ -8,7 +8,6 @@ import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
-const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
 const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
@@ -126,6 +125,72 @@ function rewritePlainTextMentions(
   });
 }
 
+function countBacktickRun(text: string, index: number): number {
+  let cursor = index;
+  while (text[cursor] === "`") {
+    cursor += 1;
+  }
+  return cursor - index;
+}
+
+function findSameLineBacktickRun(
+  text: string,
+  startIndex: number,
+  runLength: number,
+): number | null {
+  const delimiter = "`".repeat(runLength);
+  const newlineIndex = text.indexOf("\n", startIndex);
+  const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
+  const closeIndex = text.indexOf(delimiter, startIndex);
+  return closeIndex !== -1 && closeIndex < lineEnd ? closeIndex + runLength : null;
+}
+
+function findFenceEnd(text: string, startIndex: number, runLength: number): number {
+  let searchIndex = startIndex + runLength;
+  while (searchIndex < text.length) {
+    const newlineIndex = text.indexOf("\n", searchIndex);
+    if (newlineIndex === -1) {
+      return text.length;
+    }
+    let lineCursor = newlineIndex + 1;
+    while (text[lineCursor] === " " && lineCursor - newlineIndex <= 3) {
+      lineCursor += 1;
+    }
+    const closingRunLength = countBacktickRun(text, lineCursor);
+    if (closingRunLength >= runLength) {
+      return lineCursor + closingRunLength;
+    }
+    searchIndex = lineCursor + Math.max(closingRunLength, 1);
+  }
+  return text.length;
+}
+
+function findNextMarkdownCodeSegment(
+  text: string,
+  startIndex: number,
+): { startIndex: number; endIndex: number } | null {
+  let searchIndex = startIndex;
+  while (searchIndex < text.length) {
+    const segmentStart = text.indexOf("`", searchIndex);
+    if (segmentStart === -1) {
+      return null;
+    }
+    const runLength = countBacktickRun(text, segmentStart);
+    const inlineEndIndex = findSameLineBacktickRun(text, segmentStart + runLength, runLength);
+    if (inlineEndIndex !== null) {
+      return { startIndex: segmentStart, endIndex: inlineEndIndex };
+    }
+    if (runLength >= 3) {
+      return {
+        startIndex: segmentStart,
+        endIndex: findFenceEnd(text, segmentStart, runLength),
+      };
+    }
+    searchIndex = segmentStart + runLength;
+  }
+  return null;
+}
+
 export function rewriteDiscordKnownMentions(
   text: string,
   params: {
@@ -138,12 +203,12 @@ export function rewriteDiscordKnownMentions(
   }
   let rewritten = "";
   let offset = 0;
-  MARKDOWN_CODE_SEGMENT_PATTERN.lastIndex = 0;
-  for (const match of text.matchAll(MARKDOWN_CODE_SEGMENT_PATTERN)) {
-    const matchIndex = match.index ?? 0;
-    rewritten += rewritePlainTextMentions(text.slice(offset, matchIndex), params);
-    rewritten += match[0];
-    offset = matchIndex + match[0].length;
+  let segment = findNextMarkdownCodeSegment(text, offset);
+  while (segment) {
+    rewritten += rewritePlainTextMentions(text.slice(offset, segment.startIndex), params);
+    rewritten += text.slice(segment.startIndex, segment.endIndex);
+    offset = segment.endIndex;
+    segment = findNextMarkdownCodeSegment(text, offset);
   }
   rewritten += rewritePlainTextMentions(text.slice(offset), params);
   return rewritten;

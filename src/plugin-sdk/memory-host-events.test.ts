@@ -7,10 +7,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   appendMemoryHostEvent,
+  readMemoryHostEventRecords,
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
-import { createClaimableDedupe, createPersistentDedupe } from "./persistent-dedupe.js";
+import {
+  createClaimableDedupe,
+  createPersistentDedupe,
+  listPersistentDedupeLegacyJsonFileEntries,
+} from "./persistent-dedupe.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createPluginSdkTestHarness();
@@ -52,6 +57,7 @@ describe("memory host event journal helpers", () => {
       type: "memory.dream.completed",
       timestamp: "2026-04-05T13:00:00.000Z",
       phase: "light",
+      outcome: "completed",
       lineCount: 4,
       storageMode: "both",
       inlinePath: path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -69,8 +75,78 @@ describe("memory host event journal helpers", () => {
     expect(events).toHaveLength(2);
     expect(events[0]?.type).toBe("memory.recall.recorded");
     expect(events[1]?.type).toBe("memory.dream.completed");
+    if (events[1]?.type !== "memory.dream.completed") {
+      throw new Error("expected dream completion event");
+    }
+    expect(events[1].outcome).toBe("completed");
     expect(tail).toHaveLength(1);
     expect(tail[0]?.type).toBe("memory.dream.completed");
+  });
+
+  it("keeps legacy event readers stable when diagnostic records are present", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-diagnostics-");
+
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: "2026-04-05T12:00:00.000Z",
+      query: "durable memory",
+      reason: "non-short-term-memory-path",
+      eligibleResultCount: 0,
+      skippedResultCount: 1,
+      results: [
+        {
+          path: "MEMORY.md",
+          startLine: 3,
+          endLine: 3,
+          score: 0.9,
+          reason: "non-short-term-memory-path",
+        },
+      ],
+    });
+
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: "2026-04-05T12:05:00.000Z",
+      query: "daily memory",
+      resultCount: 1,
+      results: [
+        {
+          path: "memory/2026-04-05.md",
+          startLine: 1,
+          endLine: 3,
+          score: 0.95,
+        },
+      ],
+    });
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: "2026-04-05T12:10:00.000Z",
+      query: "durable memory again",
+      reason: "non-short-term-memory-path",
+      eligibleResultCount: 1,
+      skippedResultCount: 1,
+      results: [
+        {
+          path: "MEMORY.md",
+          startLine: 4,
+          endLine: 4,
+          score: 0.8,
+          reason: "non-short-term-memory-path",
+        },
+      ],
+    });
+
+    const legacyEvents = await readMemoryHostEvents({ workspaceDir });
+    const legacyTail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
+    const records = await readMemoryHostEventRecords({ workspaceDir });
+
+    expect(legacyEvents.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
+    expect(legacyTail.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
+    expect(records.map((event) => event.type)).toEqual([
+      "memory.recall.skipped",
+      "memory.recall.recorded",
+      "memory.recall.skipped",
+    ]);
   });
 });
 
@@ -127,6 +203,47 @@ describe("createPersistentDedupe", () => {
     expect(await dedupe.checkAndRecord("sqlite-only", { namespace: "x" })).toBe(true);
     expect(await dedupe.checkAndRecord("sqlite-only", { namespace: "x" })).toBe(false);
     await expect(fs.access(legacyPath)).rejects.toThrow();
+  });
+
+  it("lists retired JSON cache files as persistent dedupe entries", async () => {
+    const root = await createTempDir("openclaw-legacy-dedupe-");
+    const legacyPath = path.join(root, "legacy.json");
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        fresh: 1_000,
+        expired: 100,
+        invalid: "bad",
+      }),
+    );
+
+    await expect(
+      listPersistentDedupeLegacyJsonFileEntries({
+        filePath: legacyPath,
+        ttlMs: 500,
+        now: 1_100,
+      }),
+    ).resolves.toStrictEqual([
+      {
+        key: expect.stringMatching(/^k\.[a-f0-9]{32}$/),
+        value: { key: "fresh", seenAt: 1_000 },
+        ttlMs: 400,
+      },
+    ]);
+  });
+
+  it("treats malformed legacy JSON cache files as empty", async () => {
+    const root = await createTempDir("openclaw-legacy-dedupe-malformed-");
+    const legacyPath = path.join(root, "legacy.json");
+    await fs.writeFile(legacyPath, "{not valid json");
+
+    await expect(
+      listPersistentDedupeLegacyJsonFileEntries({
+        filePath: legacyPath,
+        ttlMs: 500,
+        now: 1_100,
+      }),
+    ).resolves.toStrictEqual([]);
   });
 
   it("warms empty namespaces and ignores retired JSON cache files", async () => {
@@ -192,6 +309,19 @@ describe("createClaimableDedupe", () => {
     await expect(dedupe.claim("line:evt-2")).resolves.toEqual({ kind: "claimed" });
   });
 
+  it("forgets committed claimable entries", async () => {
+    const dedupe = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "claimed" });
+    await expect(dedupe.commit("line:evt-3")).resolves.toBe(true);
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "duplicate" });
+    await expect(dedupe.forget("line:evt-3")).resolves.toBe(true);
+    await expect(dedupe.claim("line:evt-3")).resolves.toEqual({ kind: "claimed" });
+  });
+
   it("supports persistent-backed recent checks and warmup", async () => {
     const root = await createTempDir("openclaw-claimable-dedupe-");
     const writer = createClaimableDedupe({
@@ -219,6 +349,18 @@ describe("createClaimableDedupe", () => {
     expect(await reader.warmup("acct")).toBe(1);
     await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
       kind: "duplicate",
+    });
+    await expect(reader.forget("m1", { namespace: "acct" })).resolves.toBe(true);
+    const afterForget = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+      pluginId: "test-claimable-dedupe",
+      namespacePrefix: "test-claimable-dedupe",
+      stateMaxEntries: 1000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    });
+    await expect(afterForget.claim("m1", { namespace: "acct" })).resolves.toEqual({
+      kind: "claimed",
     });
   });
 

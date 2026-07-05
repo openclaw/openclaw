@@ -6,6 +6,7 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   formatGoalFooter,
+  formatRemoteConnectionHostFooter,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
@@ -42,6 +43,23 @@ describe("formatGoalFooter", () => {
         continuationTurns: 0,
       }),
     ).toBe("Goal blocked (/goal resume)");
+  });
+});
+
+describe("formatRemoteConnectionHostFooter", () => {
+  it("renders only the remote connection hostname", () => {
+    expect(formatRemoteConnectionHostFooter("ws://gateway-host:18789")).toBe("host gateway-host");
+    expect(
+      formatRemoteConnectionHostFooter("wss://user:secret@example.com:443/path?token=redacted"),
+    ).toBe("host example.com");
+  });
+
+  it("skips local and non-url connection labels", () => {
+    expect(formatRemoteConnectionHostFooter("local embedded")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://localhost:18789")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://127.0.0.1:18789")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://127.1:18789")).toBeNull();
+    expect(formatRemoteConnectionHostFooter("ws://[::1]:18789")).toBeNull();
   });
 });
 
@@ -356,6 +374,23 @@ describe("sanitizeRenderableText", () => {
     { label: "moderately long", input: "b".repeat(90) },
   ])("breaks $label unbroken tokens to protect narrow terminals", ({ input }) => {
     expectTokenWidthUnderLimit(input);
+  });
+
+  it("preserves long CJK prose without inserting display spaces", () => {
+    const input =
+      "特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+    expect(sanitized).not.toContain("苦难 者");
+  });
+
+  it("preserves mixed long CJK prose without inserting display spaces", () => {
+    const input =
+      "MotherTeresa更像是宗教慈悲的象征而不是现代慈善治理的典范她值得尊重的地方是真实走进极端苦难";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
   });
 
   it("preserves long filesystem paths verbatim for copy safety", () => {

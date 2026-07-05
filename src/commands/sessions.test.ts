@@ -1,7 +1,6 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSqliteSessionStoreDatabasePath } from "../config/sessions/store-sqlite.js";
 import {
   makeRuntime,
   mockSessionsConfig,
@@ -45,8 +44,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    expect(fs.existsSync(store)).toBe(false);
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
@@ -83,7 +81,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
 
     expect(logs.join("\n")).toContain("Runtime");
 
@@ -120,7 +118,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
@@ -140,7 +138,7 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
@@ -181,6 +179,65 @@ describe("sessionsCommand", () => {
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("exports subagent lineage metadata in JSON output", async () => {
+    const store = writeStore({
+      "agent:child:main": {
+        sessionId: "child-session",
+        updatedAt: Date.now() - 10 * 60_000,
+        sessionFile: "/tmp/openclaw/child-session.jsonl",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/workspace/project",
+        spawnedCwd: "/workspace/project/tasks",
+        parentSessionKey: "agent:main:main",
+        forkedFromParent: true,
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+        sessionStartedAt: Date.now() - 20 * 60_000,
+        lastInteractionAt: Date.now() - 5 * 60_000,
+        label: "research helper",
+        status: "done",
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        sessionFile?: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        spawnedCwd?: string;
+        parentSessionKey?: string;
+        forkedFromParent?: boolean;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        sessionStartedAt?: number;
+        lastInteractionAt?: number;
+        label?: string;
+        status?: string;
+      }>;
+    }>(sessionsCommand, store);
+
+    const child = payload.sessions?.find((row) => row.key === "agent:child:main");
+    expect(child).toMatchObject({
+      sessionFile: "/tmp/openclaw/child-session.jsonl",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/workspace/project",
+      spawnedCwd: "/workspace/project/tasks",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      sessionStartedAt: Date.now() - 20 * 60_000,
+      lastInteractionAt: Date.now() - 5 * 60_000,
+      label: "research helper",
+      status: "done",
+    });
   });
 
   it("shows preserved stale totals in JSON output", async () => {
@@ -352,10 +409,8 @@ describe("sessionsCommand", () => {
     expect(errors).toStrictEqual([
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
-    expect(fs.existsSync(store)).toBe(true);
-    expect(fs.existsSync(resolveSqliteSessionStoreDatabasePath(store))).toBe(false);
 
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
   });
 
   it("rejects partial --active values", async () => {
@@ -375,7 +430,7 @@ describe("sessionsCommand", () => {
       "--active must be a positive number of minutes, for example --active 30.",
     ]);
 
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
   });
 
   it("rejects invalid --limit values", async () => {
@@ -395,6 +450,6 @@ describe("sessionsCommand", () => {
       '--limit must be a positive integer or "all", for example --limit 25.',
     ]);
 
-    fs.rmSync(store, { force: true });
+    fs.rmSync(store);
   });
 });

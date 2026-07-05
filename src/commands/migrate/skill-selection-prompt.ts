@@ -26,7 +26,7 @@ type MigrationSkillSelectionOption = {
 };
 
 /** Options for the migration selection prompt, including testable IO streams. */
-export type MigrationSkillSelectionPromptOptions = {
+type MigrationSkillSelectionPromptOptions = {
   message: string;
   options: MigrationSkillSelectionOption[];
   initialValues?: string[];
@@ -255,10 +255,3 @@ export function promptMigrationSkillSelectionValues(
 
   return prompt.prompt();
 }
-
-/**
- * Compatibility alias for plugin selection prompts that share the same picker.
- *
- * @deprecated Use promptMigrationSkillSelectionValues.
- */
-export const promptMigrationSelectionValues = promptMigrationSkillSelectionValues;

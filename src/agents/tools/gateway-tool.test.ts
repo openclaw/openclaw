@@ -12,7 +12,7 @@ const {
   formatDoctorNonInteractiveHintMock,
   isRestartEnabledMock,
   callGatewayToolMock,
-  removeRestartSentinelFileMock,
+  clearRestartSentinelMock,
   scheduleGatewaySigusr1RestartMock,
   writeRestartSentinelMock,
 } = vi.hoisted(() => ({
@@ -30,8 +30,8 @@ const {
     () =>
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
   ),
-  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart"),
-  removeRestartSentinelFileMock: vi.fn(async (_path: string | null | undefined) => undefined),
+  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
+  clearRestartSentinelMock: vi.fn(async () => undefined),
   scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     ok: true,
     pid: 123,
@@ -59,7 +59,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...actual,
     formatDoctorNonInteractiveHint: formatDoctorNonInteractiveHintMock,
-    removeRestartSentinelFile: removeRestartSentinelFileMock,
+    clearRestartSentinel: clearRestartSentinelMock,
     writeRestartSentinel: writeRestartSentinelMock,
   };
 });
@@ -115,8 +115,8 @@ describe("gateway tool restart continuation", () => {
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
     writeRestartSentinelMock.mockReset();
-    writeRestartSentinelMock.mockResolvedValue("/tmp/restart");
-    removeRestartSentinelFileMock.mockClear();
+    writeRestartSentinelMock.mockResolvedValue(undefined);
+    clearRestartSentinelMock.mockClear();
     scheduleGatewaySigusr1RestartMock.mockReset();
     scheduleGatewaySigusr1RestartMock.mockReturnValue({
       ok: true,
@@ -149,11 +149,16 @@ describe("gateway tool restart continuation", () => {
     const parameters = tool.parameters as {
       properties?: {
         delayMs?: { minimum?: number; type?: string };
+        replacePaths?: { items?: { type?: string }; type?: string };
         restartDelayMs?: { minimum?: number; type?: string };
         timeoutMs?: { minimum?: number; type?: string };
       };
     };
     expect(parameters.properties?.delayMs).toMatchObject({ type: "integer", minimum: 0 });
+    expect(parameters.properties?.replacePaths).toMatchObject({
+      type: "array",
+      items: { type: "string" },
+    });
     expect(parameters.properties?.restartDelayMs).toMatchObject({ type: "integer", minimum: 0 });
     expect(parameters.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
@@ -161,6 +166,7 @@ describe("gateway tool restart continuation", () => {
   it("instructs agents to use continuationMessage for internal post-restart work", async () => {
     const tool = createGatewayTool();
 
+    expect(tool.description).toContain("replacePaths");
     expect(tool.description).toContain("post-restart work must continue internally");
     expect(tool.description).toContain(
       "visible follow-up from that turn must use the message tool",
@@ -348,7 +354,7 @@ describe("gateway tool restart continuation", () => {
     await scheduledArgs.emitHooks?.beforeEmit?.();
     await scheduledArgs.emitHooks?.afterEmitRejected?.();
 
-    expect(removeRestartSentinelFileMock).toHaveBeenCalledWith("/tmp/restart");
+    expect(clearRestartSentinelMock).toHaveBeenCalledOnce();
   });
 
   it("uses the runtime session for update.run continuation routing (#86742)", async () => {

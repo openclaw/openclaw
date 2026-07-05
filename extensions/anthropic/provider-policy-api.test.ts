@@ -136,18 +136,62 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
-  it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
+  it("exposes the always-adaptive Claude Fable 5 thinking profile", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-fable-5",
     });
 
-    if (!profile) {
-      throw new Error("Expected Anthropic policy profile");
+    expect(profile).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(
+      resolveThinkingProfile({
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
+
+  it("does not return fable-5 off-thinking profile for claude-fable-50 (prefix boundary check)", () => {
+    const profile = resolveThinkingProfile({
+      provider: "claude-cli",
+      modelId: "claude-fable-50",
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.defaultLevel).not.toBe("off");
+  });
+
+  it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
+    for (const provider of ["anthropic", "claude-cli"]) {
+      const profile = resolveThinkingProfile({
+        provider,
+        modelId: "claude-opus-4-6",
+      });
+
+      if (!profile) {
+        throw new Error(`Expected ${provider} policy profile`);
+      }
+      expect(levelIds(profile.levels)).toContain("adaptive");
+      expect(levelIds(profile.levels)).toContain("max");
+      expect(profile.defaultLevel).toBe("adaptive");
+      expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual(["max"]);
     }
-    expect(levelIds(profile.levels)).toContain("adaptive");
-    expect(profile.defaultLevel).toBe("adaptive");
-    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {

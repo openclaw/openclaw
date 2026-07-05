@@ -1,7 +1,7 @@
 // Covers heartbeat ack truncation limits.
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, saveSessionStore } from "../config/sessions/store.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -107,6 +107,7 @@ describe("runHeartbeatOnce ack handling", () => {
           cfg: params.cfg,
           accountId: undefined,
           audioAsVoice: undefined,
+          deliveryQueueId: undefined,
           forceDocument: undefined,
           formatting: undefined,
           gatewayClientScopes: undefined,
@@ -116,6 +117,8 @@ describe("runHeartbeatOnce ack handling", () => {
           mediaAccess: {},
           mediaLocalRoots: undefined,
           mediaReadFile: undefined,
+          onDeliveryResult: expect.any(Function),
+          onPlatformSendDispatch: expect.any(Function),
           replyToIdSource: undefined,
           replyToMode: undefined,
           silent: undefined,
@@ -374,23 +377,15 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       replySpy.mockImplementationOnce(async () => {
-        const parsed = loadSessionStore(storePath, { skipCache: true }) as Record<
-          string,
-          { updatedAt?: number } | undefined
-        >;
+        const raw = await fs.readFile(storePath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, { updatedAt?: number } | undefined>;
         if (parsed[sessionKey]) {
-          await saveSessionStore(
-            storePath,
-            {
-              ...parsed,
-              [sessionKey]: {
-                ...parsed[sessionKey],
-                updatedAt: bumpedUpdatedAt,
-              },
-            } as never,
-            { skipMaintenance: true },
-          );
+          parsed[sessionKey] = {
+            ...parsed[sessionKey],
+            updatedAt: bumpedUpdatedAt,
+          };
         }
+        await fs.writeFile(storePath, JSON.stringify(parsed, null, 2));
         return { text: "" };
       });
 
@@ -402,7 +397,7 @@ describe("runHeartbeatOnce ack handling", () => {
         },
       });
 
-      const finalStore = loadSessionStore(storePath, { skipCache: true }) as Record<
+      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
         string,
         { updatedAt?: number } | undefined
       >;

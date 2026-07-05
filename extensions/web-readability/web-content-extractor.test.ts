@@ -61,4 +61,15 @@ describe("web readability extractor", () => {
     expect(extracted.text).toContain("Main content starts here");
     expect(extracted.title).toBe("Example Article");
   });
+
+  it("does not count void tags toward the nesting limit", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const html = SAMPLE_HTML.replace("<article>", `<article>${"<BR>".repeat(3100)}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
 });

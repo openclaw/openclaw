@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 
-export type ConfiguredRuntimePluginInstallCandidate = {
+type ConfiguredRuntimePluginInstallCandidate = {
   /** Runtime/plugin id used in config and plugin installation records. */
   pluginId: string;
   /** Human-readable plugin label for prompts and notes. */

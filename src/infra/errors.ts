@@ -86,6 +86,10 @@ export function formatErrorMessage(err: unknown): string {
       seen.add(cause);
       if (cause instanceof Error) {
         appendCauseMessage(cause.message);
+        const code = extractErrorCode(cause);
+        if (code) {
+          appendCauseMessage(code);
+        }
         cause = cause.cause;
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
@@ -130,19 +134,7 @@ export function stringifyNonErrorCause(value: unknown): string {
   }
 }
 
-export function toErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
+export { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {

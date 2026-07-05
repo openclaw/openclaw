@@ -1,8 +1,9 @@
 // Test Live Shard tests cover test live shard script behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
@@ -46,7 +47,10 @@ describe("scripts/test-live-shard", () => {
 
     expect(allFiles.length).toBeGreaterThan(0);
     expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
-    expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
+    expect(duplicateFiles).toEqual([
+      "src/agents/zai.live.test.ts",
+      "extensions/music-generation-providers.live.test.ts",
+    ]);
     expect(musicProviderFanout).toEqual([
       "native-live-extensions-media-music-google",
       "native-live-extensions-media-music-minimax",
@@ -80,6 +84,12 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
+    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
+      "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+    );
+    expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
+      "src/agents/zai.live.test.ts",
+    ]);
     expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
       "src/gateway/gateway-acp-bind.live.test.ts",
       "src/gateway/gateway-cli-backend.live.test.ts",
@@ -412,4 +422,119 @@ describe("scripts/test-live-shard", () => {
       stdio: "inherit",
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "cleans live shard descendants before forwarding parent SIGTERM",
+    async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-signal-"));
+      const fakePnpmPath = path.join(root, "pnpm");
+      const childPidPath = path.join(root, "child.pid");
+      const descendantPidPath = path.join(root, "descendant.pid");
+      const signaledPath = path.join(root, "signaled");
+      let childPid = 0;
+      let descendantPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+
+      try {
+        writeFakePnpm(fakePnpmPath);
+        runner = spawn(
+          process.execPath,
+          ["scripts/test-live-shard.mjs", "native-live-src-agents"],
+          {
+            env: {
+              ...process.env,
+              OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+              OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+              OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+              npm_execpath: fakePnpmPath,
+            },
+            stdio: "ignore",
+          },
+        );
+
+        await waitFor(() => existsSync(childPidPath), 5_000);
+        await waitFor(() => existsSync(descendantPidPath), 5_000);
+        childPid = Number(readFileSync(childPidPath, "utf8"));
+        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+        expect(Number.isInteger(childPid)).toBe(true);
+        expect(Number.isInteger(descendantPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForClose(runner)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => existsSync(signaledPath), 5_000);
+        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        await waitFor(() => !isProcessAlive(childPid), 5_000);
+        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+      } finally {
+        if (runner?.pid && isProcessAlive(runner.pid)) {
+          process.kill(runner.pid, "SIGKILL");
+        }
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
+
+function writeFakePnpm(filePath: string): void {
+  writeFileSync(
+    filePath,
+    [
+      "#!/usr/bin/env node",
+      'const { spawn } = require("node:child_process");',
+      'const fs = require("node:fs");',
+      "const child = spawn(process.execPath, [",
+      '  "-e",',
+      "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
+      "], { stdio: 'ignore' });",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
+      'process.on("SIGTERM", () => {',
+      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
+      "  process.exit(0);",
+      "});",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(filePath, 0o755);
+}
+
+async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+async function waitForClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await Promise.race([
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+    delay(timeoutMs).then(() => {
+      throw new Error("timed out waiting for child close");
+    }),
+  ]);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

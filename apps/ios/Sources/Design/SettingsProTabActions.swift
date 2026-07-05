@@ -1,3 +1,4 @@
+import CoreLocation
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -11,78 +12,70 @@ extension SettingsProTab {
         value: String,
         color: Color) -> some View
     {
-        ProCard(radius: SettingsLayout.cardRadius) {
+        Section {
             HStack(spacing: 12) {
-                ProIconBadge(systemName: icon, color: color)
-                VStack(alignment: .leading, spacing: 3) {
+                SettingsIcon(systemName: icon, color: color)
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                ProValuePill(value: value, color: color)
+                Text(value)
+                    .font(OpenClawType.subheadMedium)
+                    .foregroundStyle(color)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var diagnosticChecksCard: some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0) {
-                self.diagnosticCheckRow(
-                    icon: "stethoscope",
-                    title: "Last Run",
-                    detail: self.diagnosticsLastRunText,
-                    value: self.diagnosticsRunValue,
-                    color: self.diagnosticsRunColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "antenna.radiowaves.left.and.right",
-                    title: "Gateway Link",
-                    detail: self.gatewayStatusDetail,
-                    value: self.gatewayStatusValue,
-                    color: self.gatewayStatusColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "dot.radiowaves.left.and.right",
-                    title: "Discovery",
-                    detail: self.gatewayController.discoveryStatusText,
-                    value: "\(self.gatewayController.gateways.count)",
-                    color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "waveform",
-                    title: "Talk Config",
-                    detail: self.gatewayTalkConfigDetail,
-                    value: self.gatewayTalkConfigValue,
-                    color: self.gatewayTalkConfigColor)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "bell",
-                    title: "Notifications",
-                    detail: "Approval and event alert channel",
-                    value: self.notificationStatusText,
-                    color: self.notificationStatusText == "Allowed" ? OpenClawBrand.ok : .secondary)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "rectangle.on.rectangle",
-                    title: "Screen Capture",
-                    detail: "Live foreground capture state",
-                    value: self.appModel.screenRecordActive ? "live" : "idle",
-                    color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
-                Divider().padding(.leading, 60)
-                self.diagnosticCheckRow(
-                    icon: "mic",
-                    title: "Voice Wake",
-                    detail: self.appModel.voiceWake.statusText,
-                    value: self.voiceWakeEnabled ? "on" : "off",
-                    color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
-            }
+        Section("Checks") {
+            self.diagnosticCheckRow(
+                icon: "stethoscope",
+                title: "Last Run",
+                detail: self.diagnosticsLastRunText,
+                value: self.diagnosticsRunValue,
+                color: self.diagnosticsRunColor)
+            self.diagnosticCheckRow(
+                icon: "antenna.radiowaves.left.and.right",
+                title: "Gateway Link",
+                detail: self.gatewayStatusDetail,
+                value: self.gatewayStatusValue,
+                color: self.gatewayStatusColor)
+            self.diagnosticCheckRow(
+                icon: "dot.radiowaves.left.and.right",
+                title: "Discovery",
+                detail: self.gatewayController.discoveryStatusText,
+                value: "\(self.gatewayController.gateways.count)",
+                color: self.gatewayController.gateways.isEmpty ? .secondary : OpenClawBrand.accent)
+            self.diagnosticCheckRow(
+                icon: "waveform",
+                title: "Talk Config",
+                detail: self.gatewayTalkConfigDetail,
+                value: self.gatewayTalkConfigValue,
+                color: self.gatewayTalkConfigColor)
+            self.diagnosticCheckRow(
+                icon: "bell",
+                title: "Notifications",
+                detail: "Approval and event alert channel",
+                value: self.notificationStatusText,
+                color: self.notificationStatus.color)
+            self.diagnosticCheckRow(
+                icon: "rectangle.on.rectangle",
+                title: "Screen Capture",
+                detail: "Live foreground capture state",
+                value: self.appModel.screenRecordActive ? "live" : "idle",
+                color: self.appModel.screenRecordActive ? OpenClawBrand.ok : .secondary)
+            self.diagnosticCheckRow(
+                icon: "mic",
+                title: "Voice Wake",
+                detail: self.appModel.voiceWake.statusText,
+                value: self.voiceWakeEnabled ? "on" : "off",
+                color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func diagnosticCheckRow(
@@ -93,42 +86,35 @@ extension SettingsProTab {
         color: Color) -> some View
     {
         HStack(spacing: 12) {
-            ProIconBadge(systemName: icon, color: color)
-            VStack(alignment: .leading, spacing: 3) {
+            SettingsIcon(systemName: icon, color: color)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(detail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            ProValuePill(value: value, color: color)
+            Text(value)
+                .font(OpenClawType.subhead)
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 
     func detailListCard(@ViewBuilder content: () -> some View) -> some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0, content: content)
+        Section {
+            content()
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func detailRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
+        LabeledContent(label) {
             Text(value)
-                .font(.caption)
+                .font(OpenClawType.subhead)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
     }
 
     func reconnectGateway() async {
@@ -137,15 +123,6 @@ extension SettingsProTab {
         self.isReconnectingGateway = true
         defer { self.isReconnectingGateway = false }
         await self.gatewayController.connectLastKnown()
-    }
-
-    func refreshGateway() async {
-        guard !self.isRefreshingGateway else { return }
-        self.isRefreshingGateway = true
-        defer { self.isRefreshingGateway = false }
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        self.gatewayController.restartDiscovery()
-        await self.appModel.refreshGatewayOverviewIfConnected()
     }
 
     @MainActor
@@ -161,12 +138,13 @@ extension SettingsProTab {
         }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
+        self.registerForRemoteNotificationsIfEnrollmentReady()
 
         let issueCount = SettingsDiagnostics.issueCount(
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationStatusText: self.notificationStatusText)
+            notificationsAllowed: self.notificationStatus == .allowed)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
@@ -175,10 +153,49 @@ extension SettingsProTab {
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+        self.refreshLocationPermissionSummary()
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
+        let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+        let manager = CLLocationManager()
+        self.locationPermissionRefreshID &+= 1
+        let refreshID = self.locationPermissionRefreshID
+        let currentSummary = self.locationPermissionSummary
+        self.locationPermissionSummary = LocationPermissionSummary(
+            desiredMode: mode,
+            locationServicesEnabled: currentSummary.locationServicesEnabled,
+            authorizationStatus: manager.authorizationStatus,
+            accuracyAuthorization: manager.accuracyAuthorization)
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            guard refreshID == self.locationPermissionRefreshID else { return }
+            let latestManager = CLLocationManager()
+            let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+            self.locationPermissionSummary = LocationPermissionSummary(
+                desiredMode: latestMode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: latestManager.authorizationStatus,
+                accuracyAuthorization: latestManager.accuracyAuthorization)
+        }
+    }
+
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
+    }
+
+    func syncAfterOnboardingReset() {
+        self.invalidateGatewaySetupAttempt()
+        self.setupStatusText = nil
+        self.stagedGatewaySetupLink = nil
+        self.pendingManualAuthOverride = nil
+        self.syncSettingsState()
     }
 
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
@@ -193,20 +210,21 @@ extension SettingsProTab {
     }
 
     func applySetupCodeAndConnect() async {
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
+        defer { self.finishGatewaySetupAttempt(attemptID) }
         self.setupStatusText = nil
-        guard self.applySetupCode() else { return }
+        guard await self.applySetupCode(attemptID: attemptID) else { return }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func applyPendingGatewaySetupLinkIfNeeded() {
-        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
+    func applyGatewaySetupLink(_ link: GatewayConnectDeepLink) {
         self.setupCode = ""
         self.setupStatusText = nil
         self.stagedGatewaySetupLink = link
@@ -215,7 +233,7 @@ extension SettingsProTab {
     }
 
     @discardableResult
-    func applySetupCode() -> Bool {
+    func applySetupCode(attemptID: UUID) async -> Bool {
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
         let stagedLink = self.stagedGatewaySetupLink
         guard !raw.isEmpty || stagedLink != nil else {
@@ -231,10 +249,12 @@ extension SettingsProTab {
             return false
         }
 
-        guard let link = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
+        guard let parsedLink = raw.isEmpty ? stagedLink : GatewayConnectDeepLink.fromSetupInput(raw) else {
             self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return false
         }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return false }
         self.stagedGatewaySetupLink = nil
         self.applyGatewayLink(link)
         return true
@@ -270,17 +290,16 @@ extension SettingsProTab {
 
     func openGatewayQRScanner() {
         self.appModel.disconnectGateway()
-        self.connectingGatewayID = nil
+        self.invalidateGatewaySetupAttempt()
         self.setupStatusText = "Opening QR scanner..."
         self.showQRScanner = true
     }
 
     func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
         self.showQRScanner = false
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         self.setupCode = ""
-        self.applyGatewayLink(link)
-        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
-        Task { await self.connectAfterScannedGatewayLink() }
+        Task { await self.connectAfterScannedGatewayLink(link, attemptID: attemptID) }
     }
 
     func handleScannedSetupCode(_ code: String) {
@@ -292,17 +311,27 @@ extension SettingsProTab {
         self.appModel.enterAppleReviewDemoMode()
     }
 
-    func connectAfterScannedGatewayLink() async {
+    func connectAfterScannedGatewayLink(_ parsedLink: GatewayConnectDeepLink, attemptID: UUID) async {
+        defer { self.finishGatewaySetupAttempt(attemptID) }
+        let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
+        guard self.setupAttemptID == attemptID else { return }
+        self.applyGatewayLink(link)
+        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = self.resolvedManualPort(host: host) else {
+        guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
             return
         }
-        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
-        await self.connectManual()
+        guard await self.preflightGateway(host: host) else { return }
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func connectManual() async {
+    func connectManual(setupAttemptID: UUID? = nil) async {
+        if let setupAttemptID {
+            guard self.setupAttemptID == setupAttemptID else { return }
+        } else {
+            self.invalidateGatewaySetupAttempt()
+        }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
             self.setupStatusText = "Failed: host required"
@@ -327,23 +356,19 @@ extension SettingsProTab {
             authOverride: authOverride)
     }
 
-    func preflightGateway(host: String, port: Int, useTLS: Bool) async -> Bool {
+    func preflightGateway(host: String) async -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
-        self.setupStatusText = "Checking gateway reachability..."
-        let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
-        if !ok {
-            self.setupStatusText = "Can't reach gateway at \(trimmed):\(port). Check Tailscale or LAN."
-        }
-        return ok
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
+        return true
     }
 
     func resetOnboarding() {
-        self.connectingGatewayID = nil
+        self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
         self.setupCode = ""
         self.gatewayAutoConnect = false
@@ -359,29 +384,22 @@ extension SettingsProTab {
         self.onboardingRequestID += 1
     }
 
-    func retryGatewayConnectionFromProblem() async {
-        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
-            await self.connectManual()
-        } else {
-            await self.gatewayController.connectLastKnown()
-        }
+    func beginGatewaySetupAttempt() -> UUID? {
+        guard self.connectingGatewayID == nil else { return nil }
+        let attemptID = UUID()
+        self.setupAttemptID = attemptID
+        self.connectingGatewayID = "setup-code"
+        return attemptID
     }
 
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Reset onboarding" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    func finishGatewaySetupAttempt(_ attemptID: UUID) {
+        guard self.setupAttemptID == attemptID else { return }
+        self.invalidateGatewaySetupAttempt()
     }
 
-    func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
-        if problem.suggestsOnboardingReset {
-            self.resetOnboarding()
-            return
-        }
-        if problem.canTrustRotatedCertificate {
-            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
-            return
-        }
-        await self.retryGatewayConnectionFromProblem()
+    func invalidateGatewaySetupAttempt() {
+        self.setupAttemptID = nil
+        self.connectingGatewayID = nil
     }
 
     func handleLocationModeChange(_ newValue: String) {
@@ -402,15 +420,19 @@ extension SettingsProTab {
     {
         self.isChangingLocationMode = true
         self.locationStatusText = nil
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         defer { self.isChangingLocationMode = false }
 
         if mode == .off {
+            _ = await self.appModel.requestLocationPermissions(mode: mode)
             self.previousLocationModeRaw = rawValue
+            self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
             return
         }
 
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -418,6 +440,8 @@ extension SettingsProTab {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
             self.locationStatusText = "Location permission was not granted."
+            self.refreshLocationPermissionSummary(
+                desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
         }
     }
 
@@ -426,45 +450,55 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
 
     func handleNotificationAction() {
-        if self.notificationStatusText == "Allowed" || self.notificationStatusText == "Not Allowed" {
-            self.openSystemSettings()
+        if self.notificationStatus.shouldOpenNotificationSettings {
+            self.openNotificationSettings()
             return
         }
+        guard self.notificationStatus == .notSet else { return }
 
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            self.showNotificationRelayDisclosure = true
+            return
+        }
+        self.requestNotificationAuthorizationFromSettings()
+    }
+
+    func requestNotificationAuthorizationFromSettings() {
+        guard !self.isRequestingNotificationAuthorization else { return }
+        PushEnrollmentConsent.markDisclosureAccepted()
+        self.isRequestingNotificationAuthorization = true
         Task {
             let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
                 .alert,
                 .badge,
                 .sound,
             ])) ?? false
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
             await MainActor.run {
-                self.notificationStatusText = granted ? "Allowed" : "Not Allowed"
-                self.notificationActionText = granted ? "Open System Settings" : "Open System Settings"
+                self.isRequestingNotificationAuthorization = false
+                self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
+                guard granted else { return }
+                self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
     }
 
     @MainActor
+    func registerForRemoteNotificationsIfEnrollmentReady() {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationStatus.allowsNotifications else { return }
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    @MainActor
     func applyNotificationStatus(_ status: UNAuthorizationStatus) {
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            self.notificationStatusText = "Allowed"
-            self.notificationActionText = "Open System Settings"
-        case .denied:
-            self.notificationStatusText = "Not Allowed"
-            self.notificationActionText = "Open System Settings"
-        case .notDetermined:
-            self.notificationStatusText = "Not Set"
-            self.notificationActionText = "Request Access"
-        @unknown default:
-            self.notificationStatusText = "Unknown"
-            self.notificationActionText = "Open System Settings"
-        }
+        self.notificationStatus = SettingsNotificationStatus(status)
     }
 
     func persistGatewayToken(_ value: String) {
@@ -485,8 +519,8 @@ extension SettingsProTab {
             instanceId: instanceId)
     }
 
-    func openSystemSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+    func openNotificationSettings() {
+        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
 
@@ -495,10 +529,12 @@ extension SettingsProTab {
         case .gateway: "Gateway"
         case .approvals: "Approvals"
         case .permissions: "Permissions"
+        case .channels: "Channels"
         case .voice: "Voice & Talk"
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
+        case .licenses: "Licenses"
         case .about: "About"
         }
     }
@@ -538,6 +574,12 @@ extension SettingsProTab {
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if self.isTransientSetupStatus(trimmedSetup),
+           !gatewayStatus.isEmpty,
+           gatewayStatus != "Offline"
+        {
+            return gatewayStatus
+        }
         if !trimmedSetup.isEmpty { return trimmedSetup }
         if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
@@ -562,6 +604,11 @@ extension SettingsProTab {
         if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
             return "Secure handshake failed. Check Tailscale, then connect again."
         }
+        if lower.contains("tls fingerprint verification timed out")
+            || lower.contains("no tls endpoint detected")
+        {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if lower.contains("timed out") {
             return "Connection timed out. Make sure Tailscale is connected, then try again."
         }
@@ -569,6 +616,13 @@ extension SettingsProTab {
             return "Connected, but some controls are restricted for nodes. This is expected."
         }
         return nil
+    }
+
+    func isTransientSetupStatus(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "setup code applied. connecting..."
+            || lower.hasPrefix("qr loaded. connecting to ")
+            || lower == "checking gateway reachability..."
     }
 
     var shouldShowRealtimeVoicePicker: Bool {
@@ -669,6 +723,9 @@ extension SettingsProTab {
         if self.appModel.isAppleReviewDemoModeEnabled {
             return "Live gateway requests are disabled in demo mode."
         }
+        if self.notificationsNeedAttention {
+            return "Foreground approvals still appear while OpenClaw is connected."
+        }
         return self.gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway."
     }
 
@@ -695,20 +752,17 @@ extension SettingsProTab {
         self.appModel.gatewayServerName ?? "OpenClaw Gateway"
     }
 
-    var permissionsDetail: String {
-        var enabled = 0
-        if self.cameraEnabled { enabled += 1 }
-        if self.locationModeRaw != OpenClawLocationMode.off.rawValue { enabled += 1 }
-        if self.preventSleep { enabled += 1 }
-        return "\(enabled) enabled"
-    }
-
     var pendingApproval: NodeAppModel.ExecApprovalPrompt? {
         self.appModel.pendingExecApprovalPrompt
     }
 
-    var approvalsDetail: String {
-        self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+    var notificationsNeedAttention: Bool {
+        switch self.notificationStatus {
+        case .allowed, .checking:
+            false
+        case .notAllowed, .notSet, .unknown:
+            true
+        }
     }
 
     var approvalItems: [SettingsApprovalItem] {
@@ -738,10 +792,6 @@ extension SettingsProTab {
         return "Off"
     }
 
-    var diagnosticsDetail: String {
-        "System checks"
-    }
-
     var diagnosticsHealthValue: String {
         if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
         if self.gatewayConnected { return "ready" }
@@ -761,14 +811,74 @@ extension SettingsProTab {
 
     var privacyDetail: String {
         let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return location == .off ? "Location off" : "Location \(self.locationLabel)"
+        return switch (location, self.locationPermissionSummary.effectiveMode) {
+        case (.off, _):
+            "Location off"
+        case (.whileUsing, .whileUsing):
+            "Location While Using"
+        case (.whileUsing, .off):
+            "Location While Using, effective Off"
+        case (.whileUsing, .always):
+            "Location While Using, effective Always"
+        case (.always, .always):
+            "Location Always"
+        case (.always, .whileUsing):
+            "Location Always, effective While Using"
+        case (.always, .off):
+            "Location Always, effective Off"
+        }
     }
 
-    var locationLabel: String {
-        switch OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off {
-        case .off: "Off"
-        case .whileUsing: "While Using"
-        case .always: "Always"
+    var locationPermissionDetailText: String {
+        if self.isChangingLocationMode {
+            return "Requesting iOS location permission…"
         }
+        return self.locationPermissionSummary.detailText
+    }
+
+    var locationPermissionWarningText: String? {
+        guard let locationStatusText else { return nil }
+        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        return locationStatusText
+    }
+
+    var notificationStatusText: String {
+        self.notificationStatus.text
+    }
+
+    var notificationActionText: String {
+        self.notificationStatus.actionTitle
+    }
+
+    var notificationStatusDetail: String {
+        switch self.notificationStatus {
+        case .checking:
+            "Checking iOS notification permission."
+        case .allowed:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .notAllowed:
+            "Notifications have been denied. Enable them in iOS Settings."
+        case .notSet:
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
+        }
+    }
+
+    var notificationRelayDetail: String {
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            let host = PushBuildConfig.current.relayBaseURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
+            } ?? "ios-push-relay.openclaw.ai"
+            return """
+            This build uses OpenClaw's hosted push relay at \(host) for notification \
+            delivery data.
+            """
+        }
+        return "This build is not configured to use OpenClaw's hosted push relay."
+    }
+
+    var notificationRelayDisclosureMessage: String {
+        "Enabling this sends delivery data through OpenClaw's hosted push relay."
     }
 }

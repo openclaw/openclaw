@@ -116,6 +116,14 @@ export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;
 export type ConfigSchemaLookupResult = SchemaType<"ConfigSchemaLookupResult">;
 export type UpdateStatusParams = SchemaType<"UpdateStatusParams">;
 
+/** Crestodian chat payloads exchanged by clients and the gateway. */
+export type CrestodianChatParams = SchemaType<"CrestodianChatParams">;
+export type CrestodianChatResult = SchemaType<"CrestodianChatResult">;
+export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParams">;
+export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
+export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
+export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
+
 /** Wizard setup flow payloads exchanged by CLI, UI, and gateway. */
 export type WizardStartParams = SchemaType<"WizardStartParams">;
 export type WizardNextParams = SchemaType<"WizardNextParams">;
@@ -179,6 +187,15 @@ export type AgentsFilesGetParams = SchemaType<"AgentsFilesGetParams">;
 export type AgentsFilesGetResult = SchemaType<"AgentsFilesGetResult">;
 export type AgentsFilesSetParams = SchemaType<"AgentsFilesSetParams">;
 export type AgentsFilesSetResult = SchemaType<"AgentsFilesSetResult">;
+export type SessionFileKind = SchemaType<"SessionFileKind">;
+export type SessionFileRelevance = SchemaType<"SessionFileRelevance">;
+export type SessionFileEntry = SchemaType<"SessionFileEntry">;
+export type SessionFileBrowserEntry = SchemaType<"SessionFileBrowserEntry">;
+export type SessionFileBrowserResult = SchemaType<"SessionFileBrowserResult">;
+export type SessionsFilesListParams = SchemaType<"SessionsFilesListParams">;
+export type SessionsFilesListResult = SchemaType<"SessionsFilesListResult">;
+export type SessionsFilesGetParams = SchemaType<"SessionsFilesGetParams">;
+export type SessionsFilesGetResult = SchemaType<"SessionsFilesGetResult">;
 export type ArtifactSummary = SchemaType<"ArtifactSummary">;
 export type ArtifactsListParams = SchemaType<"ArtifactsListParams">;
 export type ArtifactsListResult = SchemaType<"ArtifactsListResult">;
@@ -272,6 +289,8 @@ export type DevicePairListParams = SchemaType<"DevicePairListParams">;
 export type DevicePairApproveParams = SchemaType<"DevicePairApproveParams">;
 export type DevicePairRejectParams = SchemaType<"DevicePairRejectParams">;
 export type DevicePairRemoveParams = SchemaType<"DevicePairRemoveParams">;
+export type DevicePairSetupCodeParams = SchemaType<"DevicePairSetupCodeParams">;
+export type DevicePairSetupCodeResult = SchemaType<"DevicePairSetupCodeResult">;
 export type DeviceTokenRotateParams = SchemaType<"DeviceTokenRotateParams">;
 export type DeviceTokenRevokeParams = SchemaType<"DeviceTokenRevokeParams">;
 export type ChatAbortParams = SchemaType<"ChatAbortParams">;

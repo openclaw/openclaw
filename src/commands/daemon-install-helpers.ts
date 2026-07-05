@@ -6,7 +6,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir, resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import {
@@ -43,6 +43,7 @@ import {
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -60,18 +61,32 @@ type GatewayInstallPlan = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
-let daemonInstallAuthProfileSourceRuntimePromise:
-  | Promise<typeof import("./daemon-install-auth-profiles-source.runtime.js")>
-  | undefined;
-let daemonInstallAuthProfileStoreRuntimePromise:
-  | Promise<typeof import("./daemon-install-auth-profiles-store.runtime.js")>
-  | undefined;
-
 const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
 ]);
 const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
+
+function configContainsSecretRef(config: OpenClawConfig | undefined): boolean {
+  if (!config) {
+    return false;
+  }
+  const pending: unknown[] = [config];
+  const seen = new Set<object>();
+  const defaults = config.secrets?.defaults;
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (coerceSecretRef(value, defaults)) {
+      return true;
+    }
+    if (!value || typeof value !== "object" || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    pending.push(...Object.values(value));
+  }
+  return false;
+}
 
 function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
   if (isDangerousHostEnvVarName(key)) {
@@ -83,17 +98,15 @@ function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
   return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
 }
 
-function loadDaemonInstallAuthProfileSourceRuntime() {
-  daemonInstallAuthProfileSourceRuntimePromise ??=
-    import("./daemon-install-auth-profiles-source.runtime.js");
-  return daemonInstallAuthProfileSourceRuntimePromise;
-}
+const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
+  () => import("./daemon-install-auth-profiles-source.runtime.js"),
+  { cacheRejections: true },
+);
 
-function loadDaemonInstallAuthProfileStoreRuntime() {
-  daemonInstallAuthProfileStoreRuntimePromise ??=
-    import("./daemon-install-auth-profiles-store.runtime.js");
-  return daemonInstallAuthProfileStoreRuntimePromise;
-}
+const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
+  () => import("./daemon-install-auth-profiles-store.runtime.js"),
+  { cacheRejections: true },
+);
 
 async function resolveAuthProfileStoreForServiceEnv(
   authStore: AuthProfileStore | undefined,
@@ -170,10 +183,11 @@ type ExecSecretRefPassEnvSource = {
 function collectConfigSecretRefServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
-  durableEnvironment: Record<string, string | undefined>;
+  configContainsSecretRef: boolean;
+  stateDirDotEnvEnvironment: Record<string, string | undefined>;
   warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
-  if (!params.config) {
+  if (!params.config || !params.configContainsSecretRef) {
     return {};
   }
   const entries: Record<string, string> = {};
@@ -207,7 +221,7 @@ function collectConfigSecretRefServiceEnvVars(params: {
       );
       continue;
     }
-    if (Object.hasOwn(params.durableEnvironment, key)) {
+    if (Object.hasOwn(params.stateDirDotEnvEnvironment, key)) {
       continue;
     }
     const value = params.env[key]?.trim();
@@ -222,6 +236,7 @@ function collectConfigSecretRefServiceEnvVars(params: {
 function collectExecSecretRefPassEnvServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
+  configContainsSecretRef: boolean;
   authStore?: AuthProfileStore;
   durableEnvironment: Record<string, string | undefined>;
   warn?: DaemonInstallWarnFn;
@@ -232,31 +247,35 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
   const entries: Record<string, string> = {};
   let manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined;
   const sources: ExecSecretRefPassEnvSource[] = [];
-  for (const target of discoverConfigSecretTargets(params.config)) {
-    if (!target.entry.includeInPlan) {
-      continue;
+  if (params.configContainsSecretRef) {
+    for (const target of discoverConfigSecretTargets(params.config)) {
+      if (!target.entry.includeInPlan) {
+        continue;
+      }
+      const { ref } = resolveSecretInputRef({
+        value: target.value,
+        refValue: target.refValue,
+        defaults: params.config.secrets?.defaults,
+      });
+      if (!ref || ref.source !== "exec") {
+        continue;
+      }
+      sources.push({ ref, warningTitle: "Config SecretRef" });
     }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults: params.config.secrets?.defaults,
-    });
-    if (!ref || ref.source !== "exec") {
-      continue;
-    }
-    sources.push({ ref, warningTitle: "Config SecretRef" });
   }
   for (const ref of collectAuthProfileSecretRefs(params.authStore)) {
     if (ref.source === "exec") {
       sources.push({ ref, warningTitle: "Auth profile" });
     }
   }
-  for (const ref of collectPluginConfigSecretRefs({
-    env: params.env,
-    config: params.config,
-  })) {
-    if (ref.source === "exec") {
-      sources.push({ ref, warningTitle: "Plugin config SecretRef" });
+  if (params.configContainsSecretRef) {
+    for (const ref of collectPluginConfigSecretRefs({
+      env: params.env,
+      config: params.config,
+    })) {
+      if (ref.source === "exec") {
+        sources.push({ ref, warningTitle: "Plugin config SecretRef" });
+      }
     }
   }
   for (const { ref, warningTitle } of sources) {
@@ -496,6 +515,26 @@ function readExistingEnvironmentValueSource(params: {
   return undefined;
 }
 
+function omitEnvironmentEntriesShadowedBy(
+  entries: Record<string, string | undefined>,
+  shadowEntries: Array<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  const shadowKeys = new Set(
+    shadowEntries.flatMap((environment) =>
+      Object.keys(environment).flatMap((key) => {
+        const normalized = normalizeEnvVarKey(key, { portable: true })?.toUpperCase();
+        return normalized ? [normalized] : [];
+      }),
+    ),
+  );
+  return Object.fromEntries(
+    Object.entries(entries).filter(([key]) => {
+      const normalized = normalizeEnvVarKey(key, { portable: true })?.toUpperCase();
+      return !normalized || !shadowKeys.has(normalized);
+    }),
+  );
+}
+
 function resolveGatewayInstallWorkingDirectory(params: {
   env: Record<string, string | undefined>;
   platform: NodeJS.Platform;
@@ -531,16 +570,20 @@ async function buildGatewayInstallEnvironment(params: {
       env: params.env,
       config: params.config,
     });
+  // Full target discovery materializes plugin metadata; configs without refs do not need it.
+  const containsConfigSecretRef = configContainsSecretRef(params.config);
   const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
     env: params.env,
     config: params.config,
-    durableEnvironment,
+    configContainsSecretRef: containsConfigSecretRef,
+    stateDirDotEnvEnvironment,
     warn: params.warn,
   });
   const authStore = await resolveAuthProfileStoreForServiceEnv(params.authStore);
   const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
     env: params.env,
     config: params.config,
+    configContainsSecretRef: containsConfigSecretRef,
     authStore,
     durableEnvironment,
     warn: params.warn,
@@ -550,35 +593,48 @@ async function buildGatewayInstallEnvironment(params: {
     authStore,
     warn: params.warn,
   });
+  const stateDirDotEnvRenderEnvironment = omitEnvironmentEntriesShadowedBy(
+    stateDirDotEnvEnvironment,
+    [
+      configEnvironment,
+      configSecretRefEnvironment,
+      execSecretRefPassEnvEnvironment,
+      authProfileEnvironment,
+    ],
+  );
   const preservedExistingEnvironment = collectPreservedExistingServiceEnvVars(
     params.existingEnvironment,
     readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment),
   );
   const plan = createMutableServiceEnvPlan();
   addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
-    source: "existing-preserved",
     valueSource: ({ normalizedKey }) =>
       readExistingEnvironmentValueSource({
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         normalizedKey,
       }) ?? "inline",
   });
-  addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, { source: "state-dotenv" });
-  addServiceEnvPlanEntries(plan, configEnvironment, { source: "config-env" });
-  addServiceEnvPlanEntries(plan, configSecretRefEnvironment, { source: "config-secretref-env" });
-  addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, { source: "exec-passenv" });
-  addServiceEnvPlanEntries(plan, authProfileEnvironment, { source: "auth-profile-env" });
-  const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
-    omitKeys: Object.keys(params.serviceEnvironment),
-  });
+  addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
+  addServiceEnvPlanEntries(plan, configEnvironment, {});
+  addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
+  addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, {});
+  addServiceEnvPlanEntries(plan, authProfileEnvironment, {});
+  const managedServiceEnvKeys = formatManagedServiceEnvKeys(
+    {
+      ...durableEnvironment,
+      ...configSecretRefEnvironment,
+    },
+    { omitKeys: Object.keys(params.serviceEnvironment) },
+  );
   applyManagedServiceEnvRenderPolicy({
     plan,
     managedServiceEnvKeys,
     serviceEnvironment: params.serviceEnvironment,
     platform: params.platform,
+    stateDirDotEnvEnvironment: stateDirDotEnvRenderEnvironment,
+    configSecretRefEnvironment,
   });
   addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
-    source: "service-generated",
     includeRawKeys: true,
   });
   const mergedPath = mergeServicePath(

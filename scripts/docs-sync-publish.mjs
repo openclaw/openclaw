@@ -12,7 +12,6 @@ const ROOT = path.resolve(HERE, "..");
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const INTERNAL_DOCS_DIRS = ["internal"];
-const PUBLISH_EXCLUDED_DOCS_DIRS = [...INTERNAL_DOCS_DIRS, "maturity-scorecard"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
 const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
@@ -89,6 +88,13 @@ const GENERATED_LOCALES = [
     dir: "fr",
     navFile: "fr-navigation.json",
     tmFile: "fr.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "hi",
+    dir: "hi",
+    navFile: "hi-navigation.json",
+    tmFile: "hi.tm.jsonl",
     navMode: "clone-en",
   },
   {
@@ -169,11 +175,18 @@ const GENERATED_LOCALES = [
     // once the docs host accepts it.
     navigation: false,
   },
+  {
+    language: "ru",
+    dir: "ru",
+    navFile: "ru-navigation.json",
+    tmFile: "ru.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
@@ -472,9 +485,9 @@ function repairGeneratedLocaleDocs(targetDocsDir) {
   }
 }
 
-function pruneExcludedPublishDocs(targetDocsDir) {
+function pruneInternalDocs(targetDocsDir) {
   let pruned = 0;
-  for (const relativeDir of PUBLISH_EXCLUDED_DOCS_DIRS) {
+  for (const relativeDir of INTERNAL_DOCS_DIRS) {
     const dirPath = path.join(targetDocsDir, relativeDir);
     if (!fs.existsSync(dirPath)) {
       continue;
@@ -484,7 +497,7 @@ function pruneExcludedPublishDocs(targetDocsDir) {
   }
 
   if (pruned > 0) {
-    console.log(`Pruned ${pruned} publish-excluded docs director${pruned === 1 ? "y" : "ies"}.`);
+    console.log(`Pruned ${pruned} internal-only docs director${pruned === 1 ? "y" : "ies"}.`);
   }
 }
 
@@ -675,12 +688,12 @@ function syncDocsTree(targetRoot, options = {}) {
     "P .i18n/README.md",
     "--exclude",
     ".i18n/README.md",
-    ...PUBLISH_EXCLUDED_DOCS_DIRS.flatMap((dir) => ["--exclude", `${dir}/`]),
+    ...INTERNAL_DOCS_DIRS.flatMap((dir) => ["--exclude", `${dir}/`]),
     ...localeFilters,
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
-  pruneExcludedPublishDocs(targetDocsDir);
+  pruneInternalDocs(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
     const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);

@@ -3,12 +3,11 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveStorePath,
 } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -18,10 +17,6 @@ import {
   formatTrajectoryCommandExportSummary,
   type TrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
-import {
-  ensureExplicitSessionStoreMigratedForCommand,
-  ensureSessionStateMigratedForCommand,
-} from "./session-state-migration.js";
 
 type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
@@ -120,17 +115,15 @@ export async function exportTrajectoryCommand(
     runtime.exit(1);
     return;
   }
-  const cfg = getRuntimeConfig();
-  await ensureSessionStateMigratedForCommand(cfg);
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolvedOpts.store
-    ? path.resolve(resolvedOpts.store)
-    : resolveDefaultSessionStorePath(targetAgentId);
-  await ensureExplicitSessionStoreMigratedForCommand(storePath, {
-    onWarning: (warning) => runtime.error?.(warning),
+    ? resolveStorePath(resolvedOpts.store, { agentId: targetAgentId })
+    : resolveStorePath(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+  const entry = loadSessionEntry({
+    agentId: targetAgentId,
+    sessionKey,
+    storePath,
   });
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
     runtime.error(
       `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions")} to see available sessions.`,

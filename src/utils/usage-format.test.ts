@@ -18,10 +18,10 @@ import {
   formatUsd,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
-  type PricingTier,
 } from "./usage-format.js";
 
 type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
+type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
 
 function requireCostConfig(
   cost: ReturnType<typeof resolveModelCostConfig>,
