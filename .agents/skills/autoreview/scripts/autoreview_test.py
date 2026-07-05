@@ -5,6 +5,7 @@ import argparse
 import importlib.util
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,23 @@ class AutoreviewCursorTests(unittest.TestCase):
 
 
 class AutoreviewCompatibilityTests(unittest.TestCase):
+    def test_harness_opts_both_cursor_aliases_into_trusted_fixture(self) -> None:
+        harness_path = SCRIPT_PATH.with_name("test-review-harness.py")
+        namespace = runpy.run_path(str(harness_path))
+        commands: list[list[str]] = []
+        run_reviews = namespace["run_reviews"]
+        with mock.patch.dict(
+            run_reviews.__globals__,
+            {
+                "run": lambda command, _cwd: commands.append(command),
+                "validate_prompt_policy": lambda _repo, _autoreview: None,
+            },
+        ), tempfile.TemporaryDirectory(prefix="autoreview-harness-test.") as tmpdir:
+            run_reviews(Path(tmpdir), SCRIPT_PATH.parent, "benign", ["cursor", "cursor-agent"])
+        self.assertEqual(len(commands), 2)
+        for command in commands:
+            self.assertIn("--cursor-allow-workspace-instructions", command)
+
     def test_cursor_agent_bin_cli_alias(self) -> None:
         with mock.patch.object(
             sys,
@@ -182,24 +200,20 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         self.assertFalse(AUTOREVIEW.is_structured_output_failure("finding 0 has invalid priority"))
 
     def test_cursor_workspace_instructions_fail_closed(self) -> None:
-        for relative_path in ("AGENTS.md", ".cursorrules"):
-            with self.subTest(relative_path=relative_path), tempfile.TemporaryDirectory(
-                prefix="autoreview-cursor-test."
-            ) as tmpdir:
-                repo = Path(tmpdir)
-                (repo / relative_path).write_text("fixture\n")
-                args = argparse.Namespace(
-                    thinking=None,
-                    tools=True,
-                    web_search=True,
-                    cursor_allow_workspace_instructions=False,
-                    cursor_bin="cursor-agent",
-                    model="auto",
-                    stream_engine_output=False,
-                )
-                with self.assertRaises(SystemExit) as exc_info:
-                    AUTOREVIEW.run_cursor(args, repo, "prompt")
-                self.assertIn("cursor engine refused project-local instructions/config", str(exc_info.exception))
+        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
+            repo = Path(tmpdir)
+            args = argparse.Namespace(
+                thinking=None,
+                tools=True,
+                web_search=True,
+                cursor_allow_workspace_instructions=False,
+                cursor_bin="cursor-agent",
+                model="auto",
+                stream_engine_output=False,
+            )
+            with self.assertRaises(SystemExit) as exc_info:
+                AUTOREVIEW.run_cursor(args, repo, "prompt")
+            self.assertIn("requires --cursor-allow-workspace-instructions", str(exc_info.exception))
 
     def test_cursor_local_mcp_requires_explicit_approval(self) -> None:
         with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
@@ -249,7 +263,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 thinking=None,
                 tools=True,
                 web_search=True,
-                cursor_allow_workspace_instructions=False,
+                cursor_allow_workspace_instructions=True,
                 cursor_bin=str(cursor_bin),
                 model=None,
                 stream_engine_output=False,
@@ -314,6 +328,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                     "cursor",
                     "--cursor-bin",
                     str(cursor_bin),
+                    "--cursor-allow-workspace-instructions",
                 ],
                 cwd=repo,
                 env=env,

@@ -1510,17 +1510,6 @@ def run_opencode(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     return result.stdout
 
 
-def cursor_workspace_instruction_paths(repo: Path) -> list[Path]:
-    candidates = [
-        repo / ".cursorrules",
-        repo / ".cursor" / "rules",
-        repo / ".cursor" / "cli.json",
-        repo / "AGENTS.md",
-        repo / "CLAUDE.md",
-    ]
-    return [path for path in candidates if path.exists()]
-
-
 def cursor_local_mcp_paths(repo: Path) -> list[Path]:
     candidates = [
         repo / ".cursor" / "mcp.json",
@@ -1531,7 +1520,11 @@ def cursor_local_mcp_paths(repo: Path) -> list[Path]:
 
 
 def cursor_local_hook_paths(repo: Path) -> list[Path]:
-    candidates = [repo / ".cursor" / "hooks.json"]
+    candidates = [
+        repo / ".cursor" / "hooks.json",
+        repo / ".claude" / "settings.json",
+        repo / ".claude" / "settings.local.json",
+    ]
     return [path for path in candidates if path.exists()]
 
 
@@ -1639,21 +1632,18 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--no-tools is not supported by the cursor engine")
     if not args.web_search:
         raise SystemExit("--no-web-search is not supported by the cursor engine; Cursor CLI does not expose a documented per-run web-search disable flag")
-    instruction_paths = cursor_workspace_instruction_paths(repo)
     local_mcp_paths = cursor_local_mcp_paths(repo)
     local_hook_paths = cursor_local_hook_paths(repo)
+    if not args.cursor_allow_workspace_instructions:
+        raise SystemExit(
+            "cursor engine requires --cursor-allow-workspace-instructions for an explicitly trusted repo; "
+            "Cursor CLI does not expose a per-run project-resource disable flag."
+        )
     if local_hook_paths:
         raise SystemExit(
             "cursor engine refused project-local hooks: "
             + format_repo_paths(repo, local_hook_paths)
             + ". Cursor hooks execute host commands outside review tool permissions."
-        )
-    if (instruction_paths or local_mcp_paths) and not args.cursor_allow_workspace_instructions:
-        paths = instruction_paths + local_mcp_paths
-        raise SystemExit(
-            "cursor engine refused project-local instructions/config: "
-            + format_repo_paths(repo, paths)
-            + ". Re-run with --cursor-allow-workspace-instructions only for trusted repos."
         )
     if local_mcp_paths:
         raise SystemExit(
@@ -1661,12 +1651,10 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             + format_repo_paths(repo, local_mcp_paths)
             + ". Cursor MCP tools cannot be restricted to read-only review access."
         )
-    if instruction_paths or local_mcp_paths:
-        print(
-            "cursor isolation warning: Cursor CLI does not document a project-instruction disable flag; "
-            "trusted project-local surfaces are being allowed explicitly.",
-            file=sys.stderr,
-        )
+    print(
+        "cursor isolation warning: trusted project-local resources are being allowed explicitly.",
+        file=sys.stderr,
+    )
     cursor_bin = resolve_command(args.cursor_bin, repo)
     with tempfile.TemporaryDirectory(prefix="autoreview-cursor-config.") as tempdir:
         config_dir = Path(tempdir)
@@ -2500,7 +2488,7 @@ def self_test_engine_isolation() -> int:
             try:
                 run_cursor(args, repo, "review hostile patch")
             except SystemExit as exc:
-                if "refused project-local instructions/config" not in str(exc):
+                if "requires --cursor-allow-workspace-instructions" not in str(exc):
                     raise
             else:
                 raise SystemExit("cursor isolation self-test failed: hostile project surfaces should be refused")
@@ -2511,6 +2499,18 @@ def self_test_engine_isolation() -> int:
             try:
                 run_cursor(args, repo, "review hostile patch")
             except SystemExit as exc:
+                if "project-local hooks" not in str(exc):
+                    raise
+            else:
+                raise SystemExit("cursor isolation self-test failed: local hooks should be refused")
+            if record_path.exists():
+                raise SystemExit("cursor isolation self-test failed: cursor invoked despite refused hooks")
+
+            for relative_path in (Path(".claude/settings.json"), Path(".claude/settings.local.json")):
+                (repo / relative_path).unlink(missing_ok=True)
+            try:
+                run_cursor(args, repo, "review hostile patch")
+            except SystemExit as exc:
                 if "project-local MCP config" not in str(exc):
                     raise
             else:
@@ -2518,7 +2518,11 @@ def self_test_engine_isolation() -> int:
             if record_path.exists():
                 raise SystemExit("cursor isolation self-test failed: cursor invoked despite refused MCP config")
 
-            for relative_path in (Path(".cursor/mcp.json"), Path(".mcp.json"), Path("mcp.json")):
+            for relative_path in (
+                Path(".cursor/mcp.json"),
+                Path(".mcp.json"),
+                Path("mcp.json"),
+            ):
                 (repo / relative_path).unlink(missing_ok=True)
             run_cursor(args, repo, "review hostile patch")
             cursor_record = json.loads(record_path.read_text())
@@ -3111,13 +3115,13 @@ def parse_args() -> argparse.Namespace:
         dest="cursor_allow_workspace_instructions",
         action="store_true",
         default=None,
-        help="Allow Cursor review when the repo contains project-local Cursor instructions/config. Use only for trusted repos.",
+        help="Required opt-in for every Cursor review. Confirms the repository and its project-local resources are trusted.",
     )
     parser.add_argument(
         "--no-cursor-allow-workspace-instructions",
         dest="cursor_allow_workspace_instructions",
         action="store_false",
-        help="Fail closed when Cursor would load project-local instructions/config.",
+        help="Refuse Cursor review because project-local resource loading cannot be disabled.",
     )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
     parser.add_argument(
