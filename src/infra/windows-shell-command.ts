@@ -190,14 +190,16 @@ export function isWindowsPlatform(platform?: string | null): boolean {
 const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$_])/;
 
 function findWindowsShellExpansionToken(command: string): string | null {
-  for (let i = 0; i < command.length; i += 1) {
-    if (command[i] !== "$") {
+  let previous = "";
+  for (const current of command) {
+    if (previous !== "$") {
+      previous = current;
       continue;
     }
-    const next = command[i + 1];
-    if (next !== undefined && /[A-Za-z_{(?$_]/.test(next)) {
+    if (/[A-Za-z_{(?$_]/.test(current)) {
       return "$";
     }
+    previous = current;
   }
   return null;
 }

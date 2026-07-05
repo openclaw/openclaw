@@ -622,12 +622,10 @@ export async function processGatewayAllowlist(
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
-      !requiresAllowlistPlanApproval &&
       !requiresExplicitApproval &&
       !requiresSecurityAuditSuppressionApproval;
     let autoReviewRequiresHumanApproval =
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresAllowlistPlanApproval ||
       requiresExplicitApproval ||
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {

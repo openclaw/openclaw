@@ -25,6 +25,7 @@ type MockAllowlistSegment = {
   raw?: string;
   resolution: null;
   argv: string[];
+  requiresExplicitApproval?: "windows-shell-expansion";
 };
 type MockAllowlistResult = {
   allowlistMatches: unknown[];

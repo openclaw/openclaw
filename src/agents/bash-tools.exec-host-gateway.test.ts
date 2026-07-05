@@ -699,8 +699,8 @@ describe("processGatewayAllowlist", () => {
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({
-      execCommandOverride: undefined,
-      allowWithoutEnforcedCommand: true,
+      execCommandOverride: command,
+      allowWithoutEnforcedCommand: false,
     });
   });
 
@@ -755,8 +755,8 @@ describe("processGatewayAllowlist", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(warnings[0]).toContain("reviewer or explicit approval");
     expect(result).toEqual({
-      execCommandOverride: undefined,
-      allowWithoutEnforcedCommand: true,
+      execCommandOverride: command,
+      allowWithoutEnforcedCommand: false,
     });
   });
 
@@ -771,6 +771,10 @@ describe("processGatewayAllowlist", () => {
       throw new Error(authorizationPlan.reason);
     }
     requiresExecApprovalMock.mockReturnValue(false);
+    buildEnforcedShellCommandMock.mockReturnValue({
+      ok: true,
+      command: "/usr/bin/head -c 16",
+    });
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
@@ -797,7 +801,7 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("requires human approval for allowlist plan misses", async () => {
+  it("auto-reviews allowlist plan misses before asking a human", async () => {
     const command = "echo ok";
     requiresExecApprovalMock.mockReturnValue(false);
     buildEnforcedShellCommandMock.mockReturnValue({
@@ -824,9 +828,19 @@ describe("processGatewayAllowlist", () => {
       autoReview: true,
     });
 
-    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command,
+        argv: ["echo", "ok"],
+        host: "gateway",
+        reason: "execution-plan-miss",
+      }),
+    );
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      execCommandOverride: undefined,
+      allowWithoutEnforcedCommand: true,
+    });
   });
 
   it("omits allow-always when allowlist execution cannot persist reusable patterns", async () => {
