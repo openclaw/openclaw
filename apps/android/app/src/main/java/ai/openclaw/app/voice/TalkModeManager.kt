@@ -1813,7 +1813,7 @@ class TalkModeManager internal constructor(
     val messages = root["messages"] as? JsonArray ?: return null
     for (item in messages.reversed()) {
       val obj = item.asObjectOrNull() ?: continue
-      if (obj["role"].asStringOrNull() != "assistant") continue
+      if (!ChatEventText.isAssistantRole(obj["role"].asStringOrNull())) continue
       if (sinceSeconds != null) {
         val timestamp = obj["timestamp"].asDoubleOrNull()
         if (timestamp != null && !TalkModeRuntime.isMessageTimestampAfter(timestamp, sinceSeconds)) continue

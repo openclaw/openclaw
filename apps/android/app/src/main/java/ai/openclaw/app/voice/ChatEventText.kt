@@ -12,11 +12,14 @@ internal object ChatEventText {
   /** Extracts text from assistant messages while ignoring non-assistant roles. */
   fun assistantTextFromMessage(messageEl: JsonElement?): String? {
     val message = messageEl.asObjectOrNull() ?: return null
-    val role = message["role"].asStringOrNull()?.trim()
-    // Voice stays fail-closed on missing roles; only canonical assistant roles speak.
-    if (role.isNullOrEmpty()) return null
-    if (!role.equals("assistant", ignoreCase = true)) return null
+    if (!isAssistantRole(message["role"].asStringOrNull())) return null
     return textFromContent(message["content"])
+  }
+
+  fun isAssistantRole(role: String?): Boolean {
+    val normalized = role?.trim()
+    if (normalized.isNullOrEmpty()) return false
+    return normalized.equals("assistant", ignoreCase = true)
   }
 
   private fun textFromContent(content: JsonElement?): String? =
