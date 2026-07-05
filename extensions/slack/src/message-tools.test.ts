@@ -210,7 +210,7 @@ describe("Slack message tools", () => {
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
 
-  it("describes the react emoji param as a Slack shortcode, not a raw character", () => {
+  it("describes Slack shortcode and common glyph reaction inputs", () => {
     const discovery = describeSlackMessageTool({
       cfg: {
         channels: {
@@ -225,7 +225,7 @@ describe("Slack message tools", () => {
 
     expect(schema.actions).toEqual(["react", "reactions"]);
     expect(property.description).toContain("white_check_mark");
-    expect(property.description).toMatch(/not the emoji character/i);
+    expect(property.description).toContain("✅");
   });
 
   it("omits the react emoji schema when reactions are disabled", () => {

@@ -27,7 +27,7 @@ function createSlackReactionEmojiSchema(): Record<string, TSchema> {
     emoji: Type.Optional(
       Type.String({
         description:
-          'Slack emoji shortcode name (for example "white_check_mark" or "+1"), not the emoji character. Colons are optional: "white_check_mark" and ":white_check_mark:" both work.',
+          'Slack emoji shortcode name (for example "white_check_mark" or "+1") or common emoji character (for example "✅"). Colons are optional around shortcodes.',
       }),
     ),
   };

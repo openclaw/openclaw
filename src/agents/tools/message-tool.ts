@@ -692,7 +692,7 @@ function buildChannelTargetSchema() {
     userId: Type.Optional(
       Type.String({
         description:
-          "User id for member-info and moderation/participant actions (kick, ban, timeout, addParticipant, removeParticipant; channel-dependent). These take userId directly; they do not accept `target`.",
+          "User id for member-info and channel-specific moderation or participant actions. For member-info, pass userId directly; the action does not accept target.",
       }),
     ),
     openId: Type.Optional(Type.String()),

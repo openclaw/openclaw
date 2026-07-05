@@ -53,7 +53,7 @@ import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
-import { normalizeSlackEmojiName, reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -517,15 +517,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     cfg.messages?.statusReactions?.enabled === true;
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
-      await reactSlackMessage(
-        message.channel,
-        reactionMessageTs ?? "",
-        normalizeSlackEmojiName(emoji),
-        {
-          token: ctx.botToken,
-          client: ctx.app.client,
-        },
-      ).catch((err: unknown) => {
+      await reactSlackMessage(message.channel, reactionMessageTs ?? "", emoji, {
+        token: ctx.botToken,
+        client: ctx.app.client,
+      }).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("already_reacted")) {
           return;
         }
@@ -533,15 +528,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
     removeReaction: async (emoji) => {
-      await removeSlackReaction(
-        message.channel,
-        reactionMessageTs ?? "",
-        normalizeSlackEmojiName(emoji),
-        {
-          token: ctx.botToken,
-          client: ctx.app.client,
-        },
-      ).catch((err: unknown) => {
+      await removeSlackReaction(message.channel, reactionMessageTs ?? "", emoji, {
+        token: ctx.botToken,
+        client: ctx.app.client,
+      }).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("no_reaction")) {
           return;
         }

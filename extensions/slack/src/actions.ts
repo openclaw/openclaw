@@ -71,8 +71,15 @@ function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfi
   return token;
 }
 
-const SLACK_EMOJI_SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/gu;
+const SLACK_EMOJI_SKIN_TONE_MODIFIER_RE = /[\u{1F3FB}-\u{1F3FF}]/u;
 const SLACK_EMOJI_VARIATION_SELECTOR_RE = /[\uFE0E\uFE0F]/g;
+const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
+  ["🏻", 2],
+  ["🏼", 3],
+  ["🏽", 4],
+  ["🏾", 5],
+  ["🏿", 6],
+]);
 
 // Slack's reactions.add/remove accept only shortcode names, never a raw
 // Unicode glyph. Models keep passing the glyph because the `emoji` param
@@ -112,20 +119,22 @@ const SLACK_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
   "💻": "computer",
 };
 
-function stripSlackEmojiGlyphModifiers(value: string): string {
-  return value
-    .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
-    .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
-}
-
-export function normalizeSlackEmojiName(raw: string): string {
+function normalizeSlackEmojiName(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Emoji is required for Slack reactions");
   }
   const withoutColons = trimmed.replace(/^:+|:+$/g, "");
-  const glyphKey = stripSlackEmojiGlyphModifiers(withoutColons);
-  return SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey] ?? withoutColons;
+  const modifier = withoutColons.match(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE)?.[0];
+  const glyphKey = withoutColons
+    .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
+    .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
+  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey];
+  const skinTone = modifier ? SLACK_EMOJI_SKIN_TONE_BY_MODIFIER.get(modifier) : undefined;
+  if (!shortname || !skinTone) {
+    return shortname ?? withoutColons;
+  }
+  return `${shortname}::skin-tone-${skinTone}`;
 }
 
 const SLACK_TIMESTAMP_RE = /^\d+(?:\.\d+)?$/;
