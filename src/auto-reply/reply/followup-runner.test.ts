@@ -12,6 +12,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -360,6 +361,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
   vi.doMock("../../agents/model-fallback.js", () => ({
+    isFallbackSummaryError: (err: unknown) =>
+      err instanceof Error && err.name === "FallbackSummaryError",
     runWithModelFallback: (params: unknown) => runWithModelFallbackMock(params),
   }));
   vi.doMock("../../agents/session-write-lock.js", () => ({
@@ -4329,13 +4332,19 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      reasoningPayloadsEnabled: boolean;
+      commentaryPayloadsEnabled: boolean;
     }> = {},
   ) {
     if (overrides.storePath && overrides.sessionStore) {
       registerFollowupTestSessionStore(overrides.storePath, overrides.sessionStore);
     }
     return createFollowupRunner({
-      opts: { onBlockReply },
+      opts: {
+        onBlockReply,
+        reasoningPayloadsEnabled: overrides.reasoningPayloadsEnabled,
+        commentaryPayloadsEnabled: overrides.commentaryPayloadsEnabled,
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-6",
@@ -4354,6 +4363,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      reasoningPayloadsEnabled: boolean;
+      commentaryPayloadsEnabled: boolean;
     }>;
   }) {
     const onBlockReply = createAsyncReplySpy();
@@ -4373,6 +4384,259 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ...overrides,
     };
   }
+
+  it.each([
+    { label: "empty", payloads: [], runnerOverrides: undefined },
+    { label: "empty-envelope", payloads: [{}], runnerOverrides: undefined },
+    { label: "blank-text", payloads: [{ text: "" }], runnerOverrides: undefined },
+    {
+      label: "reasoning-only",
+      payloads: [{ text: "internal", isReasoning: true }],
+      runnerOverrides: undefined,
+    },
+    {
+      label: "reasoning-only with reasoning enabled",
+      payloads: [{ text: "internal", isReasoning: true }],
+      runnerOverrides: { reasoningPayloadsEnabled: true },
+    },
+    {
+      label: "commentary-only",
+      payloads: [{ text: "internal", isCommentary: true }],
+      runnerOverrides: undefined,
+    },
+    {
+      label: "commentary-only with commentary enabled",
+      payloads: [{ text: "internal", isCommentary: true }],
+      runnerOverrides: { commentaryPayloadsEnabled: true },
+    },
+    {
+      label: "directive-only",
+      payloads: [{ text: "[[reply_to_current]]" }],
+      runnerOverrides: undefined,
+    },
+  ])(
+    "routes a visible fallback for successful $label followups",
+    async ({ payloads, runnerOverrides }) => {
+      const queued = baseQueuedRun("discord");
+      const { onBlockReply } = await runMessagingCase({
+        agentResult: { payloads },
+        runnerOverrides,
+        queued: {
+          ...queued,
+          currentInboundEventKind: "user_request",
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          originatingReplyToMode: "first",
+          messageId: "message-1",
+        },
+      });
+
+      expect(onBlockReply).not.toHaveBeenCalled();
+      const fallbackCall = routeReplyMock.mock.calls.find((call) => {
+        const payload = requireRecord(
+          requireRecord(call[0], "route reply params").payload,
+          "payload",
+        );
+        return payload.isError === true;
+      });
+      expect(fallbackCall).toBeDefined();
+      expect(requireRecord(fallbackCall?.[0], "fallback route reply params").payload).toMatchObject(
+        {
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        },
+      );
+    },
+  );
+
+  it("routes the shared terminal failure for empty failed followups", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "private detail" } },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it("routes a terminal failure when a classified empty result exhausts model fallback", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (provider: string, model: string) => Promise<unknown>;
+        classifyResult: (attempt: {
+          result: unknown;
+          provider: string;
+          model: string;
+          attempt: number;
+          total: number;
+        }) => Promise<Record<string, unknown>> | Record<string, unknown>;
+      }) => {
+        const result = await params.run(params.provider, params.model);
+        const classification = await params.classifyResult({
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempt: 1,
+          total: 1,
+        });
+        expect(classification).toMatchObject({
+          code: "empty_result",
+          preserveResultOnExhaustion: true,
+          preserveResultPriority: -1,
+        });
+        return {
+          outcome: "exhausted",
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [{ reason: "format", code: "empty_result" }],
+        };
+      },
+    );
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { agentHarnessResultClassification: "empty" },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it("routes a terminal failure when model fallback exhausts without a preserved result", async () => {
+    const exhaustionError = new Error("All model fallback candidates failed");
+    exhaustionError.name = "FallbackSummaryError";
+    runWithModelFallbackMock.mockRejectedValueOnce(exhaustionError);
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it.each([
+    {
+      label: "NO_REPLY",
+      agentResult: {
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { finalAssistantVisibleText: "NO_REPLY" },
+      },
+      queuedOverrides: {},
+    },
+    {
+      label: "accepted child spawn",
+      agentResult: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+      },
+      queuedOverrides: {},
+    },
+    {
+      label: "cron side effect",
+      agentResult: { payloads: [], successfulCronAdds: 1 },
+      queuedOverrides: {},
+    },
+    {
+      label: "approval prompt",
+      agentResult: { payloads: [], didSendDeterministicApprovalPrompt: true },
+      queuedOverrides: {},
+    },
+    {
+      label: "source delivery",
+      agentResult: { payloads: [], didDeliverSourceReplyViaMessageTool: true },
+      queuedOverrides: {},
+    },
+    {
+      label: "message-tool-only mode",
+      agentResult: { payloads: [] },
+      queuedOverrides: { run: { sourceReplyDeliveryMode: "message_tool_only" } },
+    },
+    {
+      label: "explicit silent policy",
+      agentResult: { payloads: [] },
+      queuedOverrides: { run: { silentExpected: true } },
+    },
+    {
+      label: "allowed empty reply",
+      agentResult: { payloads: [] },
+      queuedOverrides: { run: { allowEmptyAssistantReplyAsSilent: true } },
+    },
+    {
+      label: "yielded continuation",
+      agentResult: { payloads: [], meta: { yielded: true } },
+      queuedOverrides: {},
+    },
+    {
+      label: "pending tool continuation",
+      agentResult: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
+      queuedOverrides: {},
+    },
+    {
+      label: "room event",
+      agentResult: { payloads: [] },
+      queuedOverrides: { currentInboundEventKind: "room_event" },
+    },
+    {
+      label: "default-silent group",
+      agentResult: { payloads: [] },
+      queuedOverrides: { originatingChatType: "group" },
+    },
+    {
+      label: "internal handoff",
+      agentResult: { payloads: [] },
+      queuedOverrides: {
+        run: { inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" } },
+      },
+    },
+  ])("keeps successful $label followups silent", async ({ agentResult, queuedOverrides }) => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult,
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        ...queuedOverrides,
+        run: { ...queued.run, ...queuedOverrides.run },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = "/tmp/openclaw-followup-usage.json";
@@ -5096,7 +5360,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     await runner(queued);
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenCalledTimes(3);
     const startRoute = requireMockCallArg(routeReplyMock, 0);
     const endRoute = requireMockCallArg(routeReplyMock, 1);
     expect(startRoute).toMatchObject({
@@ -5120,6 +5384,12 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToId: "current-msg-1",
       replyToCurrent: true,
       isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 2).payload, "final fallback"),
+    ).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
     });
   });
 
@@ -5201,7 +5471,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(4);
+    expect(routeReplyMock).toHaveBeenCalledTimes(5);
     expect(
       requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "hook start"),
     ).toMatchObject({
@@ -5231,6 +5501,12 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToId: "current-msg-1",
       replyToCurrent: true,
       isCompactionNotice: true,
+    });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 4).payload, "final fallback"),
+    ).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
     });
   });
 
@@ -5269,13 +5545,19 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
     const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload");
     expect(payload).toMatchObject({
       text: "🧹 Compacting context...",
       isCompactionNotice: true,
     });
     expect(payload.replyToId).toBeUndefined();
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 1).payload, "final fallback"),
+    ).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
   });
 
   it("plans queued compaction notices with the active fallback candidate", async () => {
@@ -5364,7 +5646,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: expect.stringContaining("did not produce a visible reply"),
+      isError: true,
+    });
   });
 });
 
