@@ -293,6 +293,20 @@ describe("promosClaimCommand", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("runs the install path when the auth choice is not installed, even with existing auth", async () => {
+    // Existing env credentials must not shortcut past a required plugin install.
+    mocks.resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+    mocks.resolveProviderInstallCatalogEntry.mockReturnValue(authChoice);
+    mocks.hasAvailableAuthForProvider.mockResolvedValue(true);
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
+
+    await promosClaimCommand("spring-models", {}, makeRuntime());
+
+    expect(mocks.applyAuthChoiceLoadedPluginProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ authChoice: "openrouter-api-key" }),
+    );
+  });
+
   it("refuses to claim when the provider plugin is blocked by policy", async () => {
     mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
       config: cfg,

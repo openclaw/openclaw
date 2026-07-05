@@ -77,21 +77,26 @@ function requireLiveWindow(promotion: ClawHubPromotion) {
 
 // Mirrors applyAuthChoiceLoadedPluginProvider's own resolution order: loaded
 // plugin manifests (bundled/installed providers) first, then the install
-// catalog for providers that would need a plugin install.
+// catalog for providers that would need a plugin install. The source matters:
+// only manifest-resolved choices may take the credential-reuse shortcut,
+// because install-catalog choices still need their plugin installed.
+type ResolvedAuthChoice = { entry: ProviderAuthChoiceMetadata; installed: boolean };
+
 function resolveAuthChoice(
   promotion: ClawHubPromotion,
   provider: string,
   cfg: OpenClawConfig,
-): ProviderAuthChoiceMetadata | undefined {
+): ResolvedAuthChoice | undefined {
   const authChoiceId = promotion.authChoiceId?.trim();
   if (!authChoiceId) {
     return undefined;
   }
+  const manifestEntry = resolveManifestProviderAuthChoice(authChoiceId, {
+    config: cfg,
+    includeUntrustedWorkspacePlugins: false,
+  });
   const entry =
-    resolveManifestProviderAuthChoice(authChoiceId, {
-      config: cfg,
-      includeUntrustedWorkspacePlugins: false,
-    }) ??
+    manifestEntry ??
     resolveProviderInstallCatalogEntry(authChoiceId, {
       config: cfg,
       includeUntrustedWorkspacePlugins: false,
@@ -106,7 +111,7 @@ function resolveAuthChoice(
       `Promotion "${promotion.slug}" declares provider "${provider}" but its auth choice belongs to "${entry.providerId}"; refusing to configure it.`,
     );
   }
-  return entry;
+  return { entry, installed: Boolean(manifestEntry) };
 }
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -123,19 +128,23 @@ async function readValidConfigSnapshot(): Promise<ConfigSnapshot> {
 async function ensureProviderAuth(params: {
   promotion: ClawHubPromotion;
   provider: string;
-  catalogEntry: ProviderAuthChoiceMetadata | undefined;
+  authChoice: ResolvedAuthChoice | undefined;
   snapshot: ConfigSnapshot;
   opts: PromosClaimOptions;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  const { promotion, provider, catalogEntry, snapshot, opts, runtime } = params;
+  const { promotion, provider, authChoice, snapshot, opts, runtime } = params;
+  const catalogEntry = authChoice?.entry;
   const runtimeConfig = snapshot.runtimeConfig ?? snapshot.config;
   const apiKey = opts.apiKey?.trim();
   // Any working provider auth is deliberately sufficient: the promotion's
   // authChoiceId describes how to set up auth when none exists, not an
   // exclusivity requirement. An explicit --api-key overrides reuse because the
-  // user asked for that specific key to be stored.
-  if (!apiKey && (await hasAvailableAuthForProvider({ provider, cfg: runtimeConfig }))) {
+  // user asked for that specific key to be stored. Install-catalog choices
+  // never take the shortcut: their plugin is not installed yet, so the apply
+  // flow must still run to install it.
+  const reuseAllowed = !apiKey && (authChoice?.installed ?? true);
+  if (reuseAllowed && (await hasAvailableAuthForProvider({ provider, cfg: runtimeConfig }))) {
     runtime.log(`Using your existing ${provider} credentials.`);
     return;
   }
@@ -201,13 +210,13 @@ export async function promosClaimCommand(
     resolvePromotionModelTarget(promotion, model.modelRef);
   }
   const snapshot = await readValidConfigSnapshot();
-  const catalogEntry = resolveAuthChoice(
+  const authChoice = resolveAuthChoice(
     promotion,
     provider,
     snapshot.runtimeConfig ?? snapshot.config,
   );
 
-  await ensureProviderAuth({ promotion, provider, catalogEntry, snapshot, opts, runtime });
+  await ensureProviderAuth({ promotion, provider, authChoice, snapshot, opts, runtime });
 
   const suggested = promotion.models.find((model) => model.suggestedDefault) ?? promotion.models[0];
   let makeDefault = Boolean(opts.setDefault && suggested);
@@ -223,11 +232,11 @@ export async function promosClaimCommand(
     // enablement normally happens. Enable (or refuse) the provider plugin here
     // so a claim never registers models the runtime cannot load under the
     // user's plugin policy. Idempotent when the auth flow already enabled it.
-    if (catalogEntry) {
-      const enabled = enablePluginInConfig(base, catalogEntry.pluginId);
+    if (authChoice) {
+      const enabled = enablePluginInConfig(base, authChoice.entry.pluginId);
       if (!enabled.enabled) {
         throw new Error(
-          `The "${catalogEntry.pluginId}" plugin is blocked by your plugin policy (${enabled.reason ?? "disabled"}); cannot claim this promotion.`,
+          `The "${authChoice.entry.pluginId}" plugin is blocked by your plugin policy (${enabled.reason ?? "disabled"}); cannot claim this promotion.`,
         );
       }
       base = enabled.config;
