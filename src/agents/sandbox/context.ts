@@ -27,7 +27,10 @@ import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
-import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
+import {
+  ensureReadOnlyWorkspaceSkillMountSources,
+  resolveMaterializedSandboxSkillsWorkspaceDir,
+} from "./workspace-mounts.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function syncSandboxSkillsToWorkspace(params: {
@@ -124,6 +127,13 @@ async function ensureSandboxWorkspaceLayout(params: {
       config: params.config,
       agentId: params.agentId,
       rawSessionKey,
+    });
+    await ensureReadOnlyWorkspaceSkillMountSources({
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: cfg.docker.workdir,
+      workspaceAccess: cfg.workspaceAccess,
     });
   }
 
