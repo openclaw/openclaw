@@ -135,6 +135,34 @@ require_remote_testbox_gate_stamp() {
   printf '%s\n' "$stamp"
 }
 
+write_gates_env_stamp() {
+  local pr="$1"
+  local docs_only="$2"
+  local changelog_required="$3"
+  local gates_mode="$4"
+  local last_verified_head="$5"
+  local full_gates_head="$6"
+  local hosted_gates_head="$7"
+  local remote_provider="$8"
+  local remote_lease_id="$9"
+  local remote_run_url="${10}"
+
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    DOCS_ONLY "$docs_only" \
+    CHANGELOG_REQUIRED "$changelog_required" \
+    GATES_MODE "$gates_mode" \
+    LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
+    FULL_GATES_HEAD_SHA "$full_gates_head" \
+    HOSTED_GATES_HEAD_SHA "$hosted_gates_head" \
+    REMOTE_GATES_PROVIDER "$remote_provider" \
+    REMOTE_GATES_LEASE_ID "$remote_lease_id" \
+    REMOTE_GATES_RUN_URL "$remote_run_url" \
+    GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/gates.env
+}
+
 run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
@@ -152,25 +180,55 @@ run_prepare_push_retry_gates() {
   acquire_pr_gates_lock
   run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
   run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
+
+  # The retry rebased the prep head, so the pre-push gates.env stamp no longer
+  # describes what these gates just verified; rewrite it for the new head so
+  # prep.md and prep.env do not attribute stale evidence to the pushed commit.
+  local retry_head
+  retry_head=$(git rev-parse HEAD)
+  local gates_mode="full"
+  local full_gates_head="$retry_head"
+  local remote_gates_provider=""
+  local remote_gates_lease_id=""
+  local remote_gates_run_url=""
+
   if [ "$docs_only" = "true" ]; then
     release_pr_gates_lock
-    return 0
-  fi
-
-  if [ "$gates_remote_mode" = "testbox" ]; then
+    gates_mode="docs_only"
+    # No test ran: carry the prior full-gates proof and how it was produced.
+    full_gates_head="${FULL_GATES_HEAD_SHA:-}"
+    remote_gates_provider="${REMOTE_GATES_PROVIDER:-}"
+    remote_gates_lease_id="${REMOTE_GATES_LEASE_ID:-}"
+    remote_gates_run_url="${REMOTE_GATES_RUN_URL:-}"
+  elif [ "$gates_remote_mode" = "testbox" ]; then
     release_pr_gates_lock
+    gates_mode="remote_testbox"
     run_remote_testbox_full_test_gate \
       "pnpm test (lease-retry, blacksmith-testbox)" \
       ".local/lease-retry-test.log" \
-      "pr-gates-lease-retry"
+      "pr-${PR_NUMBER:-unknown}-gates-lease-retry"
     local retry_stamp
     retry_stamp=$(require_remote_testbox_gate_stamp ".local/lease-retry-test.log")
-    echo "Remote testbox lease-retry gate stamp: $(printf '%s\n' "$retry_stamp" | jq -r '.leaseId')"
-    return 0
+    remote_gates_provider="blacksmith-testbox"
+    remote_gates_lease_id=$(printf '%s\n' "$retry_stamp" | jq -r '.leaseId')
+    remote_gates_run_url=$(printf '%s\n' "$retry_stamp" | jq -r '.actionsRunUrl // ""')
+    echo "Remote testbox lease-retry gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
+  else
+    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
+    release_pr_gates_lock
   fi
 
-  run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
-  release_pr_gates_lock
+  write_gates_env_stamp \
+    "${PR_NUMBER:-}" \
+    "$docs_only" \
+    "${CHANGELOG_REQUIRED:-false}" \
+    "$gates_mode" \
+    "$retry_head" \
+    "$full_gates_head" \
+    "" \
+    "$remote_gates_provider" \
+    "$remote_gates_lease_id" \
+    "$remote_gates_run_url"
 }
 
 prepare_gates() {
@@ -335,20 +393,17 @@ prepare_gates() {
     fi
   fi
 
-  # Security: shell-escape values to prevent command injection when sourced.
-  printf '%s=%q\n' \
-    PR_NUMBER "$pr" \
-    DOCS_ONLY "$docs_only" \
-    CHANGELOG_REQUIRED "$changelog_required" \
-    GATES_MODE "$gates_mode" \
-    LAST_VERIFIED_HEAD_SHA "$current_head" \
-    FULL_GATES_HEAD_SHA "${previous_full_gates_head:-}" \
-    HOSTED_GATES_HEAD_SHA "$hosted_gates_head" \
-    REMOTE_GATES_PROVIDER "$remote_gates_provider" \
-    REMOTE_GATES_LEASE_ID "$remote_gates_lease_id" \
-    REMOTE_GATES_RUN_URL "$remote_gates_run_url" \
-    GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > .local/gates.env
+  write_gates_env_stamp \
+    "$pr" \
+    "$docs_only" \
+    "$changelog_required" \
+    "$gates_mode" \
+    "$current_head" \
+    "${previous_full_gates_head:-}" \
+    "$hosted_gates_head" \
+    "$remote_gates_provider" \
+    "$remote_gates_lease_id" \
+    "$remote_gates_run_url"
 
   echo "docs_only=$docs_only"
   echo "changelog_only=$changelog_only"

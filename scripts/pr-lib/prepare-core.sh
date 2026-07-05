@@ -156,6 +156,10 @@ prepare_push() {
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" true "${DOCS_ONLY:-false}" "$push_result_env"
   # shellcheck disable=SC1090
   source "$push_result_env"
+  # A lease retry reruns gates for the rebased head and rewrites gates.env;
+  # re-source so prep.md/prep.env carry the stamp for the head actually pushed.
+  # shellcheck disable=SC1091
+  source .local/gates.env
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
