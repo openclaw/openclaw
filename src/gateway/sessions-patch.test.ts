@@ -367,6 +367,53 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe(true);
   });
 
+  test("persists, trims, and clears category", async () => {
+    const store = mainStoreEntry({});
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, category: "  Research  " },
+      }),
+    );
+    expect(entry.category).toBe("Research");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ category: "Research" }),
+        patch: { key: MAIN_SESSION_KEY, category: null },
+      }),
+    );
+    expect(cleared.category).toBeUndefined();
+  });
+
+  test("allows duplicate categories across sessions", async () => {
+    const store: Record<string, SessionEntry> = {
+      ...mainStoreEntry({}),
+      "agent:main:discord:channel:123": {
+        sessionId: "other",
+        updatedAt: 1,
+        category: "Research",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, category: "Research" },
+      }),
+    );
+    expect(entry.category).toBe("Research");
+  });
+
+  test("rejects empty category", async () => {
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({}),
+        patch: { key: MAIN_SESSION_KEY, category: "   " },
+      }),
+      "invalid category: empty",
+    );
+  });
+
   test("clears fastMode when patch sets null", async () => {
     const store = mainStoreEntry({ fastMode: true });
     const entry = expectPatchOk(

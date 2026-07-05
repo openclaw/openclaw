@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import {
@@ -423,7 +424,7 @@ export class AppSidebar extends LitElement {
     ]
       .filter(Boolean)
       .join(" ");
-    return html`
+    const row = html`
       <div
         class=${rowClass}
         data-session-key=${session.key}
@@ -486,6 +487,9 @@ export class AppSidebar extends LitElement {
         </span>
       </div>
     `;
+    // Hover marquee state mutates the row DOM. Keying prevents that state from
+    // leaking when Lit reuses this slot for another session after navigation.
+    return keyed(session.key, row);
   }
 
   private renderSessions() {

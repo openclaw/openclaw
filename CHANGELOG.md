@@ -6,10 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI session titles:** reveal truncated recent-session names with a reduced-motion-safe hover animation.
 - **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd.
 
 ### Fixes
 
+- **iOS Voice Wake cleanup:** avoid initializing the microphone audio pipeline while disabling inactive Voice Wake, preventing simulator launch aborts and unnecessary audio setup.
 - **Agent stop recovery:** prevent late-aborting prompts from reacquiring orphaned session locks after teardown, so `/stop` leaves the conversation ready for the next turn.
 - **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
 - **WhatsApp credential recovery:** restore malformed primary auth state from a valid backup during startup. (#99070) Thanks @LeonidasLux.
@@ -27,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - **Model aliases:** resolve provider-qualified aliases during session and chat-command model switches without collisions when providers share a display alias. (#100209) Thanks @sahilsatralkar.
 - **TUI new-session hooks:** create `/new` sessions through the shared Gateway lifecycle so command and session hooks receive the completed parent transcript in both Gateway and embedded modes, while preventing rollover during an active turn. (#100241, #49918) Thanks @BingqingLyu.
 - **TUI abort diagnostics:** show sanitized tool argument-validation summaries for aborted runs in both Gateway and local TUI modes without exposing raw model arguments. (#91002) Thanks @wsyjh8.
+- **iOS Watch replies:** persist queued quick replies in the gateway-scoped chat outbox and submit them through idempotent chat delivery, preventing losses, duplicates, and cross-gateway sends after reconnects. (#100031) Thanks @NianJiuZst.
 
 ## 2026.7.1
 

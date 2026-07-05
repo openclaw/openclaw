@@ -320,6 +320,9 @@ export function reconcileSessionChanged(
   if (rowFields.label === null) {
     delete row.label;
   }
+  if (rowFields.category === null) {
+    delete row.category;
+  }
   if (rowFields.displayName === null) {
     delete row.displayName;
   }

@@ -7,6 +7,7 @@ struct WatchReplyDraft {
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var note: String?
     var sentAtMs: Int
 }
@@ -114,6 +115,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
            !sessionKey.isEmpty
         {
             payload["sessionKey"] = sessionKey
+        }
+        if let gatewayStableID = draft.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            payload["gatewayStableID"] = gatewayStableID
         }
         if let note = draft.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
             payload["note"] = note
@@ -250,6 +256,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let kind = (payload["kind"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let details = (payload["details"] as? String)?
@@ -266,6 +274,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             sentAtMs: sentAtMs,
             promptId: promptId,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,

@@ -1256,6 +1256,82 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("clears hover marquee state when a session switch reshuffles recent rows", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessions = chatSessionListResponse();
+    sessions.sessions[0].label = "Short";
+    sessions.sessions[1].label =
+      "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
+        4,
+      );
+    await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessions },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const recentRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
+      );
+      const recentLabel = recentRow.locator(".sidebar-recent-session__name");
+      await recentLabel.waitFor({ state: "visible", timeout: 10_000 });
+      const layout = await recentLabel.evaluate((label) => ({
+        clientWidth: label.clientWidth,
+        linkWidth: label.parentElement?.clientWidth ?? 0,
+        rowWidth: label.closest<HTMLElement>(".sidebar-recent-session")?.clientWidth ?? 0,
+        scrollWidth: label.scrollWidth,
+        text: label.textContent,
+      }));
+      expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
+
+      await recentRow.dispatchEvent("mouseenter");
+      await expect
+        .poll(() => recentLabel.evaluate((label) => getComputedStyle(label).textIndent))
+        .not.toBe("0px");
+
+      await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
+        button: 0,
+      });
+      await page
+        .locator(".sidebar-recent-session--active")
+        .getByText(sessions.sessions[1].label)
+        .waitFor({
+          timeout: 10_000,
+        });
+
+      const reshuffledLabel = page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .getByText("Short");
+      await reshuffledLabel.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textIndent)).toBe(
+        "0px",
+      );
+      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textOverflow)).toBe(
+        "ellipsis",
+      );
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const activeRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
+      );
+      await activeRow.dispatchEvent("mouseenter");
+      expect(
+        await activeRow.locator(".sidebar-recent-session__name").evaluate((label) => ({
+          textIndent: getComputedStyle(label).textIndent,
+          textOverflow: getComputedStyle(label).textOverflow,
+        })),
+      ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("shows a pending send while a model override save is still pending", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
