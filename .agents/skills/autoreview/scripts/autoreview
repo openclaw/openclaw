@@ -3058,7 +3058,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
     parser.add_argument("--droid-bin", default=os.environ.get("DROID_BIN", "droid"))
     parser.add_argument("--copilot-bin", default=os.environ.get("COPILOT_BIN", "copilot"))
-    parser.add_argument("--cursor-bin", default=os.environ.get("CURSOR_BIN", "cursor-agent"))
+    parser.add_argument(
+        "--cursor-bin",
+        "--cursor-agent-bin",
+        dest="cursor_bin",
+        default=os.environ.get("CURSOR_BIN")
+        or os.environ.get("CURSOR_AGENT_BIN", "cursor-agent"),
+    )
     parser.add_argument("--opencode-bin", default=os.environ.get("OPENCODE_BIN", "opencode"))
     parser.add_argument("--pi-bin", default=os.environ.get("PI_BIN", "pi"))
     parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, copilot, opencode, and cursor reject no-tools review.")

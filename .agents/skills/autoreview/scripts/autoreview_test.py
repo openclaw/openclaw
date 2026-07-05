@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).with_name("autoreview")
@@ -101,6 +102,26 @@ class AutoreviewCursorTests(unittest.TestCase):
 
 
 class AutoreviewCompatibilityTests(unittest.TestCase):
+    def test_cursor_agent_bin_cli_alias(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["autoreview", "--cursor-agent-bin", "/tmp/legacy-cursor"],
+        ):
+            args = AUTOREVIEW.parse_args()
+        self.assertEqual(args.cursor_bin, "/tmp/legacy-cursor")
+
+    def test_cursor_agent_bin_env_alias(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"CURSOR_AGENT_BIN": "/tmp/legacy-cursor"},
+            clear=False,
+        ):
+            os.environ.pop("CURSOR_BIN", None)
+            with mock.patch.object(sys, "argv", ["autoreview"]):
+                args = AUTOREVIEW.parse_args()
+        self.assertEqual(args.cursor_bin, "/tmp/legacy-cursor")
+
     def test_cursor_agent_reviewer_alias_normalizes_to_cursor(self) -> None:
         self.assertEqual(
             AUTOREVIEW.parse_reviewer_token("cursor-agent:auto"),

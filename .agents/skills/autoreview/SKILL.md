@@ -266,6 +266,9 @@ Examples matching current `main` behavior:
 "$AUTOREVIEW" --engine opencode --model opencode/north-mini-code-free --thinking high
 ```
 
+`--cursor-agent-bin` and `CURSOR_AGENT_BIN` remain compatibility aliases for
+`--cursor-bin` and `CURSOR_BIN`.
+
 ### Environment defaults
 
 CLI flags take precedence over environment variables.
