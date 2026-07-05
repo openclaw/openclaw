@@ -264,6 +264,25 @@ function isMergeableProviderConfig(
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function mergeOnboardProviderRequest(
+  existing: ModelProviderConfig["request"],
+  patch: ModelProviderConfig["request"],
+): ModelProviderConfig["request"] {
+  if (!existing) {
+    return patch;
+  }
+  const merged = { ...existing, ...patch };
+  // Keep operator transport policy, but never resurrect nested credentials
+  // that the onboarding owner intentionally omitted from its patch.
+  if (!patch || !("auth" in patch)) {
+    delete merged.auth;
+  }
+  if (!patch || !("headers" in patch)) {
+    delete merged.headers;
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 function mergeOnboardProviderConfigs(
   existingProviders: Record<string, ModelProviderConfig> | undefined,
   patchProviders: Record<string, ModelProviderConfig>,
@@ -271,19 +290,24 @@ function mergeOnboardProviderConfigs(
   const merged: Record<string, ModelProviderConfig> = { ...existingProviders };
   for (const [providerId, providerConfig] of Object.entries(patchProviders)) {
     const existingProvider = existingProviders?.[providerId];
-    if (!isMergeableProviderConfig(existingProvider) || !isMergeableProviderConfig(providerConfig)) {
+    if (
+      !isMergeableProviderConfig(existingProvider) ||
+      !isMergeableProviderConfig(providerConfig)
+    ) {
       merged[providerId] = providerConfig;
       continue;
     }
     const nextProvider = { ...existingProvider, ...providerConfig };
-    if (!("apiKey" in providerConfig)) {
-      delete nextProvider.apiKey;
+    for (const key of ["apiKey", "auth", "authHeader", "headers"] as const) {
+      if (!(key in providerConfig)) {
+        delete nextProvider[key];
+      }
     }
-    if (!("auth" in providerConfig)) {
-      delete nextProvider.auth;
-    }
-    if (!("headers" in providerConfig)) {
-      delete nextProvider.headers;
+    if (!("request" in providerConfig) || providerConfig.request) {
+      nextProvider.request = mergeOnboardProviderRequest(
+        existingProvider.request,
+        providerConfig.request,
+      );
     }
     merged[providerId] = nextProvider;
   }

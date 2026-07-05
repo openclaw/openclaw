@@ -111,7 +111,13 @@ describe("onboard auth provider config merges", () => {
               baseUrl: "https://old.example.com/v1",
               apiKey: "stale-key",
               auth: "api-key",
+              authHeader: true,
               headers: { authorization: "stale-header" },
+              request: {
+                allowPrivateNetwork: true,
+                auth: { mode: "authorization-bearer", token: "stale-token" },
+                headers: { "x-stale-auth": "stale-request-header" },
+              },
               timeoutSeconds: 900,
               models: [makeModel("model-a")],
             },
@@ -132,7 +138,9 @@ describe("onboard auth provider config merges", () => {
 
     expect(next.models?.providers?.custom?.apiKey).toBeUndefined();
     expect(next.models?.providers?.custom?.auth).toBeUndefined();
+    expect(next.models?.providers?.custom?.authHeader).toBeUndefined();
     expect(next.models?.providers?.custom?.headers).toBeUndefined();
+    expect(next.models?.providers?.custom?.request).toEqual({ allowPrivateNetwork: true });
     expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
   });
 
