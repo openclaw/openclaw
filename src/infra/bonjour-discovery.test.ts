@@ -341,6 +341,29 @@ describe("bonjour-discovery", () => {
     expect(calls.map((c) => c.argv[0])).toContain("dig");
   });
 
+  it("tolerates malformed tailscale status JSON during wide-area fallback", async () => {
+    const run = vi.fn(async (argv: string[]) => {
+      const cmd = argv[0];
+      if (cmd === "dns-sd" && argv[1] === "-B") {
+        return { stdout: "", stderr: "", code: 0, signal: null, killed: false };
+      }
+      if (cmd === "tailscale" && argv[1] === "status" && argv[2] === "--json") {
+        return { stdout: "not valid json {", stderr: "", code: 0, signal: null, killed: false };
+      }
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    });
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 1200,
+      domains: [WIDE_AREA_DOMAIN],
+      wideAreaDomain: WIDE_AREA_DOMAIN,
+      run: run as unknown as typeof runCommandWithTimeout,
+    });
+
+    expect(beacons).toEqual([]);
+  });
+
   it("normalizes domains and respects domains override", async () => {
     const calls: string[][] = [];
     const run = vi.fn(async (argv: string[]) => {
