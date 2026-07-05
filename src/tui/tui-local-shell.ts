@@ -117,6 +117,12 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
+      // stdout/stderr can emit 'error' (EPIPE, resource limits) before close.
+      // Swallow these stream errors so they do not become unhandled rejections;
+      // child close/error remains the authoritative completion signal.
+      const ignoreOutputStreamError = () => {};
+      child.stdout.on("error", ignoreOutputStreamError);
+      child.stderr.on("error", ignoreOutputStreamError);
       child.stdout.on("data", (buf) => {
         stdout = appendWithCap(stdout, buf.toString("utf8"));
       });

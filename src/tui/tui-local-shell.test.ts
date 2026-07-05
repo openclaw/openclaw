@@ -162,4 +162,32 @@ describe("createLocalShellRunner", () => {
     // the previous head-cut kept all stdout and dropped stderr entirely.
     expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
   });
+
+  it("does not crash when stdout or stderr emit an error event", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => callback(0, null));
+        }
+      },
+    }));
+
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const run = harness.runLocalShellLine("!cmd");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledTimes(1));
+    stdout.emit("error", new Error("EPIPE"));
+    stderr.emit("error", new Error("EIO"));
+
+    await expect(run).resolves.toBeUndefined();
+    expect(harness.messages.some((m) => m.includes("exit 0"))).toBe(true);
+  });
 });
