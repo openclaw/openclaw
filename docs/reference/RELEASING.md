@@ -72,6 +72,8 @@ writes `release/extended-stable-plugin-cohort.json`. Later `.34+` maintenance
 releases verify the same immutable baseline against the supplied evidence; they
 must not advance it. Cohort packages are verified at that exact version but are
 never republished, tagged, or added to the protected selector transaction.
+They remain outside the covered acceptance, backport, and priority-support
+contract.
 
 Run the npm preflight and Full Release Validation from the exact
 extended-stable branch, then save both run IDs:

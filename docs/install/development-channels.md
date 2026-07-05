@@ -121,6 +121,9 @@ Switching channels with `openclaw update` also syncs plugin sources:
   npm-publishable official plugins with bare or `latest` intent use the monthly
   compatibility baseline packaged with that core release. Exact pins and
   non-npm sources remain unchanged; neither track falls back to `latest`.
+- Cohort-only plugins are compatibility-pinned, not extended-stable-supported:
+  they receive no covered acceptance, backports, selector, publication, or
+  priority-support promise.
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status
