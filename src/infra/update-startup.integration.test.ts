@@ -63,13 +63,16 @@ describe("extended-stable startup update integration", () => {
 
   it("emits a read-only hint after verifying a newer exact loopback package", async () => {
     const requests: string[] = [];
-    server = http.createServer((request, response) => {
+    const registryServer = http.createServer((request, response) => {
       requests.push(request.url ?? "");
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ version: "2.0.0" }));
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
+    server = registryServer;
+    await new Promise<void>((resolve) => {
+      registryServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = registryServer.address();
     if (!address || typeof address === "string") {
       throw new Error("expected loopback registry address");
     }
