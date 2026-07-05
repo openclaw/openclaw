@@ -25,6 +25,7 @@ import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 
@@ -2652,15 +2653,29 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("repairs a provisional registry kill from a task-first completion", async () => {
+  it.each([
+    {
+      name: "repairs a provisional registry kill from a task-first completion",
+      taskStatus: "succeeded" as const,
+      expectedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectedOutcome: { status: "ok" },
+    },
+    {
+      name: "preserves an error reason when replaying a task-first failure",
+      taskStatus: "failed" as const,
+      taskError: "provider failed",
+      expectedReason: SUBAGENT_ENDED_REASON_ERROR,
+      expectedOutcome: { status: "error", error: "provider failed" },
+    },
+  ])("$name", async ({ taskStatus, taskError, expectedReason, expectedOutcome }) => {
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     try {
       const startedAt = Date.parse("2026-03-24T11:50:00Z");
       const killedAt = Date.parse("2026-03-24T11:55:00Z");
       const completedAt = Date.parse("2026-03-24T11:56:00Z");
-      const runId = "run-task-first-partial-commit";
-      const childSessionKey = "agent:main:subagent:task-first-partial-commit";
+      const runId = `run-task-first-${taskStatus}`;
+      const childSessionKey = `agent:main:subagent:task-first-${taskStatus}`;
       expect(
         createRunningTaskRun({
           runtime: "subagent",
@@ -2680,9 +2695,10 @@ describe("subagent registry seam flow", () => {
           runId,
           runtime: "subagent",
           sessionKey: childSessionKey,
-          status: "succeeded",
+          status: taskStatus,
           endedAt: completedAt,
           lastEventAt: completedAt,
+          error: taskError,
           progressSummary: "durable final result",
         }),
       ).toHaveLength(1);
@@ -2713,8 +2729,8 @@ describe("subagent registry seam flow", () => {
           .find((candidate) => candidate.runId === runId);
         expect(run).toMatchObject({
           endedAt: completedAt,
-          endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-          outcome: { status: "ok", startedAt, endedAt: completedAt },
+          endedReason: expectedReason,
+          outcome: { ...expectedOutcome, startedAt, endedAt: completedAt },
           completion: { resultText: "durable final result", capturedAt: completedAt },
         });
         expect(run?.killReconciliation).toBeUndefined();

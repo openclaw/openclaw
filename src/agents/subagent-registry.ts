@@ -335,6 +335,7 @@ function resolveCompletionFromTerminalTask(
       startedAt?: number;
       endedAt: number;
       outcome: SubagentRunOutcome;
+      reason: SubagentLifecycleEndedReason;
       completionSnapshot: { resultText: string | null; capturedAt: number };
     }
   | undefined {
@@ -357,6 +358,7 @@ function resolveCompletionFromTerminalTask(
     startedAt: entry.startedAt ?? task.startedAt,
     endedAt: task.endedAt,
     outcome,
+    reason: task.status === "failed" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
     completionSnapshot: {
       resultText: task.progressSummary ?? task.terminalSummary ?? null,
       capturedAt: task.endedAt,
@@ -1119,7 +1121,6 @@ async function sweepSubagentRuns() {
             {
               runId,
               ...taskCompletion,
-              reason: SUBAGENT_ENDED_REASON_COMPLETE,
               sendFarewell: true,
               accountId: entry.requesterOrigin?.accountId,
               triggerCleanup: true,
