@@ -26,8 +26,7 @@ function findWindowsUnsupportedToken(command: string): string | null {
   let inDouble = false;
   // cmd.exe does not recognise single quotes, so they are not treated as safe
   // quoting for this cross-host safety check.
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
+  for (const ch of command) {
     if (ch === '"') {
       inDouble = !inDouble;
       continue;

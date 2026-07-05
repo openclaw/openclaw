@@ -699,8 +699,8 @@ describe("processGatewayAllowlist", () => {
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result).toEqual({
-      execCommandOverride: command,
-      allowWithoutEnforcedCommand: false,
+      execCommandOverride: process.platform === "win32" ? command : undefined,
+      allowWithoutEnforcedCommand: process.platform !== "win32",
     });
   });
 
@@ -755,8 +755,8 @@ describe("processGatewayAllowlist", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(warnings[0]).toContain("reviewer or explicit approval");
     expect(result).toEqual({
-      execCommandOverride: command,
-      allowWithoutEnforcedCommand: false,
+      execCommandOverride: process.platform === "win32" ? command : undefined,
+      allowWithoutEnforcedCommand: process.platform !== "win32",
     });
   });
 
