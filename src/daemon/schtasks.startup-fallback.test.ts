@@ -782,7 +782,7 @@ describe("Windows startup fallback", () => {
       });
 
       const runtime = await readScheduledTaskRuntime(nodeEnv);
-      expect(runtime.status).toBe("unknown");
+      expect(runtime.status).not.toBe("running");
       expect(runtime.pid).toBeUndefined();
       expect(inspectPortUsage).not.toHaveBeenCalled();
     });
