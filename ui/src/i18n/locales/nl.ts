@@ -491,6 +491,7 @@ export const nl: TranslationMap = {
     debug: "Debuggen",
     logs: "Logs",
     dreams: "Dromen",
+    plugin: "Plugin",
   },
   subtitles: {
     agents: "Werkruimten, tools, identiteiten.",
@@ -516,6 +517,7 @@ export const nl: TranslationMap = {
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
     dreams: "Geheugendromen, consolidatie en reflectie.",
+    plugin: "Plugin-provided panel.",
   },
   skillWorkshop: {
     header: {

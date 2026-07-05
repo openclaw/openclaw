@@ -492,6 +492,7 @@ export const ru: TranslationMap = {
     debug: "Отладка",
     logs: "Журналы",
     dreams: "Сновидения",
+    plugin: "Плагин",
   },
   subtitles: {
     agents: "Рабочие пространства, инструменты, идентификаторы.",
@@ -518,6 +519,7 @@ export const ru: TranslationMap = {
     debug: "Снимки, события, RPC.",
     logs: "Живые журналы шлюза.",
     dreams: "Сновидения памяти, консолидация и рефлексия.",
+    plugin: "Plugin-provided panel.",
   },
   skillWorkshop: {
     header: {

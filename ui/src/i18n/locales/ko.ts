@@ -488,6 +488,7 @@ export const ko: TranslationMap = {
     debug: "디버그",
     logs: "로그",
     dreams: "드리밍",
+    plugin: "Plugin",
   },
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",
@@ -513,6 +514,7 @@ export const ko: TranslationMap = {
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
     dreams: "수면 중 메모리 통합.",
+    plugin: "Plugin-provided panel.",
   },
   skillWorkshop: {
     header: {

@@ -489,6 +489,7 @@ export const vi: TranslationMap = {
     debug: "Gỡ lỗi",
     logs: "Nhật ký",
     dreams: "Đang mơ",
+    plugin: "Plugin",
   },
   subtitles: {
     agents: "Không gian làm việc, công cụ, danh tính.",
@@ -515,6 +516,7 @@ export const vi: TranslationMap = {
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
     dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
+    plugin: "Plugin-provided panel.",
   },
   skillWorkshop: {
     header: {

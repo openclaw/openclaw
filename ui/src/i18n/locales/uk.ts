@@ -490,6 +490,7 @@ export const uk: TranslationMap = {
     debug: "Налагодження",
     logs: "Журнали",
     dreams: "Сни",
+    plugin: "Plugin",
   },
   subtitles: {
     agents: "Робочі простори, інструменти, ідентичності.",
@@ -516,6 +517,7 @@ export const uk: TranslationMap = {
     debug: "Знімки, події, RPC.",
     logs: "Журнали шлюзу в реальному часі.",
     dreams: "Консолідація пам’яті під час сну.",
+    plugin: "Plugin-provided panel.",
   },
   skillWorkshop: {
     header: {

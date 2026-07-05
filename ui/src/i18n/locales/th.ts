@@ -487,6 +487,7 @@ export const th: TranslationMap = {
     debug: "ดีบัก",
     logs: "บันทึก",
     dreams: "การฝัน",
+    plugin: "Plugin",
   },
   subtitles: {
     agents: "เวิร์กสเปซ เครื่องมือ และข้อมูลประจำตัว",
@@ -512,6 +513,7 @@ export const th: TranslationMap = {
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
     dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
+    plugin: "Plugin-provided panel.",
   },
   skillWorkshop: {
     header: {

@@ -244,6 +244,19 @@ describe("inferBasePathFromPathname", () => {
   });
 });
 
+describe("plugin tabs route", () => {
+  it("round-trips the shared /plugin route", () => {
+    expect(pathForRoute("plugin", "")).toBe("/plugin");
+    expect(routeIdFromPath("/plugin", "")).toBe("plugin");
+    // The tab id travels in the search, not the pathname.
+    expect(routeIdFromPath("/plugin/logbook", "")).toBeNull();
+  });
+
+  it("stays out of the static sidebar sections", () => {
+    expect(SIDEBAR_SECTIONS.flatMap((g) => g.routes)).not.toContain("plugin");
+  });
+});
+
 describe("SIDEBAR_SECTIONS", () => {
   it("contains all expected groups", () => {
     expect(SIDEBAR_SECTIONS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
