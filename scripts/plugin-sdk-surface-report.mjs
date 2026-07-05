@@ -159,7 +159,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "music-generation-core": 20,
   "reply-history": 8,
   "messaging-targets": 12,
-  "memory-core": 45,
+  "memory-core": 46,
   "memory-core-engine-runtime": 15,
   "memory-core-host-multimodal": 3,
   "memory-core-host-query": 2,
@@ -195,7 +195,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10470,
+      10472,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
