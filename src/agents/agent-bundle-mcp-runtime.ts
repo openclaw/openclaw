@@ -355,7 +355,9 @@ function globMatches(pattern: string, value: string): boolean {
   if (!trimmed.includes("*")) {
     return trimmed === value;
   }
-  return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
+  // Collapse consecutive wildcards so globs like "**…*" produce a linear-time regex.
+  const collapsed = trimmed.replace(/\*+/g, "*");
+  return new RegExp(`^${collapsed.split("*").map(escapeRegex).join(".*")}$`).test(value);
 }
 
 function normalizeStringList(value: unknown): string[] | undefined {
