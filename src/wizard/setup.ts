@@ -493,10 +493,16 @@ async function runSetupWizardOnce(
     normalizedExplicitFlow === "import"
       ? normalizedExplicitFlow
       : undefined;
-  const hasExplicitSetupOperation = Object.entries(opts).some(
-    ([key, value]) =>
-      value !== undefined && key !== "acceptRisk" && key !== "skipUi" && key !== "json",
-  );
+  const hasExplicitSetupOperation =
+    opts.installDaemon !== undefined ||
+    Object.entries(opts).some(
+      ([key, value]) =>
+        value !== undefined &&
+        value !== false &&
+        key !== "acceptRisk" &&
+        key !== "skipUi" &&
+        key !== "json",
+    );
   let flow: SetupFlowChoice =
     explicitFlow ?? (hasExplicitFullWizardIntent(opts) ? "advanced" : "quickstart");
 

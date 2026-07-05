@@ -861,7 +861,26 @@ describe("runSetupWizard", () => {
     ) as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ select });
 
-    await runSetupWizard({ acceptRisk: true }, createRuntime(), prompter);
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        nonInteractive: false,
+        reset: false,
+        tailscaleResetOnExit: false,
+        skipChannels: false,
+        skipSkills: false,
+        skipBootstrap: false,
+        skipSearch: false,
+        skipHealth: false,
+        skipUi: false,
+        suppressGatewayTokenOutput: false,
+        skipHooks: false,
+        importSecrets: false,
+        json: false,
+      },
+      createRuntime(),
+      prompter,
+    );
 
     expect(prompter.outro).toHaveBeenCalledWith("Current configuration kept.");
     expect(replaceConfigFile).not.toHaveBeenCalled();
