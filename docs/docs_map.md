@@ -9779,6 +9779,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Pair a mobile device
   - H2: Personal identity (browser-local)
   - H2: Runtime config endpoint
+  - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
   - H2: Sidebar navigation
