@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -11,7 +10,11 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import {
+  hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
+} from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -240,49 +243,6 @@ function resolveReplyRunDeliveryContext(params: {
   });
 }
 
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
-}
-
-function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const record = entry as { text?: unknown; mediaUrls?: unknown };
-    if ("text" in record || "mediaUrls" in record) {
-      return (
-        (typeof record.text === "string" && record.text.trim().length > 0) ||
-        hasNonEmptyStringArray(record.mediaUrls)
-      );
-    }
-    return true;
-  });
-}
-
-function hasSuccessfulSideEffectDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
-  directlySentBlockKeys?: Set<string>;
-  messagingToolSentTexts?: string[];
-  messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
-  didSendViaMessagingTool?: boolean;
-  acceptedSessionSpawns?: readonly unknown[];
-  successfulCronAdds?: number;
-  didSendDeterministicApprovalPrompt?: boolean;
-}): boolean {
-  return (
-    params.didSendViaMessagingTool === true ||
-    hasSuccessfulSourceReplyDelivery(params) ||
-    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
-    (params.successfulCronAdds ?? 0) > 0 ||
-    params.didSendDeterministicApprovalPrompt === true
-  );
-}
-
 function hasSuccessfulSourceReplyDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
@@ -293,9 +253,7 @@ function hasSuccessfulSourceReplyDelivery(params: {
   return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
-    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+    hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
 }
 
@@ -1977,17 +1935,6 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
-    const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
-      blockReplyPipeline,
-      directlySentBlockKeys,
-      messagingToolSentTexts: runResult.messagingToolSentTexts,
-      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-      messagingToolSentTargets: runResult.messagingToolSentTargets,
-      didSendViaMessagingTool: runResult.didSendViaMessagingTool,
-      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
-      successfulCronAdds: runResult.successfulCronAdds,
-      didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
-    });
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -1996,12 +1943,14 @@ export async function runReplyAgent(params: {
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
     const committedMessagingToolSourceReplyDelivery =
-      runResult.didDeliverSourceReplyViaMessageTool === true ||
-      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+      hasCommittedSourceReplyDeliveryEvidence(runResult);
+    const successfulSideEffectDelivery =
+      successfulSourceReplyDelivery ||
+      committedMessagingToolSourceReplyDelivery ||
+      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      runResult.didSendDeterministicApprovalPrompt === true;
     const shouldDeliverTerminalFailure = Boolean(
-      terminalFailurePayload &&
-      !successfulSideEffectDelivery &&
-      !committedMessagingToolSourceReplyDelivery,
+      terminalFailurePayload && !successfulSideEffectDelivery,
     );
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -2034,8 +1983,7 @@ export async function runReplyAgent(params: {
     const returnEmptyInteractiveReplyIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const emptyInteractiveReplyPayload = buildEmptyInteractiveReplyFallbackPayload({
         isHeartbeat,
-        hasSuccessfulSideEffectDelivery:
-          successfulSideEffectDelivery || committedMessagingToolSourceReplyDelivery,
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
         sourceReplyDeliveryMode:

@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -12,6 +11,10 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import {
+  hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
+} from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
@@ -81,10 +84,7 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
-import {
-  buildEmptyInteractiveReplyFallbackPayload,
-  hasCommittedSourceReplyDeliveryEvidence,
-} from "./empty-interactive-reply.js";
+import { buildEmptyInteractiveReplyFallbackPayload } from "./empty-interactive-reply.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -1436,29 +1436,23 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
-      const sendEmptyInteractiveFallbackIfNeeded = async (): Promise<boolean> => {
+      const sendEmptyInteractiveFallbackIfNeeded = async (): Promise<void> => {
         const payload = buildEmptyInteractiveReplyFallbackPayload({
           isHeartbeat: opts?.isHeartbeat === true,
           silentExpected: run.silentExpected,
           allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
           sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
           hasSuccessfulSideEffectDelivery:
+            // Compaction progress already gave the user a visible response or continued the turn;
+            // adding an empty-reply error afterward would contradict that lifecycle state.
             didSendCompactionNoticePayload ||
             didObserveCompactionRetry ||
-            hasAcceptedSessionSpawn(runResult.acceptedSessionSpawns) ||
-            hasCommittedSourceReplyDeliveryEvidence({
-              didSendViaMessagingTool: runResult.didSendViaMessagingTool,
-              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
-              messagingToolSentTexts: runResult.messagingToolSentTexts,
-              messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-              messagingToolSentTargets: runResult.messagingToolSentTargets,
-              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
-            }),
-          successfulCronAdds: runResult.successfulCronAdds,
-          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+            hasVisibleOutboundDeliveryEvidence(runResult) ||
+            hasCommittedSourceReplyDeliveryEvidence(runResult) ||
+            runResult.didSendDeterministicApprovalPrompt === true,
         });
         if (!payload) {
-          return false;
+          return;
         }
         replyOperation?.fail(
           "run_failed",
@@ -1473,7 +1467,6 @@ export function createFollowupRunner(params: {
           },
           { runId },
         );
-        return true;
       };
       const usedCliProvider = isCliProvider(providerUsed, runtimeConfig);
       const contextTokensUsed =

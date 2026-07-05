@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI tool-result images:** render direct image content blocks from Gateway history and make the delayed-send scroll E2E setup deterministic. (#100295) Thanks @lzyyzznl.
 - **Plugin approval diagnostics:** surface Gateway validation rejection reasons while keeping transport and availability failures fail-closed. (#100337) Thanks @tzy-17.
 - **IRC Unicode messages:** split outbound PRIVMSG payloads on UTF-16 code-point boundaries so emoji cannot be cut into lone surrogates. (#96572) Thanks @llagy009.
+- **Interactive empty replies:** surface a visible recovery error when direct or queued interactive turns finish without a reply, while preserving intentional silence after message-tool delivery, durable side effects, or compaction progress. (#99824) Thanks @mushuiyu886.
 - **OpenAI realtime voice greetings:** prevent server VAD from creating a second outbound greeting while an explicit greeting response owns the turn, without disabling caller interruption. (#86285) Thanks @giodl73-repo.
 - **iOS Voice Wake cleanup:** avoid initializing the microphone audio pipeline while disabling inactive Voice Wake, preventing simulator launch aborts and unnecessary audio setup.
 - **Cron duration validation:** reject positive durations that truncate below one millisecond instead of silently scheduling a zero-duration interval. (#100311) Thanks @qingminglong.

@@ -42,6 +42,11 @@ type AgentDeliveryEvidence = {
   };
 };
 
+type SourceReplyDeliveryEvidence = {
+  didDeliverSourceReplyViaMessageTool?: unknown;
+  messagingToolSourceReplyPayloads?: unknown;
+};
+
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -52,6 +57,17 @@ function hasNonEmptyArray(value: unknown): boolean {
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
+}
+
+function hasVisibleMessagingToolTarget(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const target = value as { text?: unknown; mediaUrls?: unknown };
+  if ("text" in target || "mediaUrls" in target) {
+    return hasNonEmptyString(target.text) || hasNonEmptyStringArray(target.mediaUrls);
+  }
+  return true;
 }
 
 function hasVisibleAttachmentReference(value: unknown): boolean {
@@ -224,6 +240,42 @@ export function hasCommittedMessagingToolDeliveryEvidence(
     hasNonEmptyStringArray(result.messagingToolSentTexts) ||
     hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
     hasNonEmptyArray(result.messagingToolSentTargets)
+  );
+}
+
+/** Returns whether messaging-tool metadata proves a user-visible committed delivery. */
+export function hasVisibleCommittedMessagingToolDeliveryEvidence(
+  result: Pick<
+    AgentDeliveryEvidence,
+    "messagingToolSentTexts" | "messagingToolSentMediaUrls" | "messagingToolSentTargets"
+  >,
+): boolean {
+  return (
+    hasNonEmptyStringArray(result.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(result.messagingToolSentMediaUrls) ||
+    (Array.isArray(result.messagingToolSentTargets) &&
+      result.messagingToolSentTargets.some(hasVisibleMessagingToolTarget))
+  );
+}
+
+/** Returns whether a source reply was visibly delivered through the message tool. */
+export function hasCommittedSourceReplyDeliveryEvidence(
+  result: SourceReplyDeliveryEvidence,
+): boolean {
+  return (
+    result.didDeliverSourceReplyViaMessageTool === true ||
+    hasVisibleAgentPayload({ payloads: result.messagingToolSourceReplyPayloads })
+  );
+}
+
+/** Returns whether outbound metadata proves a visible message, spawn, or cron side effect. */
+export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    result.didSendViaMessagingTool === true ||
+    hasVisibleCommittedMessagingToolDeliveryEvidence(result) ||
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveNumber(result.successfulCronAdds)
   );
 }
 
