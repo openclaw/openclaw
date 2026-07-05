@@ -2,8 +2,10 @@ package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxEnqueueResult
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.chat.RoomChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -691,6 +693,7 @@ class GatewayBootstrapAuthTest {
       val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
       val authStore = DeviceAuthStore(prefs)
       val transcriptCache = readField<RoomChatTranscriptCache>(runtime, "chatTranscriptCache")
+      val commandOutbox = readField<RoomChatCommandOutbox>(runtime, "chatCommandOutbox")
       val cacheGatewayId = "gateway-${UUID.randomUUID()}"
       prefs.setGatewayToken("stale-shared-token")
       prefs.setGatewayBootstrapToken("stale-bootstrap-token")
@@ -711,6 +714,15 @@ class GatewayBootstrapAuthTest {
             ),
           ),
       )
+      assertTrue(
+        commandOutbox.enqueue(
+          gatewayId = cacheGatewayId,
+          sessionKey = "main",
+          text = "stale queued command",
+          thinkingLevel = "off",
+          nowMs = 1L,
+        ) is ChatOutboxEnqueueResult.Queued,
+      )
       val connectionGeneration = readField<AtomicLong>(runtime, "connectAttemptSeq")
       val generationBeforeReset = connectionGeneration.get()
 
@@ -723,6 +735,7 @@ class GatewayBootstrapAuthTest {
       assertNull(authStore.loadToken(deviceId, "operator"))
       assertNull(readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
       assertTrue(transcriptCache.loadTranscript(cacheGatewayId, "main").isEmpty())
+      assertTrue(commandOutbox.load(cacheGatewayId).isEmpty())
       assertEquals(generationBeforeReset + 2, connectionGeneration.get())
     }
 
