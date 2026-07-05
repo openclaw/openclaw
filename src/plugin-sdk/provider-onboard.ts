@@ -1,7 +1,10 @@
 // Keep provider onboarding helpers dependency-light so bundled provider plugins
 // do not pull heavyweight runtime graphs at activation time.
 
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
@@ -140,7 +143,9 @@ function resolveProviderModelMergeState(
   providerId: string,
 ): ProviderModelMergeState {
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProviderKey = findNormalizedProviderKey(providers, providerId);
+  const existingProviderKey = Object.hasOwn(providers, providerId)
+    ? providerId
+    : findNormalizedProviderKey(providers, providerId);
   const existingProvider =
     existingProviderKey !== undefined
       ? (providers[existingProviderKey] as ModelProviderConfig | undefined)
@@ -150,8 +155,11 @@ function resolveProviderModelMergeState(
     : [];
   // Collapse case/alias variants into the canonical provider key before writing,
   // otherwise onboarding can leave two provider blocks for the same backend.
-  if (existingProviderKey && existingProviderKey !== providerId) {
-    delete providers[existingProviderKey];
+  const normalizedProviderId = normalizeProviderId(providerId);
+  for (const key of Object.keys(providers)) {
+    if (key !== providerId && normalizeProviderId(key) === normalizedProviderId) {
+      delete providers[key];
+    }
   }
   return {
     providers,
@@ -289,14 +297,23 @@ function mergeOnboardProviderConfigs(
 ): Record<string, ModelProviderConfig> {
   const merged: Record<string, ModelProviderConfig> = { ...existingProviders };
   for (const [providerId, providerConfig] of Object.entries(patchProviders)) {
+    const normalizedProviderId = normalizeProviderId(providerId);
+    const patchProviderKey = Object.hasOwn(patchProviders, normalizedProviderId)
+      ? normalizedProviderId
+      : findNormalizedProviderKey(patchProviders, providerId);
+    if (providerId !== patchProviderKey) {
+      continue;
+    }
     const existingProviderKey = findNormalizedProviderKey(existingProviders ?? {}, providerId);
-    const existingProvider = existingProviderKey
-      ? existingProviders?.[existingProviderKey]
-      : undefined;
-    if (existingProviderKey && existingProviderKey !== providerId) {
+    const existingProvider =
+      existingProviders?.[providerId] ??
+      (existingProviderKey ? existingProviders?.[existingProviderKey] : undefined);
+    for (const key of Object.keys(existingProviders ?? {})) {
       // The patch owns the canonical key; retaining its old case variant would
       // leave two runtime candidates with conflicting auth and endpoint state.
-      delete merged[existingProviderKey];
+      if (key !== providerId && normalizeProviderId(key) === normalizedProviderId) {
+        delete merged[key];
+      }
     }
     if (
       !isMergeableProviderConfig(existingProvider) ||
