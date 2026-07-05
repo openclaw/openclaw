@@ -216,6 +216,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
   let updateVerificationGeneration = 0;
   let updateVerificationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let devicePairPendingCountGeneration = 0;
+  let approvalDecision: { client: NonNullable<typeof activeClient>; id: string } | null = null;
   const devicePairSetupState: DevicePairSetupState & { pendingCount: number } = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.connected,
@@ -253,6 +254,12 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
   };
   promptState.execApprovalExpired = publish;
 
+  const isCurrentClient = (client: NonNullable<typeof activeClient>) =>
+    !disposed &&
+    activeClient === client &&
+    gateway.snapshot.client === client &&
+    gateway.snapshot.connected;
+
   const refreshDevicePairPendingCount = async () => {
     const client = gateway.snapshot.client;
     if (
@@ -285,12 +292,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
 
   const refreshApprovals = async (client: NonNullable<typeof activeClient>) => {
     const applied = await refreshPendingApprovalQueue(promptState, {
-      isCurrentClient: (requestClient) =>
-        !disposed &&
-        requestClient === client &&
-        activeClient === client &&
-        gateway.snapshot.client === client &&
-        gateway.snapshot.connected,
+      isCurrentClient: (requestClient) => requestClient === client && isCurrentClient(client),
     });
     if (applied && !disposed) {
       publish();
@@ -411,6 +413,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = next.connected;
     if (previousClient !== next.client || !next.connected) {
+      approvalDecision = null;
       devicePairPendingCountGeneration += 1;
       closeDevicePairSetupState(devicePairSetupState);
       devicePairSetupState.pendingCount = 0;
@@ -571,47 +574,40 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       }
       promptState.execApprovalBusy = true;
       promptState.execApprovalError = null;
+      const operation = { client, id: active.id };
+      approvalDecision = operation;
       publish();
       try {
         const method =
           active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
         await client.request(method, { id: active.id, decision });
-        if (
-          disposed ||
-          activeClient !== client ||
-          gateway.snapshot.client !== client ||
-          !gateway.snapshot.connected
-        ) {
+        if (!isCurrentClient(client)) {
           return;
         }
         dismissExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
-          if (
-            disposed ||
-            activeClient !== client ||
-            gateway.snapshot.client !== client ||
-            !gateway.snapshot.connected
-          ) {
+          if (!isCurrentClient(client)) {
             return;
           }
           dismissExecApprovalPrompt(promptState, active.id);
           const currentClient = activeClient;
-          if (
-            currentClient &&
-            gateway.snapshot.client === currentClient &&
-            gateway.snapshot.connected
-          ) {
+          if (currentClient && isCurrentClient(currentClient)) {
             await refreshApprovals(currentClient);
           }
           return;
         }
-        if (promptState.execApprovalQueue.some((entry) => entry.id === active.id)) {
+        if (isCurrentClient(client) && promptState.execApprovalQueue[0]?.id === active.id) {
           promptState.execApprovalError = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
         }
       } finally {
-        promptState.execApprovalBusy = false;
-        publish();
+        // Reconnect can admit a new decision while this request is still settling.
+        // Only the operation that owns the busy state may release it.
+        if (approvalDecision === operation) {
+          approvalDecision = null;
+          promptState.execApprovalBusy = false;
+          publish();
+        }
       }
     },
     async openDevicePairSetup() {
