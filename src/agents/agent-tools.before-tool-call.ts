@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -32,6 +33,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
@@ -91,7 +93,6 @@ export {
   isToolWrappedWithBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
 } from "./before-tool-call-metadata.js";
-import { GatewayClientRequestError } from "../gateway/client.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -928,17 +929,12 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    // Distinguish gateway-rejection errors from transport failures so the
-    // agent isn't actively misdirected — a GatewayClientRequestError means
-    // the gateway is reachable and responded with a structured rejection
-    // (e.g. schema validation, INVALID_REQUEST). Everything else is a
-    // genuine transport/connectivity failure.
-    const gatewayUp =
-      err instanceof GatewayClientRequestError &&
-      typeof err.gatewayCode === "string" &&
-      err.gatewayCode.length > 0;
-    const reason = gatewayUp
-      ? `Plugin approval request rejected: ${String(err)}`
+    // UNAVAILABLE can also arrive as a structured response. Only validation
+    // rejection proves a healthy Gateway rejected the approval payload.
+    const requestRejected =
+      err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
+    const reason = requestRejected
+      ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
       : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {

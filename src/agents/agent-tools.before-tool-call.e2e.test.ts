@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -1591,6 +1592,43 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
+  });
+
+  it.each([
+    [
+      "surfaces validation rejections",
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message:
+          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+      }),
+      "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+    ],
+    [
+      "keeps structured service failures on the unavailable fallback",
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "approval service unavailable",
+      }),
+      "Plugin approval required (gateway unavailable)",
+    ],
+  ])("%s", async (_label, error, expectedReason) => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "x".repeat(81),
+        description: "Gateway classification test",
+      },
+    });
+    mockCallGateway.mockRejectedValueOnce(error);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", expectedReason);
   });
 
   it("blocks when gateway returns no id", async () => {
