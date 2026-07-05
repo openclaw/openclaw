@@ -15,6 +15,7 @@ import {
   pruneStaleRootChunkFiles,
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
+  resolveTsdownBuildInvocations,
   runTsdownBuildInvocation,
   signalTsdownBuildProcessTree,
 } from "../../scripts/tsdown-build.mjs";
@@ -131,6 +132,23 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.args).toContain("tsdown");
     expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
     expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
+  });
+
+  it("builds AI package declarations before the main graph", () => {
+    const results = resolveTsdownBuildInvocations({
+      args: ["--format", "esm"],
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.args).toEqual(
+      expect.arrayContaining(["--config", "tsdown.ai.config.ts", "--format", "esm"]),
+    );
+    expect(results[1]?.args).not.toContain("tsdown.ai.config.ts");
   });
 
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {

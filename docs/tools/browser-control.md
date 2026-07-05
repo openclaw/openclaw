@@ -400,7 +400,7 @@ These are useful for "make the site behave like X" workflows:
 - Headers: `set headers --headers-json '{"X-Debug":"1"}'` (or the positional form `set headers '{"X-Debug":"1"}'`)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
-- Media: `set media dark|light|none` (the underlying `/set/media` route also accepts `no-preference`)
+- Media: `set media dark|light|no-preference|none`
 - Timezone / locale: `set timezone ...`, `set locale ...`
 - Device / viewport:
   - `set device "iPhone 14"` (Playwright device presets)

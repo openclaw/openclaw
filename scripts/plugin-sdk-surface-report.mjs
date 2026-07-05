@@ -203,7 +203,7 @@ try {
   budgets = {
     publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 324),
     publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10429),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5240),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5206),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       3261,
@@ -242,23 +242,18 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
-const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
-
-function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
-  if (!generatedLlmCoreValidatorExports.has(exportName)) {
-    return false;
-  }
+function isGeneratedPackageDeclaration(declaration) {
   const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
   const relativePath = relative.split(path.sep).join(path.posix.sep);
-  // Build artifacts can make agent-core's package-name validator reexports look
-  // newly callable. Keep this source report independent of generated dist state.
-  return relativePath.includes("llm-core/dist/validation.d.");
+  // Package builds can make workspace package reexports look newly callable.
+  // Source-surface counts must stay independent of generated dist state.
+  return /^packages\/[^/]+\/dist\//u.test(relativePath);
 }
 
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
-  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
+  if (isGeneratedPackageDeclaration(declaration)) {
     return false;
   }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);

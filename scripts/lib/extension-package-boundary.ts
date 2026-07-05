@@ -85,6 +85,13 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/ai": ["../dist/plugin-sdk/packages/ai/src/index.d.ts"],
+  "@openclaw/ai/diagnostics": ["../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"],
+  "@openclaw/ai/event-stream": ["../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"],
+  "@openclaw/ai/providers": ["../dist/plugin-sdk/packages/ai/src/providers.d.ts"],
+  "@openclaw/ai/types": ["../dist/plugin-sdk/packages/ai/src/types.d.ts"],
+  "@openclaw/ai/validation": ["../dist/plugin-sdk/packages/ai/src/validation.d.ts"],
+  "@openclaw/ai/internal/*": ["../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"],
   "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
   "@openclaw/llm-core/diagnostics": [
     "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",

@@ -198,6 +198,7 @@ const explicitNeverBundleDependencies = [
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@openclaw/ai",
   "@vitest/expect",
   "jimp",
   "matrix-js-sdk",
@@ -436,10 +437,12 @@ function buildNormalizationCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/normalization-core/src/index.ts",
     "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
+    "error-coercion": "packages/normalization-core/src/error-coercion.ts",
     "number-coercion": "packages/normalization-core/src/number-coercion.ts",
     "record-coerce": "packages/normalization-core/src/record-coerce.ts",
     "string-coerce": "packages/normalization-core/src/string-coerce.ts",
     "string-normalization": "packages/normalization-core/src/string-normalization.ts",
+    "utf16-slice": "packages/normalization-core/src/utf16-slice.ts",
   };
 }
 
@@ -552,16 +555,10 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildLlmRuntimeDistEntries(): Record<string, string> {
-  return {
-    index: "packages/llm-runtime/src/index.ts",
-    "api-registry": "packages/llm-runtime/src/api-registry.ts",
-    stream: "packages/llm-runtime/src/stream.ts",
-  };
-}
-
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/ai" ||
+    id.startsWith("@openclaw/ai/") ||
     id === "@openclaw/llm-core" ||
     id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
@@ -597,10 +594,6 @@ function shouldExternalizeSpeechCoreDependency(id: string): boolean {
 
 function shouldExternalizeLlmCoreDependency(id: string): boolean {
   return id === "typebox" || id.startsWith("typebox/");
-}
-
-function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
-  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
@@ -784,15 +777,6 @@ export default defineConfig([
     entry: buildModelCatalogCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("model-catalog-core"),
   }),
-  nodeWorkspacePackageBuildConfig({
-    clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
-    entry: buildLlmRuntimeDistEntries(),
-    outDir: tsdownPackageOutputRoot("llm-runtime"),
-    deps: {
-      neverBundle: shouldExternalizeLlmRuntimeDependency,
-    },
-  }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
@@ -802,6 +786,8 @@ export default defineConfig([
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
+      // Keep dts generation from inlining externalized package types.
+      dts: { neverBundle: shouldNeverBundleDependency },
     },
   }),
 ]);
