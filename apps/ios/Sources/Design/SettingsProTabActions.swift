@@ -221,7 +221,7 @@ extension SettingsProTab {
         }
         guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
     func applyGatewaySetupLink(_ link: GatewayConnectDeepLink) {
@@ -296,8 +296,8 @@ extension SettingsProTab {
     }
 
     func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
-        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         self.showQRScanner = false
+        guard let attemptID = self.beginGatewaySetupAttempt() else { return }
         self.setupCode = ""
         Task { await self.connectAfterScannedGatewayLink(link, attemptID: attemptID) }
     }
@@ -323,10 +323,15 @@ extension SettingsProTab {
             return
         }
         guard await self.preflightGateway(host: host) else { return }
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
-    func connectManual() async {
+    func connectManual(setupAttemptID: UUID? = nil) async {
+        if let setupAttemptID {
+            guard self.setupAttemptID == setupAttemptID else { return }
+        } else {
+            self.invalidateGatewaySetupAttempt()
+        }
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
             self.setupStatusText = "Failed: host required"

@@ -335,10 +335,10 @@ struct OnboardingWizardView: View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
             onScanQRCode: {
-                self.statusLine = "Opening QR scanner…"
-                self.showQRScanner = true
+                self.openQRScannerFromOnboarding()
             },
             onManualSetup: {
+                self.invalidateSetupAttempt()
                 self.step = .mode
             })
     }
@@ -824,13 +824,13 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting via setup code..."
         self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
+        self.showQRScanner = false
         guard let attemptID = self.beginSetupAttempt() else { return }
         self.setupCodeStatus = nil
-        self.showQRScanner = false
         Task { await self.connectScannedLink(link, attemptID: attemptID) }
     }
 
@@ -842,7 +842,7 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
-        await self.connectManual()
+        await self.connectManual(setupAttemptID: attemptID)
     }
 
     private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
@@ -1144,7 +1144,12 @@ extension OnboardingWizardView {
         return !tailnetDns.isEmpty
     }
 
-    private func connectManual() async {
+    private func connectManual(setupAttemptID: UUID? = nil) async {
+        if let setupAttemptID {
+            guard self.setupAttemptID == setupAttemptID else { return }
+        } else {
+            self.invalidateSetupAttempt()
+        }
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 else { return }
         self.connectingGatewayID = "manual"

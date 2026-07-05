@@ -810,6 +810,7 @@ extension SettingsProTab {
                 Task { await self.connectManual() }
             }
         }
+        .disabled(self.setupAttemptID != nil)
     }
 
     var gatewayAdvancedCard: some View {
