@@ -251,6 +251,32 @@ Set breakpoints in `src/` TypeScript files; the debugger maps them to compiled J
 - Edit `launch.json` `args` to debug other CLI subcommands.
 - To use the built CLI for other tasks (for example `dashboard --no-open` if your debug session spawns a new auth token), run it from another terminal: `node ./openclaw.mjs` or an alias like `alias openclaw-build="node $(pwd)/openclaw.mjs"`.
 
+## Diagnosing agent sessions
+
+When an agent session behaves unexpectedly—looping tool calls, truncated
+output, unusually high token usage—inspect the session transcript directly.
+
+### Quick checks
+
+- **Session size**: `wc -l <workspace>/agents/<agentId>/sessions/*.jsonl`
+  shows message counts per session. A single session with thousands of
+  messages may indicate a compaction failure or loop.
+- **Tool-call patterns**: `grep -c '"tool_calls"' <session-file>` counts
+  tool invocations. Repeated identical calls suggest the agent is stuck.
+- **Token pressure**: compaction status events in the gateway log
+  (`Compacting context`) indicate the context window is near capacity.
+
+### Community diagnostic tools
+
+The [ClawHub](https://clawhub.ai) community registry lists installable
+diagnostic plugins that aggregate session statistics without hand-rolled
+shell pipelines:
+
+```bash
+openclaw plugins search "transcript"
+openclaw plugins install clawhub:<package-name>
+```
+
 ## Related
 
 - [Troubleshooting](/help/troubleshooting)
