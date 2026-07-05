@@ -276,6 +276,25 @@ describe("runDiscordGatewayLifecycle", () => {
     });
   });
 
+  it("owns and cleans up auto-join when READY preceded voice listener registration", async () => {
+    waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
+    const { lifecycleParams } = createLifecycleHarness();
+    const voiceManager = {
+      autoJoin: vi.fn(async () => undefined),
+      destroy: vi.fn(async () => undefined),
+    } as unknown as NonNullable<LifecycleParams["voiceManager"]>;
+    lifecycleParams.voiceManager = voiceManager;
+    lifecycleParams.voiceManagerRef.current = voiceManager;
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+      "gateway wait failed",
+    );
+
+    expect(voiceManager.autoJoin).toHaveBeenCalledTimes(1);
+    expect(voiceManager.destroy).toHaveBeenCalledTimes(1);
+    expect(lifecycleParams.voiceManagerRef.current).toBeNull();
+  });
+
   it("pushes connected status when gateway is already connected at lifecycle start", async () => {
     const { emitter, gateway } = createGatewayHarness();
     gateway.isConnected = true;

@@ -514,31 +514,6 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("starts voice auto-join when the gateway reached READY before listener registration", async () => {
-    resolveDiscordAccountMock.mockReturnValue({
-      accountId: "default",
-      token: "MTIz.abc.def",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: true, autoJoin: [{ guildId: "g1", channelId: "c1" }] },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-      },
-    });
-    clientGetPluginMock.mockImplementation((name: string) =>
-      name === "gateway"
-        ? { emitter: new EventEmitter(), disconnect: vi.fn(), isConnected: true }
-        : undefined,
-    );
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    expect(voiceAutoJoinMock).toHaveBeenCalledTimes(1);
-  });
-
   it("loads the Discord voice runtime for existing voice config blocks", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
