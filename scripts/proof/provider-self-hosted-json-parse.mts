@@ -18,7 +18,9 @@ const server = createServer((req, res) => {
   res.end("not found");
 });
 
-await new Promise<void>((resolve) => server.listen(PORT, HOST, resolve));
+await new Promise<void>((resolve) => {
+  server.listen(PORT, HOST, resolve);
+});
 const address = server.address();
 if (address === null || typeof address === "string") {
   throw new Error("server did not bind to a TCP port");
