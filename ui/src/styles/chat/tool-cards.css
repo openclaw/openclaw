@@ -10,7 +10,8 @@
   margin-top: 2px;
 }
 
-.chat-bubble--tool-shell > .chat-tool-msg-collapse {
+.chat-bubble--tool-shell > .chat-tool-msg-collapse,
+.chat-bubble--tool-shell > .chat-tools-inline > .chat-tool-msg-collapse {
   margin-top: 0;
 }
 
@@ -570,17 +571,6 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.4;
-}
-
-.chat-activity-group__preview {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Left rule groups the rows without wrapping them in another card. */
