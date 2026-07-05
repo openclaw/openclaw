@@ -155,7 +155,12 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
       },
       status: createComputedAccountStatusAdapter<ResolvedTwitchAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-        buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
+        buildChannelSummary: ({ snapshot }) =>
+          // `running` tracks the monitor lifecycle; `connected` tracks the live
+          // ChatClient transport so a post-handshake disconnect stays visible.
+          buildPassiveProbedChannelStatusSummary(snapshot, {
+            connected: snapshot.connected ?? false,
+          }),
         probeAccount: async ({ account, timeoutMs }) => await probeTwitch(account, timeoutMs),
         collectStatusIssues: collectTwitchStatusIssues,
         resolveAccountSnapshot: ({ account, cfg }) => {
@@ -177,6 +182,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
           ctx.setStatus?.({
             accountId,
             running: true,
+            connected: false,
             lastStartAt: Date.now(),
             lastError: null,
           });
@@ -198,6 +204,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
                   config: ctx.cfg,
                   runtime: ctx.runtime,
                   abortSignal: ctx.abortSignal,
+                  statusSink: (patch) => ctx.setStatus?.({ accountId, ...patch }),
                 });
               },
             });

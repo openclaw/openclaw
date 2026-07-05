@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TwitchStatusPatch } from "./monitor.js";
 import type { TwitchAccountConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -101,5 +102,58 @@ describe("twitch startAccount lifecycle", () => {
     await expect(task).rejects.toThrow("irc join failed");
     expectLifecyclePatch(patches, { running: true });
     expectLifecyclePatch(patches, { running: false });
+  });
+
+  it("marks the account disconnected on a transport drop while keeping running true", async () => {
+    const patches: ChannelAccountSnapshot[] = [];
+    hoisted.monitorTwitchProvider.mockImplementation(
+      async (options: { statusSink?: (patch: TwitchStatusPatch) => void }) => {
+        // Simulate the persistent ChatClient reporting a post-handshake drop.
+        options.statusSink?.({ connected: false, lastError: "connection reset" });
+        return { stop: vi.fn() };
+      },
+    );
+
+    const abort = new AbortController();
+    const task = requireStartAccount()(
+      createStartAccountContext({
+        account: buildAccount(),
+        abortSignal: abort.signal,
+        statusPatchSink: (next) => patches.push({ ...next }),
+      }),
+    );
+    // Let the monitor's synchronous statusSink patch land, then unblock the
+    // abort-pending startAccount task.
+    await Promise.resolve();
+    abort.abort();
+    await task;
+
+    // `running` is owned by the monitor lifecycle: the disconnect must not clear
+    // it, only the transport `connected` flag (mirrors qqbot #100127).
+    expectLifecyclePatch(patches, { running: true, connected: false });
+    expectLifecyclePatch(patches, { connected: false, lastError: "connection reset" });
+    expect(patches.every((patch) => patch.running !== false)).toBe(true);
+  });
+
+  it("surfaces connected in the channel status summary", () => {
+    const buildChannelSummary = twitchPlugin.status?.buildChannelSummary;
+    if (!buildChannelSummary) {
+      throw new Error("Expected Twitch status.buildChannelSummary");
+    }
+
+    const summary = buildChannelSummary({
+      snapshot: {
+        accountId: "default",
+        configured: true,
+        running: true,
+        connected: false,
+        lastError: "connection reset",
+      },
+    } as Parameters<typeof buildChannelSummary>[0]);
+
+    expect(summary).toMatchObject({
+      running: true,
+      connected: false,
+    });
   });
 });

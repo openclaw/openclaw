@@ -31,6 +31,7 @@ const messageHandlers: Array<(channel: string, user: string, message: string, ms
 const authSuccessHandlers: Array<() => void> = [];
 const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
 const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
+const connectHandlers: Array<() => void> = [];
 
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: any) => {
@@ -49,6 +50,10 @@ const mockOnDisconnect = vi.fn((handler: (manual: boolean, reason?: Error) => vo
   disconnectHandlers.push(handler);
   return { unbind: mockUnbind };
 });
+const mockOnConnect = vi.fn((handler: () => void) => {
+  connectHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
 
 const mockAddUserForToken = vi.fn().mockResolvedValue("123456");
 const mockOnRefresh = vi.fn();
@@ -60,6 +65,7 @@ vi.mock("@twurple/chat", () => ({
     onAuthenticationSuccess = mockOnAuthenticationSuccess;
     onAuthenticationFailure = mockOnAuthenticationFailure;
     onDisconnect = mockOnDisconnect;
+    onConnect = mockOnConnect;
     connect = mockConnect;
     join = mockJoin;
     say = mockSay;
@@ -133,6 +139,7 @@ describe("TwitchClientManager", () => {
     authSuccessHandlers.length = 0;
     authFailureHandlers.length = 0;
     disconnectHandlers.length = 0;
+    connectHandlers.length = 0;
 
     // Re-set up the default token mock implementation after clearing
     resolveTwitchTokenMock.mockReturnValue({
@@ -224,7 +231,9 @@ describe("TwitchClientManager", () => {
         "Twitch authentication failed for testbot; waiting for retry, disconnect, or timeout: bad token",
       );
 
-      disconnectHandlers[0]?.(false, new Error("disconnected"));
+      // The connect-phase listener is registered last (setupClientHandlers adds
+      // the persistent liveness listener first), so target the most recent one.
+      disconnectHandlers.at(-1)?.(false, new Error("disconnected"));
       await Promise.resolve();
       expect(settled).toBe(false);
 
@@ -238,7 +247,8 @@ describe("TwitchClientManager", () => {
       const connection = manager.getClient(testAccount);
       await Promise.resolve();
       authFailureHandlers[0]?.("bad token", 1);
-      disconnectHandlers[0]?.(true);
+      // Connect-phase listener is the last registered (see note above).
+      disconnectHandlers.at(-1)?.(true);
 
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
     });
@@ -791,6 +801,39 @@ describe("TwitchClientManager", () => {
       // Note: The implementation doesn't handle concurrent getClient calls,
       // so multiple connections may be created. This is expected behavior.
       expect(mockConnect).toHaveBeenCalled();
+    });
+  });
+
+  describe("onConnectionChange (transport liveness)", () => {
+    it("notifies connected:false on a post-handshake disconnect", async () => {
+      await manager.getClient(testAccount);
+      const statuses: Array<{ connected: boolean; reason?: string }> = [];
+      manager.onConnectionChange(testAccount, (status) => statuses.push(status));
+
+      // The persistent listeners registered in setupClientHandlers survive the
+      // connect handshake, so a later ChatClient disconnect still fires.
+      for (const handler of connectHandlers) {
+        handler();
+      }
+      expect(statuses.at(-1)).toEqual({ connected: true });
+
+      for (const handler of disconnectHandlers) {
+        handler(false, new Error("connection reset"));
+      }
+      expect(statuses.at(-1)?.connected).toBe(false);
+      expect(statuses.at(-1)?.reason).toContain("connection reset");
+    });
+
+    it("stops notifying once the registration is removed", async () => {
+      await manager.getClient(testAccount);
+      const statuses: Array<{ connected: boolean }> = [];
+      const unregister = manager.onConnectionChange(testAccount, (status) => statuses.push(status));
+
+      unregister();
+      for (const handler of disconnectHandlers) {
+        handler(false, new Error("ignored"));
+      }
+      expect(statuses).toHaveLength(0);
     });
   });
 });

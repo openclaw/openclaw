@@ -20,13 +20,21 @@ export type TwitchRuntimeEnv = {
   error?: (message: string) => void;
 };
 
+/** Runtime status patch emitted by the monitor to the channel status sink. */
+export type TwitchStatusPatch = {
+  lastInboundAt?: number;
+  lastOutboundAt?: number;
+  connected?: boolean;
+  lastError?: string | null;
+};
+
 export type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown; // OpenClawConfig
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: TwitchStatusPatch) => void;
 };
 
 export type TwitchMonitorResult = {
@@ -45,7 +53,7 @@ async function processTwitchMessage(params: {
   config: unknown;
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: TwitchStatusPatch) => void;
 }): Promise<void> {
   const { message, account, accountId, config, runtime, core, statusSink } = params;
   const cfg = config as OpenClawConfig;
@@ -257,6 +265,29 @@ export async function monitorTwitchProvider(
     throw error;
   }
 
+  // getClient resolves once the initial handshake succeeds; the persistent
+  // ChatClient listeners below then track later reconnects/disconnects so the
+  // channel status and the shared health monitor (via `connected`) reflect the
+  // live transport. We deliberately do not publish `lastTransportActivityAt`:
+  // Twurple has no exposed heartbeat here, so a one-shot connect timestamp would
+  // age and trip the health monitor's stale-socket restart on a quiet-but-healthy
+  // account (see channel-health-policy.ts). `connected: false` is what drives
+  // dead-transport recovery.
+  statusSink?.({ connected: true, lastError: null });
+
+  const unregisterConnection = clientManager.onConnectionChange(account, (status) => {
+    if (stopped) {
+      return;
+    }
+    statusSink?.({
+      connected: status.connected,
+      // Runtime status patches merge, so clear the prior disconnect error on
+      // reconnect; otherwise a recovered transport keeps surfacing a stale
+      // lastError in the channel summary and status issues.
+      lastError: status.connected ? null : (status.reason ?? null),
+    });
+  });
+
   const unregisterHandler = clientManager.onMessage(account, (message) => {
     if (stopped) {
       return;
@@ -297,6 +328,7 @@ export async function monitorTwitchProvider(
   const stop = () => {
     stopped = true;
     unregisterHandler();
+    unregisterConnection();
   };
 
   abortSignal.addEventListener("abort", stop, { once: true });

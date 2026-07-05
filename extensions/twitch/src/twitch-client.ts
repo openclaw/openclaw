@@ -10,6 +10,9 @@ import { normalizeToken } from "./utils/twitch.js";
 
 const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 
+/** Transport-liveness change emitted to the channel status sink. */
+export type TwitchConnectionStatus = { connected: boolean; reason?: string };
+
 /**
  * Manages Twitch chat client connections
  */
@@ -19,6 +22,8 @@ export class TwitchClientManager {
   private connectionPromises = new Map<string, Promise<ChatClient>>();
   private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
   private messageHandlerTokens = new Map<string, symbol>();
+  private connectionHandlers = new Map<string, (status: TwitchConnectionStatus) => void>();
+  private connectionHandlerTokens = new Map<string, symbol>();
 
   constructor(private logger: ChannelLogSink) {}
 
@@ -296,6 +301,21 @@ export class TwitchClientManager {
       }
     });
 
+    // Persistent transport-liveness listeners. These are separate from the
+    // connect-phase handshake listeners in connectClient(), which unbind once
+    // auth settles; without a listener that survives the handshake, a later
+    // ChatClient disconnect leaves channel status stuck reporting connected and
+    // the shared health monitor never sees the dead transport.
+    client.onConnect(() => {
+      this.connectionHandlers.get(key)?.({ connected: true });
+    });
+    client.onDisconnect((_manually, reason) => {
+      this.connectionHandlers.get(key)?.({
+        connected: false,
+        reason: reason ? formatErrorMessage(reason) : undefined,
+      });
+    });
+
     this.logger.info(`Set up handlers for ${key}`);
   }
 
@@ -321,9 +341,32 @@ export class TwitchClientManager {
     };
   }
 
-  private clearMessageHandler(key: string): void {
+  /**
+   * Subscribe to transport connection changes for an account.
+   * @returns A function that removes the registration when called.
+   */
+  onConnectionChange(
+    account: TwitchAccountConfig,
+    handler: (status: TwitchConnectionStatus) => void,
+  ): () => void {
+    const key = this.getAccountKey(account);
+    const token = Symbol(key);
+    this.connectionHandlers.set(key, handler);
+    this.connectionHandlerTokens.set(key, token);
+    return () => {
+      // Only remove the exact registration this cleanup closure owns.
+      if (this.connectionHandlerTokens.get(key) === token) {
+        this.connectionHandlers.delete(key);
+        this.connectionHandlerTokens.delete(key);
+      }
+    };
+  }
+
+  private clearAccountHandlers(key: string): void {
     this.messageHandlers.delete(key);
     this.messageHandlerTokens.delete(key);
+    this.connectionHandlers.delete(key);
+    this.connectionHandlerTokens.delete(key);
   }
 
   /**
@@ -338,13 +381,13 @@ export class TwitchClientManager {
       pendingClient.quit();
       this.pendingClients.delete(key);
       this.connectionPromises.delete(key);
-      this.clearMessageHandler(key);
+      this.clearAccountHandlers(key);
     }
 
     if (client) {
       client.quit();
       this.clients.delete(key);
-      this.clearMessageHandler(key);
+      this.clearAccountHandlers(key);
       this.logger.info(`Disconnected ${key}`);
     }
   }
@@ -360,6 +403,8 @@ export class TwitchClientManager {
     this.clients.clear();
     this.messageHandlers.clear();
     this.messageHandlerTokens.clear();
+    this.connectionHandlers.clear();
+    this.connectionHandlerTokens.clear();
     this.logger.info(" Disconnected all clients");
   }
 
@@ -407,5 +452,7 @@ export class TwitchClientManager {
     this.pendingClients.clear();
     this.connectionPromises.clear();
     this.messageHandlers.clear();
+    this.connectionHandlers.clear();
+    this.connectionHandlerTokens.clear();
   }
 }
