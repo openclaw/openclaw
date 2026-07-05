@@ -151,6 +151,8 @@ import {
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -582,6 +584,8 @@ export const ProtocolSchemas = {
   CronStatusParams: CronStatusParamsSchema,
   CronGetParams: CronGetParamsSchema,
   CronAddParams: CronAddParamsSchema,
+  CronAddResult: CronAddResultSchema,
+  CronDeclarativeAddResult: CronDeclarativeAddResultSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,
   CronRunParams: CronRunParamsSchema,

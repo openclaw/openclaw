@@ -872,6 +872,10 @@ CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
   name TEXT NOT NULL,
   description TEXT,
   enabled INTEGER NOT NULL,
