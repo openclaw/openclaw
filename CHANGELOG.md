@@ -40,7 +40,6 @@ Docs: https://docs.openclaw.ai
 - **TUI new-session hooks:** create `/new` sessions through the shared Gateway lifecycle so command and session hooks receive the completed parent transcript in both Gateway and embedded modes, while preventing rollover during an active turn. (#100241, #49918) Thanks @BingqingLyu.
 - **TUI abort diagnostics:** show sanitized tool argument-validation summaries for aborted runs in both Gateway and local TUI modes without exposing raw model arguments. (#91002) Thanks @wsyjh8.
 - **iOS Watch replies:** persist queued quick replies in the gateway-scoped chat outbox and submit them through idempotent chat delivery, preventing losses, duplicates, and cross-gateway sends after reconnects. (#100031) Thanks @NianJiuZst.
-- Browser: canonicalize stable tab handles before `/act` dispatch so labels, tab IDs, suggested target IDs, and unique prefixes work across actions and batches while cross-tab overrides remain blocked. (#96178) Thanks @ZengWen-DT.
 
 ## 2026.7.1
 
