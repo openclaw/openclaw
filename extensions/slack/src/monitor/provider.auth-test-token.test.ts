@@ -56,4 +56,24 @@ describe("auth.test boot call", () => {
       expect.stringContaining("replace it with a Bot User OAuth Token"),
     );
   });
+
+  it("warns that required-mention channels fail closed when auth.test fails", async () => {
+    const runtimeLog = vi.fn();
+    getSlackClient().auth.test.mockRejectedValueOnce(new Error("request_timeout"));
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+    await stopSlackMonitor(monitor);
+
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "required-mention channels will fail closed without another trusted activation signal",
+      ),
+    );
+  });
 });
