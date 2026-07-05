@@ -134,7 +134,7 @@ enum ChatMarkdownBlockSegmenter {
 
     private static func containsReferenceLink(_ document: Document, source: SourceBuffer) -> Bool {
         func search(_ markup: any Markup) -> Bool {
-            if (markup is Markdown.Link || markup is Markdown.Image),
+            if markup is Markdown.Link || markup is Markdown.Image,
                let range = markup.range,
                let raw = source.text(in: range)?.trimmingCharacters(in: .whitespacesAndNewlines),
                raw.hasSuffix("]")
