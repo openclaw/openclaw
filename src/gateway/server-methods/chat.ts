@@ -5487,7 +5487,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           };
           if (abortedAtDispatchReject && abortMarkerPresentAtDispatchReject) {
-            await persistErrorTranscript();
             // Dispatch rejected after chat.abort already recorded/broadcast the
             // terminal abort. Lifecycle interrupts abort the same signal without
             // that marker, so they still need the error branch to emit a terminal event.
@@ -5510,6 +5509,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                 payload,
               },
             });
+            cleanupAdmittedRun({ force: true });
+            clearAgentRunContext(clientRunId, lifecycleGeneration);
+            removeActiveChatRun();
+            await persistErrorTranscript();
             return;
           }
           const errorMessage = String(err);

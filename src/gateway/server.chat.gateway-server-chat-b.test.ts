@@ -1208,6 +1208,8 @@ describe("gateway server chat", () => {
   test("chat.send post-dispatch rejection after abort preserves the terminal abort", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred();
+    const runtimePersistenceRelease = createDeferred();
+    let runtimePersistenceStarted = false;
     const runId = "idem-post-dispatch-abort-throw";
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
@@ -1251,8 +1253,13 @@ describe("gateway server chat", () => {
       } as unknown as GatewayRequestContext;
       let capturedAbortSignal: AbortSignal | undefined;
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.abortSignal;
+        const replyOptions = (args as { replyOptions?: GetReplyOptions }).replyOptions;
+        capturedAbortSignal = replyOptions?.abortSignal;
+        const runtimePersistence = new Promise<void>((resolve, reject) => {
+          runtimePersistenceStarted = true;
+          runtimePersistenceRelease.promise.then(resolve, reject);
+        });
+        replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(runtimePersistence);
         await dispatchRelease.promise;
         throw new Error("dispatch exploded after abort");
       });
@@ -1322,11 +1329,21 @@ describe("gateway server chat", () => {
       ]);
       expect(capturedAbortSignal?.aborted).toBe(true);
 
+      expect(runtimePersistenceStarted).toBe(true);
       dispatchRelease.resolve();
-      await send;
       await vi.waitFor(() => {
         expect(context.dedupe.get(`chat:${runId}`)).toBeDefined();
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
       }, FAST_WAIT_OPTS);
+      await expect(
+        interruptSessionWorkAdmissions({
+          scope: testState.sessionStorePath,
+          identities: ["main", "agent:main:main", "sess-main"],
+          timeoutMs: 500,
+        }),
+      ).resolves.toBe(true);
+      runtimePersistenceRelease.resolve();
+      await send;
 
       expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
         expect.objectContaining({
@@ -1351,6 +1368,7 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
+      runtimePersistenceRelease.resolve();
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
