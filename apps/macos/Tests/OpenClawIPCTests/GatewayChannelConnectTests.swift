@@ -237,11 +237,11 @@ struct GatewayChannelConnectTests {
     @Test func `stored device token connect scopes reuse cached scopes`() async throws {
         try await self.withTemporaryStateDir {
             let identity = DeviceIdentityStore.loadOrCreate()
-            let storedEntry = try #require(DeviceAuthStore.storeToken(
+            let storedEntry: DeviceAuthEntry = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,
                 role: "operator",
                 token: "bootstrap-device-token",
-                scopes: ["operator.read", "operator.write", "operator.approvals"]))
+                scopes: ["operator.read", "operator.write", "operator.approvals"])
             let capture = ScopeCapture()
             let session = GatewayTestWebSocketSession(
                 taskFactory: {

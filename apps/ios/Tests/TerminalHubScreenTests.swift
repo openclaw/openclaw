@@ -94,7 +94,7 @@ struct TerminalHubScreenTests {
             deviceId: identity.deviceId,
             role: "operator",
             token: "scoped-terminal-token",
-            gatewayID: gatewayID) != nil)
+            gatewayID: gatewayID).token == "scoped-terminal-token")
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443")),
             deviceAuthGatewayID: gatewayID)
@@ -117,7 +117,7 @@ struct TerminalHubScreenTests {
             deviceId: identity.deviceId,
             role: "operator",
             token: "stale-terminal-token",
-            gatewayID: gatewayID) != nil)
+            gatewayID: gatewayID).token == "stale-terminal-token")
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443")),
             password: "replacement-password",

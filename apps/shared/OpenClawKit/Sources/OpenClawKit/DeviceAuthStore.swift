@@ -39,7 +39,24 @@ public enum DeviceAuthStore {
         token: String,
         scopes: [String] = [],
         gatewayID: String? = nil,
-        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceAuthEntry?
+        profile: GatewayDeviceIdentityProfile = .primary) -> DeviceAuthEntry
+    {
+        self.storeTokenResult(
+            deviceId: deviceId,
+            role: role,
+            token: token,
+            scopes: scopes,
+            gatewayID: gatewayID,
+            profile: profile).entry
+    }
+
+    static func storeTokenResult(
+        deviceId: String,
+        role: String,
+        token: String,
+        scopes: [String] = [],
+        gatewayID: String? = nil,
+        profile: GatewayDeviceIdentityProfile = .primary) -> (entry: DeviceAuthEntry, persisted: Bool)
     {
         let normalizedRole = self.normalizeRole(role)
         var next = self.readStore(profile: profile)
@@ -56,8 +73,8 @@ public enum DeviceAuthStore {
             next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
         }
         next?.tokens[self.tokenKey(role: normalizedRole, gatewayID: gatewayID)] = entry
-        guard let store = next, self.writeStore(store, profile: profile) else { return nil }
-        return entry
+        let persisted = next.map { self.writeStore($0, profile: profile) } ?? false
+        return (entry, persisted)
     }
 
     public static func clearToken(

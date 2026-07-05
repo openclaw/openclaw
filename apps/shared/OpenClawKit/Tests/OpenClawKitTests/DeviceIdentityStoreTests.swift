@@ -23,12 +23,17 @@ struct DeviceIdentityStoreTests {
             try? FileManager.default.removeItem(at: tempDir)
         }
 
-        let stored = DeviceAuthStore.storeToken(
+        let compatibleEntry: DeviceAuthEntry = DeviceAuthStore.storeToken(
+            deviceId: "unwritable-device",
+            role: "node",
+            token: "must-not-be-acknowledged")
+        let stored = DeviceAuthStore.storeTokenResult(
             deviceId: "unwritable-device",
             role: "node",
             token: "must-not-be-acknowledged")
 
-        #expect(stored == nil)
+        #expect(compatibleEntry.token == "must-not-be-acknowledged")
+        #expect(!stored.persisted)
         #expect(DeviceAuthStore.loadToken(deviceId: "unwritable-device", role: "node") == nil)
     }
 

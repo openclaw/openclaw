@@ -1245,6 +1245,38 @@ struct RootTabsSourceGuardTests {
         #expect(channelsSource.contains("Self-hosted chat bot routing."))
     }
 
+    @Test func `deferred gateway mutations retain their source gateway`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let pendingActions = try Self.extract(
+            source,
+            from: "private func resumePendingForegroundNodeActionsIfNeeded(",
+            to: "private func handleWatchQuickReply(")
+        let resolvedState = try Self.extract(
+            source,
+            from: "private func handleExecApprovalResolvedForCurrentGateway(",
+            to: "func handleExecApprovalResolvedRemotePush(")
+        let resolvedPushes = try Self.extract(
+            source,
+            from: "func handleExecApprovalResolvedRemotePush(",
+            to: "func handleSilentPushWake(")
+
+        #expect(pendingActions.contains("ifCurrentRoute: nodeRoute"))
+        #expect(pendingActions.contains("ifCurrentRoute: expectedRoute"))
+        #expect(pendingActions.contains("isCurrentGatewaySessionRoute"))
+        #expect(pendingActions.contains("pendingForegroundActionDrainRequested = true"))
+        #expect(pendingActions.contains("trigger: \"coalesced\""))
+        #expect(pendingActions.contains("pendingForegroundActionDrainInFlight = false"))
+        #expect(pendingActions.contains("completedPendingForegroundActionIDsByGateway"))
+        #expect(pendingActions.contains("presentIn: decoded.actions"))
+        #expect(pendingActions.contains("let currentRoute = await self.nodeGateway.currentRoute()"))
+        #expect(pendingActions.contains("ifCurrentRoute: expectedRoute"))
+        #expect(resolvedState.matches(of: /canApplyExecApprovalResolvedState/).count >= 4)
+        #expect(resolvedState.contains("routeContext: routeContext"))
+        #expect(resolvedPushes.contains("applyValidatedExecApprovalResolvedPush(push, context: context)"))
+        #expect(resolvedPushes.contains("session: self.operatorGateway"))
+        #expect(resolvedPushes.contains("generation: context.routeGeneration"))
+    }
+
     private static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

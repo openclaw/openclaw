@@ -833,13 +833,13 @@ public actor GatewayChannelActor {
         guard let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes) else {
             return false
         }
-        return DeviceAuthStore.storeToken(
+        return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
             role: role,
             token: token,
             scopes: filteredScopes,
             gatewayID: deviceAuthGatewayID,
-            profile: deviceIdentityProfile) != nil
+            profile: deviceIdentityProfile).persisted
     }
 
     private func persistIssuedDeviceToken(
@@ -863,13 +863,13 @@ public actor GatewayChannelActor {
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile)
         }
-        return DeviceAuthStore.storeToken(
+        return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
             role: role,
             token: token,
             scopes: scopes,
             gatewayID: deviceAuthGatewayID,
-            profile: deviceIdentityProfile) != nil
+            profile: deviceIdentityProfile).persisted
     }
 
     private func handleConnectResponse(

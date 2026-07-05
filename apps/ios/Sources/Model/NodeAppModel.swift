@@ -129,8 +129,14 @@ final class NodeAppModel {
         case failed(message: String)
     }
 
+    private struct GatewaySessionRouteContext {
+        let route: GatewayNodeSessionRoute
+        let gatewayStableID: String
+        let routeGeneration: UInt64
+    }
+
     private enum ExecApprovalPushRouteValidation {
-        case validated(GatewayNodeSessionRoute)
+        case validated(GatewaySessionRouteContext)
         case unavailable
         case mismatchedOwner
     }
@@ -278,6 +284,8 @@ final class NodeAppModel {
     private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
     private var pendingWatchExecApprovalResolutions: [WatchExecApprovalResolveEvent] = []
     private var pendingForegroundActionDrainInFlight = false
+    private var pendingForegroundActionDrainRequested = false
+    private var completedPendingForegroundActionIDsByGateway: [String: Set<String>] = [:]
 
     private var gatewayConnected = false
     private var operatorConnected = false
@@ -3641,20 +3649,52 @@ extension NodeAppModel {
         guard shouldContinue() else { return }
         guard !self.isBackgrounded else { return }
         guard await isGatewayConnected() else { return }
-        guard !self.pendingForegroundActionDrainInFlight else { return }
+        guard !self.pendingForegroundActionDrainInFlight else {
+            self.pendingForegroundActionDrainRequested = true
+            return
+        }
 
         self.pendingForegroundActionDrainInFlight = true
-        defer { self.pendingForegroundActionDrainInFlight = false }
+        defer {
+            self.pendingForegroundActionDrainInFlight = false
+            if self.pendingForegroundActionDrainRequested {
+                self.pendingForegroundActionDrainRequested = false
+                // Serialize non-idempotent action execution, then retry against whichever
+                // exact route is current after the suspended drain has unwound.
+                Task { @MainActor [weak self] in
+                    await self?.resumePendingForegroundNodeActionsIfNeeded(trigger: "coalesced")
+                }
+            }
+        }
+
+        let routeGeneration = self.gatewayRouteGeneration
+        guard let gatewayStableID = self.connectedGatewayID,
+              let nodeRoute = await nodeGateway.currentRoute(),
+              shouldContinue(),
+              self.isCurrentGatewayRoute(generation: routeGeneration, stableID: gatewayStableID)
+        else { return }
 
         do {
+            let routeContext = GatewaySessionRouteContext(
+                route: nodeRoute,
+                gatewayStableID: gatewayStableID,
+                routeGeneration: routeGeneration)
             let payload = try await nodeGateway.request(
                 method: "node.pending.pull",
                 paramsJSON: "{}",
-                timeoutSeconds: 6)
+                timeoutSeconds: 6,
+                ifCurrentRoute: nodeRoute)
             let decoded = try JSONDecoder().decode(
                 PendingForegroundNodeActionsResponse.self,
                 from: payload)
-            guard shouldContinue() else { return }
+            guard await self.isCurrentGatewaySessionRoute(
+                routeContext,
+                session: self.nodeGateway,
+                shouldContinue: shouldContinue)
+            else { return }
+            self.retainCompletedPendingForegroundActionIDs(
+                presentIn: decoded.actions,
+                gatewayStableID: gatewayStableID)
             guard !decoded.actions.isEmpty else { return }
             self.pendingActionLogger
                 .info("pending actions trigger=\(trigger, privacy: .public)")
@@ -3662,6 +3702,7 @@ extension NodeAppModel {
             await self.applyPendingForegroundNodeActions(
                 decoded.actions,
                 trigger: trigger,
+                routeContext: routeContext,
                 shouldContinue: shouldContinue)
         } catch {
             // Best-effort only.
@@ -3671,10 +3712,18 @@ extension NodeAppModel {
     private func applyPendingForegroundNodeActions(
         _ actions: [PendingForegroundNodeAction],
         trigger: String,
+        routeContext: GatewaySessionRouteContext? = nil,
         shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
     {
         for action in actions {
             guard shouldContinue() else { return }
+            if let routeContext {
+                guard await self.isCurrentGatewaySessionRoute(
+                    routeContext,
+                    session: self.nodeGateway,
+                    shouldContinue: shouldContinue)
+                else { return }
+            }
             guard !self.isBackgrounded else {
                 self.pendingActionLogger.info(
                     "Pending action replay paused trigger=\(trigger, privacy: .public): app backgrounded")
@@ -3684,33 +3733,107 @@ extension NodeAppModel {
                 id: action.id,
                 command: action.command,
                 paramsJSON: action.paramsJSON)
-            let result = await handleInvoke(req, gatewayStableID: connectedGatewayID)
-            guard shouldContinue() else { return }
-            self.pendingActionLogger
-                .info("pending replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public)")
-            self.pendingActionLogger.info("pending replay ok=\(result.ok, privacy: .public)")
-            self.pendingActionLogger.info("pending replay command=\(action.command, privacy: .public)")
-            guard result.ok else { return }
+            let gatewayStableID = routeContext?.gatewayStableID
+            let alreadyCompleted = gatewayStableID.map {
+                self.completedPendingForegroundActionIDsByGateway[$0]?.contains(action.id) == true
+            } ?? false
+            if !alreadyCompleted {
+                let result = await handleInvoke(
+                    req,
+                    gatewayStableID: gatewayStableID ?? self.connectedGatewayID)
+                self.pendingActionLogger
+                    .info("pending replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public)")
+                self.pendingActionLogger.info("pending replay ok=\(result.ok, privacy: .public)")
+                self.pendingActionLogger.info("pending replay command=\(action.command, privacy: .public)")
+                guard result.ok else { return }
+                if let gatewayStableID {
+                    // The gateway queue is connection-independent. Remember successful local
+                    // execution until its source gateway accepts the ACK so reconnects cannot replay it.
+                    self.completedPendingForegroundActionIDsByGateway[gatewayStableID, default: []]
+                        .insert(action.id)
+                }
+                guard shouldContinue() else { return }
+            }
             let acked = await ackPendingForegroundNodeAction(
                 id: action.id,
                 trigger: trigger,
-                command: action.command)
+                command: action.command,
+                routeContext: routeContext)
             guard acked else { return }
+            if let gatewayStableID {
+                self.removeCompletedPendingForegroundActionID(
+                    action.id,
+                    gatewayStableID: gatewayStableID)
+            }
         }
+    }
+
+    private func retainCompletedPendingForegroundActionIDs(
+        presentIn actions: [PendingForegroundNodeAction],
+        gatewayStableID: String)
+    {
+        guard let completed = self.completedPendingForegroundActionIDsByGateway[gatewayStableID] else {
+            return
+        }
+        let retained = completed.intersection(actions.map(\.id))
+        if retained.isEmpty {
+            self.completedPendingForegroundActionIDsByGateway.removeValue(forKey: gatewayStableID)
+        } else {
+            self.completedPendingForegroundActionIDsByGateway[gatewayStableID] = retained
+        }
+    }
+
+    private func removeCompletedPendingForegroundActionID(
+        _ id: String,
+        gatewayStableID: String)
+    {
+        self.completedPendingForegroundActionIDsByGateway[gatewayStableID]?.remove(id)
+        if self.completedPendingForegroundActionIDsByGateway[gatewayStableID]?.isEmpty == true {
+            self.completedPendingForegroundActionIDsByGateway.removeValue(forKey: gatewayStableID)
+        }
+    }
+
+    private func isCurrentGatewaySessionRoute(
+        _ context: GatewaySessionRouteContext,
+        session: GatewayNodeSession,
+        shouldContinue: @MainActor @Sendable () -> Bool) async -> Bool
+    {
+        guard shouldContinue(),
+              self.isCurrentGatewayRoute(
+                  generation: context.routeGeneration,
+                  stableID: context.gatewayStableID)
+        else { return false }
+        guard await session.currentRoute() == context.route else { return false }
+        return shouldContinue() &&
+            self.isCurrentGatewayRoute(
+                generation: context.routeGeneration,
+                stableID: context.gatewayStableID)
     }
 
     private func ackPendingForegroundNodeAction(
         id: String,
         trigger: String,
-        command: String) async -> Bool
+        command: String,
+        routeContext: GatewaySessionRouteContext?) async -> Bool
     {
         do {
+            let expectedRoute: GatewayNodeSessionRoute?
+            if let routeContext {
+                guard self.activeGatewayConnectConfig?.effectiveStableID == routeContext.gatewayStableID,
+                      let currentRoute = await self.nodeGateway.currentRoute(),
+                      self.activeGatewayConnectConfig?.effectiveStableID == routeContext.gatewayStableID
+                else { return false }
+                expectedRoute = currentRoute
+            } else {
+                expectedRoute = nil
+            }
             let payload = try JSONEncoder().encode(PendingForegroundNodeActionsAckRequest(ids: [id]))
             let paramsJSON = String(bytes: payload, encoding: .utf8) ?? "{}"
             _ = try await self.nodeGateway.request(
                 method: "node.pending.ack",
                 paramsJSON: paramsJSON,
-                timeoutSeconds: 6)
+                timeoutSeconds: 6,
+                ifCurrentRoute: expectedRoute)
             return true
         } catch {
             self.pendingActionLogger
@@ -4762,8 +4885,8 @@ extension NodeAppModel {
                 "watch exec approval: hydrate fetch start id=\(approvalId) reason=\(reason)")
             let operatorRoute: GatewayNodeSessionRoute
             switch await self.validateExecApprovalPushRoute(push, sourceReason: reason) {
-            case let .validated(route):
-                operatorRoute = route
+            case let .validated(context):
+                operatorRoute = context.route
             case .unavailable:
                 continue
             case .mismatchedOwner:
@@ -4935,8 +5058,8 @@ extension NodeAppModel {
         guard !normalizedApprovalID.isEmpty else { return false }
         let operatorRoute: GatewayNodeSessionRoute
         switch await self.validateExecApprovalPushRoute(push, sourceReason: "push_request") {
-        case let .validated(route):
-            operatorRoute = route
+        case let .validated(context):
+            operatorRoute = context.route
         case .unavailable:
             // APNs delivery is one-shot. Retain the owner-tagged request until its route
             // returns so Watch recovery cannot lose an approval during a reconnect.
@@ -4980,13 +5103,20 @@ extension NodeAppModel {
         }
     }
 
+    @discardableResult
     private func handleExecApprovalResolvedForCurrentGateway(
         approvalId: String,
         recoveryPushGatewayDeviceID: String? = nil,
+        routeContext: GatewaySessionRouteContext? = nil,
         shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
+        -> Bool
     {
         let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard shouldContinue(), !normalizedApprovalID.isEmpty else { return }
+        guard !normalizedApprovalID.isEmpty,
+              await self.canApplyExecApprovalResolvedState(
+                  routeContext: routeContext,
+                  shouldContinue: shouldContinue)
+        else { return false }
 
         let currentGatewayStableID = self.currentExecApprovalGatewayStableID()
         let hadWatchPrompt = if let currentGatewayStableID {
@@ -5014,7 +5144,7 @@ extension NodeAppModel {
         let hadGuidancePrompt = self.pendingNotificationPermissionGuidancePrompt?.approvalId == normalizedApprovalID
         let hadApprovalSurface = hadWatchPrompt || hadPendingPrompt || hadPendingRecoveryID
         guard hadApprovalSurface || hadGuidancePrompt else {
-            return
+            return true
         }
 
         if hadApprovalSurface, let currentGatewayStableID {
@@ -5022,21 +5152,48 @@ extension NodeAppModel {
                 approvalId: normalizedApprovalID,
                 gatewayStableID: currentGatewayStableID,
                 reason: .resolved)
-            guard shouldContinue() else { return }
+            guard await self.canApplyExecApprovalResolvedState(
+                routeContext: routeContext,
+                shouldContinue: shouldContinue)
+            else { return false }
         }
         for push in recoveryPushes {
             await ExecApprovalNotificationBridge.removeNotifications(
                 for: push,
                 notificationCenter: self.notificationCenter)
+            guard await self.canApplyExecApprovalResolvedState(
+                routeContext: routeContext,
+                shouldContinue: shouldContinue)
+            else { return false }
             self.removePendingWatchExecApprovalRecoveryPush(push)
         }
+        guard await self.canApplyExecApprovalResolvedState(
+            routeContext: routeContext,
+            shouldContinue: shouldContinue)
+        else { return false }
         self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
+        return true
+    }
+
+    private func canApplyExecApprovalResolvedState(
+        routeContext: GatewaySessionRouteContext?,
+        shouldContinue: @MainActor @Sendable () -> Bool) async -> Bool
+    {
+        guard shouldContinue() else { return false }
+        guard let routeContext else { return true }
+        return await self.isCurrentGatewaySessionRoute(
+            routeContext,
+            session: self.operatorGateway,
+            shouldContinue: shouldContinue)
     }
 
     func handleExecApprovalResolvedRemotePush(_ push: ExecApprovalNotificationPrompt) async -> Bool {
         switch await self.validateExecApprovalPushRoute(push, sourceReason: "push_resolved") {
-        case .validated:
-            await self.applyValidatedExecApprovalResolvedPush(push)
+        case let .validated(context):
+            let applied = await self.applyValidatedExecApprovalResolvedPush(push, context: context)
+            if !applied {
+                self.appendPendingExecApprovalResolvedPush(push)
+            }
         case .unavailable:
             self.appendPendingExecApprovalResolvedPush(push)
             if Self.trimmedOrNil(push.gatewayDeviceId) != nil {
@@ -5058,16 +5215,44 @@ extension NodeAppModel {
         return true
     }
 
-    private func applyValidatedExecApprovalResolvedPush(_ push: ExecApprovalNotificationPrompt) async {
-        await self.handleExecApprovalResolvedForCurrentGateway(
+    @discardableResult
+    private func applyValidatedExecApprovalResolvedPush(
+        _ push: ExecApprovalNotificationPrompt,
+        context: GatewaySessionRouteContext) async -> Bool
+    {
+        let routeIsCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            self?.isCurrentGatewayRoute(
+                generation: context.routeGeneration,
+                stableID: context.gatewayStableID) == true
+        }
+        guard await self.isCurrentGatewaySessionRoute(
+            context,
+            session: self.operatorGateway,
+            shouldContinue: routeIsCurrent)
+        else { return false }
+        guard await self.handleExecApprovalResolvedForCurrentGateway(
             approvalId: push.approvalId,
-            recoveryPushGatewayDeviceID: push.gatewayDeviceId)
+            recoveryPushGatewayDeviceID: push.gatewayDeviceId,
+            routeContext: context,
+            shouldContinue: routeIsCurrent)
+        else { return false }
+        guard await self.isCurrentGatewaySessionRoute(
+            context,
+            session: self.operatorGateway,
+            shouldContinue: routeIsCurrent)
+        else { return false }
         await ExecApprovalNotificationBridge.removeNotifications(
             for: push,
             notificationCenter: self.notificationCenter,
             includingLegacyOwnerless: true)
+        guard await self.isCurrentGatewaySessionRoute(
+            context,
+            session: self.operatorGateway,
+            shouldContinue: routeIsCurrent)
+        else { return false }
         self.removePendingWatchExecApprovalRecoveryPush(push)
         self.removePendingExecApprovalResolvedPush(push)
+        return true
     }
 
     private func flushPendingExecApprovalResolvedPushes(
@@ -5081,8 +5266,10 @@ extension NodeAppModel {
                 sourceReason: "push_resolved",
                 shouldContinue: shouldContinue)
             {
-            case .validated:
-                await self.applyValidatedExecApprovalResolvedPush(push)
+            case let .validated(context):
+                guard await self.applyValidatedExecApprovalResolvedPush(push, context: context) else {
+                    return
+                }
             case .unavailable:
                 return
             case .mismatchedOwner:
@@ -5405,8 +5592,8 @@ extension NodeAppModel {
             sourceReason: "notification_action",
             shouldContinue: shouldContinue)
         {
-        case let .validated(route):
-            operatorRoute = route
+        case let .validated(context):
+            operatorRoute = context.route
         case .unavailable:
             guard shouldContinue() else { return }
             self.appendPendingWatchExecApprovalRecoveryPush(prompt)
@@ -5542,12 +5729,12 @@ extension NodeAppModel {
     private func operatorRouteForExecApproval(
         sourceReason: String,
         expectedOperatorRoute: GatewayNodeSessionRoute? = nil,
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
-        -> (route: GatewayNodeSessionRoute, gatewayStableID: String)?
+        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async -> GatewaySessionRouteContext?
     {
         guard shouldContinue(), let gatewayStableID = currentExecApprovalGatewayStableID() else {
             return nil
         }
+        let routeGeneration = self.gatewayRouteGeneration
         let connected: Bool = if expectedOperatorRoute != nil {
             self.operatorConnected
         } else if Self.shouldUseBackgroundAwareExecApprovalReconnect(
@@ -5561,7 +5748,7 @@ extension NodeAppModel {
             await self.ensureOperatorApprovalConnection(timeoutMs: 12000)
         }
         guard shouldContinue(), connected,
-              self.currentExecApprovalGatewayStableID() == gatewayStableID
+              self.isCurrentGatewayRoute(generation: routeGeneration, stableID: gatewayStableID)
         else {
             return nil
         }
@@ -5572,11 +5759,14 @@ extension NodeAppModel {
         }
         guard let route,
               shouldContinue(),
-              currentExecApprovalGatewayStableID() == gatewayStableID
+              self.isCurrentGatewayRoute(generation: routeGeneration, stableID: gatewayStableID)
         else {
             return nil
         }
-        return (route, gatewayStableID)
+        return GatewaySessionRouteContext(
+            route: route,
+            gatewayStableID: gatewayStableID,
+            routeGeneration: routeGeneration)
     }
 
     private func validatedExecApprovalPushRoute(
@@ -5584,14 +5774,14 @@ extension NodeAppModel {
         sourceReason: String,
         shouldContinue: @MainActor @Sendable () -> Bool = { true }) async -> GatewayNodeSessionRoute?
     {
-        guard case let .validated(route) = await validateExecApprovalPushRoute(
+        guard case let .validated(context) = await validateExecApprovalPushRoute(
             push,
             sourceReason: sourceReason,
             shouldContinue: shouldContinue)
         else {
             return nil
         }
-        return route
+        return context.route
     }
 
     private func validateExecApprovalPushRoute(
@@ -5608,19 +5798,21 @@ extension NodeAppModel {
         // Gateways shipped before owner-tagged APNs payloads are still safe when the
         // approval is resolved only through the currently authenticated operator route.
         guard let expectedGatewayDeviceID = push.gatewayDeviceId else {
-            return .validated(context.route)
+            return .validated(context)
         }
         do {
             let identity = try await fetchPushRelayGatewayIdentity(ifCurrentRoute: context.route)
             guard shouldContinue(),
-                  self.currentExecApprovalGatewayStableID() == context.gatewayStableID
+                  self.isCurrentGatewayRoute(
+                      generation: context.routeGeneration,
+                      stableID: context.gatewayStableID)
             else {
                 return .unavailable
             }
             guard identity.deviceId == expectedGatewayDeviceID else {
                 return .mismatchedOwner
             }
-            return .validated(context.route)
+            return .validated(context)
         } catch {
             return .unavailable
         }
