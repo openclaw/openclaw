@@ -201,7 +201,11 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("sudo corepack enable >/dev/null 2>&1 || true");
     expect(remoteScript).toContain("packageManager ??");
     expect(remoteScript).toContain('active_pnpm_version="$(pnpm --version 2>/dev/null || true)"');
-    expect(remoteScript).toContain('sudo npm install --global --force "pnpm@$pnpm_version"');
+    expect(remoteScript).toContain('pnpm_prefix="$out/pnpm-global"');
+    expect(remoteScript).toContain(
+      'npm install --global --prefix "$pnpm_prefix" --force "pnpm@$pnpm_version"',
+    );
+    expect(remoteScript).toContain('export PATH="$pnpm_prefix/bin:$PATH"');
     expect(remoteScript).toContain("Expected pnpm $pnpm_version, got $active_pnpm_version.");
     expect(remoteScript).toContain("pnpm install --frozen-lockfile --prefer-offline");
     expect(remoteScript).toContain("pnpm build");

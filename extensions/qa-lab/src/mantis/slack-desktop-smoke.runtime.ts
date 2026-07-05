@@ -704,8 +704,11 @@ process.stdout.write(match[1]);
   active_pnpm_version="$(pnpm --version 2>/dev/null || true)"
   if [ "$active_pnpm_version" != "$pnpm_version" ]; then
     # Some desktop images ship an old distro Corepack that enables its shim but
-    # cannot execute current pnpm. Install the repository-pinned version directly.
-    sudo npm install --global --force "pnpm@$pnpm_version"
+    # cannot execute current pnpm. Keep the exact fallback scoped to this run;
+    # sudo's restricted PATH may not expose the image's user-local npm or Node.
+    pnpm_prefix="$out/pnpm-global"
+    npm install --global --prefix "$pnpm_prefix" --force "pnpm@$pnpm_version"
+    export PATH="$pnpm_prefix/bin:$PATH"
     hash -r
     active_pnpm_version="$(pnpm --version)"
   fi
