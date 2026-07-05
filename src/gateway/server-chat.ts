@@ -631,10 +631,13 @@ export function createAgentEventHandler({
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;
+        // Some local lifecycle sources only carry the aborted flag. Preserve
+        // that terminal state instead of misclassifying the run as a timeout.
+        const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
         const terminalOutcome = buildAgentRunTerminalOutcome({
           status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
           error: evt.data?.error,
-          stopReason: evtStopReason,
+          stopReason: terminalStopReason,
           livenessState: evt.data?.livenessState,
           timeoutPhase: evt.data?.timeoutPhase,
           providerStarted: evt.data?.providerStarted,
@@ -1261,9 +1264,14 @@ export function createAgentEventHandler({
       });
     }
     agentRunSeq.set(evt.runId, evt.seq);
+    if (evt.stream === "assistant") {
+      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (toolPhase === "result") {
+      if (toolPhase === "start") {
+        updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+      } else if (toolPhase === "result") {
         updateRunToolErrorSummary?.({
           runId: evt.runId,
           clientRunId,

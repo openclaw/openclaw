@@ -213,6 +213,44 @@ describe("agent event handler", () => {
     });
   });
 
+  it.each([
+    { stream: "assistant", data: { text: "Recovered" } },
+    { stream: "tool", data: { phase: "start", name: "read" } },
+  ] as const)("clears stale validation diagnostics on $stream progress", (progressEvent) => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { chatRunState, handler } = createHarness({ updateRunToolErrorSummary });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-1",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 1,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        isError: true,
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: progressEvent.stream,
+      ts: 1_100,
+      data: progressEvent.data,
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenLastCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      summary: undefined,
+    });
+  });
+
   function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
   }
@@ -2888,7 +2926,6 @@ describe("agent event handler", () => {
       data: {
         phase: "end",
         aborted: true,
-        stopReason: "aborted",
         toolErrorSummary: "edit tool validation failed: edits: must be an array",
       },
     });
@@ -2905,6 +2942,31 @@ describe("agent event handler", () => {
     });
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     expect(chatRunState.registry.peek("provider-validation-loop")).toBeUndefined();
+  });
+
+  it.each([
+    { stopReason: "rpc", expectedState: "aborted" },
+    { stopReason: "timeout", expectedState: "error" },
+  ])("preserves $stopReason lifecycle abort classification", ({ stopReason, expectedState }) => {
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add(`provider-${stopReason}`, {
+      sessionKey: `session-${stopReason}`,
+      clientRunId: `client-${stopReason}`,
+    });
+
+    handler({
+      runId: `provider-${stopReason}`,
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: { phase: "end", aborted: true, stopReason },
+    });
+
+    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+      runId: `client-${stopReason}`,
+      state: expectedState,
+      stopReason,
+    });
   });
 
   it("does not forward unsafe lifecycle abort diagnostics", () => {

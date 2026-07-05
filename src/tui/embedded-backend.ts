@@ -1092,7 +1092,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
-    if (evt.stream === "tool" && evt.data?.phase === "result") {
+    if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {
+      run.toolErrorSummary = undefined;
+    } else if (evt.stream === "tool" && evt.data?.phase === "result") {
       run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
     }
 

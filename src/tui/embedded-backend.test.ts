@@ -1335,6 +1335,62 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it.each([
+    { stream: "assistant", data: { text: "Recovered" } },
+    { stream: "tool", data: { phase: "start", name: "read" } },
+  ] as const)(
+    "clears stale validation diagnostics on local $stream progress",
+    async (progressEvent) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const pending = deferred<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = (evt) => {
+        events.push({ event: evt.event, payload: evt.payload });
+      };
+      backend.start();
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "recover after invalid arguments",
+        runId: "run-recovered-validation",
+      });
+
+      registeredListener?.({
+        runId: "run-recovered-validation",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolErrorSummary: "edit tool validation failed: invalid arguments",
+        },
+      });
+      registeredListener?.({
+        runId: "run-recovered-validation",
+        stream: progressEvent.stream,
+        data: progressEvent.data,
+      });
+      registeredListener?.({
+        runId: "run-recovered-validation",
+        stream: "lifecycle",
+        data: { phase: "end", aborted: true },
+      });
+      await flushMicrotasks();
+
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: {
+          runId: "run-recovered-validation",
+          sessionKey: "agent:main:main",
+          state: "aborted",
+        },
+      });
+    },
+  );
+
   it("drops unsafe lifecycle tool-error summaries", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
