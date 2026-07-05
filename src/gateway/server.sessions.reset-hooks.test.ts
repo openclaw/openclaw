@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -217,6 +218,8 @@ async function performSessionReset(params: {
   agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
+  assertCurrent?: () => void;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
   return performGatewaySessionReset(params);
@@ -324,17 +327,6 @@ function expectCliBindingsCleared(
   expect(nextEntry?.cliSessionIds).toBeUndefined();
 }
 
-function expectClaudeCliBinding(
-  nextEntry: SessionEntryWithCliBindings | undefined,
-  cliSessionId: string,
-) {
-  expect(nextEntry?.claudeCliSessionId).toBe(cliSessionId);
-  expect(nextEntry?.cliSessionBindings).toEqual({
-    "claude-cli": { sessionId: cliSessionId },
-  });
-  expect(nextEntry?.cliSessionIds).toEqual({ "claude-cli": cliSessionId });
-}
-
 test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -346,6 +338,33 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+});
+
+test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeMainSessionEntry("sess-main");
+  let ownershipChecks = 0;
+
+  await expect(
+    performSessionReset({
+      key: "main",
+      reason: "new",
+      commandSource: "gateway:agent",
+      assertCurrent: () => {
+        ownershipChecks += 1;
+        if (ownershipChecks >= 2) {
+          const error = new Error("stale lifecycle");
+          error.name = "AbortError";
+          throw error;
+        }
+      },
+    }),
+  ).rejects.toThrow("stale lifecycle");
+
+  expect(ownershipChecks).toBe(2);
+  const store = await loadGatewaySessionStoreForKey("main");
+  expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
@@ -629,6 +648,89 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
 });
 
+test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {
+  await createSessionStoreDir();
+  await writeMainSessionEntry("sess-active-parent");
+  embeddedRunMock.activeIds.add("sess-active-parent");
+
+  const result = await directSessionReq("sessions.create", {
+    key: "tui-next",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+  expect(result.error?.message).toMatch(/parent session.*still active/i);
+  expect(commandNewHookEvents()).toHaveLength(0);
+  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+});
+
+test("sessions.create waits for the parent work admission to release", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeMainSessionEntry("sess-finishing-parent");
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-finishing-parent"],
+    assertAllowed: () => {},
+  });
+  try {
+    const result = await directSessionReq("sessions.create", {
+      key: "tui-next",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+    expect(commandNewHookEvents()).toHaveLength(0);
+    expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  } finally {
+    admission.release();
+  }
+});
+
+test("sessions.create fences new parent work while rollover hooks run", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeMainSessionEntry("sess-parent-fenced");
+  let releaseHook: (() => void) | undefined;
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(
+    async () =>
+      await new Promise<void>((resolve) => {
+        releaseHook = resolve;
+      }),
+  );
+
+  const creating = directSessionReq("sessions.create", {
+    key: "tui-next",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+  });
+  await vi.waitFor(() => expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1));
+
+  let admissionStarted = false;
+  const admission = beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-parent-fenced"],
+    assertAllowed: () => {
+      admissionStarted = true;
+    },
+  });
+  await Promise.resolve();
+  expect(admissionStarted).toBe(false);
+
+  if (!releaseHook) {
+    throw new Error("expected pending command:new hook");
+  }
+  releaseHook();
+  expect((await creating).ok).toBe(true);
+  const lease = await admission;
+  expect(admissionStarted).toBe(true);
+  lease.release();
+});
+
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
   const { dir } = await createSessionStoreDir();
   const transcriptPath = await writeMessageTranscript({
@@ -648,6 +750,7 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
         },
       },
     });
+    embeddedRunMock.activeIds.add("sess-parent-dms");
 
     const result = await directSessionReq<{
       ok: boolean;
@@ -673,6 +776,47 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
     expect(endEvent.reason).toBe("new");
     expect(startEvent.sessionKey).toBe("agent:main:main");
     expect(startEvent.resumedFrom).toBe("sess-parent-dms");
+  } finally {
+    testState.sessionConfig = undefined;
+  }
+});
+
+test("sessions.create keeps an explicit TUI child key when session.dmScope is 'main'", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = await writeMessageTranscript({
+    dir,
+    sessionId: "sess-parent-tui",
+    content: "hello before TUI /new",
+  });
+
+  testState.sessionConfig = { dmScope: "main" };
+  try {
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent-tui",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const result = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+      key: "tui-explicit",
+      agentId: "main",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.payload?.key).toBe("agent:main:tui-explicit");
+    expect(result.payload?.sessionId).not.toBe("sess-parent-tui");
+    expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
+    const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+    const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+    expect(endEvent.sessionKey).toBe("agent:main:main");
+    expect(endEvent.nextSessionKey).toBe("agent:main:tui-explicit");
+    expect(startEvent.sessionKey).toBe("agent:main:tui-explicit");
   } finally {
     testState.sessionConfig = undefined;
   }
@@ -738,25 +882,38 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
 
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
   const { dir } = await createSessionStoreDir();
+  const reseedPromptHash = "a".repeat(64);
   const childTranscript = await writeMessageTranscript({
     dir,
     sessionId: "sess-spawned-child",
     content: "hello from spawned child",
     messageId: "m-child",
   });
+  const childEntry = cliBoundSessionEntry(
+    "sess-spawned-child",
+    childTranscript,
+    "claude-cli-child-session",
+    {
+      parentSessionKey: "agent:main:main",
+      spawnedBy: "agent:main:main",
+      subagentRole: "orchestrator",
+    },
+  );
+  childEntry.cliSessionBindings = {
+    "claude-cli": {
+      sessionId: "claude-cli-child-session",
+      reseedReceipt: {
+        version: 1,
+        promptHash: reseedPromptHash,
+        localSessionId: "sess-spawned-child",
+        userTurnDisposition: "omitted",
+      },
+    },
+  };
 
   await writeSessionStore({
     entries: {
-      "subagent:child": cliBoundSessionEntry(
-        "sess-spawned-child",
-        childTranscript,
-        "claude-cli-child-session",
-        {
-          parentSessionKey: "agent:main:main",
-          spawnedBy: "agent:main:main",
-          subagentRole: "orchestrator",
-        },
-      ),
+      "subagent:child": childEntry,
     },
   });
 
@@ -766,5 +923,19 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
   const nextEntry = store["agent:main:subagent:child"];
   expect(nextEntry).toBeDefined();
   expect(nextEntry?.sessionId).not.toBe("sess-spawned-child");
-  expectClaudeCliBinding(nextEntry, "claude-cli-child-session");
+  expect(nextEntry?.claudeCliSessionId).toBe("claude-cli-child-session");
+  expect(nextEntry?.cliSessionIds).toEqual({
+    "claude-cli": "claude-cli-child-session",
+  });
+  expect(nextEntry?.cliSessionBindings).toEqual({
+    "claude-cli": {
+      sessionId: "claude-cli-child-session",
+      reseedReceipt: {
+        version: 1,
+        promptHash: reseedPromptHash,
+        localSessionId: nextEntry?.sessionId,
+        userTurnDisposition: "omitted",
+      },
+    },
+  });
 });

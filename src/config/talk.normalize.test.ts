@@ -48,6 +48,10 @@ describe("talk normalization", () => {
         speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: " low ",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
       },
@@ -74,11 +78,28 @@ describe("talk normalization", () => {
         speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
+  });
+
+  it("drops invalid realtime voice detection defaults", () => {
+    const normalized = normalizeTalkSection({
+      realtime: {
+        vadThreshold: 1.5,
+        silenceDurationMs: 0,
+        prefixPaddingMs: -1,
+        reasoningEffort: "   ",
+      },
+    } as never);
+
+    expect(normalized).toBeUndefined();
   });
 
   it("merges duplicate provider ids after trimming", () => {

@@ -13,6 +13,7 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -21,7 +22,6 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
-import { extractToolPayload } from "./tool-payload.js";
 
 /** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
@@ -75,6 +75,9 @@ async function sendCoreMessage(params: {
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -98,6 +101,9 @@ async function sendCoreMessage(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
@@ -146,25 +152,13 @@ async function tryHandleWithPluginAction(params: {
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
   });
-  const handled = await dispatchChannelMessageAction({
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
-    accountId: params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    senderIsOwner: params.ctx.senderIsOwner,
-    sessionKey: params.ctx.sessionKey,
-    sessionId: params.ctx.sessionId,
-    inboundEventKind: params.ctx.inboundEventKind,
-    agentId: params.ctx.agentId,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    dryRun: params.ctx.dryRun,
-  });
+  const handled = await dispatchChannelMessageAction(
+    createChannelActionContext({
+      ctx: params.ctx,
+      action: params.action,
+      mediaAccess,
+    }),
+  );
   if (!handled) {
     return null;
   }
@@ -191,6 +185,7 @@ function createChannelActionContext(params: {
     mediaLocalRoots: mediaAccess?.localRoots ?? params.ctx.mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile ?? params.ctx.mediaReadFile,
     accountId: params.ctx.accountId ?? undefined,
+    requesterAccountId: params.ctx.requesterAccountId,
     requesterSenderId: params.ctx.requesterSenderId,
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
@@ -240,6 +235,9 @@ export async function executeSendAction(params: {
   payload?: ReplyPayload;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;

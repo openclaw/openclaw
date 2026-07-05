@@ -142,6 +142,12 @@ describe("resolveGeminiCliSelectedAuthType", () => {
 });
 
 describe("extractGeminiCliCredentials", () => {
+  const ENV_KEYS = [
+    "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+    "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
+    "GEMINI_CLI_OAUTH_CLIENT_ID",
+    "GEMINI_CLI_OAUTH_CLIENT_SECRET",
+  ] as const;
   const normalizePath = (value: string) =>
     value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   const rootDir = parse(process.cwd()).root || "/";
@@ -153,7 +159,9 @@ describe("extractGeminiCliCredentials", () => {
   `;
 
   let originalPath: string | undefined;
+  let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   let extractGeminiCliCredentials: typeof import("./oauth.credentials.js").extractGeminiCliCredentials;
+  let resolveOAuthClientConfig: typeof import("./oauth.credentials.js").resolveOAuthClientConfig;
   let clearCredentialsCache: typeof import("./oauth.credentials.js").clearCredentialsCache;
   let setOAuthCredentialsFsForTest: typeof import("./oauth.credentials.js").setOAuthCredentialsFsForTest;
 
@@ -446,18 +454,34 @@ describe("extractGeminiCliCredentials", () => {
   }
 
   beforeAll(async () => {
-    ({ extractGeminiCliCredentials, clearCredentialsCache, setOAuthCredentialsFsForTest } =
-      await import("./oauth.credentials.js"));
+    ({
+      extractGeminiCliCredentials,
+      resolveOAuthClientConfig,
+      clearCredentialsCache,
+      setOAuthCredentialsFsForTest,
+    } = await import("./oauth.credentials.js"));
   });
 
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    for (const key of ENV_KEYS) {
+      delete process.env[key];
+    }
     await installMockFs();
   });
 
   afterEach(async () => {
     process.env.PATH = originalPath;
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     setOAuthCredentialsFsForTest();
   });
 
@@ -467,6 +491,16 @@ describe("extractGeminiCliCredentials", () => {
 
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
+  });
+
+  it("includes missing binary details when resolving OAuth client config", async () => {
+    process.env.PATH = "/nonexistent";
+    mockExistsSync.mockReturnValue(false);
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(
+      /Details: Gemini CLI binary was not found in PATH/,
+    );
   });
 
   it("extracts credentials from oauth2.js in known path", () => {
@@ -517,11 +551,45 @@ describe("extractGeminiCliCredentials", () => {
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
+  it("includes missing oauth2.js details when resolving OAuth client config", async () => {
+    installGeminiLayout({ oauth2Exists: false, readdir: [] });
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(/Could not locate oauth2\.js/);
+    expect(() => resolveOAuthClientConfig()).toThrow(/recursiveSearchDepth=10/);
+  });
+
   it("returns null when oauth2.js lacks credentials", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
+  });
+
+  it("includes parse failure details when resolving OAuth client config", async () => {
+    installGeminiLayout({
+      oauth2Exists: true,
+      oauth2Content: "// no credentials here",
+      readdir: [],
+    });
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(
+      /Candidate credential files did not contain a parseable OAuth client id\/secret/,
+    );
+  });
+
+  it("includes unexpected extraction exception details when resolving OAuth client config", async () => {
+    installGeminiLayout({ oauth2Exists: true, readdir: [] });
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error("mock read failure");
+    });
+
+    clearCredentialsCache();
+    expect(() => resolveOAuthClientConfig()).toThrow(
+      /Unexpected errors occurred while reading candidate credential files\/directories/,
+    );
+    expect(() => resolveOAuthClientConfig()).toThrow(/mock read failure/);
   });
 
   it("caches credentials after first extraction", () => {
@@ -610,6 +678,17 @@ describe("loginGeminiCliOAuth", () => {
       status,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  function responseTextBodyWithTextTrap(body: string, status = 500) {
+    const response = new Response(body, {
+      status,
+      headers: { "Content-Type": "text/plain" },
+    });
+    const text = vi
+      .spyOn(response, "text")
+      .mockRejectedValue(new Error("unexpected response.text() call"));
+    return { response, text };
   }
 
   function tokenResponse(): Response {
@@ -857,6 +936,30 @@ describe("loginGeminiCliOAuth", () => {
       /loadCodeAssist failed/i,
     );
     expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
+  });
+
+  it.each([
+    [
+      "exchange",
+      "x",
+      async () =>
+        (await import("./oauth.token.js")).exchangeCodeForTokens("oauth-code", "pkce-verifier"),
+    ],
+    [
+      "refresh",
+      "y",
+      async () =>
+        (await import("./oauth.token.js")).refreshTokensForGeminiCli({ refresh: "refresh-token" }),
+    ],
+  ])("bounds token %s error bodies without using response.text()", async (_flow, fill, request) => {
+    const { response, text } = responseTextBodyWithTextTrap(fill.repeat(32 * 1024), 500);
+    installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
+
+    const error = await request().catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Token exchange failed: ${fill.repeat(8 * 1024)}`);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {

@@ -1,5 +1,5 @@
 // Exercises core model selection, aliases, thinking defaults, and visibility policy.
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -101,6 +101,26 @@ const providerModelNormalizationMock = vi.hoisted(() => ({
   normalizeProviderModelIdWithRuntime: vi.fn(() => undefined),
 }));
 
+const providerPolicySurfaceMock = vi.hoisted(() => ({
+  resolveBundledProviderPolicySurface: vi.fn((providerId: string) => {
+    if (providerId !== "anthropic" && providerId !== "amazon-bedrock") {
+      return null;
+    }
+    return {
+      resolveThinkingProfile: (context: { modelId: string }) =>
+        context.modelId.includes("claude-") && context.modelId.includes("4-6")
+          ? {
+              levels: [
+                { id: "off", label: "off", rank: 0 },
+                { id: "adaptive", label: "adaptive", rank: 6 },
+              ],
+              defaultLevel: "adaptive",
+            }
+          : undefined,
+    };
+  }),
+}));
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
 }));
@@ -110,9 +130,19 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
     providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
 }));
 
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface:
+    providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
+}));
+
 vi.mock("./model-selection-cli.js", () => ({
   isCliProvider: () => false,
 }));
+
+afterEach(() => {
+  setLoggerOverride(null);
+  resetLogger();
+});
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
@@ -884,6 +914,31 @@ describe("model-selection", () => {
       expect(model?.reasoning).toBe(true);
     });
 
+    it("carries configured model params into catalog entries for provider policy", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [
+                {
+                  id: "company-fable",
+                  name: "Company Fable",
+                  params: {
+                    canonicalModelId: "claude-fable-5",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "amazon-bedrock" && entry.id === "company-fable",
+      );
+      expect(model?.params).toEqual({ canonicalModelId: "claude-fable-5" });
+    });
+
     it("does not infer reasoning from non-vLLM thinking compat", () => {
       const cfg = {
         models: {
@@ -935,6 +990,30 @@ describe("model-selection", () => {
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+    });
+
+    it("indexes duplicate aliases by provider", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+              "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const index = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+
+      expect(index.byProviderAlias?.get("lmstudio-moe/local")?.ref).toEqual({
+        provider: "lmstudio-moe",
+        model: "qwen3.6-35b-a3b",
+      });
+      expect(index.byProviderAlias?.get("lmstudio-dense/local")?.ref).toEqual({
+        provider: "lmstudio-dense",
+        model: "qwen3.6-27b",
+      });
     });
 
     it("does not normalize configured model keys that have no alias", () => {
@@ -1598,6 +1677,43 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("resolves provider-qualified aliases without cross-provider collisions", () => {
+      const index = buildModelAliasIndex({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+                "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        defaultProvider: "openai",
+      });
+
+      expect(
+        resolveModelRefFromString({
+          raw: "lmstudio-moe/Local",
+          defaultProvider: "openai",
+          aliasIndex: index,
+        }),
+      ).toEqual({
+        ref: { provider: "lmstudio-moe", model: "qwen3.6-35b-a3b" },
+        alias: "Local",
+      });
+      expect(
+        resolveModelRefFromString({
+          raw: "lmstudio-dense/LOCAL",
+          defaultProvider: "openai",
+          aliasIndex: index,
+        }),
+      ).toEqual({
+        ref: { provider: "lmstudio-dense", model: "qwen3.6-27b" },
+        alias: "Local",
+      });
     });
 
     it("prefers slash-form aliases over direct provider/model parsing", () => {
@@ -2647,7 +2763,7 @@ describe("model-selection", () => {
       expect(resolveClaudeCliOpus48Thinking(cfg)).toBe("off");
     });
 
-    it("uses bundled provider thinking defaults when no explicit config overrides them", () => {
+    it("uses provider policy thinking defaults when no explicit config overrides them", () => {
       const cfg = {} as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");

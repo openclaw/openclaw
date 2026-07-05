@@ -6,6 +6,7 @@ import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-po
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
 type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
+type SlackReceiver = import("@slack/bolt").Receiver;
 type SlackSocketModeReceiverConstructor = typeof import("@slack/bolt").SocketModeReceiver;
 type SlackSocketModeReceiverOptions = ConstructorParameters<SlackSocketModeReceiverConstructor>[0];
 type SlackSocketModeConfig = Pick<
@@ -111,6 +112,14 @@ function installSlackNativeReconnectFailureObserver(receiver: unknown) {
       });
     },
   );
+}
+
+function createSlackRelayReceiver(): SlackReceiver {
+  return {
+    init() {},
+    start: () => Promise.resolve(undefined),
+    stop: () => Promise.resolve(undefined),
+  };
 }
 
 function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
@@ -296,7 +305,7 @@ export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boo
 
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
-  slackMode: "socket" | "http";
+  slackMode: "socket" | "http" | "relay";
   botToken: string;
   appToken?: string;
   signingSecret?: string;
@@ -322,25 +331,31 @@ export function createSlackBoltApp(params: {
     socketModeReceiverOptions.pingPongLoggingEnabled = params.socketMode.pingPongLoggingEnabled;
   }
 
-  const receiver =
-    params.slackMode === "socket"
-      ? new params.interop.SocketModeReceiver(socketModeReceiverOptions)
-      : new params.interop.HTTPReceiver({
-          signingSecret: params.signingSecret ?? "",
-          endpoints: params.slackWebhookPath,
-        });
+  let receiver:
+    | InstanceType<SlackSocketModeReceiverConstructor>
+    | InstanceType<SlackHttpReceiverConstructor>
+    | SlackReceiver
+    | undefined;
   if (params.slackMode === "socket") {
+    receiver = new params.interop.SocketModeReceiver(socketModeReceiverOptions);
     installSlackNativeReconnectFailureObserver(receiver);
+  } else if (params.slackMode === "http") {
+    receiver = new params.interop.HTTPReceiver({
+      signingSecret: params.signingSecret ?? "",
+      endpoints: params.slackWebhookPath,
+    });
+  } else {
+    receiver = createSlackRelayReceiver();
   }
   const app = new params.interop.App({
     token: params.botToken,
-    receiver,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
     // Bolt eagerly starts an auth.test promise in the constructor when token
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
+    ...(receiver ? { receiver } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {

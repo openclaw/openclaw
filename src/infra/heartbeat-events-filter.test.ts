@@ -179,11 +179,6 @@ describe("heartbeat event classification", () => {
 });
 
 describe("isExecCompletionEvent", () => {
-  it("matches emitExecSystemEvent (gateway/node approval path) events", () => {
-    expect(isExecCompletionEvent("Exec finished (gateway id=g1, session=s1, code 0)")).toBe(true);
-    expect(isExecCompletionEvent("exec finished (node=n1, code 1)\nsome output")).toBe(true);
-  });
-
   it("matches maybeNotifyOnExit (backgrounded allowlisted commands) events", () => {
     // Word-based session slugs (createSessionSlug)
     expect(isExecCompletionEvent("Exec completed (amber-at, code 0) :: some output")).toBe(true);

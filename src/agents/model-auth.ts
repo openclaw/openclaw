@@ -10,7 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -40,6 +44,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -654,6 +659,61 @@ function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
   return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
 }
 
+function hasManagedSecretRefProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): boolean {
+  const apiKey = resolveProviderConfig(cfg, provider)?.apiKey;
+  const ref = coerceSecretRef(apiKey);
+  if (ref) {
+    return ref.source !== "env";
+  }
+  return typeof apiKey === "string" && isManagedSecretRefApiKeyMarker(apiKey);
+}
+
+function resolveLiteralProviderConfigApiKeyAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | undefined {
+  const apiKey = normalizeOptionalSecretInput(
+    resolveProviderConfig(params.cfg, params.provider)?.apiKey,
+  );
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+    return undefined;
+  }
+  return {
+    apiKey,
+    source: `models.providers.${params.provider}`,
+    mode: "api-key",
+  };
+}
+
+function resolveManagedSecretRefRuntimeProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | undefined {
+  if (!hasManagedSecretRefProviderApiKey(params.cfg, params.provider)) {
+    return undefined;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (params.cfg && params.cfg !== runtimeConfig && !runtimeSourceConfig) {
+    return undefined;
+  }
+  const applicableConfig = selectApplicableRuntimeConfig({
+    inputConfig: params.cfg,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+  if (!runtimeConfig || applicableConfig !== runtimeConfig) {
+    return undefined;
+  }
+  return resolveLiteralProviderConfigApiKeyAuth({
+    cfg: runtimeConfig,
+    provider: params.provider,
+  });
+}
+
 /** True when a custom local provider can use a synthetic no-auth placeholder. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
@@ -756,6 +816,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
     return true;
   }
+  if (resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider })) {
+    return true;
+  }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
@@ -783,6 +846,14 @@ function resolveProviderSyntheticRuntimeAuth(params: {
   provider: string;
   modelApi?: string;
 }): SyntheticProviderAuthResolution {
+  const runtimeAuth = resolveManagedSecretRefRuntimeProviderAuth(params);
+  if (runtimeAuth) {
+    return { auth: runtimeAuth };
+  }
+  if (hasManagedSecretRefProviderApiKey(params.cfg, params.provider)) {
+    return { blockedOnManagedSecretRef: true };
+  }
+
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
@@ -814,13 +885,13 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     return { blockedOnManagedSecretRef: true };
   }
 
-  const runtimeAuth = resolveFromConfig(runtimeConfig);
-  const runtimeApiKey = runtimeAuth?.apiKey;
-  if (!runtimeAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
+  const runtimePluginAuth = resolveFromConfig(runtimeConfig);
+  const runtimeApiKey = runtimePluginAuth?.apiKey;
+  if (!runtimePluginAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
     return { blockedOnManagedSecretRef: true };
   }
   return {
-    auth: runtimeAuth,
+    auth: runtimePluginAuth,
   };
 }
 
@@ -969,6 +1040,15 @@ export async function resolveApiKeyForProvider(params: {
         profileId,
         preferredProfile,
       });
+    const configuredProfileType = store.profiles[profileId]?.type;
+    if (configuredProfileType) {
+      assertAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        profileId,
+        mode: profileTypeToAuthMode(configuredProfileType),
+      });
+    }
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -1121,6 +1201,10 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
+    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider });
+    if (runtimeCustomKey) {
+      return runtimeCustomKey;
+    }
     const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
     if (customKey) {
       return {
@@ -1162,7 +1246,9 @@ export async function resolveApiKeyForProvider(params: {
     preferredProfile,
   });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
+  let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
+    let candidateMode: ResolvedProviderAuth["mode"] | undefined;
     try {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
         cfg,
@@ -1171,6 +1257,18 @@ export async function resolveApiKeyForProvider(params: {
       });
       if (awsSdkProfileAuth) {
         return awsSdkProfileAuth;
+      }
+      const candidateType = store.profiles[candidate]?.type;
+      candidateMode = candidateType ? profileTypeToAuthMode(candidateType) : undefined;
+      if (
+        candidateMode &&
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: candidateMode,
+        })
+      ) {
+        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,
@@ -1214,6 +1312,18 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
+      if (
+        !refreshFailure &&
+        err instanceof OAuthRefreshFailureError &&
+        (!candidateMode ||
+          isAuthModeAllowedForModel({
+            provider,
+            modelApi: params.modelApi,
+            mode: candidateMode,
+          }))
+      ) {
+        refreshFailure = err;
+      }
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
@@ -1256,6 +1366,10 @@ export async function resolveApiKeyForProvider(params: {
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
+  }
+
+  if (refreshFailure) {
+    throw refreshFailure;
   }
 
   const hasInlineConfiguredModels =
@@ -1418,6 +1532,17 @@ export async function hasAvailableAuthForProvider(params: {
     try {
       if (resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId: candidate })) {
         return true;
+      }
+      const candidateType = store.profiles[candidate]?.type;
+      if (
+        candidateType &&
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: profileTypeToAuthMode(candidateType),
+        })
+      ) {
+        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,

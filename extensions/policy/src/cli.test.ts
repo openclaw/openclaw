@@ -257,9 +257,22 @@ describe("policy commands", () => {
           ocPath: "oc://openclaw.config/channels/telegram",
           target: "oc://openclaw.config/channels/telegram",
           requirement: "oc://policy.jsonc/channels/denyRules/#0",
+          policy: {
+            fixRecommendation: {
+              fixClass: "automatic",
+              policyPath: ["channels", "denyRules"],
+              configTargets: ["channels"],
+              summary: "Disable product-managed channels matching the denied provider.",
+            },
+          },
         },
       ],
     });
+    const attestedFinding = { ...parsed.findings[0] };
+    expect(attestedFinding.policy).toBeDefined();
+    delete attestedFinding.policy;
+    expect(parsed.attestation.findingsHash).toBe(policyFindingsHash([attestedFinding]));
+    expect(parsed.attestation.findingsHash).not.toBe(policyFindingsHash(parsed.findings));
   });
 
   it("attests underlying policy findings when the accepted attestation is stale", async () => {
@@ -512,6 +525,82 @@ describe("policy commands", () => {
       findings: [],
     });
     expect(parsed.rulesChecked).toBeGreaterThan(10);
+  });
+
+  it("accepts exec approval allowlist conformance entries with argPattern", async () => {
+    const policy = {
+      execApprovals: {
+        agents: {
+          allowAutoAllowSkills: false,
+          allowlist: {
+            expected: ["status", { pattern: "calendar-cli", argPattern: "^sync\\b" }],
+          },
+        },
+      },
+    };
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify(policy),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(parsed).toMatchObject({
+      ok: true,
+      findings: [],
+    });
+  });
+
+  it("rejects unsupported exec approval allowlist requirement keys in policy compare", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argpattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argPattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(parsed).toMatchObject({
+      ok: false,
+      rulesChecked: 0,
+    });
+    expect(parsed.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-conformance-invalid",
+          target: "oc://baseline.policy.jsonc/execApprovals/agents/allowlist/expected/#0",
+        }),
+      ]),
+    );
   });
 
   it("reports missing and weaker policy file conformance rules", async () => {
@@ -938,6 +1027,44 @@ describe("policy commands", () => {
         target: "oc://policy.jsonc/scopes/release/tools/exec/allowHosts",
       }),
     ]);
+  });
+
+  it("accepts stricter later scoped candidate overlays during policy compare", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          release: {
+            agentIds: ["main"],
+            tools: { exec: { allowHosts: ["sandbox"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          team: {
+            agentIds: ["main"],
+            tools: { exec: { allowHosts: ["sandbox", "node"] } },
+          },
+          lockdown: {
+            agentIds: ["main"],
+            tools: { exec: { allowHosts: ["sandbox"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(parsed.findings).toEqual([]);
   });
 
   it("rejects duplicate scoped candidates when any matching scoped value is weaker", async () => {

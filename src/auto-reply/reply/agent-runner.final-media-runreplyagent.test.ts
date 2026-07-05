@@ -103,6 +103,7 @@ function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
     setPhase: vi.fn(),
+    freezeAbort: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn(),

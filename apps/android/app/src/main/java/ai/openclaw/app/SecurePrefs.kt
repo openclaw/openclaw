@@ -41,7 +41,9 @@ class SecurePrefs(
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
+    private const val cameraEnabledKey = "camera.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+    private const val appearanceThemeModeKey = "appearance.themeMode"
   }
 
   private val appContext = context.applicationContext
@@ -50,6 +52,7 @@ class SecurePrefs(
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
+  private val hadPlainPrefsBeforeInit = plainPrefs.all.isNotEmpty()
 
   // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
   private val masterKey by lazy {
@@ -67,7 +70,7 @@ class SecurePrefs(
     MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
-  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
+  private val _cameraEnabled = MutableStateFlow(loadCameraEnabled())
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
   private val _locationMode = MutableStateFlow(loadLocationMode())
@@ -181,6 +184,10 @@ class SecurePrefs(
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
 
+  private val _appearanceThemeMode =
+    MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -194,7 +201,7 @@ class SecurePrefs(
   }
 
   fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("camera.enabled", value) }
+    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
     _cameraEnabled.value = value
   }
 
@@ -306,6 +313,7 @@ class SecurePrefs(
       quietEnd = quietEnd,
       maxEventsPerMinute = maxEvents.coerceAtLeast(1),
       sessionKey = sessionKey,
+      selfPackageName = normalizedAppPackage,
     )
   }
 
@@ -386,12 +394,6 @@ class SecurePrefs(
     val key = "gateway.token.${_instanceId.value}"
     val stored = securePrefs.getString(key, null)?.trim()
     return stored?.takeIf { it.isNotEmpty() }
-  }
-
-  /** Saves the paired gateway token under the current Android instance id. */
-  fun saveGatewayToken(token: String) {
-    val key = "gateway.token.${_instanceId.value}"
-    securePrefs.edit { putString(key, token.trim()) }
   }
 
   /** Loads the bootstrap token used during gateway setup and device-token handoff. */
@@ -525,6 +527,11 @@ class SecurePrefs(
     _speakerEnabled.value = value
   }
 
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
+    _appearanceThemeMode.value = mode
+  }
+
   private fun loadNotificationForwardingPackages(): Set<String> {
     val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
     if (raw.isNullOrEmpty()) {
@@ -566,6 +573,15 @@ class SecurePrefs(
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved
+  }
+
+  private fun loadCameraEnabled(): Boolean {
+    if (plainPrefs.contains(cameraEnabledKey)) {
+      return plainPrefs.getBoolean(cameraEnabledKey, false)
+    }
+    val migratedValue = hadPlainPrefsBeforeInit
+    plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
+    return migratedValue
   }
 
   private fun loadWakeWords(): List<String> {

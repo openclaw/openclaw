@@ -5,6 +5,8 @@
  * navigation policy checks, media storage, and screenshot normalization.
  */
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getImageMetadata } from "../../media/media-services.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
 import {
@@ -24,6 +26,8 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import type { AnnotationItem } from "../screenshot-annotate.js";
+import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -75,7 +79,7 @@ async function collectChromeMcpSnapshotUrls(params: {
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
           .replace(/\\s+/g, " ")
           .trim()
-          .slice(0, 120) || href;
+          .slice(0, 121) || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) break;
@@ -84,13 +88,18 @@ async function collectChromeMcpSnapshotUrls(params: {
     }`,
   }).catch(() => []);
   return Array.isArray(result)
-    ? result.filter(
-        (entry): entry is { text: string; url: string } =>
-          entry &&
-          typeof entry === "object" &&
-          typeof (entry as { text?: unknown }).text === "string" &&
-          typeof (entry as { url?: unknown }).url === "string",
-      )
+    ? result
+        .filter(
+          (entry): entry is { text: string; url: string } =>
+            entry &&
+            typeof entry === "object" &&
+            typeof (entry as { text?: unknown }).text === "string" &&
+            typeof (entry as { url?: unknown }).url === "string",
+        )
+        .map((entry) => {
+          entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
+          return entry;
+        })
     : [];
 }
 
@@ -192,10 +201,23 @@ async function saveNormalizedScreenshotResponse(params: {
   labels?: boolean;
   labelsCount?: number;
   labelsSkipped?: number;
+  annotations?: AnnotationItem[];
 }) {
+  // Measure original dimensions BEFORE normalization so we can rescale
+  // annotation coordinates if the response pipeline shrinks the image
+  // (longest-side or byte-budget cap). Annotation boxes are in the captured
+  // image's pixel space, so they would otherwise drift from the saved media.
+  const originalMeta = params.annotations?.length
+    ? ((await getImageMetadata(params.buffer)) ?? undefined)
+    : undefined;
   const normalized = await normalizeBrowserScreenshot(params.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
     maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+  });
+  const annotations = await rescaleAnnotationsForNormalization({
+    annotations: params.annotations,
+    originalMeta,
+    normalizedBuffer: normalized.buffer,
   });
   await saveBrowserMediaResponse({
     res: params.res,
@@ -207,7 +229,37 @@ async function saveNormalizedScreenshotResponse(params: {
     labels: params.labels,
     labelsCount: params.labelsCount,
     labelsSkipped: params.labelsSkipped,
+    annotations,
   });
+}
+
+/**
+ * Keep annotation coordinates aligned with the saved media after
+ * normalizeBrowserScreenshot. Returns the original annotations unchanged
+ * when normalization did not change the image dimensions, or when image
+ * metadata is unavailable (best-effort: better to ship pre-resize coords
+ * than to drop the field entirely).
+ */
+async function rescaleAnnotationsForNormalization(params: {
+  annotations?: AnnotationItem[];
+  originalMeta?: { width?: number; height?: number };
+  normalizedBuffer: Buffer;
+}): Promise<AnnotationItem[] | undefined> {
+  if (!params.annotations || params.annotations.length === 0) {
+    return params.annotations;
+  }
+  const orig = params.originalMeta;
+  if (!orig?.width || !orig?.height) {
+    return params.annotations;
+  }
+  const next = await getImageMetadata(params.normalizedBuffer);
+  if (!next?.width || !next?.height) {
+    return params.annotations;
+  }
+  if (next.width === orig.width && next.height === orig.height) {
+    return params.annotations;
+  }
+  return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
 }
 
 async function saveBrowserMediaResponse(params: {
@@ -220,6 +272,7 @@ async function saveBrowserMediaResponse(params: {
   labels?: boolean;
   labelsCount?: number;
   labelsSkipped?: number;
+  annotations?: AnnotationItem[];
 }) {
   await ensureMediaDir();
   const saved = await saveMediaBuffer(
@@ -236,6 +289,9 @@ async function saveBrowserMediaResponse(params: {
     ...(params.labels ? { labels: true } : {}),
     ...(typeof params.labelsCount === "number" ? { labelsCount: params.labelsCount } : {}),
     ...(typeof params.labelsSkipped === "number" ? { labelsSkipped: params.labelsSkipped } : {}),
+    ...(params.annotations && params.annotations.length > 0
+      ? { annotations: params.annotations }
+      : {}),
   });
 }
 
@@ -478,6 +534,9 @@ export function registerBrowserAgentSnapshotRoutes(
                 refs: snap.refs,
                 type,
                 timeoutMs,
+                fullPage,
+                ref,
+                element,
               });
               await saveNormalizedScreenshotResponse({
                 res,
@@ -488,6 +547,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 labels: true,
                 labelsCount: labeled.labels,
                 labelsSkipped: labeled.skipped,
+                annotations: labeled.annotations,
               });
               return;
             }
@@ -540,7 +600,9 @@ export function registerBrowserAgentSnapshotRoutes(
       });
 
       try {
-        const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+        const tab = await profileCtx.ensureTabAvailable(targetId || undefined, {
+          allowPlaywrightFallback: hasPlaywright,
+        });
         const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
         if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
@@ -743,9 +805,17 @@ export function registerBrowserAgentSnapshotRoutes(
               type: "png",
               timeoutMs: plan.timeoutMs,
             });
+            const originalMeta = labeled.annotations.length
+              ? ((await getImageMetadata(labeled.buffer)) ?? undefined)
+              : undefined;
             const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
               maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
               maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+            });
+            const scaledAnnotations = await rescaleAnnotationsForNormalization({
+              annotations: labeled.annotations,
+              originalMeta,
+              normalizedBuffer: normalized.buffer,
             });
             await ensureMediaDir();
             const saved = await saveMediaBuffer(
@@ -764,6 +834,9 @@ export function registerBrowserAgentSnapshotRoutes(
               labels: true,
               labelsCount: labeled.labels,
               labelsSkipped: labeled.skipped,
+              ...(scaledAnnotations && scaledAnnotations.length > 0
+                ? { annotations: scaledAnnotations }
+                : {}),
               imagePath: path.resolve(saved.path),
               imageType,
               ...snap,

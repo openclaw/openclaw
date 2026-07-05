@@ -48,6 +48,9 @@ export type CodexInitializeResponse = {
   };
   protocolVersion?: string;
   userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
 };
 
 export type CodexUserInput =
@@ -65,11 +68,42 @@ export type CodexUserInput =
       path: string;
     };
 
-export type CodexDynamicToolSpec = JsonObject & {
+export type CodexDynamicToolFunctionSpec = JsonObject & {
+  type: "function";
   name: string;
   description: string;
   inputSchema: JsonValue;
+  deferLoading?: boolean;
 };
+
+export type CodexDynamicToolNamespaceTool = CodexDynamicToolFunctionSpec;
+
+export type CodexDynamicToolNamespaceSpec = JsonObject & {
+  type: "namespace";
+  name: string;
+  description: string;
+  tools: CodexDynamicToolNamespaceTool[];
+};
+
+export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
+
+export type CodexLegacyDynamicToolFunctionSpec = JsonObject & {
+  name: string;
+  description: string;
+  inputSchema: JsonValue;
+  deferLoading?: boolean;
+  namespace?: string;
+};
+
+export type CodexThreadStartDynamicToolSpec =
+  | CodexDynamicToolSpec
+  | CodexLegacyDynamicToolFunctionSpec;
+
+export function flattenCodexDynamicToolFunctions(
+  tools: readonly CodexDynamicToolSpec[] | undefined,
+): CodexDynamicToolFunctionSpec[] {
+  return (tools ?? []).flatMap((tool) => (tool.type === "namespace" ? tool.tools : [tool]));
+}
 
 export type CodexTurnEnvironmentParams = JsonObject & {
   environmentId: string;
@@ -86,10 +120,11 @@ export type CodexThreadStartParams = JsonObject & {
   approvalsReviewer?: string | null;
   sandbox?: string;
   serviceTier?: CodexServiceTier | null;
-  dynamicTools?: CodexDynamicToolSpec[] | null;
+  dynamicTools?: CodexThreadStartDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
+  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
   persistExtendedHistory?: boolean;
 };
 
@@ -104,6 +139,7 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
   persistExtendedHistory?: boolean;
 };
 
@@ -122,6 +158,58 @@ export type CodexThreadForkParams = CodexThreadStartParams & {
 };
 
 export type CodexThreadForkResponse = CodexThreadStartResponse;
+
+export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
+
+export type CodexThreadSourceKind =
+  | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
+  | "exec"
+  | "appServer"
+  | "subAgent"
+  | "subAgentReview"
+  | "subAgentCompact"
+  | "subAgentThreadSpawn"
+  | "subAgentOther"
+  | "unknown";
+
+export type CodexThreadListParams = JsonObject & {
+  cursor?: string | null;
+  limit?: number | null;
+  modelProviders?: string[] | null;
+  sortKey?: "created_at" | "updated_at" | "recency_at" | null;
+  sortDirection?: "asc" | "desc" | null;
+  archived?: boolean | null;
+  searchTerm?: string | null;
+  sourceKinds?: CodexThreadSourceKind[] | null;
+};
+
+export type CodexThreadListResponse = {
+  data: CodexThread[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+};
+
+export type CodexThreadReadParams = JsonObject & {
+  threadId: string;
+  includeTurns?: boolean;
+};
+
+export type CodexThreadReadResponse = {
+  thread: CodexThread;
+};
+
+export type CodexThreadSetNameParams = JsonObject & {
+  threadId: string;
+  name: string;
+};
+
+export type CodexThreadArchiveParams = JsonObject & {
+  threadId: string;
+};
+
+export type CodexThreadUnarchiveResponse = {
+  thread: CodexThread;
+};
 
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
@@ -193,6 +281,7 @@ export type CodexThread = {
   threadSource?: string | null;
   agentNickname?: string | null;
   agentRole?: string | null;
+  turns?: CodexTurn[];
 };
 
 export type CodexThreadStatus =
@@ -335,6 +424,12 @@ export type CodexGetAccountResponse = {
   requiresOpenaiAuth?: boolean;
 };
 
+export type CodexModelProviderCapabilitiesReadResponse = {
+  namespaceTools: boolean;
+  imageGeneration: boolean;
+  webSearch: boolean;
+};
+
 export type CodexChatgptAuthTokensRefreshResponse = {
   accessToken: string;
   chatgptAccountId: string;
@@ -355,6 +450,7 @@ export type CodexLoginAccountParams =
 
 export type CodexPluginSummary = {
   id: string;
+  remotePluginId?: string;
   name: string;
   source?: JsonObject;
   installed: boolean;
@@ -521,8 +617,13 @@ export declare namespace v2 {
 type CodexAppServerRequestParamsOverride = {
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
+  "thread/archive": CodexThreadArchiveParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
+  "thread/list": CodexThreadListParams;
+  "thread/name/set": CodexThreadSetNameParams;
+  "thread/read": CodexThreadReadParams;
   "thread/start": CodexThreadStartParams;
+  "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
   "turn/interrupt": CodexTurnInterruptParams;
 };
@@ -533,6 +634,8 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
+  "config/read": JsonValue;
+  "config/value/write": JsonValue;
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
@@ -540,17 +643,22 @@ type CodexAppServerRequestResultMap = {
   "marketplace/add": JsonValue;
   "mcpServerStatus/list": CodexListMcpServerStatusResponse;
   "model/list": CodexModelListResponse;
+  "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;
   "plugin/list": CodexPluginListResponse;
   "plugin/read": CodexPluginReadResponse;
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/archive": JsonValue;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
-  "thread/list": JsonValue;
+  "thread/list": CodexThreadListResponse;
+  "thread/name/set": JsonValue;
+  "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
+  "thread/unarchive": CodexThreadUnarchiveResponse;
   "thread/unsubscribe": JsonValue;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;

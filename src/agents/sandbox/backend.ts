@@ -10,6 +10,7 @@ import type {
   SandboxBackendId,
   SandboxBackendManager,
   SandboxBackendRegistration,
+  SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
 
 export type {
@@ -19,12 +20,16 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirValidation,
+  SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
 export type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
   SandboxBackendHandle,
+  SandboxBackendPreparedWorkdirDiscarder,
+  SandboxBackendWorkdirValidator,
 } from "./backend-handle.types.js";
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
@@ -77,6 +82,11 @@ export function getSandboxBackendManager(id: string): SandboxBackendManager | nu
   return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.manager ?? null;
 }
 
+/** Look up optional backend workdir resolution that does not start the runtime. */
+export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWorkdirResolver | null {
+  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.resolveWorkdir ?? null;
+}
+
 /** Resolve a backend factory or throw the user-facing configuration error. */
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {
   const factory = getSandboxBackendFactory(id);
@@ -92,14 +102,21 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 }
 
 import { createDockerSandboxBackend, dockerSandboxBackendManager } from "./docker-backend.js";
-import { createSshSandboxBackend, sshSandboxBackendManager } from "./ssh-backend.js";
+import {
+  createSshSandboxBackend,
+  resolveSshRuntimePaths,
+  sshSandboxBackendManager,
+} from "./ssh-backend.js";
 
 registerSandboxBackend("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
+  resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
 });
 
 registerSandboxBackend("ssh", {
   factory: createSshSandboxBackend,
   manager: sshSandboxBackendManager,
+  resolveWorkdir: ({ cfg, scopeKey }) =>
+    resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir,
 });

@@ -25,8 +25,14 @@ export type OpenClawPluginToolOptions = {
   modelProvider?: string;
   modelId?: string;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  /**
+   * Explicit one-shot local CLI runs should not keep plugin-owned process
+   * resources alive after emitting their result.
+   */
+  oneShotCliRun?: boolean;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
@@ -90,7 +96,9 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      senderIsOwner: options?.senderIsOwner,
       sandboxed: options?.sandboxed,
+      oneShotCliRun: options?.oneShotCliRun,
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   };

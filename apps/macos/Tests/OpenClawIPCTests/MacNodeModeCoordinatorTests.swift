@@ -4,6 +4,28 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeModeCoordinatorTests {
+    @Test @MainActor func `fresh node uses durable dedicated identity for local auto approval`() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"))
+
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: false) == .node)
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: true) == .node)
+    }
+
+    @Test @MainActor func `upgraded node durably preserves its shipped primary identity`() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"))
+
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: true) == .primary)
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: false) == .primary)
+    }
+
     @Test func `remote mode does not advertise browser proxy`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
@@ -87,6 +109,41 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(params.expectedFingerprint == "stored-local")
         #expect(params.allowTOFU == false)
+    }
+
+    @Test func `tls session cache reuses session box for unchanged params`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        var cache = MacNodeGatewayTLSSessionCache()
+        let params = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            storedFingerprint: "stored"))
+
+        let first = cache.sessionBox(url: url, params: params)
+        let second = cache.sessionBox(url: url, params: params)
+
+        #expect(ObjectIdentifier(first.session) == ObjectIdentifier(second.session))
+    }
+
+    @Test func `tls session cache rebuilds session box when params change`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        var cache = MacNodeGatewayTLSSessionCache()
+        let firstParams = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:configured"]]],
+            storedFingerprint: "stored"))
+        let secondParams = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: ["gateway": ["remote": ["tlsFingerprint": "sha256:rotated"]]],
+            storedFingerprint: "stored"))
+
+        let first = cache.sessionBox(url: url, params: firstParams)
+        let second = cache.sessionBox(url: url, params: secondParams)
+
+        #expect(ObjectIdentifier(first.session) != ObjectIdentifier(second.session))
     }
 
     @Test func `auto repairs trusted tailscale serve pin mismatch`() throws {

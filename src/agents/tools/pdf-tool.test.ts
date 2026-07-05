@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import * as modelDiscovery from "../agent-model-discovery.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
@@ -168,9 +169,10 @@ async function withManagedInboundPdf(
   const mediaPath = path.join(inboundDir, mediaId);
   await fs.mkdir(inboundDir, { recursive: true });
   await fs.writeFile(mediaPath, FAKE_PDF_MEDIA.buffer);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   try {
-    await run({ stateDir, mediaId, mediaPath });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await run({ stateDir, mediaId, mediaPath });
+    });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
@@ -186,7 +188,6 @@ describe("createPdfTool", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     global.fetch = priorFetch;
   });
 
@@ -544,6 +545,26 @@ describe("createPdfTool", () => {
           pages: "1-2",
         }),
       ).rejects.toThrow("pages is not supported with native PDF providers");
+    });
+  });
+
+  it("rejects explicit page ranges that resolve to no pages before native PDF analysis", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          pages: "999",
+        }),
+      ).rejects.toThrow('No PDF pages matched requested range "999"');
+      expect(nativeSpy).not.toHaveBeenCalled();
     });
   });
 

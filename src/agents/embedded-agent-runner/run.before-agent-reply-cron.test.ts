@@ -8,6 +8,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -23,12 +24,22 @@ function firstBeforeAgentReplyCall() {
 }
 
 function firstAttemptParams(): {
+  cleanupBundleMcpOnRunEnd?: boolean;
   modelRun?: boolean;
   promptMode?: string;
   promptCacheKey?: string;
+  suppressLiveStreamOutput?: boolean;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
-    | [{ modelRun?: boolean; promptMode?: string; promptCacheKey?: string }]
+    | [
+        {
+          cleanupBundleMcpOnRunEnd?: boolean;
+          modelRun?: boolean;
+          promptMode?: string;
+          promptCacheKey?: string;
+          suppressLiveStreamOutput?: boolean;
+        },
+      ]
     | undefined;
   if (!call) {
     throw new Error("expected embedded attempt call");
@@ -39,6 +50,7 @@ function firstAttemptParams(): {
 describe("runEmbeddedAgent cron before_agent_reply seam", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -79,6 +91,9 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe("test-key");
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
+    expect(hookContext?.senderId).toBeUndefined();
+    expect(hookContext?.chatId).toBeUndefined();
+    expect(hookContext?.channel).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
@@ -155,6 +170,17 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(attemptParams.promptMode).toBe("none");
   });
 
+  it("forwards one-shot bundle MCP cleanup into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    expect(firstAttemptParams().cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
   it("forwards prompt cache identity into the embedded attempt", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
@@ -164,5 +190,16 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     });
 
     expect(firstAttemptParams().promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it("forwards suppressed live stream output into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      suppressLiveStreamOutput: true,
+    });
+
+    expect(firstAttemptParams().suppressLiveStreamOutput).toBe(true);
   });
 });

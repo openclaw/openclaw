@@ -1,19 +1,27 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.deleteChatTranscriptCacheDatabase
+import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.ui.GatewayConnectPlan
+import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
@@ -32,7 +41,11 @@ class MainViewModel(
   private val nodeApp = app as NodeApp
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
-  private var foreground = true
+
+  @Volatile private var foreground = false
+
+  @Volatile private var runtimeStartupQueued = false
+
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
@@ -51,6 +64,19 @@ class MainViewModel(
     runtime.setForeground(foreground)
     runtimeRef.value = runtime
     return runtime
+  }
+
+  /**
+   * Starts the node runtime off the main thread so fresh installs can render
+   * the shell before encrypted prefs, device identity, and gateway setup warm up.
+   */
+  private fun queueRuntimeStartup() {
+    if (runtimeRef.value != null || runtimeStartupQueued) return
+    runtimeStartupQueued = true
+    viewModelScope.launch(Dispatchers.Default) {
+      runCatching { ensureRuntime() }
+      runtimeStartupQueued = false
+    }
   }
 
   /**
@@ -89,8 +115,15 @@ class MainViewModel(
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
+    runtimeState(initial = null) { it.gatewayControlPage }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
+  val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
+    runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
+  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
+  val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
+    runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -99,6 +132,8 @@ class MainViewModel(
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
+    runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
   val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
@@ -150,6 +185,7 @@ class MainViewModel(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
@@ -179,12 +215,11 @@ class MainViewModel(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
-
-  init {
-    if (prefs.onboardingCompleted.value) {
-      ensureRuntime()
-    }
-  }
+  val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
+  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
+  val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
+  val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -213,13 +248,10 @@ class MainViewModel(
    */
   fun setForeground(value: Boolean) {
     foreground = value
-    val runtime =
-      if (value && prefs.onboardingCompleted.value) {
-        ensureRuntime()
-      } else {
-        runtimeRef.value
-      }
-    runtime?.setForeground(value)
+    if (value && prefs.onboardingCompleted.value) {
+      queueRuntimeStartup()
+    }
+    runtimeRef.value?.setForeground(value)
   }
 
   fun setDisplayName(value: String) {
@@ -258,10 +290,6 @@ class MainViewModel(
     prefs.setManualTls(value)
   }
 
-  fun setGatewayToken(value: String) {
-    prefs.setGatewayToken(value)
-  }
-
   fun setGatewayBootstrapToken(value: String) {
     prefs.setGatewayBootstrapToken(value)
   }
@@ -270,9 +298,60 @@ class MainViewModel(
     prefs.setGatewayPassword(value)
   }
 
-  /** Clears setup credentials through the runtime so active gateway sessions drop stale auth state. */
-  fun resetGatewaySetupAuth() {
-    ensureRuntime().resetGatewaySetupAuth()
+  /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
+  private suspend fun resetGatewaySetupAuth() {
+    runtimeRef.value?.resetGatewaySetupAuth() ?: resetGatewaySetupAuthWithoutRuntime()
+  }
+
+  private fun resetGatewaySetupAuthWithoutRuntime() {
+    prefs.clearGatewaySetupAuth()
+    val deviceId = DeviceIdentityStore(nodeApp).loadOrCreate().deviceId
+    val deviceAuthStore = DeviceAuthStore(prefs)
+    deviceAuthStore.clearToken(deviceId, "node")
+    deviceAuthStore.clearToken(deviceId, "operator")
+    // No runtime means no open Room handle, so the cache file can be deleted directly.
+    deleteChatTranscriptCacheDatabase(nodeApp)
+  }
+
+  internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
+    // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
+    // the whole sequence off the Compose thread so retries cannot trigger ANRs.
+    viewModelScope.launch(Dispatchers.Default) {
+      val config = plan.config
+      val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE
+      val hasExplicitAuth =
+        config.token.isNotEmpty() || config.bootstrapToken.isNotEmpty() || config.password.isNotEmpty()
+      if (replacesSavedAuth) {
+        resetGatewaySetupAuth()
+      }
+      prefs.setManualEnabled(true)
+      prefs.setManualHost(config.host)
+      prefs.setManualPort(config.port)
+      prefs.setManualTls(config.tls)
+
+      // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
+      // including password-only setups that Compose deliberately cannot read back.
+      if (replacesSavedAuth || hasExplicitAuth) {
+        prefs.setGatewayBootstrapToken(config.bootstrapToken)
+        prefs.setGatewayToken(config.token)
+        prefs.setGatewayPassword(config.password)
+      }
+
+      val runtime = ensureRuntime()
+      val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+      if (replacesSavedAuth || hasExplicitAuth) {
+        runtime.connect(
+          endpoint,
+          NodeRuntime.GatewayConnectAuth(
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
+          ),
+        )
+      } else {
+        runtime.connect(endpoint)
+      }
+    }
   }
 
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
@@ -285,10 +364,12 @@ class MainViewModel(
 
   /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
-    runtimeRef.value?.disconnect()
-    resetGatewaySetupAuth()
-    _startOnboardingAtGatewaySetup.value = true
-    prefs.setOnboardingCompleted(false)
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.disconnect()
+      resetGatewaySetupAuth()
+      prefs.setOnboardingCompleted(false)
+      _startOnboardingAtGatewaySetup.value = true
+    }
   }
 
   /** Acknowledges the one-shot request that opens onboarding at the gateway setup step. */
@@ -383,12 +464,28 @@ class MainViewModel(
     ensureRuntime().setSpeakerEnabled(enabled)
   }
 
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    prefs.setAppearanceThemeMode(mode)
+  }
+
   fun refreshGatewayConnection() {
-    ensureRuntime().refreshGatewayConnection()
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().refreshGatewayConnection()
+    }
+  }
+
+  fun startGatewayDiscovery() {
+    queueRuntimeStartup()
   }
 
   fun connect(endpoint: GatewayEndpoint) {
     ensureRuntime().connect(endpoint)
+  }
+
+  fun connectInBackground(endpoint: GatewayEndpoint) {
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().connect(endpoint)
+    }
   }
 
   fun connect(
@@ -441,6 +538,10 @@ class MainViewModel(
     ensureRuntime().refreshModelCatalog()
   }
 
+  fun refreshTalkSetupReadiness() {
+    ensureRuntime().refreshTalkSetupReadiness()
+  }
+
   fun refreshAgents() {
     ensureRuntime().refreshAgents()
   }
@@ -459,6 +560,17 @@ class MainViewModel(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshExecApprovals() {
+    ensureRuntime().refreshExecApprovals()
+  }
+
+  fun resolveExecApproval(
+    id: String,
+    decision: String,
+  ) {
+    ensureRuntime().resolveExecApproval(id = id, decision = decision)
   }
 
   fun refreshChannels() {
@@ -495,6 +607,22 @@ class MainViewModel(
 
   fun abortChat() {
     ensureRuntime().abortChat()
+  }
+
+  fun startNewChat() {
+    ensureRuntime().startNewChat()
+  }
+
+  fun refreshChatCommands() {
+    ensureRuntime().refreshChatCommands()
+  }
+
+  fun retryChatOutboxCommand(id: String) {
+    ensureRuntime().retryChatOutboxCommand(id)
+  }
+
+  fun deleteChatOutboxCommand(id: String) {
+    ensureRuntime().deleteChatOutboxCommand(id)
   }
 
   fun sendChat(

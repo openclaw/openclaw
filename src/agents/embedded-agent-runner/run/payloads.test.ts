@@ -71,6 +71,103 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("marks runtime-persisted final replies as transcript owned", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Already persisted."],
+      assistantTranscriptOwned: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantTranscriptOwned: true,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "output_text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
+    const text = "Before <think>literal tag text after";
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, text);
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Visible prefix <think>private reasoning tail",
+      } as unknown as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Visible prefix");
+  });
+
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
     const payloads = buildPayloads({
       assistantTexts: ["   "],
@@ -261,6 +358,20 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("suppresses terminal assistant text after direct message-tool source replies", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {
       blocks: [
@@ -444,6 +555,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
       detail: "Command timed out after 1800 seconds.",
+    });
+  });
+
+  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "show last 20 lines of ~/.openclaw/workspace/memory/2026-06-04.md",
+        error:
+          "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
+      },
+      isHeartbeatTrigger: true,
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "show last 20 lines",
+      detail: "No such file or directory",
     });
   });
 

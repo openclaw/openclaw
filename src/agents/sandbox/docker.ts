@@ -4,6 +4,7 @@
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { spawn } from "node:child_process";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -32,12 +33,6 @@ type ExecDockerRawError = Error & {
   stdout: Buffer;
   stderr: Buffer;
 };
-
-function createAbortError(): Error {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  return err;
-}
 
 type DockerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -139,7 +134,7 @@ export function execDockerRaw(
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-        reject(createAbortError());
+      reject(createAbortError("Aborted"));
         return;
       }
       const exitCode = code ?? 0;
@@ -266,37 +261,6 @@ export async function readDockerContainerEnvVar(
     }
   }
   return null;
-}
-
-export async function readDockerNetworkDriver(network: string): Promise<string | null> {
-  const result = await execDocker(["network", "inspect", "-f", "{{.Driver}}", network], {
-    allowFailure: true,
-  });
-  if (result.code !== 0) {
-    return null;
-  }
-  const driver = result.stdout.trim();
-  return driver || null;
-}
-
-export async function readDockerNetworkGateway(network: string): Promise<string | null> {
-  const result = await execDocker(
-    ["network", "inspect", "-f", "{{range .IPAM.Config}}{{println .Gateway}}{{end}}", network],
-    { allowFailure: true },
-  );
-  if (result.code !== 0) {
-    return null;
-  }
-  // Filter valid, non-empty gateways (handles dual-stack / multi-subnet networks
-  // and filters Docker's "<no value>" sentinel for nil IPAM entries).
-  const gateways = result.stdout
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && l !== "<no value>");
-  // Prefer IPv4: the CDP relay binds on 0.0.0.0 so an IPv6-only range would
-  // reject forwarded IPv4 traffic from the bridge gateway.
-  const gw = gateways.find((g) => !g.includes(":")) ?? gateways[0] ?? "";
-  return gw || null;
 }
 
 export async function readDockerPort(containerName: string, port: number) {
@@ -564,6 +528,7 @@ async function createSandboxContainer(params: {
   workspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   scopeKey: string;
   configHash?: string;
   readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
@@ -584,6 +549,7 @@ async function createSandboxContainer(params: {
     args,
     workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
@@ -623,6 +589,7 @@ export async function ensureSandboxContainer(params: {
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
@@ -632,6 +599,7 @@ export async function ensureSandboxContainer(params: {
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
   });
@@ -689,6 +657,7 @@ export async function ensureSandboxContainer(params: {
       workspaceDir: params.workspaceDir,
       workspaceAccess: params.cfg.workspaceAccess,
       agentWorkspaceDir: params.agentWorkspaceDir,
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
       readOnlyWorkspaceSkillMounts,

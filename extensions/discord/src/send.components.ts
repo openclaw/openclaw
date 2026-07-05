@@ -167,6 +167,8 @@ type DiscordComponentSendOpts = {
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
   suppressEmbeds?: boolean;
+  /** Persist the concrete platform send before component bookkeeping can fail. */
+  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -285,6 +287,7 @@ export async function sendDiscordComponentMessage(
       maxLinesPerMessage: opts.maxLinesPerMessage,
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
+      onDeliveryResult: opts.onDeliveryResult,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
@@ -326,6 +329,14 @@ export async function sendDiscordComponentMessage(
     });
   }
 
+  const deliveryResult = createDiscordSendResult({
+    result,
+    fallbackChannelId: channelId,
+    kind: "card",
+    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+  });
+  await opts.onDeliveryResult?.(deliveryResult);
+
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
@@ -338,12 +349,7 @@ export async function sendDiscordComponentMessage(
     direction: "outbound",
   });
 
-  return createDiscordSendResult({
-    result,
-    fallbackChannelId: channelId,
-    kind: "card",
-    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
-  });
+  return deliveryResult;
 }
 
 export async function editDiscordComponentMessage(

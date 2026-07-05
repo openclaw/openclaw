@@ -21,7 +21,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 - `/status` → quick "how full is my window?" view + session settings.
 - `/context list` → what's injected + rough sizes (per file + totals).
-- `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
+- `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
@@ -34,7 +34,7 @@ Values vary by model, provider, tool policy, and what's in your workspace.
 
 ### `/context list`
 
-```
+```text
 🧠 Context breakdown
 Workspace: <workspaceDir>
 Bootstrap max/file: 12,000 chars
@@ -61,7 +61,7 @@ Session tokens (cached): 14,250 total / ctx=32,000
 
 ### `/context detail`
 
-```
+```text
 🧠 Context breakdown (detailed)
 …
 Top skills (prompt entry size):
@@ -146,7 +146,7 @@ Tools affect context in two ways:
 Slash commands are handled by the Gateway. There are a few different behaviors:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
-- **Directives**: `/think`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/model`, `/queue` are stripped before the model sees the message.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue` are stripped before the model sees the message.
   - Directive-only messages persist session settings.
   - Inline directives in a normal message act as per-message hints.
 - **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: "hey /status"), and are stripped before the model sees the remaining text.
@@ -179,7 +179,7 @@ pluggable interface, lifecycle hooks, and configuration.
 - `System prompt (run)` = captured from the last embedded (tool-capable) run and persisted in the session store.
 - `System prompt (estimate)` = computed on the fly when no run report exists (or when running via a CLI backend that doesn't generate the report).
 
-Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas.
+Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas. In detailed mode, it also compares the session transcript with the same real-conversation message predicate used by compaction, so high prompt/cache usage is easier to distinguish from compactable conversation history.
 
 ## Related
 

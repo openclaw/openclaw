@@ -48,7 +48,12 @@ export function guardSessionManager(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    withCompactionPersistence?: (
+      append: () => string,
+      validateAppend: (entryId: string, appendedText: string) => boolean,
+    ) => string;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -140,7 +145,9 @@ export function guardSessionManager(
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
+    withCompactionPersistence: opts?.withCompactionPersistence,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
+    onUserMessageBlocked: opts?.onUserMessageBlocked,
     onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;

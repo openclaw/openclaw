@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
+import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -25,15 +25,6 @@ let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLogge
 const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
-
-function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
 
 vi.mock("./connection-controller-registry.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
@@ -82,9 +73,11 @@ vi.mock("./text-runtime.js", async () => {
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
-  const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
-  const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
-  const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
+  const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
+  const sendPoll = vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll123"));
+  const sendReaction = vi.fn(async () =>
+    createAcceptedWhatsAppSendResult("reaction", "reaction123"),
+  );
 
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
@@ -304,6 +297,33 @@ describe("web outbound", () => {
     });
     expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
     expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
+  });
+
+  it("reports the accepted voice send before a caption failure", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/ogg",
+      kind: "audio",
+    });
+    sendMessage
+      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "voice-accepted"))
+      .mockRejectedValueOnce(new Error("caption failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageWhatsApp("+1555", "voice note", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: "/tmp/voice.ogg",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("caption failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "voice-accepted" }),
+    );
   });
 
   it.each([

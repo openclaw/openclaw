@@ -1,5 +1,6 @@
 // Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -341,6 +342,42 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
   });
 
+  it("puts skip first and selected by default in QuickStart channel selection", async () => {
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    const select = vi.fn(async () => "__skip__");
+
+    await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+        skipConfirm: true,
+      },
+    );
+
+    const prompt = callArg<{
+      message?: string;
+      options?: Array<{ value: string; label: string }>;
+      initialValue?: string;
+      searchable?: boolean;
+    }>(select);
+    expect(prompt.message).toBe("Select channel (QuickStart)");
+    expect(prompt.options?.[0]).toEqual(
+      expect.objectContaining({
+        value: "__skip__",
+        label: "Skip for now",
+      }),
+    );
+    expect(prompt.initialValue).toBe("__skip__");
+    expect(prompt.searchable).toBe(true);
+  });
+
   it("keeps already-active setup plugins in the deferred picker without registry fallback", async () => {
     const activePlugin = {
       ...makeSetupPlugin({ id: "custom-chat", label: "Custom Chat" }),
@@ -436,6 +473,83 @@ describe("setupChannels workspace shadow exclusion", () => {
       channels: {
         "custom-chat": { token: "secret" },
       },
+    });
+  });
+
+  it("allowlists ClickClack when it is explicitly selected for setup", async () => {
+    const setupWizard = {
+      channel: "clickclack",
+      getStatus: vi.fn(async () => ({
+        channel: "clickclack",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg: {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            clickclack: {
+              ...cfg.channels?.clickclack,
+              token: "secret",
+            },
+          },
+        },
+      })),
+    };
+    const clickClackPlugin = makeSetupPlugin({
+      id: "clickclack",
+      label: "ClickClack",
+      setupWizard,
+    });
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "clickclack",
+            meta: makeMeta("clickclack", "ClickClack"),
+          },
+        ],
+      }),
+    );
+    loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
+      makePluginRegistry({
+        channelSetups: [
+          {
+            pluginId: "clickclack",
+            source: "bundled",
+            enabled: true,
+            plugin: clickClackPlugin,
+          },
+        ],
+      }),
+    );
+    const select = vi.fn().mockResolvedValueOnce("clickclack").mockResolvedValueOnce("__done__");
+
+    const next = await setupChannels(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(next.plugins?.allow).toEqual(["memory-core", "clickclack"]);
+    expect(next.plugins?.entries?.clickclack?.enabled).toBe(true);
+    expect(next.channels?.clickclack).toEqual({
+      enabled: true,
+      token: "secret",
     });
   });
 

@@ -130,13 +130,13 @@ export function storeMayContainPluginSessionRouteState(
   return Object.values(store).some((entry) => entryMayContainPluginSessionRouteState(entry));
 }
 
-export type DoctorSessionRouteState = {
+type DoctorSessionRouteState = {
   defaultProvider: string;
   configuredModelRefs: string[];
   runtime?: string;
 };
 
-export type DoctorSessionRouteStateRepair = {
+type DoctorSessionRouteStateRepair = {
   key: string;
   ownerId: string;
   ownerLabel: string;
@@ -145,13 +145,13 @@ export type DoctorSessionRouteStateRepair = {
   cliSessionKeys: string[];
 };
 
-export type DoctorSessionRouteStateManualReview = {
+type DoctorSessionRouteStateManualReview = {
   key: string;
   ownerLabel: string;
   message: string;
 };
 
-export type DoctorSessionRouteStateScan = {
+type DoctorSessionRouteStateScan = {
   repairs: DoctorSessionRouteStateRepair[];
   manualReview: DoctorSessionRouteStateManualReview[];
 };

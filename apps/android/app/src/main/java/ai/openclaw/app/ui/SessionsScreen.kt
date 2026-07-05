@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
@@ -55,7 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** Session browser for recent and currently-live chat sessions. */
+/** Session browser for recent and current chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -73,7 +74,7 @@ internal fun SessionsScreen(
       .let { rows ->
         when (filter) {
           SessionFilter.Recent -> rows
-          SessionFilter.Live -> rows.filter { it.key == chatSessionKey }
+          SessionFilter.Current -> rows.filter { it.key == chatSessionKey }
         }
       }.let { rows ->
         if (recentFirst) {
@@ -92,12 +93,12 @@ internal fun SessionsScreen(
   }
 
   ClawScaffold(
-    contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 6.dp),
+    contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
     contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      verticalArrangement = Arrangement.spacedBy(7.dp),
+      verticalArrangement = Arrangement.spacedBy(9.dp),
       contentPadding = PaddingValues(bottom = 4.dp),
     ) {
       item {
@@ -106,16 +107,16 @@ internal fun SessionsScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 17.4.sp, lineHeight = 21.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          SessionPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
-          SessionPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
+          Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
+          ClawPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
         }
       }
 
       item {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
           FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
-          FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Live, live = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Live })
+          FilterPill(text = "Current", icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
         }
       }
 
@@ -179,7 +180,7 @@ private fun FilterPill(
   text: String,
   icon: ImageVector? = null,
   active: Boolean = false,
-  live: Boolean = false,
+  showDot: Boolean = false,
   dropdown: Boolean = false,
   onClick: (() -> Unit)? = null,
 ) {
@@ -198,7 +199,7 @@ private fun FilterPill(
     ) {
       icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text) }
       Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
-      if (live) {
+      if (showDot) {
         Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
       }
       if (dropdown) {
@@ -217,7 +218,7 @@ private fun SessionRow(
   compact: Boolean,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Column {
       Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(vertical = 5.dp),
@@ -258,7 +259,7 @@ private fun SessionRow(
             Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
               SessionMiniTag(text = "Workspace")
-              SessionMiniTag(text = if (active) "Active" else "OpenClaw")
+              SessionMiniTag(text = if (active) "Current" else "OpenClaw")
             }
           }
         }
@@ -269,19 +270,6 @@ private fun SessionRow(
         }
       }
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-    }
-  }
-}
-
-@Composable
-private fun SessionPlainIconButton(
-  icon: ImageVector,
-  contentDescription: String,
-  onClick: () -> Unit,
-) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -320,21 +308,21 @@ private fun SessionMiniTag(text: String) {
 
 private enum class SessionFilter {
   Recent,
-  Live,
+  Current,
 }
 
 /** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "No sessions yet"
-    SessionFilter.Live -> "No live session"
+    SessionFilter.Current -> "No current session"
   }
 
 /** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "Start a new conversation and it will show up here."
-    SessionFilter.Live -> "Open Chat to start or resume the current session."
+    SessionFilter.Current -> "Open Chat to start or resume the current session."
   }
 
 /** Formats session timestamps for compact mobile metadata. */

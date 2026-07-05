@@ -2,6 +2,7 @@
 // session/channel context used when the gateway resumes an interrupted run.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { RestartSentinel, RestartSentinelPayload } from "../infra/restart-sentinel.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
@@ -24,18 +25,24 @@ const mocks = vi.hoisted(() => {
     set queuedSessionDelivery(value: Record<string, unknown> | null) {
       state.queuedSessionDelivery = value;
     },
-    readRestartSentinel: vi.fn(async () => ({
-      payload: {
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15550002",
-          accountId: "acct-2",
+    readRestartSentinel: vi.fn(
+      async (): Promise<RestartSentinel> => ({
+        version: 1,
+        payload: {
+          kind: "restart",
+          status: "ok",
+          ts: 123,
+          sessionKey: "agent:main:main",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "+15550002",
+            accountId: "acct-2",
+          },
         },
-      },
-    })),
-    removeRestartSentinelFile: vi.fn(async () => undefined),
-    resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
+      }),
+    ),
+    finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
+    clearRestartSentinel: vi.fn(async () => undefined),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
     resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
@@ -55,6 +62,7 @@ const mocks = vi.hoisted(() => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main"],
         legacyKey: undefined,
       }),
     ),
@@ -173,9 +181,9 @@ vi.mock("../agents/agent-scope.js", async () => {
 });
 
 vi.mock("../infra/restart-sentinel.js", () => ({
+  finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   readRestartSentinel: mocks.readRestartSentinel,
-  removeRestartSentinelFile: mocks.removeRestartSentinelFile,
-  resolveRestartSentinelPath: mocks.resolveRestartSentinelPath,
+  clearRestartSentinel: mocks.clearRestartSentinel,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
 }));
@@ -292,7 +300,11 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const {
+  getLatestUpdateRestartSentinel,
+  refreshLatestUpdateRestartSentinel,
+  scheduleRestartSentinelWake,
+} = await import("./server-restart-sentinel.js");
 
 function expectRecordFields(
   record: unknown,
@@ -366,7 +378,11 @@ describe("scheduleRestartSentinelWake", () => {
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
     mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
       payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 123,
         sessionKey: "agent:main:main",
         deliveryContext: {
           channel: "whatsapp",
@@ -387,6 +403,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReset();
@@ -408,7 +425,11 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
-    mocks.removeRestartSentinelFile.mockClear();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
+    mocks.clearRestartSentinel.mockClear();
+    mocks.formatRestartSentinelMessage.mockClear();
+    mocks.summarizeRestartSentinel.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
     mocks.recordInboundSessionAndDispatchReply.mockReset();
@@ -439,6 +460,8 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
+    expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(expect.anything());
+    expect(mocks.summarizeRestartSentinel).toHaveBeenCalledWith(expect.anything());
     expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:main",
@@ -601,7 +624,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
       {
         Body: "Reply with exactly: Yay! I did it!",
-        BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+        BodyForAgent: "Reply with exactly: Yay! I did it!",
         BodyForCommands: "",
         CommandBody: "",
         CommandAuthorized: true,
@@ -657,6 +680,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -697,6 +721,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     const replacementEntry: LoadedSessionEntry = {
@@ -710,6 +735,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     mocks.readRestartSentinel.mockResolvedValue({
@@ -785,6 +811,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -832,6 +859,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:group",
+      storeKeys: ["agent:main:group"],
       legacyKey: undefined,
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
@@ -876,6 +904,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+      storeKeys: ["agent:main:telegram:group:-1003826723328:topic:13757"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReturnValue({
@@ -1276,7 +1305,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.removeRestartSentinelFile).not.toHaveBeenCalled();
+    expect(mocks.clearRestartSentinel).not.toHaveBeenCalled();
     expect(mocks.drainPendingSessionDeliveries).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith("startup task failed", {
       source: "restart-sentinel",
@@ -1310,6 +1339,60 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a consumed update sentinel available for reconnect status polling", async () => {
+    const payload: RestartSentinelPayload = {
+      kind: "update",
+      status: "ok",
+      ts: 123,
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+      },
+      stats: {
+        mode: "git",
+        root: "/repo",
+        before: { version: "1.0.0" },
+        after: { version: "2.0.0" },
+        steps: [],
+        reason: null,
+        durationMs: 10,
+      },
+    };
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload,
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.clearRestartSentinel).toHaveBeenCalledOnce();
+    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
+  });
+
+  it("does not rewrite pending update sentinels during status refresh", async () => {
+    const payload: RestartSentinelPayload = {
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: {
+        mode: "git",
+        handoffId: "handoff-1",
+        reason: "managed-service-handoff-started",
+      },
+    };
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload,
+    });
+
+    await expect(refreshLatestUpdateRestartSentinel()).resolves.toEqual(payload);
+
+    expect(mocks.finalizeUpdateRestartSentinelRunningVersion).not.toHaveBeenCalled();
+    expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
   it("does not wake the main session when the sentinel has no sessionKey", async () => {
@@ -1437,6 +1520,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event"],
         legacyKey: undefined,
       })
       .mockReturnValueOnce({
@@ -1450,6 +1534,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org"],
         legacyKey: undefined,
       });
     mocks.deliveryContextFromSession

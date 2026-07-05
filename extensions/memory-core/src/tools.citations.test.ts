@@ -1,6 +1,5 @@
 // Memory Core tests cover tools.citations plugin behavior.
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -8,7 +7,9 @@ import {
 import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
+  getMemorySearchManagerMockParams,
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
@@ -16,7 +17,8 @@ import {
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
+import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import { testing as memoryToolsTesting } from "./tools.js";
 import {
@@ -162,6 +164,47 @@ describe("memory tools", () => {
     });
   });
 
+  it("uses default memory manager mode for shared memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+    });
+
+    await tool.execute("call_default_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: undefined,
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("uses one-shot CLI memory manager mode for explicit local CLI memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      oneShotCliRun: true,
+    });
+
+    await tool.execute("call_cli_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: "cli",
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
+  });
+
   it("returns disabled details when memory_get fails", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
       throw new Error("path required");
@@ -283,13 +326,15 @@ describe("memory tools", () => {
       });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
-      const store = JSON.parse(storeRaw) as {
-        entries?: Record<string, { path: string; recallCount: number }>;
-      };
-      const entries = Object.values(store.entries ?? {});
-      expect(entries).toHaveLength(1);
+      const entries = await waitFor(async () => {
+        const store = await shortTermPromotionTesting.readRecallStore(
+          workspaceDir,
+          new Date().toISOString(),
+        );
+        const values = Object.values(store.entries);
+        expect(values).toHaveLength(1);
+        return values;
+      });
       const entry = entries[0];
       expect(entry?.path).toBe("memory/2026-04-03.md");
       expect(entry?.recallCount).toBe(1);

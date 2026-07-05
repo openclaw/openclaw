@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import path from "node:path";
+import { sleep as delay } from "../../lib/sleep.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer } from "./types.ts";
 
@@ -94,7 +95,7 @@ async function stopHostServerChild(
   terminateTimeoutMs = 2_000,
   killTimeoutMs = 1_500,
 ): Promise<boolean> {
-  if (child.exitCode != null) {
+  if (hasHostServerChildExited(child)) {
     return true;
   }
   child.kill("SIGTERM");
@@ -109,13 +110,13 @@ async function waitForChildExit(
   child: ChildProcessWithoutNullStreams,
   timeoutMs: number,
 ): Promise<boolean> {
-  if (child.exitCode != null) {
+  if (hasHostServerChildExited(child)) {
     return true;
   }
   return await new Promise<boolean>((resolve) => {
     let settled = false;
     const onExit = () => settle(true);
-    const timeout = setTimeout(() => settle(child.exitCode != null), timeoutMs);
+    const timeout = setTimeout(() => settle(hasHostServerChildExited(child)), timeoutMs);
     timeout.unref();
     function settle(exited: boolean): void {
       if (settled) {
@@ -128,6 +129,10 @@ async function waitForChildExit(
     }
     child.once("exit", onExit);
   });
+}
+
+function hasHostServerChildExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode != null || child.signalCode != null;
 }
 
 async function waitForHostServer(
@@ -147,11 +152,11 @@ async function waitForHostServer(
   });
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
-    if (child.exitCode != null) {
+    if (hasHostServerChildExited(child)) {
       if (!childClosed) {
         await Promise.race([childClose, delay(HOST_SERVER_STDERR_DRAIN_MS)]);
       }
-      die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
+      die(`host artifact server exited early: ${stderr.trim() || formatHostServerExit(child)}`);
     }
     if (await canConnect(port)) {
       return;
@@ -172,6 +177,10 @@ function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number
   return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
 }
 
+function formatHostServerExit(child: ChildProcessWithoutNullStreams): string {
+  return child.signalCode ? `signal ${child.signalCode}` : `exit ${child.exitCode ?? "unknown"}`;
+}
+
 async function canConnect(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const socket = createConnection({ host: "127.0.0.1", port });
@@ -184,12 +193,6 @@ async function canConnect(port: number): Promise<boolean> {
       socket.destroy();
       resolve(false);
     });
-  });
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 

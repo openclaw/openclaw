@@ -6,7 +6,7 @@ import type {
 } from "../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "../plugins/runtime-channel-state.js";
 
-export type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
+type RegisteredChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: ActivePluginChannelRegistration["plugin"] & {
     id?: string | null;
     meta?: {

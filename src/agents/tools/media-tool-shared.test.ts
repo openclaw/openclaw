@@ -2,11 +2,13 @@
 // model-registry normalization for generation/understanding tools.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withEnv } from "../../test-utils/env.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
+  readBooleanToolParam,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
@@ -58,11 +60,15 @@ function createModelRegistryStub(resolve: (provider: string, modelId: string) =>
   };
 }
 
-describe("resolveMediaToolLocalRoots", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+describe("readBooleanToolParam", () => {
+  it("parses booleans and true/false string tokens", () => {
+    expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
+    expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
+    expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
   });
+});
 
+describe("resolveMediaToolLocalRoots", () => {
   it("does not widen default local roots from media sources", () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
@@ -70,13 +76,13 @@ describe("resolveMediaToolLocalRoots", () => {
     const moviesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
 
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const roots = resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
-      path.join(picturesDir, "photo.png"),
-      pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
-      "/top-level-file.png",
-    ]);
+    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
+        path.join(picturesDir, "photo.png"),
+        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
+        "/top-level-file.png",
+      ]),
+    );
 
     const normalizedRoots = roots.map(normalizeHostPath);
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));

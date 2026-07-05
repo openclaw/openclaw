@@ -10,18 +10,44 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Builds create/patch payload variants while preserving per-call field optionality. */
-function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
+function cronAgentTurnPayloadSchema(params: {
+  message: TSchema;
+  model: TSchema;
+  fallbacks: TSchema;
+  toolsAllow: TSchema;
+  thinking: TSchema;
+}) {
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
       message: params.message,
-      model: Type.Optional(Type.String()),
-      fallbacks: Type.Optional(Type.Array(Type.String())),
-      thinking: Type.Optional(Type.String()),
+      model: Type.Optional(params.model),
+      fallbacks: Type.Optional(params.fallbacks),
+      thinking: Type.Optional(params.thinking),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       toolsAllow: Type.Optional(params.toolsAllow),
+      // Server-managed marker for auto-stamped defaults; persisted so CLI cron
+      // runs can drop only the cap that was never user-explicit.
+      toolsAllowIsDefault: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  );
+}
+
+/** Builds command payload variants while preserving create/patch argv optionality. */
+function cronCommandPayloadSchema(params: { argv: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("command"),
+      argv: params.argv,
+      cwd: Type.Optional(Type.String({ minLength: 1 })),
+      env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.String())),
+      input: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
     },
     { additionalProperties: false },
   );
@@ -57,6 +83,7 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
   Type.Literal("at"),
   Type.Literal("every"),
   Type.Literal("cron"),
+  Type.Literal("on-exit"),
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -98,6 +125,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("billing"),
   Type.Literal("server_error"),
   Type.Literal("timeout"),
+  Type.Literal("context_overflow"),
   Type.Literal("model_not_found"),
   Type.Literal("session_expired"),
   Type.Literal("empty_response"),
@@ -197,6 +225,17 @@ export const CronScheduleSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      // Event-driven trigger: fires once when the gateway-owned watcher running
+      // `command` exits. Survives per-turn CLI teardown (runs under the gateway
+      // ProcessSupervisor, not the turn process tree).
+      kind: Type.Literal("on-exit"),
+      command: NonEmptyString,
+      cwd: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 
 /** Full cron payload for new jobs. */
@@ -210,7 +249,13 @@ export const CronPayloadSchema = Type.Union([
   ),
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
+    model: Type.String(),
+    fallbacks: Type.Array(Type.String()),
     toolsAllow: Type.Array(Type.String()),
+    thinking: Type.String(),
+  }),
+  cronCommandPayloadSchema({
+    argv: Type.Array(NonEmptyString, { minItems: 1 }),
   }),
 ]);
 
@@ -225,7 +270,13 @@ export const CronPayloadPatchSchema = Type.Union([
   ),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
+    model: Type.Union([Type.String(), Type.Null()]),
+    fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+    thinking: Type.Union([Type.String(), Type.Null()]),
+  }),
+  cronCommandPayloadSchema({
+    argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
   }),
 ]);
 
@@ -434,6 +485,7 @@ export const CronListParamsSchema = Type.Object(
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
     agentId: Type.Optional(NonEmptyString),
+    compact: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

@@ -2,15 +2,81 @@ import Foundation
 import OpenClawKit
 import OSLog
 
+struct MacNodeGatewayTLSSessionCache {
+    private struct Key: Equatable {
+        let url: URL
+        let required: Bool
+        let expectedFingerprint: String?
+        let allowTOFU: Bool
+        let storeKey: String?
+
+        init(url: URL, params: GatewayTLSParams) {
+            self.url = url
+            self.required = params.required
+            self.expectedFingerprint = params.expectedFingerprint
+            self.allowTOFU = params.allowTOFU
+            self.storeKey = params.storeKey
+        }
+    }
+
+    private var cachedKey: Key?
+    private var cachedBox: WebSocketSessionBox?
+
+    mutating func sessionBox(url: URL, params: GatewayTLSParams) -> WebSocketSessionBox {
+        let key = Key(url: url, params: params)
+        if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
+            return cachedBox
+        }
+        let box = WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
+        self.cachedKey = key
+        self.cachedBox = box
+        return box
+    }
+
+    mutating func invalidate() {
+        self.cachedKey = nil
+        self.cachedBox = nil
+    }
+}
+
 @MainActor
 final class MacNodeModeCoordinator {
     static let shared = MacNodeModeCoordinator()
+    static var nodeIdentityProfile: GatewayDeviceIdentityProfile {
+        self.resolveNodeIdentityProfile(
+            defaults: .standard,
+            isExistingInstallation: AppStateStore.shared.onboardingSeen)
+    }
+
+    static func prepareNodeIdentityProfile(isExistingInstallation: Bool) {
+        _ = self.resolveNodeIdentityProfile(
+            defaults: .standard,
+            isExistingInstallation: isExistingInstallation)
+    }
+
+    static func resolveNodeIdentityProfile(
+        defaults: UserDefaults,
+        isExistingInstallation: Bool) -> GatewayDeviceIdentityProfile
+    {
+        if let rawValue = defaults.string(forKey: macNodeIdentityProfileKey),
+           let stored = GatewayDeviceIdentityProfile(rawValue: rawValue),
+           stored == .primary || stored == .node
+        {
+            return stored
+        }
+        // Released builds used the primary identity for the Mac node. Persist the
+        // install-era choice before onboarding can change connection state.
+        let selected: GatewayDeviceIdentityProfile = isExistingInstallation ? .primary : .node
+        defaults.set(selected.rawValue, forKey: macNodeIdentityProfileKey)
+        return selected
+    }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "mac-node")
     private var task: Task<Void, Never>?
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
     private var autoRepairedTLSFingerprintsByStoreKey: [String: String] = [:]
+    private var tlsSessionCache = MacNodeGatewayTLSSessionCache()
 
     private init() {
         let session = GatewayNodeSession()
@@ -82,7 +148,8 @@ final class MacNodeModeCoordinator {
                     permissions: permissions,
                     clientId: "openclaw-macos",
                     clientMode: "node",
-                    clientDisplayName: InstanceIdentity.displayName)
+                    clientDisplayName: InstanceIdentity.displayName,
+                    deviceIdentityProfile: Self.nodeIdentityProfile)
                 let sessionBox = self.buildSessionBox(
                     url: config.url,
                     connectionMode: AppStateStore.shared.connectionMode)
@@ -268,7 +335,10 @@ final class MacNodeModeCoordinator {
     }
 
     private func buildSessionBox(url: URL, connectionMode: AppState.ConnectionMode) -> WebSocketSessionBox? {
-        guard url.scheme?.lowercased() == "wss" else { return nil }
+        guard url.scheme?.lowercased() == "wss" else {
+            self.tlsSessionCache.invalidate()
+            return nil
+        }
         let stableID = Self.tlsPinStoreKey(for: url)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         guard let params = Self.tlsParams(
@@ -276,8 +346,10 @@ final class MacNodeModeCoordinator {
             connectionMode: connectionMode,
             root: OpenClawConfigFile.loadDict(),
             storedFingerprint: stored)
-        else { return nil }
-        let session = GatewayTLSPinningSession(params: params)
-        return WebSocketSessionBox(session: session)
+        else {
+            self.tlsSessionCache.invalidate()
+            return nil
+        }
+        return self.tlsSessionCache.sessionBox(url: url, params: params)
     }
 }

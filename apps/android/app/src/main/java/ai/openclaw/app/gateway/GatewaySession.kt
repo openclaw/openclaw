@@ -31,7 +31,7 @@ import okhttp3.WebSocketListener
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Identity advertised during gateway connect; these fields become the device row users approve.
@@ -69,7 +69,7 @@ private enum class GatewayConnectAuthSource {
 }
 
 /**
- * Structured auth failure guidance from the gateway, preserved for reconnect and UI decisions.
+ * Structured connect failure guidance from the gateway, preserved for reconnect and UI decisions.
  */
 data class GatewayConnectErrorDetails(
   val code: String?,
@@ -77,7 +77,21 @@ data class GatewayConnectErrorDetails(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean? = null,
   val reason: String? = null,
+  val requestId: String? = null,
+  val retryable: Boolean = false,
+  val clientMinProtocol: Int? = null,
+  val clientMaxProtocol: Int? = null,
+  val expectedProtocol: Int? = null,
+  val minimumProbeProtocol: Int? = null,
 )
+
+private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+/** Keeps copied approval commands single-argument and safe for a gateway host shell. */
+internal fun normalizeGatewayApprovalRequestId(requestId: String?): String? {
+  val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  return trimmed.takeIf { gatewayApprovalRequestIdPattern.matches(it) }
+}
 
 /**
  * Server hello fields cached by the Android runtime after a successful connect.
@@ -111,6 +125,16 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
+private class GatewayRequestNotEnqueued(
+  message: String,
+) : IllegalStateException(message)
+
+internal enum class NodeEventSendOutcome {
+  COMPLETED,
+  DISCONNECTED,
+  FAILED,
+}
+
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
  */
@@ -120,6 +144,7 @@ class GatewaySession(
   private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (GatewayHelloSummary) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
+  private val onConnectFailure: (error: ErrorShape, pauseReconnect: Boolean) -> Unit = { _, _ -> },
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
@@ -172,7 +197,6 @@ class GatewaySession(
 
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
-  private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
   @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
 
@@ -256,62 +280,33 @@ class GatewaySession(
     currentConnection?.closeQuietly()
   }
 
-  fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
+  private fun readyConnection(): Connection? = currentConnection?.takeIf { it.isReady() }
 
-  /** Refreshes the canvas plugin surface URL and caches the normalized Android-reachable URL. */
-  suspend fun refreshCanvasHostUrl(timeoutMs: Long = 8_000): String? {
-    val refreshed =
-      refreshPluginSurfaceUrl(
-        method = "node.pluginSurface.refresh",
-        params = buildJsonObject { put("surface", JsonPrimitive("canvas")) },
-        timeoutMs = timeoutMs,
-      )
-    if (!refreshed.isNullOrBlank()) {
-      pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
-    }
-    return refreshed
-  }
-
-  fun currentMainSessionKey(): String? = mainSessionKey
+  internal fun isReady(): Boolean = readyConnection() != null
 
   /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
     payloadJson: String?,
-  ): Boolean {
-    val conn = currentConnection ?: return false
+  ): Boolean = sendNodeEventWithOutcome(event, payloadJson) == NodeEventSendOutcome.COMPLETED
+
+  internal suspend fun sendNodeEventWithOutcome(
+    event: String,
+    payloadJson: String?,
+  ): NodeEventSendOutcome {
+    val conn = readyConnection() ?: return NodeEventSendOutcome.DISCONNECTED
     return try {
       conn.request(
         "node.event",
         buildNodeEventParams(event = event, payloadJson = payloadJson),
         timeoutMs = 8_000,
       )
-      true
+      NodeEventSendOutcome.COMPLETED
+    } catch (_: GatewayRequestNotEnqueued) {
+      NodeEventSendOutcome.DISCONNECTED
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
-      false
-    }
-  }
-
-  private suspend fun refreshPluginSurfaceUrl(
-    method: String,
-    params: JsonElement?,
-    timeoutMs: Long,
-  ): String? {
-    val conn = currentConnection ?: return null
-    return try {
-      val res = conn.request(method, params, timeoutMs)
-      if (!res.ok) return null
-      val obj = res.payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() } ?: return null
-      val raw =
-        obj["pluginSurfaceUrls"]
-          .asObjectOrNull()
-          ?.get("canvas")
-          .asStringOrNull()
-      normalizeCanvasHostUrl(raw, conn.endpoint, isTlsConnection = conn.tls != null)
-    } catch (err: Throwable) {
-      Log.d("OpenClawGateway", "$method failed: ${err.message ?: err::class.java.simpleName}")
-      null
+      NodeEventSendOutcome.FAILED
     }
   }
 
@@ -322,7 +317,7 @@ class GatewaySession(
     timeoutMs: Long = 8_000,
   ): RpcResult {
     val conn =
-      currentConnection
+      readyConnection()
         ?: return RpcResult(
           ok = false,
           payloadJson = null,
@@ -370,7 +365,7 @@ class GatewaySession(
     paramsJson: String?,
     timeoutMs: Long = 15_000,
   ): RpcResult {
-    val conn = currentConnection ?: throw IllegalStateException("not connected")
+    val conn = readyConnection() ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -388,7 +383,7 @@ class GatewaySession(
     timeoutMs: Long = 15_000,
     onError: (ErrorShape) -> Unit = {},
   ) {
-    val conn = currentConnection ?: throw IllegalStateException("not connected")
+    val conn = readyConnection() ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -405,6 +400,18 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
+  private data class ConnectedGateway(
+    val pluginSurfaceUrls: Map<String, String>,
+    val mainSessionKey: String?,
+    val hello: GatewayHelloSummary,
+  )
+
+  private enum class ConnectionState {
+    CONNECTING,
+    READY,
+    CLOSED,
+  }
+
   private inner class Connection(
     val endpoint: GatewayEndpoint,
     private val token: String?,
@@ -413,14 +420,19 @@ class GatewaySession(
     private val options: GatewayConnectOptions,
     val tls: GatewayTlsParams?,
   ) {
-    private val connectDeferred = CompletableDeferred<Unit>()
+    private val state = AtomicReference(ConnectionState.CONNECTING)
+    private val connectDeferred = CompletableDeferred<ConnectedGateway>()
     private val closedDeferred = CompletableDeferred<Unit>()
-    private val isClosed = AtomicBoolean(false)
     private val connectNonceDeferred = CompletableDeferred<String>()
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+
+    // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
+
+    private val pendingLock = Any()
     private val messagePumpJob =
       scope.launch(Dispatchers.IO) {
         for (text in incomingMessages) {
@@ -439,15 +451,11 @@ class GatewaySession(
 
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
-    suspend fun connect() {
+    suspend fun connect(): ConnectedGateway {
       val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
-      try {
-        connectDeferred.await()
-      } catch (err: Throwable) {
-        throw err
-      }
+      return connectDeferred.await()
     }
 
     suspend fun request(
@@ -456,19 +464,14 @@ class GatewaySession(
       timeoutMs: Long,
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
-      val deferred = CompletableDeferred<RpcResponse>()
-      pending[id] = deferred
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
-      } catch (err: Throwable) {
-        pending.remove(id)
-        throw err
-      }
-      return try {
-        withTimeout(timeoutMs) { deferred.await() }
+        return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
-        pending.remove(id)
         throw IllegalStateException("request timeout")
+      } finally {
+        pending.remove(id)
       }
     }
 
@@ -479,8 +482,7 @@ class GatewaySession(
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
-      val deferred = CompletableDeferred<RpcResponse>()
-      pending[id] = deferred
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
       } catch (err: Throwable) {
@@ -488,25 +490,43 @@ class GatewaySession(
         throw err
       }
       scope.launch(Dispatchers.IO) {
-        val response =
-          try {
-            withTimeout(timeoutMs) { deferred.await() }
-          } catch (_: TimeoutCancellationException) {
-            pending.remove(id)
-            onError(ErrorShape("UNAVAILABLE", "request timeout"))
-            return@launch
+        try {
+          val response =
+            try {
+              withTimeout(timeoutMs) { deferred.await() }
+            } catch (_: TimeoutCancellationException) {
+              onError(ErrorShape("UNAVAILABLE", "request timeout"))
+              return@launch
+            } catch (_: CancellationException) {
+              return@launch
+            }
+          if (!response.ok) {
+            onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
           }
-        if (!response.ok) {
-          onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        } finally {
+          pending.remove(id)
         }
       }
+    }
+
+    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
+      val deferred = CompletableDeferred<RpcResponse>()
+      // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
+      synchronized(pendingLock) {
+        if (state.get() == ConnectionState.CLOSED) {
+          throw GatewayRequestNotEnqueued("Gateway closed")
+        }
+        pending[id] = deferred
+      }
+      return deferred
     }
 
     suspend fun sendJson(obj: JsonObject) {
       val jsonString = obj.toString()
       writeLock.withLock {
         if (socket?.send(jsonString) != true) {
-          throw IllegalStateException("gateway send failed")
+          // OkHttp returning false means this frame never entered its outgoing queue.
+          throw GatewayRequestNotEnqueued("gateway send failed")
         }
       }
     }
@@ -525,13 +545,18 @@ class GatewaySession(
 
     suspend fun awaitClose() = closedDeferred.await()
 
+    fun isReady(): Boolean = state.get() == ConnectionState.READY
+
+    fun markReady(): Boolean = state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)
+
     fun closeQuietly() {
-      if (isClosed.compareAndSet(false, true)) {
+      if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
         incomingMessages.close()
         messagePumpJob.cancel()
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
         }
+        failPending()
         socket?.close(1000, "bye")
         socket = null
         closedDeferred.complete(Unit)
@@ -587,7 +612,7 @@ class GatewaySession(
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(t)
         }
-        if (isClosed.compareAndSet(false, true)) {
+        if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
           incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
@@ -603,7 +628,7 @@ class GatewaySession(
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
         }
-        if (isClosed.compareAndSet(false, true)) {
+        if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
           incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
@@ -659,8 +684,8 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
-      connectDeferred.complete(Unit)
+      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      connectDeferred.complete(connected)
     }
 
     private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
@@ -680,6 +705,7 @@ class GatewaySession(
             setOf(
               "operator.approvals",
               "operator.read",
+              "operator.talk.secrets",
               "operator.write",
             )
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
@@ -712,11 +738,11 @@ class GatewaySession(
       deviceAuthStore.saveToken(deviceId, role, token, scopes)
     }
 
-    private fun handleConnectSuccess(
+    private fun parseConnectSuccess(
       res: RpcResponse,
       deviceId: String,
       authSource: GatewayConnectAuthSource,
-    ) {
+    ): ConnectedGateway {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       pendingDeviceTokenRetry = false
@@ -763,21 +789,24 @@ class GatewaySession(
           normalizeCanvasHostUrl(value.asStringOrNull(), endpoint, isTlsConnection = tls != null)
             ?.let { normalized -> surface to normalized }
         } ?: emptyList()
-      pluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
+      val nextPluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
       val snapshot = obj["snapshot"].asObjectOrNull()
       val sessionDefaults =
         snapshot
           ?.get("sessionDefaults")
           .asObjectOrNull()
-      mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
-      onConnected(
-        GatewayHelloSummary(
-          serverName = serverName,
-          remoteAddress = remoteAddress,
-          serverVersion = serverVersion,
-          mainSessionKey = mainSessionKey,
-          updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
-        ),
+      val nextMainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
+      return ConnectedGateway(
+        pluginSurfaceUrls = nextPluginSurfaceUrls,
+        mainSessionKey = nextMainSessionKey,
+        hello =
+          GatewayHelloSummary(
+            serverName = serverName,
+            remoteAddress = remoteAddress,
+            serverVersion = serverVersion,
+            mainSessionKey = nextMainSessionKey,
+            updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+          ),
       )
     }
 
@@ -923,6 +952,12 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
+                requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
+                retryable = it["retryable"].asBooleanOrNull() == true,
+                clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
+                clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
+                expectedProtocol = it["expectedProtocol"].asIntOrNull(),
+                minimumProbeProtocol = it["minimumProbeProtocol"].asIntOrNull(),
               )
             }
           ErrorShape(code, msg, details)
@@ -980,6 +1015,8 @@ class GatewaySession(
           try {
             onInvoke?.invoke(InvokeRequest(id, nodeId, command, params, timeoutMs))
               ?: InvokeResult.error("UNAVAILABLE", "invoke handler missing")
+          } catch (err: CancellationException) {
+            throw err
           } catch (err: Throwable) {
             invokeErrorFromThrowable(err)
           }
@@ -1032,10 +1069,13 @@ class GatewaySession(
     }
 
     private fun failPending() {
-      for ((_, waiter) in pending) {
+      val waiters =
+        synchronized(pendingLock) {
+          pending.values.toList().also { pending.clear() }
+        }
+      for (waiter in waiters) {
         waiter.cancel()
       }
-      pending.clear()
     }
   }
 
@@ -1061,10 +1101,14 @@ class GatewaySession(
       } catch (err: Throwable) {
         attempt += 1
         onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
-        if (
-          err is GatewayConnectFailure &&
-          shouldPauseReconnectAfterAuthFailure(err.gatewayError)
-        ) {
+        val gatewayConnectFailure = err as? GatewayConnectFailure
+        val pauseForAuthFailure =
+          gatewayConnectFailure
+            ?.let { shouldPauseReconnectAfterAuthFailure(it.gatewayError) } == true
+        if (gatewayConnectFailure != null) {
+          onConnectFailure(gatewayConnectFailure.gatewayError, pauseForAuthFailure)
+        }
+        if (pauseForAuthFailure) {
           reconnectPausedForAuthFailure = true
           continue
         }
@@ -1085,15 +1129,47 @@ class GatewaySession(
           target.options,
           target.tls,
         )
-      currentConnection = conn
+      val shouldConnect =
+        synchronized(lifecycleLock) {
+          if (desired === target) {
+            currentConnection = conn
+            true
+          } else {
+            false
+          }
+        }
+      if (!shouldConnect) {
+        conn.closeQuietly()
+        return@withContext
+      }
       try {
-        conn.connect()
+        val connected = conn.connect()
+        val published =
+          synchronized(lifecycleLock) {
+            if (currentConnection !== conn || desired !== target || !conn.markReady()) {
+              false
+            } else {
+              // Readiness and its metadata must become visible before callbacks flush queued events.
+              pluginSurfaceUrls = connected.pluginSurfaceUrls
+              mainSessionKey = connected.mainSessionKey
+              onConnected(connected.hello)
+              true
+            }
+          }
+        if (!published) {
+          conn.closeQuietly()
+          return@withContext
+        }
         conn.awaitClose()
       } finally {
-        if (currentConnection === conn) {
-          currentConnection = null
-          pluginSurfaceUrls = emptyMap()
-          mainSessionKey = null
+        // Callback failures and cancellation must close this socket before the loop replaces it.
+        conn.closeQuietly()
+        synchronized(lifecycleLock) {
+          if (currentConnection === conn) {
+            currentConnection = null
+            pluginSurfaceUrls = emptyMap()
+            mainSessionKey = null
+          }
         }
       }
     }
@@ -1239,7 +1315,6 @@ class GatewaySession(
       hasBootstrapToken = target?.bootstrapToken?.trim()?.isNotEmpty() == true,
       role = target?.options?.role,
       scopes = target?.options?.scopes ?: emptyList(),
-      deviceTokenRetryBudgetUsed = deviceTokenRetryBudgetUsed,
       pendingDeviceTokenRetry = pendingDeviceTokenRetry,
     )
   }
@@ -1263,32 +1338,52 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   hasBootstrapToken: Boolean,
   role: String?,
   scopes: List<String>,
-  deviceTokenRetryBudgetUsed: Boolean,
   pendingDeviceTokenRetry: Boolean,
-): Boolean =
-  when (error.details?.code) {
+): Boolean {
+  val details = error.details
+  val code = details?.code
+  if (code == "PAIRING_REQUIRED") {
+    val pairingDetails = details
+    return !(
+      hasBootstrapToken &&
+        role?.trim() == "node" &&
+        scopes.isEmpty() &&
+        pairingDetails.reason == "not-paired" &&
+        (
+          pairingDetails.pauseReconnect == false ||
+            pairingDetails.recommendedNextStep == "wait_then_retry"
+        )
+    )
+  }
+  // Gateway rate limits last minutes; generic retry advice must not trigger the short reconnect loop.
+  if (code == "AUTH_RATE_LIMITED") return true
+  when (details?.recommendedNextStep) {
+    "wait_then_retry" -> return false
+    "retry_with_device_token" -> return !pendingDeviceTokenRetry
+    "update_auth_configuration",
+    "update_auth_credentials",
+    "review_auth_configuration",
+    -> return true
+  }
+  return when (code) {
     "AUTH_TOKEN_MISSING",
+    "AUTH_TOKEN_NOT_CONFIGURED",
+    "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_BOOTSTRAP_TOKEN_INVALID",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
-    "AUTH_RATE_LIMITED",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
+    "AUTH_SCOPE_MISMATCH",
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true
-    "PAIRING_REQUIRED" ->
-      !(
-        hasBootstrapToken &&
-          role?.trim() == "node" &&
-          scopes.isEmpty() &&
-          error.details.reason == "not-paired" &&
-          (
-            error.details.pauseReconnect == false ||
-              error.details.recommendedNextStep == "wait_then_retry"
-          )
-      )
-    "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
+    // The first shared-token mismatch may schedule one trusted stored-device-token retry.
+    // Once no retry is pending, keep the terminal recovery action visible until credentials change.
+    "AUTH_TOKEN_MISMATCH" -> !pendingDeviceTokenRetry
+    "PROTOCOL_MISMATCH" -> true
     else -> false
   }
+}
 
 /** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
 internal fun buildGatewayWebSocketUrl(
@@ -1338,6 +1433,12 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
+    else -> null
+  }
+
+private fun JsonElement?.asIntOrNull(): Int? =
+  when (this) {
+    is JsonPrimitive -> content.toIntOrNull()
     else -> null
   }
 

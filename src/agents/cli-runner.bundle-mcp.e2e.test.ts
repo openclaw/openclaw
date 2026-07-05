@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   writeBundleProbeMcpServer,
   writeClaudeBundle,
@@ -70,11 +70,11 @@ async function createBundleMcpFixture(params: {
     "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
   ]);
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
-  process.env.HOME = tempHome;
-  process.env.USERPROFILE = tempHome;
-  delete process.env.OPENCLAW_HOME;
-  delete process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = "1";
+  setTestEnvValue("HOME", tempHome);
+  setTestEnvValue("USERPROFILE", tempHome);
+  deleteTestEnvValue("OPENCLAW_HOME");
+  deleteTestEnvValue("OPENCLAW_STATE_DIR");
+  setTestEnvValue("OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY", "1");
 
   const workspaceDir = path.join(tempHome, "workspace");
   const sessionFile = path.join(tempHome, "session.jsonl");
@@ -181,7 +181,7 @@ async function prepareBundleMcpExecutionContext(params: {
       bundleMcpMode: "claude-config-file",
     },
     preparedBackend,
-    reusableCliSession: {},
+    reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: params.config,
     modelId: params.model,

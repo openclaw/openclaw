@@ -36,6 +36,11 @@ export {
   resolveEnvelopeFormatOptions,
 } from "../auto-reply/envelope.js";
 export type { EnvelopeFormatOptions } from "../auto-reply/envelope.js";
+export type {
+  PluginHookChannelChatContext,
+  PluginHookChannelContext,
+  PluginHookChannelSenderContext,
+} from "../plugins/hook-types.js";
 export {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -178,6 +183,7 @@ export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
   buildChannelInboundMediaPayload,
+  formatInboundMediaUnavailableText,
   // @deprecated Prefer `buildChannelInboundMediaPayload`.
   buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";

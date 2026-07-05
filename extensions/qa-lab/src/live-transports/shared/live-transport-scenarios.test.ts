@@ -11,10 +11,18 @@ import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
   findMissingLiveTransportStandardScenarios,
+  loadNonYamlScenarioRefs,
   selectLiveTransportScenarios,
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
+  it("loads every non-YAML scenario id exactly once", async () => {
+    const refs = await loadNonYamlScenarioRefs();
+
+    expect(refs.length).toBeGreaterThan(0);
+    expect(new Set(refs.map((ref) => ref.id)).size).toBe(refs.length);
+  });
+
   it("uses the public live transport scenario SDK seam", () => {
     const source = fs.readFileSync(
       fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),
@@ -108,9 +116,16 @@ describe("live transport scenario helpers", () => {
       standardId: "thread-follow-up",
       scenarioId: "slack-thread-follow-up",
     });
+    expect(lanes.find((lane) => lane.transportId === "whatsapp")?.members).toContainEqual({
+      standardId: "allowlist-block",
+      scenarioId: "whatsapp-group-allowlist-block",
+    });
     expect(
       lanes.find((lane) => lane.transportId === "discord")?.baselineMissingStandardScenarioIds,
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
+    expect(
+      lanes.find((lane) => lane.transportId === "whatsapp")?.baselineMissingStandardScenarioIds,
+    ).toEqual([]);
   });
 
   it("keeps coverage report lane summaries aligned with runtime lanes", () => {

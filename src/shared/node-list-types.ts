@@ -15,6 +15,11 @@ export type NodeListNode = {
   caps?: string[];
   commands?: string[];
   permissions?: Record<string, boolean>;
+  approvalState?: "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
+  pendingRequestId?: string;
+  pendingDeclaredCaps?: string[];
+  pendingDeclaredCommands?: string[];
+  pendingDeclaredPermissions?: Record<string, boolean>;
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;

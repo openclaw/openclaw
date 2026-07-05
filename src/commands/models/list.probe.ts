@@ -673,17 +673,6 @@ export function formatProbeLatency(latencyMs?: number | null) {
   return formatMs(latencyMs);
 }
 
-/** Groups probe results by provider. */
-export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthProbeResult[]> {
-  const map = new Map<string, AuthProbeResult[]>();
-  for (const result of results) {
-    const list = map.get(result.provider) ?? [];
-    list.push(result);
-    map.set(result.provider, list);
-  }
-  return map;
-}
-
 /** Sorts probe results by provider and display label. */
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
   return results.slice().toSorted((a, b) => {

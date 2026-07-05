@@ -1,12 +1,10 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ChatSendAck
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
@@ -43,7 +41,7 @@ data class VoiceConversationEntry(
 )
 
 /** Coordinates live mic transcription, queued sends, and assistant audio replies. */
-class MicCaptureManager(
+internal class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
   private val createTranscriptionSession: suspend () -> String,
@@ -54,11 +52,12 @@ class MicCaptureManager(
   ) -> Unit,
   private val closeTranscriptionSession: suspend (sessionId: String) -> Unit,
   /**
-   * Send [message] to the gateway and return the run ID.
+   * Send [message] to the gateway and return the full chat.send ACK.
    * [onRunIdKnown] is called with the idempotency key *before* the network
    * round-trip so [pendingRunId] is set before any chat events can arrive.
    */
-  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> String?,
+  private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> ChatSendAck,
+  private val refreshAfterTerminalSuccess: suspend () -> Unit = {},
   private val speakAssistantReply: suspend (String) -> Unit = {},
 ) {
   companion object {
@@ -104,6 +103,7 @@ class MicCaptureManager(
   private val messageQueue = ArrayDeque<String>()
   private val messageQueueLock = Any()
   private var flushedPartialTranscript: String? = null
+
   // Correlates chat events with the idempotency key generated before sendChat returns.
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null
@@ -482,24 +482,30 @@ class MicCaptureManager(
 
     scope.launch {
       try {
-        val runId =
+        val ack =
           sendToGateway(next) { earlyRunId ->
             // Called with the idempotency key before chat.send fires so that
             // pendingRunId is populated before any chat events can arrive.
             pendingRunId = earlyRunId
           }
+        val runId = ack.runId
         // Update to the real runId if the gateway returned a different one.
         if (runId != null && runId != pendingRunId) pendingRunId = runId
-        if (runId == null) {
-          pendingRunTimeoutJob?.cancel()
-          pendingRunTimeoutJob = null
-          removeFirstQueuedMessage()
-          publishQueue()
-          _isSending.value = false
-          pendingAssistantEntryId = null
-          sendQueuedIfIdle()
-        } else {
-          armPendingRunTimeout(runId)
+        when {
+          ack.isTerminalSuccess -> {
+            completePendingTurn()
+            refreshAfterTerminalSuccess()
+          }
+          ack.isTerminalFailure -> {
+            completePendingTurn()
+            _statusText.value = "Send failed: Chat failed before the run started; try again."
+          }
+          runId == null -> {
+            completePendingTurn()
+          }
+          else -> {
+            armPendingRunTimeout(runId)
+          }
         }
       } catch (err: Throwable) {
         pendingRunTimeoutJob?.cancel()
@@ -641,35 +647,14 @@ class MicCaptureManager(
       }
     transcriptionCaptureJob =
       scope.launch(Dispatchers.IO) {
-        var audioRecord: AudioRecord? = null
+        var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = transcriptionSampleRateHz * 2 * transcriptionAudioFrameMs / 1000
-          val minBuffer =
-            AudioRecord.getMinBufferSize(
-              transcriptionSampleRateHz,
-              AudioFormat.CHANNEL_IN_MONO,
-              AudioFormat.ENCODING_PCM_16BIT,
-            )
-          if (minBuffer <= 0) {
-            throw IllegalStateException("AudioRecord buffer unavailable")
-          }
-          audioRecord =
-            AudioRecord
-              .Builder()
-              .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-              .setAudioFormat(
-                AudioFormat
-                  .Builder()
-                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(transcriptionSampleRateHz)
-                  .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                  .build(),
-              ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
-              .build()
+          audioInput = AndroidAudioInputSession.open(context, transcriptionSampleRateHz, frameBytes)
           val buffer = ByteArray(frameBytes)
-          audioRecord.startRecording()
+          audioInput.startRecording()
           while (coroutineContext.isActive && _micEnabled.value && transcriptionSessionId == sessionId) {
-            val read = audioRecord.read(buffer, 0, buffer.size)
+            val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             _inputLevel.value = pcm16Level(buffer, read)
             audioFrames.trySend(buffer.copyOf(read))
@@ -679,13 +664,7 @@ class MicCaptureManager(
           failTranscription(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
         } finally {
           audioFrames.close()
-          audioRecord?.let { record ->
-            try {
-              record.stop()
-            } catch (_: Throwable) {
-            }
-            record.release()
-          }
+          audioInput?.close()
         }
       }
   }

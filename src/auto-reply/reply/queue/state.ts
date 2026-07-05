@@ -11,6 +11,7 @@ import {
 } from "./types.js";
 
 export type FollowupQueueState = {
+  abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
   lastEnqueuedAt: number;
@@ -21,6 +22,17 @@ export type FollowupQueueState = {
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
+  /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
+  activeSummarySources: WeakSet<FollowupRun>;
+  summaryElisions: Array<{
+    contextKey: string;
+    count: number;
+    /** Compact sources stay strong so cancellation follows summarized content until delivery. */
+    sources: FollowupRun[];
+    /** Weak source mapping keeps concurrent summary consumption identity-safe. */
+    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
+  }>;
+  evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];
 };
 
@@ -44,6 +56,47 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+type SummaryElisionCapState = Pick<
+  FollowupQueueState,
+  "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"
+>;
+
+export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
+  let sourceCount = queue.summaryElisions.reduce(
+    (count, entry) =>
+      count + entry.sources.filter((source) => !queue.activeSummarySources.has(source)).length,
+    0,
+  );
+  while (sourceCount > queue.cap) {
+    let evicted = false;
+    for (let entryIndex = 0; entryIndex < queue.summaryElisions.length; entryIndex += 1) {
+      const entry = queue.summaryElisions[entryIndex];
+      const sourceIndex = entry.sources.findIndex(
+        (source) => !queue.activeSummarySources.has(source),
+      );
+      if (sourceIndex < 0) {
+        continue;
+      }
+      const [source] = entry.sources.splice(sourceIndex, 1);
+      entry.count = entry.sources.length;
+      queue.evictedSummaryCount += 1;
+      sourceCount -= 1;
+      if (source) {
+        completeFollowupRunLifecycle(source);
+      }
+      if (entry.sources.length === 0) {
+        queue.summaryElisions.splice(entryIndex, 1);
+      }
+      evicted = true;
+      break;
+    }
+    if (!evicted) {
+      // A deferred delivery temporarily retains at most one queue-cap-sized active set.
+      return;
+    }
+  }
+}
+
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
@@ -51,10 +104,12 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
       target: existing,
       settings,
     });
+    trimSummaryElisionsToCap(existing);
     return existing;
   }
 
   const created: FollowupQueueState = {
+    abortController: new AbortController(),
     items: [],
     draining: false,
     lastEnqueuedAt: 0,
@@ -71,6 +126,9 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     droppedCount: 0,
     summaryLines: [],
     summarySources: [],
+    activeSummarySources: new WeakSet(),
+    summaryElisions: [],
+    evictedSummaryCount: 0,
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -86,6 +144,7 @@ export function clearFollowupQueue(key: string): number {
   if (!queue) {
     return 0;
   }
+  queue.abortController.abort();
   const cleared = queue.items.length + queue.droppedCount;
   for (const item of queue.items) {
     completeFollowupRunLifecycle(item);
@@ -93,10 +152,17 @@ export function clearFollowupQueue(key: string): number {
   for (const item of queue.summarySources) {
     completeFollowupRunLifecycle(item);
   }
+  for (const entry of queue.summaryElisions) {
+    for (const source of entry.sources) {
+      completeFollowupRunLifecycle(source);
+    }
+  }
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
   queue.summarySources = [];
+  queue.summaryElisions = [];
+  queue.evictedSummaryCount = 0;
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
@@ -175,5 +241,13 @@ export function refreshQueuedFollowupSession(params: {
   rewriteRun(queue.lastRun);
   for (const item of queue.items) {
     rewriteRun(item.run);
+  }
+  for (const item of queue.summarySources) {
+    rewriteRun(item.run);
+  }
+  for (const entry of queue.summaryElisions) {
+    for (const source of entry.sources) {
+      rewriteRun(source.run);
+    }
   }
 }

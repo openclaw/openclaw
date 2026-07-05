@@ -31,7 +31,12 @@ export function getInvalidPersistedCronJobReason(
   }
   const scheduleRecord = schedule as Record<string, unknown>;
   const scheduleKind = scheduleRecord.kind;
-  if (scheduleKind !== "at" && scheduleKind !== "every" && scheduleKind !== "cron") {
+  if (
+    scheduleKind !== "at" &&
+    scheduleKind !== "every" &&
+    scheduleKind !== "cron" &&
+    scheduleKind !== "on-exit"
+  ) {
     return "invalid-schedule";
   }
   if (scheduleKind === "at") {
@@ -52,13 +57,19 @@ export function getInvalidPersistedCronJobReason(
       return "invalid-schedule";
     }
   }
+  if (scheduleKind === "on-exit") {
+    const command = scheduleRecord.command;
+    if (typeof command !== "string" || command.trim().length === 0) {
+      return "invalid-schedule";
+    }
+  }
   const payload = candidate.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return "missing-payload";
   }
   const payloadRecord = payload as Record<string, unknown>;
   const payloadKind = payloadRecord.kind;
-  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn") {
+  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn" && payloadKind !== "command") {
     return "invalid-payload";
   }
   if (payloadKind === "systemEvent") {
@@ -70,6 +81,16 @@ export function getInvalidPersistedCronJobReason(
   if (payloadKind === "agentTurn") {
     const message = payloadRecord.message;
     if (typeof message !== "string" || message.trim().length === 0) {
+      return "invalid-payload";
+    }
+  }
+  if (payloadKind === "command") {
+    const argv = payloadRecord.argv;
+    if (
+      !Array.isArray(argv) ||
+      argv.length === 0 ||
+      argv.some((value) => typeof value !== "string" || value.length === 0)
+    ) {
       return "invalid-payload";
     }
   }

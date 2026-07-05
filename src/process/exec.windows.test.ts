@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
+  getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 
@@ -295,6 +296,24 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+  it("escapes caret arguments in Windows command wrappers", async () => {
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    await withMockedWindowsPlatform(async () => {
+      const result = await runCommandWithTimeout(
+        ["pnpm", "exec", "vitest", "-t", "@scope/pkg@^1.2.3"],
+        { timeoutMs: 1000 },
+      );
+      expect(result.code).toBe(0);
+      const captured = requireSpawnCall(0);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toBe("pnpm.cmd exec vitest -t @scope/pkg@^^1.2.3");
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+    });
+  });
+
   it("keeps child exitCode when close reports null on Windows npm shims", async () => {
     const child = createMockChild({ closeCode: null, exitCode: 0 });
 
@@ -397,6 +416,35 @@ describe("windows command wrapper behavior", () => {
     });
   });
 
+  it("wraps spaced .cmd command paths in an outer cmd.exe command line", async () => {
+    const expectedComSpec = expectedTrustedCmdExe();
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, "ok", "");
+      },
+    );
+
+    await withMockedWindowsPlatform(async () => {
+      await runExec("C:\\Program Files\\pnpm\\pnpm.cmd", ["--version"], 1000);
+      const captured = requireExecFileCall(0);
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1]).toEqual([
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\pnpm\\pnpm.cmd" --version"',
+      ]);
+      expect(captured[2].windowsHide).toBe(true);
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+    });
+  });
+
   it("sets windowsHide on direct runExec invocations too", async () => {
     execFileMock.mockImplementation(
       (
@@ -449,7 +497,7 @@ describe("windows command wrapper behavior", () => {
         expect(child.kill).not.toHaveBeenCalled();
         expect(spawnMock).toHaveBeenCalledTimes(2);
         const taskkillCall = requireSpawnCall(1);
-        expect(taskkillCall[0]).toBe("taskkill");
+        expect(taskkillCall[0]).toBe(getWindowsSystem32ExePath("taskkill.exe"));
         expect(taskkillCall[1]).toEqual(["/PID", "1234", "/T", "/F"]);
         expect(taskkillCall[2]).toEqual({
           stdio: "ignore",
@@ -459,7 +507,7 @@ describe("windows command wrapper behavior", () => {
         child.emit("close", null, "SIGKILL");
         const result = await resultPromise;
         expect(result.termination).toBe("timeout");
-        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(124);
       });
     } finally {
       vi.useRealTimers();

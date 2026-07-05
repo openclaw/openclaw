@@ -36,7 +36,7 @@ const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^NODE_ENV$/i,
 ];
 
-export type EnvVarSanitizationResult = {
+type EnvVarSanitizationResult = {
   allowed: Record<string, string>;
   blocked: string[];
   warnings: string[];

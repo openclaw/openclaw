@@ -15,6 +15,20 @@ export type CronSchedule =
       tz?: string;
       /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
       staggerMs?: number;
+    }
+  | {
+      /**
+       * Event-driven (non-time) trigger: the job fires once when a gateway-owned
+       * watcher process running `command` exits. The watcher lives under the
+       * gateway ProcessSupervisor, NOT inside any agent turn's process tree, so
+       * it survives the per-turn spawn-and-kill teardown that CLI backends apply
+       * (#71662). On exit the job runs through the normal cron run pipeline, so
+       * delivery to the bound session works exactly like a scheduled main job.
+       * `computeNextRunAtMs` returns undefined for this kind (never time-due).
+       */
+      kind: "on-exit";
+      command: string;
+      cwd?: string;
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
@@ -221,11 +235,17 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-/** Payload variants cron can execute in main-session or isolated-agent modes. */
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+/** Payload variants cron can execute in main-session or detached modes. */
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
 
 /** Partial payload update shape used by cron patch/edit flows. */
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -242,6 +262,8 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayload = {
@@ -250,9 +272,31 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
+    model?: string | null;
+    fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
+    thinking?: string | null;
   };
+
+type CronCommandPayloadFields = {
+  /** Explicit argv vector to execute. Use a shell wrapper argv for shell syntax. */
+  argv: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  input?: string;
+  timeoutSeconds?: number;
+  noOutputTimeoutSeconds?: number;
+  outputMaxBytes?: number;
+};
+
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<CronCommandPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;

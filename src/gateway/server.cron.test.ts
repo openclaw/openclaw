@@ -286,7 +286,7 @@ async function directCronReq(
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
-  expect(response.ok).toBe(true);
+  expect(response.ok, JSON.stringify((response as { error?: unknown }).error ?? null)).toBe(true);
   const value = (response.payload as { id?: unknown } | null)?.id;
   const id = typeof value === "string" ? value : "";
   expect(id.length > 0).toBe(true);
@@ -483,6 +483,29 @@ describe("gateway server cron", () => {
         label: "webhook:https://example.invalid/cron-finished",
         detail: "webhook",
       });
+
+      const compactListRes = await directCronReq(cronState, "cron.list", {
+        compact: true,
+        includeDisabled: true,
+      });
+      expect(compactListRes.ok).toBe(true);
+      const compactJobs = (
+        compactListRes.payload as { jobs?: Array<Record<string, unknown>> } | null
+      )?.jobs;
+      expect(compactJobs).toHaveLength(1);
+      expect(compactJobs?.[0]).toMatchObject({
+        id: dailyJobId,
+        name: "daily",
+        enabled: true,
+        scheduleKind: "every",
+        lastRunStatus: null,
+      });
+      expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
+        ["enabled", "id", "lastRunStatus", "name", "nextRunAtMs", "scheduleKind"].toSorted(),
+      );
+      expect(
+        (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
+      ).toBeUndefined();
 
       const getRes = await directCronReq(cronState, "cron.get", { id: String(dailyJobId) });
       expect(getRes.ok).toBe(true);
@@ -681,7 +704,7 @@ describe("gateway server cron", () => {
       const mergeUpdateRes = await directCronReq(cronState, "cron.update", {
         id: mergeJobId,
         patch: {
-          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+          delivery: { mode: "announce", channel: "last", to: "19098680" },
         },
       });
       expect(mergeUpdateRes.ok).toBe(true);
@@ -695,7 +718,7 @@ describe("gateway server cron", () => {
       expect(merged?.payload?.message).toBe("hello");
       expect(merged?.payload?.model).toBe("opus");
       expect(merged?.delivery?.mode).toBe("announce");
-      expect(merged?.delivery?.channel).toBe("telegram");
+      expect(merged?.delivery?.channel).toBe("last");
       expect(merged?.delivery?.to).toBe("19098680");
 
       const modelOnlyPatchRes = await directCronReq(cronState, "cron.update", {
@@ -721,12 +744,73 @@ describe("gateway server cron", () => {
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
       expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-6");
 
+      const modelClearPatchRes = await directCronReq(cronState, "cron.update", {
+        id: mergeJobId,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            model: null,
+          },
+        },
+      });
+      expect(modelClearPatchRes.ok).toBe(true);
+      const modelCleared = modelClearPatchRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              message?: unknown;
+              model?: unknown;
+            };
+          }
+        | undefined;
+      expect(modelCleared?.payload?.kind).toBe("agentTurn");
+      expect(modelCleared?.payload?.message).toBe("hello");
+      expect(modelCleared?.payload?.model).toBeUndefined();
+
+      const replaceRes = await directCronReq(cronState, "cron.add", {
+        name: "replace payload",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "ping" },
+      });
+      expect(replaceRes.ok).toBe(true);
+      const replaceJobIdValue = (replaceRes.payload as { id?: unknown } | null)?.id;
+      const replaceJobId = typeof replaceJobIdValue === "string" ? replaceJobIdValue : "";
+      expect(replaceJobId.length > 0).toBe(true);
+
+      const replacePatchRes = await directCronReq(cronState, "cron.update", {
+        id: replaceJobId,
+        patch: {
+          sessionTarget: "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: "hello",
+            model: null,
+          },
+        },
+      });
+      expect(replacePatchRes.ok).toBe(true);
+      const replaced = replacePatchRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              message?: unknown;
+              model?: unknown;
+            };
+          }
+        | undefined;
+      expect(replaced?.payload?.kind).toBe("agentTurn");
+      expect(replaced?.payload?.message).toBe("hello");
+      expect(replaced?.payload?.model).toBeUndefined();
+
       const deliveryPatchRes = await directCronReq(cronState, "cron.update", {
         id: mergeJobId,
         patch: {
           delivery: {
             mode: "announce",
-            channel: "signal",
+            channel: "last",
             to: "+15550001111",
             bestEffort: true,
           },
@@ -742,7 +826,7 @@ describe("gateway server cron", () => {
       expect(deliveryPatched?.payload?.kind).toBe("agentTurn");
       expect(deliveryPatched?.payload?.message).toBe("hello");
       expect(deliveryPatched?.delivery?.mode).toBe("announce");
-      expect(deliveryPatched?.delivery?.channel).toBe("signal");
+      expect(deliveryPatched?.delivery?.channel).toBe("last");
       expect(deliveryPatched?.delivery?.to).toBe("+15550001111");
       expect(deliveryPatched?.delivery?.bestEffort).toBe(true);
 
@@ -1413,6 +1497,7 @@ describe("gateway server cron", () => {
       const notifyBody = notifyCall.body;
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
+      expect(notifyBody.summary).toBe("send webhook");
 
       const legacyFinished = waitForCronEvent(
         ws,
@@ -1448,6 +1533,7 @@ describe("gateway server cron", () => {
       expect(completionCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
       expect(completionCall.body.action).toBe("finished");
       expect(completionCall.body.jobId).toBe(completionJobId);
+      expect(completionCall.body.summary).toBe("ok");
 
       const silentRes = await rpcReq(ws, "cron.add", {
         name: "webhook disabled",
@@ -1480,8 +1566,7 @@ describe("gateway server cron", () => {
         sessionTarget: "isolated",
         delivery: {
           mode: "announce",
-          channel: "telegram",
-          to: "19098680",
+          channel: "last",
           failureDestination: {
             mode: "webhook",
             to: "https://example.invalid/failure-destination",
@@ -1509,8 +1594,7 @@ describe("gateway server cron", () => {
         sessionTarget: "isolated",
         delivery: {
           mode: "announce",
-          channel: "telegram",
-          to: "19098680",
+          channel: "last",
           bestEffort: true,
           failureDestination: {
             mode: "webhook",
@@ -1545,6 +1629,110 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 60_000);
+
+  test("omits raw summaries from failed cron webhook payloads", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-webhook-failure-summary-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      cron: {
+        webhookToken: "cron-webhook-token",
+      },
+    });
+
+    fetchWithSsrFGuardMock.mockClear();
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const rawSummary = [
+        "stdout:",
+        "To sign in, use a web browser to open https://microsoft.com/devicelogin",
+        "and enter the code ABCD-1234 to authenticate.",
+      ].join("\n");
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: "command exited with code 7",
+        summary: rawSummary,
+        diagnostics: {
+          summary: rawSummary,
+          entries: [
+            {
+              ts: 123,
+              source: "exec",
+              severity: "error",
+              message: rawSummary,
+            },
+          ],
+        },
+      });
+      const directJobId = await addWebhookCronJob({
+        ws,
+        name: "failed direct webhook",
+        sessionTarget: "isolated",
+        delivery: { mode: "webhook", to: "https://example.invalid/failed-direct" },
+      });
+      await runCronJobAndWaitForFinished(ws, directJobId);
+      const directCall = getWebhookCall(0);
+      expect(directCall.url).toBe("https://example.invalid/failed-direct");
+      expect(directCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(directCall.body).toMatchObject({
+        action: "finished",
+        jobId: directJobId,
+        status: "error",
+        error: "command exited with code 7",
+      });
+      expect(directCall.body).not.toHaveProperty("summary");
+      expect(directCall.body).not.toHaveProperty("diagnostics");
+      expect(JSON.stringify(directCall.body)).not.toContain("ABCD-1234");
+
+      const completionSummary = `${rawSummary}\nstderr:\nSECRET_TOKEN=super-secret-value`;
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: "command exited with code 9",
+        summary: completionSummary,
+        diagnostics: {
+          summary: completionSummary,
+          entries: [
+            {
+              ts: 456,
+              source: "exec",
+              severity: "error",
+              message: completionSummary,
+            },
+          ],
+        },
+      });
+      const completionJobId = await addWebhookCronJob({
+        ws,
+        name: "failed completion webhook",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failed-completion",
+          },
+        },
+      });
+      await runCronJobAndWaitForFinished(ws, completionJobId);
+      const completionCall = getWebhookCall(1);
+      expect(completionCall.url).toBe("https://example.invalid/failed-completion");
+      expect(completionCall.body).toMatchObject({
+        action: "finished",
+        jobId: completionJobId,
+        status: "error",
+        error: "command exited with code 9",
+      });
+      expect(completionCall.body).not.toHaveProperty("summary");
+      expect(completionCall.body).not.toHaveProperty("diagnostics");
+      expect(JSON.stringify(completionCall.body)).not.toContain("SECRET_TOKEN");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
 
   test("falls back to the primary delivery channel on job failure and preserves sessionKey", async () => {
     const { prevSkipCron } = await setupCronTestRun({
@@ -1613,8 +1801,7 @@ describe("gateway server cron", () => {
         payload: { kind: "agentTurn", message: "test" },
         delivery: {
           mode: "announce",
-          channel: "feishu",
-          to: "ou_founder",
+          channel: "last",
         },
       });
       const jobId = expectCronJobIdFromResponse(addRes);
@@ -1636,8 +1823,7 @@ describe("gateway server cron", () => {
 
       expectFailureAnnounceCall({
         jobId,
-        channel: "feishu",
-        to: "ou_founder",
+        channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
         message: '⚠️ Cron job "session target failure fallback" failed: unknown error',
       });

@@ -19,6 +19,8 @@ import {
 } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
+const ENV_ISOLATION_SETUP_PATH = /[\\/]test[\\/]setup\.env\.ts$/u;
+
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
     throw new Error("expected unit-fast vitest test config");
@@ -106,7 +108,9 @@ describe("unit-fast vitest lane", () => {
 
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.setupFiles).toStrictEqual([]);
+    // Env isolation only: the fast shards install the isolated test home but
+    // must not pull in the shared setup's module mocks.
+    expect(testConfig.setupFiles).toStrictEqual([expect.stringMatching(ENV_ISOLATION_SETUP_PATH)]);
     expect(testConfig.include).toContain(
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
     );
@@ -118,7 +122,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/crestodian/rescue-policy.test.ts");
     expect(testConfig.include).toContain("src/crestodian/assistant.configured.test.ts");
     expect(testConfig.include).toContain("src/flows/search-setup.test.ts");
-    expect(testConfig.include).toContain("src/memory-host-sdk/host/backend-config.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
     expect(testConfig.include).toContain("src/proxy-capture/proxy-server.test.ts");
     expect(testConfig.include).toContain("src/talk/agent-consult-tool.test.ts");
@@ -133,7 +136,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/security/audit-gateway-tools-http.test.ts");
     expect(testConfig.include).toContain("src/security/audit-plugin-readonly-scope.test.ts");
     expect(testConfig.include).toContain("src/security/audit-loopback-logging.test.ts");
-    expect(testConfig.include).toContain("src/ui-app-settings.agents-files-refresh.test.ts");
     expect(testConfig.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(testConfig.include).toContain("src/security/dangerous-config-flags.test.ts");
@@ -158,6 +160,8 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/flows/channel-setup.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/flows/doctor-health-contributions.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/plugins/install.npm-spec.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
@@ -210,6 +214,7 @@ describe("unit-fast vitest lane", () => {
     expect(timerConfig.include).toEqual(unitFastTimerTestFiles);
     expect(timerConfig.fileParallelism).toBe(false);
     expect(timerConfig.maxWorkers).toBe(1);
+    expect(timerConfig.setupFiles).toStrictEqual([expect.stringMatching(ENV_ISOLATION_SETUP_PATH)]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

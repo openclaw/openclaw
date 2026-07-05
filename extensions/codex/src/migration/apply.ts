@@ -22,6 +22,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
@@ -385,12 +386,6 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
   );
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
   const targets = resolveCodexMigrationTargets(ctx);
   const appServer = resolveTargetCodexAppServer(ctx);
@@ -508,6 +503,7 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
     pluginName,
     enabled: true,
     allowDestructiveActions: true,
+    destructiveApprovalMode: "allow",
   };
 }
 

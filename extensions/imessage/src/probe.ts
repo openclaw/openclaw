@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
@@ -37,6 +38,7 @@ export type IMessageProbe = BaseProbeResult & {
 export type IMessageProbeOptions = {
   cliPath?: string;
   dbPath?: string;
+  forceRefresh?: boolean;
   platform?: NodeJS.Platform;
   runtime?: RuntimeEnv;
 };
@@ -158,7 +160,7 @@ function parseStatusPayload(stdout: string): {
   // No JSONL line parsed. Surface a small snippet of the first non-empty
   // line so the operator can grep imsg release notes if the status output
   // schema has shifted.
-  const snippet = lines[0]?.slice(0, 120);
+  const snippet = lines[0] ? truncateUtf16Safe(lines[0], 120) : undefined;
   return { payload: null, firstLineSnippet: snippet };
 }
 
@@ -237,6 +239,9 @@ export async function probeIMessagePrivateApi(
     const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
+    // imsg explains an unavailable bridge here (SIP, library validation, macOS
+    // 26 AMFI gate). Carry it forward so blocked actions can show the reason.
+    const statusMessage = typeof payload?.message === "string" ? payload.message : undefined;
     // Probe `imsg send-rich --help` for the `--file` flag added by
     // openclaw/imsg#114. We do this even when the bridge is unavailable
     // because the help output ships with the CLI binary itself, and the
@@ -250,6 +255,7 @@ export async function probeIMessagePrivateApi(
       selectors,
       rpcMethods,
       cliCapabilities: { sendRichSupportsAttachment },
+      ...(statusMessage ? { statusMessage } : {}),
       ...(result.code === 0
         ? !payload && firstLineSnippet
           ? {
@@ -311,7 +317,9 @@ export async function probeIMessage(
     };
   }
 
-  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout);
+  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout, {
+    forceRefresh: opts.forceRefresh,
+  });
 
   const client = await createIMessageRpcClient({
     cliPath,

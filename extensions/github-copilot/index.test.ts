@@ -153,6 +153,41 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
+  it("owns Claude replay thinking cleanup", () => {
+    const provider = registerProviderWithPluginConfig({});
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private", thinkingSignature: "sig" },
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: "visible" },
+        ],
+      },
+    ];
+
+    expect(provider.buildReplayPolicy?.({ modelId: "claude-haiku-4.5" } as never)).toEqual({
+      dropThinkingBlocks: true,
+    });
+    expect(
+      provider.sanitizeReplayHistory?.({
+        modelId: "claude-haiku-4.5",
+        messages,
+      } as never),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+      },
+    ]);
+    expect(
+      provider.sanitizeReplayHistory?.({
+        modelId: "gpt-5.4",
+        messages,
+      } as never),
+    ).toBe(messages);
+  });
+
   it("registers embedding provider", () => {
     const registerMemoryEmbeddingProviderMock =
       vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();
@@ -212,6 +247,61 @@ describe("github-copilot plugin", () => {
     });
 
     expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
+  });
+
+  it("exposes max thinking for catalog-supported Copilot reasoning efforts", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-fable-5",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("max");
+  });
+
+  it("does not expose max for non-adaptive Claude Copilot models", () => {
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-opus-4-5",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
+  });
+
+  it("exposes xhigh thinking for non-Claude Copilot models with catalog xhigh effort", () => {
+    // Regression for #59416: mini-family models (e.g. gpt-5.4-mini) are
+    // entitled to xhigh per live /models, but the static xhigh allowlist only
+    // contains gpt-5.4 and gpt-5.3-codex. When live metadata wins, the
+    // resolved compat must drive xhigh for these non-Claude ids as well.
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "gpt-5.4-mini",
+      compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toContain("xhigh");
+  });
+
+  it("omits xhigh for non-Claude Copilot models whose catalog effort lacks it", () => {
+    // Negative half of the #59416 regression: live-first must not over-grant.
+    // gpt-5-mini reports only [low, medium, high] live, so xhigh must stay off
+    // even though the reporter asked for the whole mini family to gain it.
+    const provider = registerProviderWithPluginConfig({});
+
+    const profile = provider.resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "gpt-5-mini",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+    });
+
+    expect(profile?.levels.map((level) => level.id)).not.toContain("xhigh");
   });
 
   it("uses live plugin config to re-enable discovery after startup disable", async () => {

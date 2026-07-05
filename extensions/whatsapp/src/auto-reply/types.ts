@@ -13,6 +13,7 @@ export type WebChannelHealthState =
   | "logged-out"
   | "stopped";
 
+/** @deprecated Use `WebInboundMessage`. */
 export type WebInboundMsg = WebInboundMessage;
 
 export type WebChannelStatus = {
@@ -30,8 +31,11 @@ export type WebChannelStatus = {
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
+  busy?: boolean;
+  lastRunActivityAt?: number | null;
   lastError?: string | null;
   healthState?: WebChannelHealthState;
+  terminalDisconnect?: boolean;
 };
 
 export type WebMonitorTuning = {

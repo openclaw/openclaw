@@ -35,6 +35,7 @@ export type DiagnosticStabilityEventRecord = {
   transport?: string;
   brain?: string;
   toolName?: string;
+  approvalId?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
@@ -431,6 +432,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
       break;
+    case "exec.approval.followup_suppressed":
+      record.approvalId = event.approvalId;
+      record.phase = event.phase;
+      assignReasonCode(record, event.reason);
+      break;
     case "run.started":
       record.provider = event.provider;
       record.model = event.model;
@@ -498,6 +504,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "log.record":
       record.level = event.level;
       record.source = event.loggerName;
+      break;
+    case "security.event":
+      record.source = event.category;
+      record.action = event.action;
+      record.outcome = event.outcome;
+      record.level = event.severity;
+      record.target = event.target?.name ?? event.target?.kind;
+      assignReasonCode(record, event.reason ?? event.policy?.reason);
       break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);

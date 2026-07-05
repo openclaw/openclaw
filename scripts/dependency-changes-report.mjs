@@ -232,7 +232,15 @@ function gitDiffDependencyFiles(baseRef, cwd) {
     });
 }
 
-function parseArgs(argv) {
+function readRequiredValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const options = {
     rootDir: process.cwd(),
     baseRef: null,
@@ -241,39 +249,56 @@ function parseArgs(argv) {
     jsonPath: null,
     markdownPath: null,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--") {
       continue;
     }
     if (arg === "--root") {
-      options.rootDir = argv[++index];
+      setOnce(arg, "rootDir", readRequiredValue(argv, index, "--root"));
+      index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      options.baseRef = argv[++index];
+      setOnce(arg, "baseRef", readRequiredValue(argv, index, "--base-ref"));
+      index += 1;
       continue;
     }
     if (arg === "--base-lockfile") {
-      options.baseLockfile = argv[++index];
+      setOnce(arg, "baseLockfile", readRequiredValue(argv, index, "--base-lockfile"));
+      index += 1;
       continue;
     }
     if (arg === "--head-lockfile") {
-      options.headLockfile = argv[++index];
+      setOnce(arg, "headLockfile", readRequiredValue(argv, index, "--head-lockfile"));
+      index += 1;
       continue;
     }
     if (arg === "--json") {
-      options.jsonPath = argv[++index];
+      setOnce(arg, "jsonPath", readRequiredValue(argv, index, "--json"));
+      index += 1;
       continue;
     }
     if (arg === "--markdown") {
-      options.markdownPath = argv[++index];
+      setOnce(arg, "markdownPath", readRequiredValue(argv, index, "--markdown"));
+      index += 1;
       continue;
     }
     throw new Error(`Unsupported argument: ${arg}`);
   }
   if (!options.baseRef && !options.baseLockfile) {
     throw new Error("Expected --base-ref <git-ref> or --base-lockfile <path>.");
+  }
+  if (options.baseRef && options.baseLockfile) {
+    throw new Error("Use either --base-ref or --base-lockfile, not both.");
   }
   return options;
 }
@@ -331,7 +356,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exitCode = exitCode;
     },
     /** @param {unknown} error */ (error) => {
-      process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     },
   );

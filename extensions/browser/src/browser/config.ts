@@ -345,6 +345,31 @@ function ensureDefaultUserBrowserProfile(
   return result;
 }
 
+function applyLegacyCdpUrlToExistingSessionDefaultProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+  defaultProfile: string,
+  legacyCdpUrl: string | undefined,
+): Record<string, BrowserProfileConfig> {
+  if (!legacyCdpUrl) {
+    return profiles;
+  }
+  const profile = profiles[defaultProfile];
+  if (
+    !profile ||
+    profile.driver !== "existing-session" ||
+    normalizeOptionalString(profile.cdpUrl)
+  ) {
+    return profiles;
+  }
+  return {
+    ...profiles,
+    [defaultProfile]: {
+      ...profile,
+      cdpUrl: legacyCdpUrl,
+    },
+  };
+}
+
 /** Resolve raw browser config into runtime browser defaults. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
@@ -417,7 +442,7 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultUserBrowserProfile(
+  let profiles = ensureDefaultUserBrowserProfile(
     ensureDefaultProfile(
       cfg?.profiles,
       defaultColor,
@@ -435,6 +460,11 @@ export function resolveBrowserConfig(
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
         : "user");
+  profiles = applyLegacyCdpUrlToExistingSessionDefaultProfile(
+    profiles,
+    defaultProfile,
+    rawCdpUrl ? cdpInfo.normalized : undefined,
+  );
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter(
@@ -624,9 +654,4 @@ export function getManagedBrowserMissingDisplayError(
     "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
     `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`
   );
-}
-
-/** Return whether local browser control should start for a resolved config. */
-export function shouldStartLocalBrowserServer(_resolved: unknown) {
-  return true;
 }

@@ -1,8 +1,36 @@
 # OpenClaw iOS Changelog
 
-## 2026.6.2 - 2026-06-02
+## Unreleased
+
+- Fixed startup aborts caused by inactive Voice Wake initializing the simulator audio pipeline.
+- Debug builds now use separate app, extension, widget, and Watch identifiers plus a distinct debug icon, so they can remain installed beside release builds.
+- Animated the OpenClaw mascot (float, blink, antenna wiggle, claw snaps) across onboarding, sidebar, and command center, matching openclaw.ai.
+
+## 2026.6.11 - 2026-07-01
 
 Maintenance update for the current OpenClaw release.
+
+- Refreshed iOS 26 visual styling, Talk controls, Gateway recovery, localization, and App Store screenshots.
+
+## 2026.6.10 - 2026-06-21
+
+Maintenance update for the current OpenClaw release.
+
+- Improved notification cleanup, Watch app compatibility, and native file input handling.
+
+## 2026.6.9 - 2026-06-20
+
+Maintenance update for the current OpenClaw release.
+
+- Added Apple Watch controls for common agent actions.
+- Improved Gateway setup, notification settings, and share-extension identity handling.
+- Updated the Watch app integration for current Xcode compatibility.
+
+## 2026.6.2 - 2026-06-02
+
+OpenClaw is now available on iPhone.
+
+Connect to your OpenClaw Gateway to chat with your assistant, use realtime Talk mode, review approvals, share content from iOS, and bring device capabilities like camera, location, screen, and notifications into your private automation workflows.
 
 ## 2026.6.1 - 2026-06-01
 
@@ -56,11 +84,11 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.5.12 - 2026-05-12
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.5.10 - 2026-05-10
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 - Gateway connections now recover after a trusted Gateway certificate changes by refreshing the stored certificate pin during reconnect.
 
@@ -126,7 +154,7 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.4.19 - 2026-04-19
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.18 - 2026-04-18
 
@@ -134,11 +162,11 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.4.15 - 2026-04-15
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.14 - 2026-04-14
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.12 - 2026-04-12
 

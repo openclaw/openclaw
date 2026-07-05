@@ -1,12 +1,25 @@
 // Provider OAuth runtime tests cover PKCE redirects, callback parsing, and token exchange helpers.
 import { describe, expect, it } from "vitest";
 import {
+  generateOAuthState,
+  generatePKCE,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "./provider-oauth-runtime.js";
 
 describe("provider OAuth runtime", () => {
+  it("generates OAuth state independently from the PKCE verifier", async () => {
+    const { verifier } = await generatePKCE();
+    const state = generateOAuthState();
+    const nextState = generateOAuthState();
+
+    expect(state).toHaveLength(43);
+    expect(state).not.toBe(verifier);
+    expect(nextState).toHaveLength(43);
+    expect(nextState).not.toBe(state);
+  });
+
   it("parses authorization code input from redirect URLs, query strings, and raw codes", () => {
     expect(
       parseOAuthAuthorizationInput("http://localhost/callback?code=oauth-code&state=oauth-state"),

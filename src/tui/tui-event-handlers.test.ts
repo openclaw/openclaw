@@ -2,7 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  BtwEvent,
+  ChatEvent,
+  SessionChangedEvent,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
@@ -133,6 +139,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     chatLog?: HandlerChatLog;
     btw?: HandlerBtwPresenter;
     localMode?: boolean;
+    refreshSessionInfo?: () => Promise<void>;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
@@ -144,10 +151,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
+      refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
+      clearLocalRunIds: context.clearLocalRunIds,
       isLocalBtwRunId: context.isLocalBtwRunId,
       forgetLocalBtwRunId: context.forgetLocalBtwRunId,
       clearLocalBtwRunIds: context.clearLocalBtwRunIds,
@@ -220,6 +229,92 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("shows running for a system-injected run that never went through submit", () => {
+    const { state, tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("running");
+    expect(state.activeChatRunId).toBe("run-bridge");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("does not adopt a system-injected lifecycle start from another session", () => {
+    const { state, tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleAgentEvent({
+      runId: "run-other",
+      stream: "lifecycle",
+      sessionKey: "agent:other:other",
+      data: { phase: "start" },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBeNull();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("does not let a system-injected run steal a concurrent active run", () => {
+    const { state, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-user" },
+    });
+
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "finishing" },
+    });
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "end" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-user");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("running");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("finishing context");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("promotes a remaining system-injected run when the active run finishes", () => {
+    const { state, setActivityStatus, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-user" },
+    });
+
+    handleAgentEvent({
+      runId: "run-bridge",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+    handleChatEvent({
+      runId: "run-user",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }], stopReason: "stop" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-bridge");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("running");
+  });
+
   it("renders terminal lifecycle errors after retry grace and clears the active run", () => {
     vi.useFakeTimers();
     const { state, chatLog, tui, setActivityStatus, loadHistory, handleAgentEvent } =
@@ -246,6 +341,52 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).toHaveBeenCalled();
     expect(tui.requestRender).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it("appends the tool-error summary to the abort line when present", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-validation-loop" },
+    });
+
+    handleChatEvent({
+      runId: "run-validation-loop",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      errorMessage: "edit tool validation failed: edits: must have required properties edits",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run aborted: edit tool validation failed: edits: must have required properties edits",
+    );
+  });
+
+  it("sanitizes untrusted abort diagnostics before rendering", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-hostile" },
+    });
+
+    handleChatEvent({
+      runId: "run-hostile",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      errorMessage: "edit failed\u001b[31m\nsecret",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted: edit failed secret");
+  });
+
+  it("falls back to a bare abort line when there is no summary", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-plain" },
+    });
+
+    handleChatEvent({
+      runId: "run-plain",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
   });
 
   it("deduplicates delayed chat errors after terminal lifecycle errors", () => {
@@ -490,7 +631,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
-    expect(tui.requestRender).toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
+  });
+
+  it("force-renders when terminal lifecycle end clears an active status", () => {
+    const { tui, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-9" },
+    });
+
+    handleAgentEvent({
+      runId: "run-9",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
   it("does not let delayed finalized-run lifecycle clobber a newer active run", () => {
@@ -787,6 +942,122 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
 
+  it("reloads the current session and clears stale run state after sessions.changed reset", () => {
+    const refreshSessionInfo = vi.fn<() => Promise<void>>(async () => undefined);
+    const {
+      state,
+      chatLog,
+      btw,
+      tui,
+      loadHistory,
+      setActivityStatus,
+      noteLocalRunId,
+      isLocalRunId,
+      handleChatEvent,
+      handleAgentEvent,
+      handleSessionsChangedEvent,
+    } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        currentSessionId: "session-before",
+        sessionInfo: { verboseLevel: "on", updatedAt: 100 },
+      },
+      refreshSessionInfo,
+    });
+
+    handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+    noteLocalRunId("run-local");
+    state.activeChatRunId = "run-stale";
+    state.pendingChatRunId = "run-pending";
+    state.pendingOptimisticUserMessage = true;
+    state.pendingSubmitDraft = { runId: "run-pending", text: "pending" };
+    state.activityStatus = "streaming";
+    loadHistory.mockClear();
+    refreshSessionInfo.mockClear();
+    chatLog.startTool.mockClear();
+    btw.clear.mockClear();
+    tui.requestRender.mockClear();
+    setActivityStatus.mockClear();
+
+    handleSessionsChangedEvent({
+      sessionKey: "main",
+      reason: "reset",
+      sessionId: "session-after",
+      updatedAt: 200,
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingSubmitDraft).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.activityStatus).toBe("idle");
+    expect(state.currentSessionId).toBe("session-after");
+    expect(state.sessionInfo.updatedAt).toBe(200);
+    expect(isLocalRunId("run-local")).toBe(false);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(btw.clear).toHaveBeenCalledTimes(1);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(refreshSessionInfo).not.toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc-old", name: "exec" },
+    });
+
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+  });
+
+  it("ignores sessions.changed reset events for other sessions", () => {
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-current", activityStatus: "streaming" },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "agent:other:main",
+      reason: "reset",
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBe("run-current");
+    expect(state.activityStatus).toBe("streaming");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("ignores selected-global sessions.changed reset events from other agents", () => {
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: {
+          agentDefaultId: "main",
+          currentAgentId: "work",
+          currentSessionKey: "global",
+          activeChatRunId: "run-current",
+          activityStatus: "streaming",
+        },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "global",
+      agentId: "main",
+      reason: "reset",
+      sessionId: "session-other-agent",
+      updatedAt: 300,
+    } satisfies SessionChangedEvent);
+
+    expect(state.activeChatRunId).toBe("run-current");
+    expect(state.activityStatus).toBe("streaming");
+    expect(state.currentSessionId).not.toBe("session-other-agent");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
   it("accepts tool events after chat final for the same run", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -969,6 +1240,31 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
     expect(isLocalRunId("run-gateway")).toBe(false);
     expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending user text after run binding until history catches up", () => {
+    const pendingUsers = new Map([["run-gateway", "queued hello"]]);
+    const chatLog = {
+      ...createMockChatLog(),
+      countPendingUsers: () => pendingUsers.size,
+      render: (_width: number) => Array.from(pendingUsers.values()),
+    };
+    const { state, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      chatLog: chatLog as unknown as HandlerChatLog,
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
+    });
+    noteLocalRunId("run-gateway");
+
+    handleChatEvent({
+      runId: "run-gateway",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "working" },
+    });
+
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(chatLog.countPendingUsers()).toBe(1);
+    expect(chatLog.render(120).join("\n")).toContain("queued hello");
   });
 
   it("does not bind unknown gateway run ids while an optimistic message is pending", () => {

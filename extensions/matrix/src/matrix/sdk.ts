@@ -10,8 +10,10 @@ import {
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
+import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   normalizeNullableString,
@@ -20,7 +22,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
-import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
+import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
 import {
   formatMatrixErrorMessage,
@@ -293,15 +295,13 @@ export type MatrixOwnDeviceDeleteResult = {
 type MatrixCryptoRuntime = typeof import("./sdk/crypto-runtime.js");
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
-let matrixCryptoRuntimePromise: Promise<MatrixCryptoRuntime> | null = null;
 
-async function loadMatrixCryptoRuntime(): Promise<MatrixCryptoRuntime> {
-  matrixCryptoRuntimePromise ??= import("./sdk/crypto-runtime.js").then((runtime) => {
+const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
+  import("./sdk/crypto-runtime.js").then((runtime) => {
     loadedMatrixCryptoRuntime = runtime;
     return runtime;
-  });
-  return await matrixCryptoRuntimePromise;
-}
+  }),
+);
 
 const normalizeOptionalString = normalizeNullableString;
 
@@ -328,7 +328,7 @@ export class MatrixClient {
   private readonly syncFilter?: IFilterDefinition;
   private readonly encryptionEnabled: boolean;
   private readonly password?: string;
-  private readonly syncStore?: FileBackedMatrixSyncStore;
+  private readonly syncStore?: SqliteBackedMatrixSyncStore;
   private readonly idbSnapshotPath?: string;
   private readonly cryptoDatabasePrefix?: string;
   private bridgeRegistered = false;
@@ -369,7 +369,7 @@ export class MatrixClient {
       encryption?: boolean;
       initialSyncLimit?: number;
       syncFilter?: IFilterDefinition;
-      storagePath?: string;
+      storageRootDir?: string;
       recoveryKeyPath?: string;
       idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
@@ -389,7 +389,9 @@ export class MatrixClient {
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
     this.password = opts.password;
-    this.syncStore = opts.storagePath ? new FileBackedMatrixSyncStore(opts.storagePath) : undefined;
+    this.syncStore = opts.storageRootDir
+      ? new SqliteBackedMatrixSyncStore(opts.storageRootDir)
+      : undefined;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
     this.selfUserId = opts.userId?.trim() || null;
@@ -481,6 +483,39 @@ export class MatrixClient {
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
+      canUnlockSecretStorage: async () => {
+        const secretStorage = (
+          this.client as {
+            secretStorage?: Partial<
+              Pick<MatrixJsClient["secretStorage"], "checkKey" | "getDefaultKeyId" | "getKey">
+            >;
+          }
+        ).secretStorage;
+        // Partial test/runtime facades can omit secretStorage; forced reset must fail closed
+        // without turning missing recovery access into a noisy caught TypeError.
+        if (
+          !secretStorage ||
+          typeof secretStorage.getDefaultKeyId !== "function" ||
+          typeof secretStorage.getKey !== "function" ||
+          typeof secretStorage.checkKey !== "function"
+        ) {
+          return false;
+        }
+        const defaultKeyId = await secretStorage.getDefaultKeyId();
+        if (!defaultKeyId) {
+          return false;
+        }
+        const keyTuple = await secretStorage.getKey(defaultKeyId);
+        const key = this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
+        if (!keyTuple || !key) {
+          return false;
+        }
+        const keyInfo = keyTuple[1];
+        if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
+          return false;
+        }
+        return await secretStorage.checkKey(key, keyInfo);
+      },
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
@@ -493,7 +528,7 @@ export class MatrixClient {
         recoveryKeyStore: this.recoveryKeyStore,
         getRoomStateEvent: (roomId, eventType, stateKey = "") =>
           this.getRoomStateEvent(roomId, eventType, stateKey),
-        downloadContent: (mxcUrl) => this.downloadContent(mxcUrl),
+        downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
     if (!this.verificationSummaryListenerBound) {
@@ -744,13 +779,9 @@ export class MatrixClient {
           "Cross-signing/bootstrap is incomplete for an already owner-signed device; skipping automatic reset and preserving the current identity. Restore the recovery key or run an explicit verification bootstrap if repair is needed.",
         );
       } else {
-        // No password guard: passwordless token-auth bots should still attempt repair.
-        // UIA failures inside bootstrap() are caught below and logged as warnings.
+        // Forced reset validates the active SSSS recovery key before rotating local keys.
+        // Missing or stale recovery material fails without mutating crypto state.
         try {
-          // The repair path already force-resets cross-signing; allow secret storage
-          // recreation so the new keys can be persisted. Without this, a device that
-          // lost its recovery key enters a permanent failure loop because the new
-          // cross-signing keys have nowhere to be stored.
           const repaired = await cryptoBootstrapper.bootstrap(
             crypto,
             MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,
@@ -1078,7 +1109,9 @@ export class MatrixClient {
     relationType: string | null,
     eventType?: string | null,
     opts: {
+      dir?: Direction;
       from?: string;
+      limit?: number;
     } = {},
   ): Promise<MatrixRelationsPage> {
     const result = await this.client.relations(roomId, eventId, relationType, eventType, opts);

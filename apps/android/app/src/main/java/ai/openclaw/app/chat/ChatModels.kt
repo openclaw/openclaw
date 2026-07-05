@@ -8,6 +8,7 @@ data class ChatMessage(
   val role: String,
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
+  val idempotencyKey: String? = null,
 )
 
 /**
@@ -39,6 +40,31 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val displayName: String? = null,
+  val totalTokens: Long? = null,
+  val totalTokensFresh: Boolean? = null,
+  val contextTokens: Long? = null,
+  val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
+)
+
+/**
+ * Slash command metadata exposed by the gateway for text-surface chat clients.
+ */
+data class ChatCommandEntry(
+  val name: String,
+  val description: String,
+  val category: String? = null,
+  val textAliases: List<String> = emptyList(),
+  val acceptsArgs: Boolean = false,
+)
+
+
+/**
+ * Run still streaming on the gateway when a chat.history snapshot was captured;
+ * [text] is the assistant text buffered so far (may be empty for runs without deltas).
+ */
+data class ChatInFlightRun(
+  val runId: String,
+  val text: String,
 )
 
 /**
@@ -49,6 +75,8 @@ data class ChatHistory(
   val sessionId: String?,
   val thinkingLevel: String?,
   val messages: List<ChatMessage>,
+  val sessionInfo: ChatSessionEntry? = null,
+  val inFlightRun: ChatInFlightRun? = null,
 )
 
 /**

@@ -21,7 +21,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
-      allowFrom: ["*"],
+      allowFrom: ["*"] as string[],
     },
   },
   messages: {
@@ -186,8 +186,12 @@ const inboundRuntimeMocks = vi.hoisted(() => {
     return current;
   }
 
+  async function* fakeMediaStream() {
+    yield Buffer.from("fake-media-data");
+  }
+
   return {
-    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+    downloadMediaMessage: vi.fn(() => fakeMediaStream()),
     isJidGroup: vi.fn((jid: string | undefined | null) =>
       typeof jid === "string" ? jid.endsWith("@g.us") : false,
     ),

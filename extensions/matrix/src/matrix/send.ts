@@ -127,6 +127,28 @@ function resolvePreviousEditContent(previousEvent: unknown): Record<string, unkn
     : content;
 }
 
+function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
+  if (!previousEvent || typeof previousEvent !== "object") {
+    return undefined;
+  }
+  const content = (previousEvent as { content?: unknown }).content;
+  if (!content || typeof content !== "object") {
+    return undefined;
+  }
+  const relation = (content as Record<string, unknown>)["m.relates_to"];
+  if (!relation || typeof relation !== "object") {
+    return undefined;
+  }
+  const relationRecord = relation as { event_id?: unknown; rel_type?: unknown };
+  if (
+    relationRecord.rel_type !== RelationType.Thread ||
+    typeof relationRecord.event_id !== "string"
+  ) {
+    return undefined;
+  }
+  return normalizeThreadId(relationRecord.event_id) ?? undefined;
+}
+
 function hasMatrixMentionsMetadata(content: Record<string, unknown> | undefined): boolean {
   return Boolean(content && Object.hasOwn(content, "m.mentions"));
 }
@@ -237,10 +259,24 @@ export async function sendMessageMatrix(
         ? buildThreadRelation(threadId, opts.replyToId)
         : buildReplyRelation(opts.replyToId);
       let pendingExtraContent = opts.extraContent;
-      const sendContent = async (content: MatrixOutboundContent) => {
+      const sendContent = async (content: MatrixOutboundContent, kind: MessageReceiptPartKind) => {
         const contentWithExtra = withMatrixExtraContentFields(content, pendingExtraContent);
         pendingExtraContent = undefined;
         const eventId = await client.sendMessage(roomId, contentWithExtra);
+        if (eventId) {
+          await opts.onDeliveryResult?.({
+            messageId: eventId,
+            roomId,
+            primaryMessageId: eventId,
+            receipt: createMatrixSendReceipt({
+              roomId,
+              platformMessageIds: [eventId],
+              kind,
+              replyToId: opts.replyToId,
+              threadId,
+            }),
+          });
+        }
         return eventId;
       };
 
@@ -302,7 +338,7 @@ export async function sendMessageMatrix(
           content,
           markdown: captionMarkdown,
         });
-        const eventId = await sendContent(content);
+        const eventId = await sendContent(content, receiptKind);
         lastMessageId = eventId ?? lastMessageId;
         if (eventId) {
           platformMessageIds.push(eventId);
@@ -322,7 +358,7 @@ export async function sendMessageMatrix(
             content: followup,
             markdown: text,
           });
-          const followupEventId = await sendContent(followup);
+          const followupEventId = await sendContent(followup, "text");
           lastMessageId = followupEventId ?? lastMessageId;
           if (followupEventId) {
             platformMessageIds.push(followupEventId);
@@ -340,7 +376,7 @@ export async function sendMessageMatrix(
             content,
             markdown: text,
           });
-          const eventId = await sendContent(content);
+          const eventId = await sendContent(content, "text");
           lastMessageId = eventId ?? lastMessageId;
           if (eventId) {
             platformMessageIds.push(eventId);
@@ -585,6 +621,7 @@ export async function editMessageMatrix(
         markdown: convertedText,
         includeMentions: opts.includeMentions,
       });
+      const previousEvent = await getPreviousMatrixEvent(client, resolvedRoom, originalEventId);
       const replaceMentions =
         opts.includeMentions === false
           ? undefined
@@ -592,9 +629,7 @@ export async function editMessageMatrix(
               extractMatrixMentions(newContent),
               await resolvePreviousEditMentions({
                 client,
-                content: resolvePreviousEditContent(
-                  await getPreviousMatrixEvent(client, resolvedRoom, originalEventId),
-                ),
+                content: resolvePreviousEditContent(previousEvent),
               }),
             );
 
@@ -604,9 +639,11 @@ export async function editMessageMatrix(
       };
       const threadId = normalizeThreadId(opts.threadId);
       if (threadId) {
-        // Thread-aware replace: Synapse needs the thread context to keep the
-        // edited event visible in the thread timeline.
-        replaceRelation["m.in_reply_to"] = { event_id: threadId };
+        // Matrix applies m.new_content while preserving the original relation.
+        // Edits can update threaded events, but cannot add or move thread membership.
+        if (resolvePreviousThreadId(previousEvent) !== threadId) {
+          throw new Error("Matrix edit cannot add or change the original event thread relation.");
+        }
       }
 
       // Spread newContent into the outer event so clients that don't support

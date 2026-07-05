@@ -14,6 +14,10 @@ export {
 } from "./channel-presence-policy.js";
 
 export {
+  collectConfiguredMemoryEmbeddingProviderIds,
+  collectConfiguredMemoryEmbeddingStartupProviderOwners,
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
   resolveChannelPluginIds,
   resolveChannelPluginIdsFromRegistry,
   resolveConfiguredDeferredChannelPluginIds,

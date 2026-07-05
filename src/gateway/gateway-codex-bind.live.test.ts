@@ -21,12 +21,14 @@ import {
 } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
   getFreeGatewayPort,
 } from "./gateway-cli-backend.live-helpers.js";
+import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -170,14 +172,6 @@ async function waitForOutboundText(params: {
       params.replies.map((reply) => reply.text),
     )}`,
   );
-}
-
-function restoreEnvVar(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-    return;
-  }
-  process.env[name] = value;
 }
 
 async function waitForAgentRunOk(
@@ -400,17 +394,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
   it(
     "binds a Slack DM to Codex app-server, updates controls, and forwards image media paths",
     async () => {
-      const previous = {
-        codexHome: process.env.CODEX_HOME,
-        configPath: process.env.OPENCLAW_CONFIG_PATH,
-        gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN,
-        home: process.env.HOME,
-        skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-        skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-        skipCron: process.env.OPENCLAW_SKIP_CRON,
-        skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-        stateDir: process.env.OPENCLAW_STATE_DIR,
-      };
+      const previous: LiveEnvSnapshot = snapshotLiveEnv(["CODEX_HOME", "HOME"]);
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-codex-bind-"));
       const tempHome = path.join(tempRoot, "home");
       const stateDir = path.join(tempRoot, "state");
@@ -453,37 +437,44 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       clearPluginLoaderCache();
       resetPluginRuntimeStateForTest();
       const codexHome =
-        previous.codexHome || (previous.home ? path.join(previous.home, ".codex") : "");
+        previous.CODEX_HOME || (previous.HOME ? path.join(previous.HOME, ".codex") : "");
       if (codexHome) {
-        process.env.CODEX_HOME = codexHome;
+        setTestEnvValue("CODEX_HOME", codexHome);
       } else {
-        delete process.env.CODEX_HOME;
+        deleteTestEnvValue("CODEX_HOME");
       }
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      const client = await connectTestGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        timeoutMs: 90_000,
-        requestTimeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
-        clientDisplayName: "vitest-codex-bind-live",
-      });
-      const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
-      pinActivePluginChannelRegistry(channelRegistry);
+      setTestEnvValue("HOME", tempHome);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+      setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
+      let pinnedChannelRegistry:
+        | ReturnType<typeof createSlackCurrentConversationBindingRegistry>
+        | undefined;
 
       try {
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        client = await connectTestGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          timeoutMs: 90_000,
+          requestTimeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
+          clientDisplayName: "vitest-codex-bind-live",
+        });
+        const activeClient = client;
+        const channelRegistry = createSlackCurrentConversationBindingRegistry(outboundReplies);
+        pinActivePluginChannelRegistry(channelRegistry);
+        pinnedChannelRegistry = channelRegistry;
+
         await writePluginBindingApproval({
           homeDir: tempHome,
           pluginRoot: resolveCodexPluginRoot(),
@@ -492,7 +483,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
 
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bind-${randomUUID()}`,
           context: "bind command",
@@ -520,7 +511,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
 
         const sendCodexCommand = async (message: string, contains: string, timeoutMs = 60_000) => {
           await sendChatAndWait({
-            client,
+            client: activeClient,
             sessionKey,
             idempotencyKey: `idem-codex-command-${randomUUID()}`,
             context: message,
@@ -563,7 +554,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         const textNonce = randomBytes(4).toString("hex").toUpperCase();
         const textToken = `CODEX-BIND-${textNonce}`;
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
           context: "bound text turn",
@@ -573,7 +564,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           originatingAccountId: accountId,
         });
         const textHistory = await waitForAssistantText({
-          client,
+          client: activeClient,
           sessionKey: boundSessionKey,
           contains: textToken,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
@@ -581,7 +572,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         expect(textHistory.matchedAssistantText).toContain(textToken);
 
         await sendChatAndWait({
-          client,
+          client: activeClient,
           sessionKey,
           idempotencyKey: `idem-codex-bound-image-${randomUUID()}`,
           context: "bound image turn",
@@ -599,7 +590,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           ],
         });
         const imageHistory = await waitForAssistantText({
-          client,
+          client: activeClient,
           sessionKey: boundSessionKey,
           contains: "cat",
           caseInsensitive: true,
@@ -611,21 +602,21 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         await sendCodexCommand("/codex detach", "Detached this conversation from Codex.");
         await sendCodexCommand("/codex binding", "No Codex conversation binding is attached.");
       } finally {
-        releasePinnedPluginChannelRegistry(channelRegistry);
-        clearConfigCache();
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
-        await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        restoreEnvVar("CODEX_HOME", previous.codexHome);
-        restoreEnvVar("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", previous.gatewayToken);
-        restoreEnvVar("HOME", previous.home);
-        restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreEnvVar("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreEnvVar("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreEnvVar("OPENCLAW_STATE_DIR", previous.stateDir);
+        try {
+          if (pinnedChannelRegistry) {
+            releasePinnedPluginChannelRegistry(pinnedChannelRegistry);
+          }
+          clearConfigCache();
+          clearRuntimeConfigSnapshot();
+          try {
+            await client?.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
+          } finally {
+            await server?.close();
+          }
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreLiveEnv(previous);
+        }
       }
     },
     CODEX_BIND_TIMEOUT_MS,

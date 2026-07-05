@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers";
 
 const SCRIPT_PATH = "scripts/install.ps1";
@@ -72,6 +72,151 @@ describe("install.ps1 failure handling", () => {
     }
     return spawnSync(powershell, args, { encoding: "utf8" });
   };
+  const batchedPowerShellResults = new Map<string, { error: string; ok: boolean }>();
+
+  beforeAll(() => {
+    if (!powershell) {
+      return;
+    }
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    const cases = [
+      {
+        name: "node-versions",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$cases = @{",
+          "  '22.18.9' = $false",
+          "  '22.19.0' = $true",
+          "  '23.7.0' = $false",
+          "  '23.10.9' = $false",
+          "  '23.11.0' = $true",
+          "  '24.0.0' = $true",
+          "}",
+          "foreach ($entry in $cases.GetEnumerator()) {",
+          "  $actual = Test-NodeVersionSupported -Version $entry.Key",
+          '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "native-arm64-git",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$env:PROCESSOR_ARCHITEW6432 = $null",
+          "$env:PROCESSOR_ARCHITECTURE = 'ARM64'",
+          "function Invoke-RestMethod {",
+          "  [pscustomobject]@{",
+          "    tag_name = 'v2.54.0.windows.1'",
+          "    assets = @(",
+          "      [pscustomobject]@{ name = 'MinGit-2.54.0-64-bit.zip'; browser_download_url = 'https://example.test/x64.zip' },",
+          "      [pscustomobject]@{ name = 'MinGit-2.54.0-arm64.zip'; browser_download_url = 'https://example.test/arm64.zip' },",
+          "      [pscustomobject]@{ name = 'MinGit-2.54.0-busybox-64-bit.zip'; browser_download_url = 'https://example.test/busybox.zip' }",
+          "    )",
+          "  }",
+          "}",
+          "$download = Resolve-PortableGitDownload",
+          "if ($download.Name -ne 'MinGit-2.54.0-arm64.zip') { throw \"Name=$($download.Name)\" }",
+          "if ($download.Url -ne 'https://example.test/arm64.zip') { throw \"Url=$($download.Url)\" }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "emulated-arm64-downloads",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$env:PROCESSOR_ARCHITEW6432 = $null",
+          "$env:PROCESSOR_ARCHITECTURE = 'AMD64'",
+          "function Get-CimInstance {",
+          "  [CmdletBinding()]",
+          "  param([string]$ClassName)",
+          "  if ($ClassName -eq 'Win32_Processor') { return [pscustomobject]@{ Architecture = 12; Name = 'Cobalt 100' } }",
+          "  if ($ClassName -eq 'Win32_ComputerSystem') { return [pscustomobject]@{ SystemType = 'ARM64-based PC' } }",
+          '  throw "Unexpected CIM class $ClassName"',
+          "}",
+          "function Invoke-RestMethod {",
+          "  param([string]$Uri, [object]$Headers)",
+          "  if ($Uri -eq 'https://nodejs.org/dist/index.json') {",
+          "    return @(",
+          "      [pscustomobject]@{ version = 'v24.17.0'; files = @('win-arm64-zip', 'win-x64-zip') }",
+          "    )",
+          "  }",
+          "  [pscustomobject]@{",
+          "    tag_name = 'v2.54.0.windows.1'",
+          "    assets = @(",
+          "      [pscustomobject]@{ name = 'MinGit-2.54.0-64-bit.zip'; browser_download_url = 'https://example.test/x64.zip' },",
+          "      [pscustomobject]@{ name = 'MinGit-2.54.0-arm64.zip'; browser_download_url = 'https://example.test/arm64.zip' }",
+          "    )",
+          "  }",
+          "}",
+          "$nodeDownload = Resolve-PortableNodeDownload",
+          "if ($nodeDownload.Name -ne 'node-v24.17.0-win-arm64.zip') { throw \"NodeName=$($nodeDownload.Name)\" }",
+          "$gitDownload = Resolve-PortableGitDownload",
+          "if ($gitDownload.Name -ne 'MinGit-2.54.0-arm64.zip') { throw \"GitName=$($gitDownload.Name)\" }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "node-options",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--trace-warnings --max_old_space_size=8192" -MinOldSpaceMb 8192',
+          'if ($result -ne "--trace-warnings --max-old-space-size=8192") { throw "alias result=$result" }',
+          '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max_old_space_size 8192 --trace-warnings" -MinOldSpaceMb 8192',
+          'if ($result -ne "--max-old-space-size=8192 --trace-warnings") { throw "split alias result=$result" }',
+          '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=4096" -MinOldSpaceMb 8192',
+          'if ($result -ne "--max-old-space-size=8192") { throw "minimum result=$result" }',
+          '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "`"--max-old-space-size=12288`"" -MinOldSpaceMb 8192',
+          'if ($result -ne "--max-old-space-size=12288") { throw "quoted token result=$result" }',
+          '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=`"12288`"" -MinOldSpaceMb 8192',
+          'if ($result -ne "--max-old-space-size=12288") { throw "quoted value result=$result" }',
+          "",
+        ].join("\n"),
+      },
+    ];
+    const tempDir = harness.createTempDir("openclaw-install-ps1-batch-");
+    const fixtures = cases.map((testCase, index) => {
+      const scriptPath = join(tempDir, `case-${index}.ps1`);
+      writeFileSync(scriptPath, testCase.source);
+      return { name: testCase.name, scriptPath };
+    });
+    const command = [
+      "$ErrorActionPreference = 'Stop'",
+      "$cases = @(",
+      fixtures
+        .map(
+          (fixture) =>
+            `  @{ Name = ${toPowerShellSingleQuotedLiteral(fixture.name)}; Path = ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} }`,
+        )
+        .join(",\n"),
+      ")",
+      "$results = foreach ($case in $cases) {",
+      "  try {",
+      "    $null = & ([scriptblock]::Create((Get-Content -LiteralPath $case.Path -Raw))) *>&1",
+      "    [pscustomobject]@{ name = $case.Name; ok = $true; error = '' }",
+      "  } catch {",
+      "    [pscustomobject]@{ name = $case.Name; ok = $false; error = $_.Exception.Message }",
+      "  }",
+      "}",
+      "$results | ConvertTo-Json -Compress",
+    ].join("\n");
+    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", command]);
+    if (result.status !== 0) {
+      throw new Error(`PowerShell batch failed: ${result.stderr}`);
+    }
+    const parsed = JSON.parse(result.stdout) as Array<{ error: string; name: string; ok: boolean }>;
+    for (const entry of parsed) {
+      batchedPowerShellResults.set(entry.name, { error: entry.error, ok: entry.ok });
+    }
+  });
+
+  function expectBatchedPowerShellCase(name: string): void {
+    expect(batchedPowerShellResults.get(name)).toEqual({ error: "", ok: true });
+  }
 
   it("does not exit directly from inside Main", () => {
     const mainBody = extractFunctionBody(source, "Main");
@@ -89,6 +234,21 @@ describe("install.ps1 failure handling", () => {
     expect(source).toContain("$installSucceeded = Test-BooleanSuccessResult -Results $mainResults");
   });
 
+  it("checks the full supported Node version range", () => {
+    const versionBody = extractFunctionBody(source, "Test-NodeVersionSupported");
+    const checkNodeBody = extractFunctionBody(source, "Check-Node");
+    expect(versionBody).toContain("$major -eq 22");
+    expect(versionBody).toContain("$minor -ge 19");
+    expect(versionBody).toContain("$major -eq 23");
+    expect(versionBody).toContain("$minor -ge 11");
+    expect(versionBody).toContain("$major -gt 23");
+    expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
+  });
+
+  runIfPowerShell("accepts only supported Node versions", () => {
+    expectBatchedPowerShellCase("node-versions");
+  });
+
   it("runs npm install through the resolved command with quiet CI defaults", () => {
     const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
     expect(npmInstallBody).toContain("$npmOutput = Invoke-NpmCommand -Arguments");
@@ -96,7 +256,7 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_AUDIT = "false"');
-    expect(npmInstallBody).toContain('$env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"');
+    expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
     expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
@@ -112,6 +272,19 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
     );
+    expect(npmInstallBody).toContain("Write-NpmInstallFailureDetails -Output $npmOutput");
+    expect(source).toContain("function Get-LatestNpmDebugLogPath {");
+    expect(source).toContain("Get-Content -LiteralPath $latestLog -Tail 120");
+  });
+
+  it("does not force npm or pnpm lifecycle scripts through cmd.exe", () => {
+    const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(ensurePnpmBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+    expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+    expect(gitInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {
@@ -233,6 +406,8 @@ describe("install.ps1 failure handling", () => {
   it("persists user-local portable Git for future git-backed updates", () => {
     const portableGitRootBody = extractFunctionBody(source, "Get-PortableGitRoot");
     const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
+    const portableArchitectureBody = extractFunctionBody(source, "Get-WindowsPortableArchitecture");
+    const portableGitDownloadBody = extractFunctionBody(source, "Resolve-PortableGitDownload");
     const portableGitPathEntriesBody = extractFunctionBody(source, "Get-PortableGitPathEntries");
     const portableGitPathBody = extractFunctionBody(source, "Ensure-PortableGitOnUserPath");
     const usePortableGitBody = extractFunctionBody(source, "Use-PortableGitIfPresent");
@@ -247,6 +422,22 @@ describe("install.ps1 failure handling", () => {
     expect(ensureGitBody).toContain("Ensure-PortableGitOnUserPath");
     expect(portableGitPathBody).toContain("Add-ToUserPath $pathEntry");
     expect(portableGitPathBody).toContain("git-backed updates");
+    expect(portableArchitectureBody).toContain("Win32_Processor");
+    expect(portableArchitectureBody).toContain("Architecture -eq 12");
+    expect(portableArchitectureBody).toContain("Win32_ComputerSystem");
+    expect(portableArchitectureBody).toContain("PROCESSOR_ARCHITEW6432");
+    expect(portableArchitectureBody).toContain("PROCESSOR_ARCHITECTURE");
+    expect(portableGitDownloadBody).toContain("Get-WindowsPortableArchitecture");
+    expect(portableGitDownloadBody).toContain("'^MinGit-.*-arm64\\.zip$'");
+    expect(portableGitDownloadBody).toContain("'^MinGit-.*-64-bit\\.zip$'");
+  });
+
+  runIfPowerShell("selects native ARM64 MinGit when the release publishes it", () => {
+    expectBatchedPowerShellCase("native-arm64-git");
+  });
+
+  runIfPowerShell("selects native ARM64 downloads when x64 PowerShell is emulated", () => {
+    expectBatchedPowerShellCase("emulated-arm64-downloads");
   });
 
   it("activates the repo-pinned pnpm version for git installs", () => {
@@ -311,6 +502,7 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"');
+    expect(gitInstallBody).toContain('$env:NODE_LLAMA_CPP_POSTINSTALL = "skip"');
     expect(gitInstallBody).toContain("$installSucceeded = ($LASTEXITCODE -eq 0)");
     expect(gitInstallBody).toContain("clearing node_modules and retrying once");
     expect(gitInstallBody).toContain("Remove-Item -Recurse -Force node_modules");
@@ -330,6 +522,7 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain(
       "$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency",
     );
+    expect(gitInstallBody).toContain("$env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall");
     expect(gitInstallBody).toContain("Add-ToUserPath $binDir");
     expect(gitInstallBody).toContain('Write-Host "[!] pnpm build failed for the Git checkout"');
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');
@@ -487,38 +680,7 @@ describe("install.ps1 failure handling", () => {
   });
 
   runIfPowerShell("preserves larger old-space NODE_OPTIONS aliases", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-    writeFileSync(
-      scriptPath,
-      [
-        scriptWithoutEntryPoint,
-        "",
-        '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--trace-warnings --max_old_space_size=8192" -MinOldSpaceMb 8192',
-        'if ($result -ne "--trace-warnings --max-old-space-size=8192") { throw "alias result=$result" }',
-        '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max_old_space_size 8192 --trace-warnings" -MinOldSpaceMb 8192',
-        'if ($result -ne "--max-old-space-size=8192 --trace-warnings") { throw "split alias result=$result" }',
-        '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=4096" -MinOldSpaceMb 8192',
-        'if ($result -ne "--max-old-space-size=8192") { throw "minimum result=$result" }',
-        '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "`"--max-old-space-size=12288`"" -MinOldSpaceMb 8192',
-        'if ($result -ne "--max-old-space-size=12288") { throw "quoted token result=$result" }',
-        '$result = Resolve-NodeOptionsWithMinOldSpace -NodeOptions "--max-old-space-size=`"12288`"" -MinOldSpaceMb 8192',
-        'if ($result -ne "--max-old-space-size=12288") { throw "quoted value result=$result" }',
-        "",
-      ].join("\n"),
-    );
-    chmodSync(scriptPath, 0o755);
-
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-Command",
-      `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expectBatchedPowerShellCase("node-options");
   });
 
   runIfPowerShell("keeps npm chatter out of Main's success return value", () => {

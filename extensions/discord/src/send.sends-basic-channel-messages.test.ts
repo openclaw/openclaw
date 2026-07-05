@@ -219,6 +219,26 @@ describe("sendMessageDiscord", () => {
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
   });
 
+  it("reports the first Discord chunk before a later chunk fails", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageDiscord("channel:789", "a".repeat(2500), {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
+  });
+
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
@@ -839,6 +859,29 @@ describe("fetchChannelPermissionsDiscord", () => {
     expect(res.permissions).toContain("ViewChannel");
     expect(res.permissions).toContain("SendMessages");
     expect(res.isDm).toBe(false);
+  });
+
+  it("stops permission lookup when the caller deadline aborts", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    const controller = new AbortController();
+    getMock.mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [],
+      };
+    });
+
+    await expect(
+      fetchChannelPermissionsDiscord("chan1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(getMock).toHaveBeenCalledTimes(1);
   });
 
   it("treats Administrator as all permissions despite overwrites", async () => {

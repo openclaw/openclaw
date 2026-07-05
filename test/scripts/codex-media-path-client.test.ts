@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
-import { readPositiveIntEnv } from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+import {
+  readPositiveIntEnv,
+  readTcpPortEnv,
+} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const tempRoots: string[] = [];
 const fakeAppServerPath = path.resolve(
@@ -48,14 +52,17 @@ function runWriteConfig(root: string, env: Record<string, string> = {}) {
 
 async function readStdoutLine(child: ChildProcessWithoutNullStreams): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    let stdout = "";
+    const stdout = createBoundedChildOutput();
     const timeout = setTimeout(() => {
-      reject(new Error(`timed out waiting for fake app-server response: ${stdout}`));
+      reject(new Error(`timed out waiting for fake app-server response: ${stdout.text()}`));
     }, 3_000);
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      const line = stdout.split("\n").find((entry) => entry.trim());
+      stdout.append(chunk);
+      const line = stdout
+        .text()
+        .split("\n")
+        .find((entry) => entry.trim());
       if (line) {
         clearTimeout(timeout);
         resolve(line);
@@ -102,6 +109,10 @@ describe("codex media path limits", () => {
     ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
   });
 
+  it("rejects out-of-range TCP ports", () => {
+    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
+  });
+
   it("writes strict positive timeout and port values into generated config", () => {
     const root = makeTempRoot();
     const result = runWriteConfig(root, {
@@ -125,6 +136,14 @@ describe("codex media path limits", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
   });
+
+  it("rejects out-of-range write-config gateway ports", () => {
+    const root = makeTempRoot();
+    const result = runWriteConfig(root, { PORT: "65536" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid PORT: 65536");
+  });
 });
 
 describe("codex media path fake app-server", () => {
@@ -137,10 +156,10 @@ describe("codex media path fake app-server", () => {
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    let stderr = "";
+    const stderr = createBoundedChildOutput();
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
 
     try {
@@ -154,7 +173,7 @@ describe("codex media path fake app-server", () => {
         },
         id: "request-1",
       });
-      expect(stderr).toContain("fake Codex app-server request log write failed");
+      expect(stderr.text()).toContain("fake Codex app-server request log write failed");
     } finally {
       await stopChild(child);
     }

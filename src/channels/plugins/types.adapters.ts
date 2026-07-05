@@ -526,6 +526,7 @@ export type ChannelDoctorAdapter = {
   repairConfig?: (params: {
     cfg: OpenClawConfig;
     doctorFixCommand: string;
+    env?: NodeJS.ProcessEnv;
   }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
   runConfigSequence?: (params: {
     cfg: OpenClawConfig;
@@ -631,6 +632,11 @@ export type ChannelApprovalAdapter = {
   render?: ChannelApprovalRenderAdapter;
   native?: ChannelApprovalNativeAdapter;
   describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
+  describePluginApprovalSetup?: (params: {
     channel: string;
     channelLabel: string;
     accountId?: string;

@@ -28,6 +28,7 @@ import {
 } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import {
   hasSubagentRunEnded,
   isLiveUnendedSubagentRun,
@@ -103,7 +104,7 @@ export function buildLatestSubagentRunIndex(
       continue;
     }
     const existing = latestByChildSessionKey.get(childSessionKey);
-    if (!existing || entry.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
       latestByChildSessionKey.set(childSessionKey, entry);
     }
   }
@@ -143,7 +144,7 @@ export function buildLatestSubagentRunIndex(
 }
 
 /** Create a cached descendant counter for repeated list rendering checks. */
-export function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
+function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
   const pendingDescendantCache = new Map<string, number>();
   return (sessionKey: string) => {
     if (pendingDescendantCache.has(sessionKey)) {
@@ -157,7 +158,7 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
 }
 
 /** Return whether a run should be shown in the active subagent section. */
-export function isActiveSubagentRun(
+function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {

@@ -2,15 +2,19 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayConnectErrorDetails
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -31,46 +35,134 @@ import java.util.UUID
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
   @Test
+  fun standaloneStatusPreservesLiveOperatorConnection() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    writeField(runtime, "operatorConnected", true)
+    val method = runtime.javaClass.getDeclaredMethod("setStandaloneGatewayStatus", String::class.java)
+    method.isAccessible = true
+
+    method.invoke(runtime, "Verify gateway TLS fingerprint…")
+
+    assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+    assertEquals("Verify gateway TLS fingerprint…", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
+  fun unstructuredRetryClearsEarlierOperatorAuthProblem() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+
+    onDisconnected("Gateway error: unauthorized")
+    onConnectFailure(
+      GatewaySession.ErrorShape(
+        code = "UNAUTHORIZED",
+        message = "unauthorized",
+        details =
+          GatewayConnectErrorDetails(
+            code = "AUTH_TOKEN_MISSING",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "provide_token",
+          ),
+      ),
+      true,
+    )
+    val problemCode =
+      runtime.gatewayConnectionDisplay.value.problem
+        ?.code
+    assertEquals(
+      "AUTH_TOKEN_MISSING",
+      problemCode,
+    )
+
+    onDisconnected("Reconnecting…")
+    assertEquals("Reconnecting…", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+
+    onDisconnected("Gateway error: timeout")
+    assertEquals("Gateway error: timeout", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
+  fun retryableNodePairingProblemSurvivesReconnectStatus() {
+    val runtime = NodeRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "nodeSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+
+    onDisconnected("Gateway error: pairing required")
+    onConnectFailure(
+      GatewaySession.ErrorShape(
+        code = "NOT_PAIRED",
+        message = "pairing required",
+        details =
+          GatewayConnectErrorDetails(
+            code = "PAIRING_REQUIRED",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "wait_then_retry",
+            reason = "not-paired",
+            requestId = "request-1",
+            retryable = true,
+          ),
+      ),
+      false,
+    )
+
+    onDisconnected("Reconnecting…")
+
+    val reconnectDisplay = runtime.gatewayConnectionDisplay.value
+    assertEquals("Reconnecting…", reconnectDisplay.statusText)
+    assertEquals("PAIRING_REQUIRED", reconnectDisplay.problem?.code)
+    assertEquals("request-1", reconnectDisplay.problem?.requestId)
+
+    onDisconnected("Gateway error: timeout")
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
-      ),
+      ) != null,
     )
     assertFalse(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
   }
 
   @Test
   fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = "stored-token",
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
   }
 
@@ -118,6 +210,116 @@ class GatewayBootstrapAuthTest {
     assertEquals(
       NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       resolved,
+    )
+  }
+
+  @Test
+  fun resolveGatewayControlPageAuthFallsBackToStoredOperatorToken() {
+    val resolved =
+      resolveGatewayControlPageAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = " stored-token ",
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "stored-token", bootstrapToken = null, password = null),
+      resolved,
+    )
+  }
+
+  @Test
+  fun resolveGatewayControlPageAuthPrefersExplicitSharedAuth() {
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+      resolveGatewayControlPageAuth(
+        auth =
+          NodeRuntime.GatewayConnectAuth(
+            token = " shared-token ",
+            bootstrapToken = "bootstrap-1",
+            password = "shared-password",
+          ),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "shared-password"),
+      resolveGatewayControlPageAuth(
+        auth =
+          NodeRuntime.GatewayConnectAuth(
+            token = null,
+            bootstrapToken = "bootstrap-1",
+            password = " shared-password ",
+          ),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
+    assertEquals(
+      ConnectionManager.nativeClientOperatorScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = false,
+        storedOperatorScopes = null,
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthPreservesStoredScopesForReconnects() {
+    val storedScopes = listOf("operator.approvals", "operator.read", "operator.write")
+
+    assertEquals(
+      storedScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = true,
+        storedOperatorScopes = storedScopes,
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthFallsBackToLegacyScopesForOldStoredDeviceTokens() {
+    assertEquals(
+      ConnectionManager.legacyOperatorScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = true,
+        storedOperatorScopes = emptyList(),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthUsesNativeScopesForExplicitReauth() {
+    assertEquals(
+      ConnectionManager.nativeClientOperatorScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = false,
+        storedOperatorScopes = listOf("operator.approvals", "operator.read", "operator.write"),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorSessionUsesStoredDeviceTokenOnlyWithoutExplicitSharedAuth() {
+    assertTrue(
+      operatorSessionUsesStoredDeviceToken(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertFalse(
+      operatorSessionUsesStoredDeviceToken(
+        auth = NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertFalse(
+      operatorSessionUsesStoredDeviceToken(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "password"),
+        storedOperatorToken = "stored-token",
+      ),
     )
   }
 
@@ -278,21 +480,65 @@ class GatewayBootstrapAuthTest {
             probeResult.await()
           },
         )
+      val runtimeScope = readField<CoroutineScope>(runtime, "scope")
+      val existingJobs =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.toSet()
+          .orEmpty()
 
       runtime.connect(
         endpoint,
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       )
       probeStarted.await()
+      val probeJob =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.singleOrNull { it !in existingJobs }
+          ?: error("Expected one TLS probe job")
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aaaaaaaa"))
-      Thread.sleep(100)
+      // Join the owning coroutine so assertions run after its stale-attempt guard.
+      probeJob.join()
 
       assertNull(runtime.pendingGatewayTrust.value)
       assertNull(desiredBootstrapToken(runtime, "nodeSession"))
       assertEquals("aaaaaaaa", prefs.loadGatewayTlsFingerprint(endpoint.stableId))
     }
+
+  @Test
+  fun refreshGatewayConnection_reconnectsSavedManualEndpointAfterDisconnect() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setManualEnabled(true)
+    prefs.setManualHost("127.0.0.1")
+    prefs.setManualPort(18789)
+    prefs.setManualTls(false)
+    prefs.setGatewayToken("shared-token")
+    val runtime = NodeRuntime(app, prefs)
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "initial-token", bootstrapToken = null, password = null),
+    )
+    runtime.disconnect()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    runtime.refreshGatewayConnection()
+
+    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    val endpoint = readField<GatewayEndpoint>(desired, "endpoint")
+    assertEquals("127.0.0.1", endpoint.host)
+    assertEquals(18789, endpoint.port)
+    assertEquals("shared-token", readField<String?>(desired, "token"))
+  }
 
   @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
@@ -318,6 +564,29 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+    val app = RuntimeEnvironment.getApplication()
+    val runtime =
+      NodeRuntime(
+        app,
+        tlsFingerprintProbe = { _, _ ->
+          GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+        },
+      )
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+    )
+
+    assertEquals(
+      "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
+      waitForStatusText(runtime),
+    )
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
   fun resetGatewaySetupAuth_clearsStoredGatewayAndDeviceTokens() {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
@@ -335,13 +604,32 @@ class GatewayBootstrapAuthTest {
     authStore.saveToken(deviceId, "node", "stale-node-token")
     authStore.saveToken(deviceId, "operator", "stale-operator-token")
 
-    runtime.resetGatewaySetupAuth()
+    runBlocking { runtime.resetGatewaySetupAuth() }
 
     assertNull(prefs.loadGatewayToken())
     assertNull(prefs.loadGatewayBootstrapToken())
     assertNull(prefs.loadGatewayPassword())
     assertNull(authStore.loadToken(deviceId, "node"))
     assertNull(authStore.loadToken(deviceId, "operator"))
+  }
+
+  @Test
+  fun restoredManualMicWithoutRecordAudioClearsStalePreference() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setVoiceMicEnabled(true)
+
+    val runtime = NodeRuntime(app, prefs)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(prefs.voiceMicEnabled.value)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
   }
 
   @Test
@@ -359,6 +647,23 @@ class GatewayBootstrapAuthTest {
       assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
       val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
       assertFalse(talkMode.ttsOnAllResponses)
+    }
+
+  @Test
+  fun talkPttStart_rejectsNewCaptureWhenBackgrounded() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      runtime.setForeground(false)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+
+      val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", result.error?.message)
+      assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
     }
 
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {

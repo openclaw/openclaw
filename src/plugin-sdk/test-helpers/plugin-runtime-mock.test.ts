@@ -1,7 +1,7 @@
 /**
  * Tests plugin runtime mock helpers stay aligned with channel runtime contracts.
  */
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 describe("createPluginRuntimeMock", () => {
@@ -27,10 +27,17 @@ describe("createPluginRuntimeMock", () => {
       id: raw.id,
       rawText: "hello",
     }));
-    const recordInboundSession = vi.fn();
-    const runDispatch = vi.fn(async () => ({
-      visibleReplySent: true,
-    }));
+    const events: string[] = [];
+    const recordInboundSession = vi.fn(async () => {
+      events.push("record");
+    });
+    const afterRecord = vi.fn(() => {
+      events.push("afterRecord");
+    });
+    const runDispatch = vi.fn(async () => {
+      events.push("dispatch");
+      return { visibleReplySent: true };
+    });
     const resolveTurn = vi.fn(async () => ({
       channel,
       storePath: "/tmp/openclaw-test",
@@ -41,6 +48,7 @@ describe("createPluginRuntimeMock", () => {
         SessionKey: "agent:main:test:direct:u1",
       },
       recordInboundSession,
+      afterRecord,
       runDispatch,
     }));
 
@@ -65,6 +73,7 @@ describe("createPluginRuntimeMock", () => {
         sessionKey: "agent:main:test:direct:u1",
       }),
     );
+    expect(events).toEqual(["record", "afterRecord", "dispatch"]);
     expect(runDispatch).toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({

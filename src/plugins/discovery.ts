@@ -39,11 +39,12 @@ import {
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { withPluginScanExistenceCache } from "./plugin-scan-existence-cache.js";
 import { resolvePluginSourceRoots } from "./roots.js";
 import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
-} from "./status-dependencies.js";
+} from "./status-dependencies-core.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
@@ -607,10 +608,13 @@ function readCandidatePackageManifest(params: {
     return cached;
   }
   const canUseProcessCache = params.origin === "bundled" || !params.rejectHardlinks;
-  const stat = readPackageManifestStat(params.dir);
-  if (canUseProcessCache && stat) {
+  const manifestStat = readPackageManifestStat(params.dir);
+  if (canUseProcessCache && manifestStat !== null) {
     const processCached = packageManifestProcessCache.get(cacheKey);
-    if (processCached?.mtimeMs === stat.mtimeMs && processCached.size === stat.size) {
+    if (
+      processCached?.mtimeMs === manifestStat.mtimeMs &&
+      processCached.size === manifestStat.size
+    ) {
       params.packageManifestCache?.set(cacheKey, processCached.manifest);
       return processCached.manifest;
     }
@@ -620,8 +624,8 @@ function readCandidatePackageManifest(params: {
       ? readTrustedPackageManifest(params.dir)
       : readPackageManifest(params.dir, params.rejectHardlinks, params.rootRealPath);
   params.packageManifestCache?.set(cacheKey, manifest);
-  if (canUseProcessCache && stat) {
-    packageManifestProcessCache.set(cacheKey, { ...stat, manifest });
+  if (canUseProcessCache && manifestStat !== null) {
+    packageManifestProcessCache.set(cacheKey, { ...manifestStat, manifest });
     prunePackageManifestProcessCache();
   }
   return manifest;
@@ -809,50 +813,52 @@ function discoverBundleInRoot(params: {
   seen: Set<string>;
   realpathCache: Map<string, string>;
 }): "added" | "invalid" | "none" {
-  const bundleFormat = detectBundleManifestFormat(params.rootDir);
-  if (!bundleFormat) {
-    return "none";
-  }
-  const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache) ?? undefined;
-  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
-    origin: params.origin,
-    rootDir: params.rootDir,
-    env: params.env,
-    realpathCache: params.realpathCache,
-  });
-  const bundleManifest = loadBundleManifest({
-    rootDir: params.rootDir,
-    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
-    bundleFormat,
-    rejectHardlinks,
-  });
-  if (!bundleManifest.ok) {
-    params.diagnostics.push({
-      level: "error",
-      message: bundleManifest.error,
-      source: bundleManifest.manifestPath,
+  return withPluginScanExistenceCache(() => {
+    const bundleFormat = detectBundleManifestFormat(params.rootDir);
+    if (!bundleFormat) {
+      return "none";
+    }
+    const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache) ?? undefined;
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: params.rootDir,
+      env: params.env,
+      realpathCache: params.realpathCache,
     });
-    return "invalid";
-  }
-  addCandidate({
-    candidates: params.candidates,
-    diagnostics: params.diagnostics,
-    seen: params.seen,
-    idHint: bundleManifest.manifest.id,
-    source: params.rootDir,
-    rootDir: params.rootDir,
-    origin: params.origin,
-    format: "bundle",
-    bundleFormat,
-    ownershipUid: params.ownershipUid,
-    workspaceDir: params.workspaceDir,
-    manifest: params.manifest,
-    packageDir: params.rootDir,
-    bundledManifestId: bundleManifest.manifest.id,
-    bundledManifestPath: bundleManifest.manifestPath,
-    realpathCache: params.realpathCache,
+    const bundleManifest = loadBundleManifest({
+      rootDir: params.rootDir,
+      ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+      bundleFormat,
+      rejectHardlinks,
+    });
+    if (!bundleManifest.ok) {
+      params.diagnostics.push({
+        level: "error",
+        message: bundleManifest.error,
+        source: bundleManifest.manifestPath,
+      });
+      return "invalid";
+    }
+    addCandidate({
+      candidates: params.candidates,
+      diagnostics: params.diagnostics,
+      seen: params.seen,
+      idHint: bundleManifest.manifest.id,
+      source: params.rootDir,
+      rootDir: params.rootDir,
+      origin: params.origin,
+      format: "bundle",
+      bundleFormat,
+      ownershipUid: params.ownershipUid,
+      workspaceDir: params.workspaceDir,
+      manifest: params.manifest,
+      packageDir: params.rootDir,
+      bundledManifestId: bundleManifest.manifest.id,
+      bundledManifestPath: bundleManifest.manifestPath,
+      realpathCache: params.realpathCache,
+    });
+    return "added";
   });
-  return "added";
 }
 
 function addLegacyNpmDeclarationDiagnostic(params: {

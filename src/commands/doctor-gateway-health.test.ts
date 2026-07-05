@@ -8,6 +8,8 @@ import {
 
 const callGateway = vi.hoisted(() => vi.fn());
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
+const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
+const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
 const probeGatewayStatus = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const TEST_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -26,6 +28,11 @@ vi.mock("../gateway/call.js", () => ({
   })),
   callGateway,
   isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
+}));
+
+vi.mock("../gateway/credentials.js", () => ({
+  isGatewaySecretRefUnavailableError,
 }));
 
 vi.mock("../cli/daemon-cli/probe.js", () => ({
@@ -49,6 +56,10 @@ describe("checkGatewayHealth", () => {
     callGateway.mockReset();
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
+    isGatewayTransportError.mockReset();
+    isGatewayTransportError.mockReturnValue(false);
+    isGatewaySecretRefUnavailableError.mockReset();
+    isGatewaySecretRefUnavailableError.mockReturnValue(false);
     probeGatewayStatus.mockReset();
     note.mockReset();
   });
@@ -114,6 +125,26 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("reports the typed close reason instead of claiming the gateway is not running", async () => {
+    const error = Object.assign(
+      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
+      {
+        kind: "closed",
+      },
+    );
+    callGateway.mockRejectedValueOnce(error);
+    isGatewayTransportError.mockImplementation((value) => value === error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      "Gateway connect failed: gateway closed (1008): protocol version mismatch",
+      "Gateway",
+    );
+    expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
+  });
+
   it("reports credentials-required when status RPC auth blocks a reachable gateway", async () => {
     callGateway.mockRejectedValueOnce(new Error());
     isGatewayCredentialsRequiredError.mockReturnValueOnce(true);
@@ -128,6 +159,38 @@ describe("checkGatewayHealth", () => {
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
     ).resolves.toEqual({ authenticated: false, healthOk: true });
 
+    expect(probeGatewayStatus).toHaveBeenCalledWith({
+      url: TEST_GATEWAY_URL,
+      timeoutMs: 3000,
+      tlsFingerprint: TEST_TLS_FINGERPRINT,
+      preauthHandshakeTimeoutMs: 4321,
+      config: cfg,
+      json: true,
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {
+    const error = new Error("gateway.auth.password unavailable");
+    callGateway.mockRejectedValueOnce(error);
+    isGatewaySecretRefUnavailableError.mockReturnValueOnce(true);
+    probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: TEST_AUTH_CLOSE_ERROR,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(isGatewaySecretRefUnavailableError).toHaveBeenCalledWith(error);
     expect(probeGatewayStatus).toHaveBeenCalledWith({
       url: TEST_GATEWAY_URL,
       timeoutMs: 3000,

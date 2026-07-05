@@ -10,7 +10,11 @@ import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
+import {
+  ensureMaxDurationTimerForLiveCall,
+  resolveTranscriptWaiter,
+  startMaxDurationTimer,
+} from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -26,6 +30,16 @@ type EventContext = Pick<
   | "onCallAnswered"
   | "streamSessionIssuer"
 >;
+
+export type ProcessEventResult =
+  | { kind: "ignored" }
+  | { kind: "processed" }
+  | {
+      kind: "final-speech";
+      call: CallRecord;
+      transcript: string;
+      waiterResolved: boolean;
+    };
 
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
@@ -134,10 +148,10 @@ function persistRejectedInboundCall(params: {
   persistCallRecord(params.ctx.storePath, rejectedCall);
 }
 
-export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
+export function processEvent(ctx: EventContext, event: NormalizedEvent): ProcessEventResult {
   const dedupeKey = event.dedupeKey || event.id;
   if (ctx.processedEventIds.has(dedupeKey)) {
-    return;
+    return { kind: "ignored" };
   }
 
   let call = findCall({
@@ -162,11 +176,11 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         console.warn(
           `[voice-call] Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, from: ${event.from}); call will time out on provider side.`,
         );
-        return;
+        return { kind: "ignored" };
       }
       ctx.processedEventIds.add(dedupeKey);
       if (ctx.rejectedProviderCallIds.has(pid)) {
-        return;
+        return { kind: "ignored" };
       }
       ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
@@ -183,7 +197,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
-      return;
+      return { kind: "processed" };
     }
 
     call = createWebhookCall({
@@ -199,7 +213,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
 
   if (!call) {
-    return;
+    return { kind: "ignored" };
   }
 
   if (event.providerCallId && event.providerCallId !== call.providerCallId) {
@@ -220,6 +234,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     call.processedEventIds.push(dedupeKey);
   }
 
+  let result: ProcessEventResult = { kind: "processed" };
   switch (event.type) {
     case "call.initiated":
       transitionState(call, "initiated");
@@ -277,6 +292,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
 
     case "call.speaking":
+      ensureMaxDurationTimerForLiveCall({
+        ctx,
+        call,
+        liveAt: event.timestamp,
+        onTimeout: async (callId) => {
+          await endCall(ctx, callId, { reason: "timeout" });
+        },
+      });
       transitionState(call, "speaking");
       break;
 
@@ -293,10 +316,25 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           console.warn(
             `[voice-call] Ignoring speech event with mismatched turn token for ${call.callId}`,
           );
+          result = { kind: "ignored" };
           break;
         }
         addTranscriptEntry(call, "user", event.transcript);
+        result = {
+          kind: "final-speech",
+          call,
+          transcript: event.transcript,
+          waiterResolved: resolved,
+        };
       }
+      ensureMaxDurationTimerForLiveCall({
+        ctx,
+        call,
+        liveAt: event.timestamp,
+        onTimeout: async (callId) => {
+          await endCall(ctx, callId, { reason: "timeout" });
+        },
+      });
       transitionState(call, "listening");
       break;
 
@@ -311,7 +349,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         endReason: event.reason,
         endedAt: event.timestamp,
       });
-      return;
+      return { kind: "processed" };
 
     case "call.error":
       if (!event.retryable) {
@@ -322,7 +360,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           endedAt: event.timestamp,
           transcriptRejectReason: `Call error: ${event.error}`,
         });
-        return;
+        return { kind: "processed" };
       }
       // Keep retryable provider errors replayable so a redelivery can still
       // drive later recovery or terminal handling for the same event key.
@@ -330,4 +368,5 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
 
   persistCallRecord(ctx.storePath, call);
+  return result;
 }
