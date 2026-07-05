@@ -491,6 +491,7 @@ export async function getReplyFromConfig(
   const {
     sessionCtx,
     sessionEntry,
+    initialSessionEntry,
     sessionEntryHandle,
     previousSessionEntry,
     sessionStore,
@@ -862,6 +863,8 @@ export async function getReplyFromConfig(
       agentId,
       agentDir,
       sessionEntry,
+      ...(initialSessionEntry ? { initialSessionEntry } : {}),
+      allowCreateSessionEntry: useFastTestBootstrap && initialSessionEntry === undefined,
       previousSessionEntry,
       sessionStore,
       sessionKey,
