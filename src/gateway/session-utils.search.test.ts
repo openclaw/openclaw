@@ -81,6 +81,17 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
   };
 }
 
+function buildLegacyRuntimeRow(cfg: OpenClawConfig, model: string) {
+  const store = createLegacyRuntimeStore(model);
+  return buildGatewaySessionInfo({
+    cfg,
+    storePath: "/tmp/sessions.json",
+    store,
+    key: MAIN_SESSION_KEY,
+    entry: store[MAIN_SESSION_KEY],
+  });
+}
+
 function createOpenAiPricingConfig(params: {
   id: string;
   label: string;
@@ -553,14 +564,10 @@ describe("listSessionsFromStore search", () => {
       expectedProvider: "vercel-ai-gateway",
     },
   ])("$name", ({ cfg, runtimeModel, expectedProvider }) => {
-    const result = listSearchSessions({
-      cfg,
-      store: createLegacyRuntimeStore(runtimeModel),
-      opts: {},
-    });
+    const row = buildLegacyRuntimeRow(cfg, runtimeModel);
 
-    expect(result.sessions[0]?.modelProvider).toBe(expectedProvider);
-    expect(result.sessions[0]?.model).toBe(runtimeModel);
+    expect(row.modelProvider).toBe(expectedProvider);
+    expect(row.model).toBe(runtimeModel);
   });
 
   test("exposes unknown totals when freshness is stale or missing", () => {

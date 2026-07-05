@@ -6,6 +6,7 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   MockedFailoverError,
+  mockedClassifyFailoverReason,
   mockedFormatAssistantErrorText,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
@@ -154,10 +155,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       const assistant = args[0];
       return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
     });
-    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
-      const assistant = args[0];
-      return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
-    });
+    mockedClassifyFailoverReason.mockReturnValue("rate_limit");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
@@ -184,7 +182,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow(`anthropic/test-model: ${sameCandidateErrorMessage}`);
-    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
       model: "test-model",
