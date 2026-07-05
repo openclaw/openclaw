@@ -640,6 +640,9 @@ export function createFollowupRunner(params: {
         return;
       }
       replyOperation = admission.operation;
+      // Failure paths may still drain progress or route a recovery payload. Keep lane ownership
+      // until finally completes so the next turn cannot overtake that asynchronous delivery.
+      replyOperation.retainFailureUntilComplete();
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
       effectiveQueued.queuedLifecycle?.onAdmitted?.();
@@ -1398,12 +1401,10 @@ export function createFollowupRunner(params: {
             ...terminalMetadata,
             fallbackExhaustedFailure: true,
           });
-          replyOperation.retainFailureUntilComplete();
           replyOperation.fail("run_failed", exhaustionError);
         } else if (deferredLifecycleError || runResult.meta?.error) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
-          replyOperation.retainFailureUntilComplete();
           replyOperation.fail("run_failed", terminalError);
         } else {
           settledLifecycleTerminal?.emit("end", runResult);
