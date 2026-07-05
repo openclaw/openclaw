@@ -403,7 +403,14 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
             speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
             systemInstruction?: string;
             temperature?: number;
-            tools?: Array<{ functionDeclarations?: Array<{ behavior?: string; name?: string }> }>;
+            tools?: Array<{
+              functionDeclarations?: Array<{
+                behavior?: string;
+                name?: string;
+                parameters?: unknown;
+                parametersJsonSchema?: unknown;
+              }>;
+            }>;
           };
           model?: string;
         };
@@ -419,12 +426,17 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(liveConstraints?.config?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe(
       "Puck",
     );
-    expect(liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0]?.name).toBe(
-      "openclaw_agent_consult",
-    );
-    expect(liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0]?.behavior).toBe(
-      "NON_BLOCKING",
-    );
+    const declaration = liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0];
+    expect(declaration?.name).toBe("openclaw_agent_consult");
+    expect(declaration?.behavior).toBe("NON_BLOCKING");
+    expect(declaration?.parameters).toEqual({
+      type: "object",
+      properties: {
+        question: { type: "string" },
+      },
+      required: ["question"],
+    });
+    expect(declaration?.parametersJsonSchema).toBeUndefined();
     expect(sessionLocal?.provider).toBe("google");
     expect(sessionLocal?.transport).toBe("provider-websocket");
     const websocketSession = sessionLocal as {
