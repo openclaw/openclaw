@@ -103,6 +103,28 @@ class AutoreviewCursorTests(unittest.TestCase):
 
 
 class AutoreviewCompatibilityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.home_dir = tempfile.TemporaryDirectory(prefix="autoreview-test-home.")
+        cls.home_patch = mock.patch.object(Path, "home", return_value=Path(cls.home_dir.name))
+        cls.home_patch.start()
+        cls.home_keys = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+        cls.old_home_env = {key: os.environ.get(key) for key in cls.home_keys}
+        os.environ["HOME"] = cls.home_dir.name
+        os.environ["USERPROFILE"] = cls.home_dir.name
+        os.environ.pop("HOMEDRIVE", None)
+        os.environ.pop("HOMEPATH", None)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.home_patch.stop()
+        for key, value in cls.old_home_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        cls.home_dir.cleanup()
+
     def test_harness_opts_both_cursor_aliases_into_trusted_fixture(self) -> None:
         harness_path = SCRIPT_PATH.with_name("test-review-harness.py")
         namespace = runpy.run_path(str(harness_path))

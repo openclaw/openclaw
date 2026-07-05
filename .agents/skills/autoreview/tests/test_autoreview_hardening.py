@@ -124,10 +124,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 argparse.Namespace(engine="claude", tools=True),
                 True,
             )
-        self.helper["ensure_reviewer_input_complete"](
-            argparse.Namespace(engine="droid", tools=True),
-            True,
-        )
+        with self.assertRaisesRegex(SystemExit, "droid engine refused truncated review input"):
+            self.helper["ensure_reviewer_input_complete"](
+                argparse.Namespace(engine="droid", tools=False),
+                True,
+            )
 
     def test_safe_git_env_preserves_trusted_platform_and_helper_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -160,15 +161,64 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "invalid boolean environment value"):
                 self.helper["env_truthy"]("AUTOREVIEW_TEST_BOOL")
 
-    def test_droid_refuses_project_settings(self) -> None:
+    def test_droid_runs_without_repo_context_or_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
-            settings = repo / ".factory" / "settings.json"
-            settings.parent.mkdir()
-            settings.write_text("{}\n", encoding="utf-8")
+            (repo / "AGENTS.md").write_text("hostile instructions\n", encoding="utf-8")
+            droid_bin = repo.parent / "droid"
+            droid_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+            droid_bin.chmod(0o755)
+            captured: dict[str, object] = {}
 
-            with self.assertRaisesRegex(SystemExit, "droid engine refused project-local settings"):
-                self.helper["run_droid"](argparse.Namespace(), repo, "prompt")
+            def fake_run_with_heartbeat(cmd: list[str], cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                captured.update(cmd=cmd, cwd=cwd, kwargs=kwargs)
+                return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+            self.helper["run_droid"].__globals__["run_with_heartbeat"] = fake_run_with_heartbeat
+            args = argparse.Namespace(
+                droid_bin=str(droid_bin),
+                model=None,
+                thinking=None,
+                stream_engine_output=False,
+            )
+
+            self.helper["run_droid"](args, repo, "prompt")
+
+            command = captured["cmd"]
+            self.assertIn("--disabled-tools", command)
+            self.assertIn("*", command)
+            self.assertNotEqual(Path(captured["cwd"]).resolve(), repo.resolve())
+            droid_cwd = Path(command[command.index("--cwd") + 1])
+            self.assertNotEqual(droid_cwd.resolve(), repo.resolve())
+
+    def test_prompt_file_keeps_recoverable_repo_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "review.md").write_text("review context\n", encoding="utf-8")
+            args = argparse.Namespace(prompt=[], prompt_file=["review.md"])
+
+            prompt, truncated = self.helper["load_extra_prompt"](args, repo)
+
+            self.assertIn("# Prompt file: review.md", prompt)
+            self.assertFalse(truncated)
+
+    def test_cursor_refuses_global_mcp_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            global_mcp = root / ".cursor" / "mcp.json"
+            global_mcp.parent.mkdir()
+            global_mcp.write_text("{}\n", encoding="utf-8")
+            args = argparse.Namespace(
+                thinking=None,
+                tools=True,
+                web_search=True,
+                cursor_allow_workspace_instructions=True,
+            )
+
+            with mock.patch.object(Path, "home", return_value=root):
+                with self.assertRaisesRegex(SystemExit, "cursor engine refused global MCP config"):
+                    self.helper["run_cursor"](args, repo, "prompt")
 
     def test_read_text_truncates_without_scanning_tail(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

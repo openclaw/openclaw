@@ -730,11 +730,11 @@ def bounded(text: str, limit: int = 180_000) -> str:
 
 
 def ensure_reviewer_input_complete(reviewer: argparse.Namespace, input_truncated: bool) -> None:
-    can_recover_full_diff = reviewer.tools and reviewer.engine in {"codex", "droid"}
+    can_recover_full_diff = reviewer.tools and reviewer.engine == "codex"
     if input_truncated and not can_recover_full_diff:
         raise SystemExit(
             f"{reviewer.engine} engine refused truncated review input because it cannot recover omitted diff hunks; "
-            "reduce the change/input size or choose codex or droid with tools enabled"
+            "reduce the change/input size or choose codex with tools enabled"
         )
 
 
@@ -1014,9 +1014,9 @@ def load_extra_prompt(args: argparse.Namespace, repo: Path) -> tuple[str, bool]:
         require_no_secret_values("--prompt", value)
         chunks.append(value)
     for path in args.prompt_file or []:
-        _, content, truncated = validate_evidence_file(repo, path, "--prompt-file")
+        resolved, content, truncated = validate_evidence_file(repo, path, "--prompt-file")
         input_truncated = input_truncated or truncated
-        chunks.append(content)
+        chunks.append(f"# Prompt file: {resolved.relative_to(repo.resolve())}\n{content}")
     return "\n\n".join(chunks), input_truncated
 
 
@@ -1424,43 +1424,34 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 
 def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    project_settings = [
-        path
-        for path in (repo / ".factory" / "settings.json", repo / ".factory" / "settings.local.json")
-        if path.exists()
-    ]
-    if project_settings:
-        raise SystemExit(
-            "droid engine refused project-local settings: "
-            + format_repo_paths(repo, project_settings)
-            + ". Droid settings can execute host hooks outside review tool permissions."
+    droid_bin = resolve_command(args.droid_bin, repo)
+    with tempfile.TemporaryDirectory(prefix="autoreview-droid.") as tempdir:
+        neutral_cwd = Path(tempdir)
+        prompt_path = neutral_cwd / "prompt.txt"
+        prompt_path.write_text(prompt)
+        cmd = [
+            droid_bin,
+            "exec",
+            "--cwd",
+            str(neutral_cwd),
+            "--disabled-tools",
+            "*",
+            "--output-format",
+            "stream-json" if args.stream_engine_output else "json",
+            "-f",
+            str(prompt_path),
+        ]
+        if args.model:
+            cmd.extend(["--model", args.model])
+        if args.thinking:
+            cmd.extend(["-r", args.thinking])
+        result = run_with_heartbeat(
+            cmd,
+            neutral_cwd,
+            label="droid",
+            stream_output=args.stream_engine_output,
+            env=safe_engine_env(repo, [Path(droid_bin).parent]),
         )
-    prompt_path = Path(tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False).name)
-    prompt_path.write_text(prompt)
-    cmd = [
-        resolve_command(args.droid_bin, repo),
-        "exec",
-        "--cwd",
-        str(repo),
-        "--output-format",
-        "stream-json" if args.stream_engine_output else "json",
-        "-f",
-        str(prompt_path),
-    ]
-    if args.model:
-        cmd.extend(["--model", args.model])
-    if args.thinking:
-        cmd.extend(["-r", args.thinking])
-    if not args.tools:
-        cmd.extend(["--disabled-tools", "*"])
-    result = run_with_heartbeat(
-        cmd,
-        repo,
-        label="droid",
-        stream_output=args.stream_engine_output,
-        env=safe_engine_env(repo, [Path(cmd[0]).parent]),
-    )
-    prompt_path.unlink(missing_ok=True)
     if result.returncode != 0:
         raise SystemExit(f"droid engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -1561,6 +1552,18 @@ def cursor_local_mcp_paths(repo: Path) -> list[Path]:
         repo / "mcp.json",
     ]
     return [path for path in candidates if path.exists()]
+
+
+def cursor_global_mcp_paths() -> list[Path]:
+    home_candidates = [Path.home()]
+    for name in ("HOME", "USERPROFILE"):
+        if value := os.environ.get(name):
+            home_candidates.append(Path(value))
+    if drive := os.environ.get("HOMEDRIVE"):
+        if home_path := os.environ.get("HOMEPATH"):
+            home_candidates.append(Path(f"{drive}{home_path}"))
+    paths = {home / ".cursor" / "mcp.json" for home in home_candidates}
+    return sorted((path for path in paths if path.exists()), key=str)
 
 
 def cursor_local_hook_paths(repo: Path) -> list[Path]:
@@ -1682,6 +1685,7 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if not args.web_search:
         raise SystemExit("--no-web-search is not supported by the cursor engine; Cursor CLI does not expose a documented per-run web-search disable flag")
     local_mcp_paths = cursor_local_mcp_paths(repo)
+    global_mcp_paths = cursor_global_mcp_paths()
     local_hook_paths = cursor_local_hook_paths(repo)
     local_permission_paths = cursor_local_permission_paths(repo)
     if not args.cursor_allow_workspace_instructions:
@@ -1700,6 +1704,10 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "cursor engine refused project-local MCP config: "
             + format_repo_paths(repo, local_mcp_paths)
             + ". Cursor MCP tools cannot be restricted to read-only review access."
+        )
+    if global_mcp_paths:
+        raise SystemExit(
+            "cursor engine refused global MCP config because Cursor can load it outside the temporary review config."
         )
     if local_permission_paths:
         raise SystemExit(
@@ -2447,6 +2455,14 @@ def self_test_engine_isolation() -> int:
         )
         old_codex_home = os.environ.get("CODEX_HOME")
         os.environ["CODEX_HOME"] = str(codex_home)
+        home_keys = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+        old_home_env = {key: os.environ.get(key) for key in home_keys}
+        test_home = root / "home"
+        test_home.mkdir()
+        os.environ["HOME"] = str(test_home)
+        os.environ["USERPROFILE"] = str(test_home)
+        os.environ.pop("HOMEDRIVE", None)
+        os.environ.pop("HOMEPATH", None)
         old_path = os.environ.get("PATH", "")
         os.environ["PATH"] = f"{repo}{os.pathsep}{old_path}"
         try:
@@ -2672,6 +2688,11 @@ def self_test_engine_isolation() -> int:
                 os.environ.pop("CODEX_HOME", None)
             else:
                 os.environ["CODEX_HOME"] = old_codex_home
+            for key, value in old_home_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     if parse_cli_version("2.1.169 (Claude Code)") != CLAUDE_SAFE_MODE_MIN_VERSION:
         raise SystemExit("claude version parsing self-test failed")
@@ -3385,7 +3406,7 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         clone.model = model
         clone.thinking = thinking
         clone.fallback_model = fallback_model
-        clone.tools = False if engine == "pi" else args.tools
+        clone.tools = False if engine in {"droid", "pi"} else args.tools
         result.append(clone)
     return result
 
