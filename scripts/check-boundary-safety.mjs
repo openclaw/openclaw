@@ -255,11 +255,19 @@ function isLikelyResponseBodyRead(sourceFile, call) {
 
 function hasBoundarySafetyIgnore(sourceFile, node, ruleId) {
   const sourceText = sourceFile.getFullText();
+  const hasIgnoreText = (text) =>
+    text.includes(`boundary-safety-ignore ${ruleId}:`) && /:\s*\S/.test(text);
   const comments = ts.getLeadingCommentRanges(sourceText, node.getFullStart()) ?? [];
-  return comments.some((comment) => {
-    const text = sourceText.slice(comment.pos, comment.end);
-    return text.includes(`boundary-safety-ignore ${ruleId}:`) && /:\s*\S/.test(text);
-  });
+  if (comments.some((comment) => hasIgnoreText(sourceText.slice(comment.pos, comment.end)))) {
+    return true;
+  }
+
+  let current = node;
+  while (current.parent && !ts.isStatement(current)) {
+    current = current.parent;
+  }
+  const statementPrefix = sourceText.slice(current.getFullStart(), node.getStart(sourceFile));
+  return hasIgnoreText(statementPrefix);
 }
 
 export function findBoundarySafetyViolations(content, fileName = "source.ts") {

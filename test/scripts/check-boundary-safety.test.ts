@@ -111,6 +111,18 @@ describe("check-boundary-safety", () => {
     ).toStrictEqual([]);
   });
 
+  it("accepts narrow boundary-safety ignore comments before awaited response reads", () => {
+    const source = `
+      export async function readFallback(res: Response) {
+        const fallbackBuffer =
+          await /* boundary-safety-ignore boundary/response-body-limit: no stream exists; enforce maxBytes after fallback. */ res.arrayBuffer();
+        return fallbackBuffer;
+      }
+    `;
+
+    expect(findBoundarySafetyViolations(source, "src/infra/http-body.ts")).toStrictEqual([]);
+  });
+
   it("keeps tests, fixtures, generated files, and scripts out of production candidates", () => {
     expect(isBoundarySafetyCandidateFile("src/agents/provider-client.ts")).toBe(true);
     expect(isBoundarySafetyCandidateFile("src/agents/provider-client.test.ts")).toBe(false);

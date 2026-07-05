@@ -191,10 +191,9 @@ async function readBufferedResponsePrefix(
   res: Response,
   maxBytes: number,
 ): Promise<ReadResponsePrefixResult> {
-  const fallback = Buffer.from(
-    await // boundary-safety-ignore boundary/response-body-limit: no stream exists; enforce maxBytes after fallback.
-    res.arrayBuffer(),
-  );
+  const fallbackBuffer =
+    await /* boundary-safety-ignore boundary/response-body-limit: no stream exists; enforce maxBytes after fallback. */ res.arrayBuffer();
+  const fallback = Buffer.from(fallbackBuffer);
   if (fallback.length > maxBytes) {
     return {
       buffer: fallback.subarray(0, maxBytes),
