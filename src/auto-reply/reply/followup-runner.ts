@@ -72,6 +72,7 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildEmptyInteractiveReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
   buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
@@ -94,7 +95,6 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
-import { buildEmptyInteractiveReplyFallbackPayload } from "./empty-interactive-reply.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -1560,17 +1560,19 @@ export function createFollowupRunner(params: {
               cfg: runtimeConfig,
             })
           : undefined
-        : buildEmptyInteractiveReplyFallbackPayload({
+        : buildEmptyInteractiveReplyPayload({
             isInteractive,
             isHeartbeat: opts?.isHeartbeat,
             silentExpected: run.silentExpected,
             allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
-            sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+            isMessageToolOnly: run.sourceReplyDeliveryMode === "message_tool_only",
             hasPendingContinuation:
               runResult.meta?.yielded === true ||
               (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
             hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-            hasSuccessfulTerminalDelivery: hasCommittedDelivery,
+            hasCommittedDelivery,
+            sessionCtx: failureConversationContext,
+            cfg: runtimeConfig,
           });
       const deliveryPlan = buildAgentRuntimeDeliveryPlan({
         provider: providerUsed,

@@ -72,6 +72,7 @@ import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
   runAgentTurnWithFallback,
 } from "./agent-runner-execution.js";
@@ -99,7 +100,6 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import { buildEmptyInteractiveReplyFallbackPayload } from "./empty-interactive-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -1989,7 +1989,7 @@ export async function runReplyAgent(params: {
     const hasSpecificFallbackFailure = fallbackTransition.fallbackActive && fallbackFailureKnown;
     const emptyInteractiveReplyPayload = terminalFailurePayload
       ? undefined
-      : buildEmptyInteractiveReplyFallbackPayload({
+      : buildEmptyInteractiveReplyPayload({
           isInteractive:
             followupRun.currentInboundEventKind !== "room_event" &&
             (followupRun.run.inputProvenance?.kind === undefined ||
@@ -1997,12 +1997,15 @@ export async function runReplyAgent(params: {
           isHeartbeat,
           silentExpected: followupRun.run.silentExpected,
           allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-          sourceReplyDeliveryMode:
-            opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode,
+          isMessageToolOnly:
+            (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
+            "message_tool_only",
           hasPendingContinuation:
             runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
           hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-          hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
+          hasCommittedDelivery: successfulTerminalDelivery,
+          sessionCtx,
+          cfg,
         });
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
