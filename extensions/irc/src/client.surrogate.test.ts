@@ -142,6 +142,16 @@ describe("irc client PRIVMSG chunking", () => {
     client.close();
   });
 
+  it("preserves one-unit chunks for BMP text", async () => {
+    const { client, socket } = await connectReadyClient(1);
+
+    client.sendPrivmsg("#room", "ABC");
+
+    expect(privmsgBodies(socket)).toEqual(["A", "B", "C"]);
+
+    client.close();
+  });
+
   it("splits an all-emoji message into whole emoji when the budget is one code unit", async () => {
     const { client, socket } = await connectReadyClient(1);
     const text = "\u{1F642}\u{1F642}\u{1F642}";
