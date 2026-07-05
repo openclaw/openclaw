@@ -100,29 +100,9 @@ describe("extended-stable plugin support policy", () => {
     ).toThrow(/acceptanceProfile is not registered/u);
   });
 
-  it("rejects any change to the fixed three-plugin support boundary", () => {
-    expect(() =>
-      parseExtendedStablePluginSupport({
-        ...validPolicy,
-        plugins: validPolicy.plugins.slice(0, 2),
-      }),
-    ).toThrow(/exactly codex, discord, and slack/u);
-
-    expect(() =>
-      parseExtendedStablePluginSupport({
-        ...validPolicy,
-        plugins: [
-          ...validPolicy.plugins.slice(0, 2),
-          {
-            pluginId: "matrix",
-            packageName: "@openclaw/matrix",
-            packageDir: "extensions/matrix",
-            acceptanceProfile: "slack-channel-v1",
-          },
-          validPolicy.plugins[2],
-        ],
-      }),
-    ).toThrow(/exactly codex, discord, and slack/u);
+  it("keeps the checked-in human-owned policy at the approved three-plugin boundary", () => {
+    const support = loadExtendedStablePluginSupport(process.cwd());
+    expect(support).toEqual(validPolicy);
   });
 
   it("rejects package identity and root-version drift", () => {

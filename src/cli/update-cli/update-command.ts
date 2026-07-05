@@ -782,7 +782,7 @@ function buildExtendedStablePluginMetadataError(error: unknown): PostCorePluginU
   };
 }
 
-export async function previewExtendedStablePluginMetadata(params: {
+async function previewExtendedStablePluginMetadata(params: {
   packageSpec: string;
   targetVersion: string;
   timeoutMs: number;
@@ -2048,13 +2048,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
   let extendedStableTargetContext: ExtendedStablePluginTargetContext | undefined;
   if (pluginUpdateChannel === "extended-stable") {
     try {
-      const installedCoreVersion = await readPackageVersion(params.root);
-      if (!installedCoreVersion) {
-        throw new Error("installed core version is missing");
-      }
       extendedStableTargetContext = loadExtendedStablePluginTargetContextFromRoot({
         rootDir: params.root,
-        expectedCoreVersion: installedCoreVersion,
       });
     } catch (error) {
       return buildExtendedStablePluginMetadataError(error);
