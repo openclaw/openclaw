@@ -493,6 +493,25 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Live reply");
   });
 
+  it("ignores duplicate delta event frames for the same run sequence", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      seq: 7,
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatStream).toBe("Live reply");
+  });
+
   it("uses the cumulative snapshot when the first observed delta joins mid-stream", () => {
     const state = createState({
       sessionKey: "main",
@@ -915,6 +934,27 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
 
+  it("ignores duplicate final event frames from another run without clearing active stream", () => {
+    const state = createActiveStreamingState();
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      seq: 9,
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Sub-agent findings" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([payload.message]);
+  });
+
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
     const state = createActiveStreamingState();
     const payload = createOtherRunNoReplyFinalPayload();
@@ -1133,6 +1173,96 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toEqual([finalMsg]);
     expect(state.chatStream).toBe(null);
+  });
+
+  it("ignores duplicate final event frames for the same run sequence", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const finalMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "Complete reply" }],
+      timestamp: 101,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      seq: 8,
+      sessionKey: "main",
+      state: "final",
+      message: finalMsg,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("does not append an identical assistant final already present in the current turn", () => {
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "repeat" }],
+      timestamp: 1,
+    };
+    const existingAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Already persisted" }],
+      timestamp: 2,
+    };
+    const finalAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Already persisted" }],
+      timestamp: 3,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user, existingAssistant],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalAssistant,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([user, finalAssistant]);
+  });
+
+  it("does not append a final whose visible text is already present from refreshed history", () => {
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "repeat" }],
+      timestamp: 1,
+    };
+    const historyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Already persisted" }],
+      __openclaw: { seq: 2 },
+    };
+    const finalAssistant = {
+      role: "assistant",
+      text: "Already persisted",
+      timestamp: 3,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user, historyAssistant],
+      chatStream: "Already persisted",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalAssistant,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([user, finalAssistant]);
   });
 
   it("keeps repeated assistant final text from a later turn", () => {
@@ -3412,6 +3542,83 @@ describe("loadChatHistory retry handling", () => {
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
+  });
+
+  it("does not append a live assistant tail already present in the current history turn", async () => {
+    const historyUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const historyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      __openclaw: { seq: 2 },
+    };
+    const liveAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      timestamp: Date.now() + 1_000,
+    };
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [historyUser],
+    });
+
+    const loadPromise = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    state.chatMessages = [historyUser, liveAssistant];
+    history.resolve({
+      messages: [historyUser, historyAssistant],
+      thinkingLevel: "low",
+    });
+    await loadPromise;
+
+    expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
+  });
+
+  it("keeps a late assistant tail when a new user turn repeats the latest history answer", async () => {
+    const historyUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest persisted ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const historyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "same answer" }],
+      __openclaw: { seq: 2 },
+    };
+    const lateUser = {
+      role: "user",
+      content: [{ type: "text", text: "new ask" }],
+      timestamp: Date.now(),
+    };
+    const lateAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "same answer" }],
+      timestamp: Date.now() + 1_000,
+    };
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [historyUser, historyAssistant],
+    });
+
+    const loadPromise = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    state.chatMessages = [historyUser, historyAssistant, lateUser, lateAssistant];
+    history.resolve({
+      messages: [historyUser, historyAssistant],
+      thinkingLevel: "low",
+    });
+    await loadPromise;
+
+    expect(state.chatMessages).toEqual([historyUser, historyAssistant, lateUser, lateAssistant]);
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {
