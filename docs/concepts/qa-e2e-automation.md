@@ -616,17 +616,18 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
   Slack-originated Gateway agent turn through the Codex app-server harness,
   waits for the native Slack plugin approval prompt for
   `openclaw-codex-app-server`, resolves it, and verifies the Codex turn
-  finishes.
+  finishes with the expected command-output and assistant markers.
 - `slack-codex-approval-plugin-native` - opt-in Codex Guardian file approval
   scenario. Uses an outside-workspace `apply_patch` instruction so Codex emits
   the app-server file-change approval route, then verifies the same native
-  Slack pending/resolved approval path.
+  Slack pending/resolved approval path, final assistant marker, and exact file
+  contents before cleanup.
 
-The Codex approval scenarios require the normal live model credentials for the
-selected `--model` plus Codex auth or API-key auth accepted by the Codex plugin.
+The Codex approval scenarios require an `openai/*` or `codex/*` `--model`, the
+normal live model credentials, and Codex auth or API-key auth accepted by the Codex plugin.
 Their Slack report and summary approval entries include the Codex app-server
-method, selected Codex model key, and final Codex turn status alongside the
-redacted Slack approval metadata.
+method, selected Codex model key, final Codex turn status, and operation-marker
+verification alongside the redacted Slack approval metadata.
 
 Output artifacts:
 

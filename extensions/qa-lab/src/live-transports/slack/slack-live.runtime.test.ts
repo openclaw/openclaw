@@ -281,6 +281,48 @@ describe("Slack live QA runtime helpers", () => {
     ).toThrow("instead of accepted");
   });
 
+  it("requires the Codex command transcript to prove the approved operation", () => {
+    const run = {
+      approvalKind: "plugin" as const,
+      appServerMethod: "item/commandExecution/requestApproval" as const,
+      decision: "allow-once" as const,
+      kind: "codex-approval" as const,
+      token: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
+    };
+    expect(() =>
+      testing.assertCodexApprovalTranscriptSucceeded(
+        [
+          {
+            role: "toolResult",
+            isError: false,
+            content: [
+              {
+                type: "toolResult",
+                text: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123",
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123" }],
+          },
+        ],
+        run,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      testing.assertCodexApprovalTranscriptSucceeded(
+        [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "SLACK_QA_CODEX_EXEC_APPROVAL_ABC123" }],
+          },
+        ],
+        run,
+      ),
+    ).toThrow("Codex command result did not contain marker");
+  });
+
   it("matches pending Codex plugin approvals by id, route, and Slack turn source", () => {
     expect(
       testing.findPendingCodexPluginApprovalRecord({
@@ -571,6 +613,7 @@ describe("Slack live QA runtime helpers", () => {
       codexModelKey: undefined,
       decision: "allow-once",
       finalCodexTurnStatus: undefined,
+      operationVerified: undefined,
       pendingActionValues: undefined,
       pendingCheckpointPath: undefined,
       pendingMessageTs: undefined,
@@ -600,6 +643,7 @@ describe("Slack live QA runtime helpers", () => {
               codexModelKey: "openai/gpt-5.5",
               decision: "allow-once",
               finalCodexTurnStatus: "ok",
+              operationVerified: true,
               pendingActionValues: ["/approve plugin:abc allow-once"],
               pendingMessageTs: "1.000000",
               pendingText: "Plugin approval required",
@@ -621,6 +665,7 @@ describe("Slack live QA runtime helpers", () => {
       channelId: undefined,
       codexModelKey: "openai/gpt-5.5",
       finalCodexTurnStatus: "ok",
+      operationVerified: true,
       pendingActionValues: undefined,
       pendingMessageTs: undefined,
       pendingText: undefined,

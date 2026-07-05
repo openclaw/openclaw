@@ -13,6 +13,7 @@ import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { extractGatewayMessageText } from "../../gateway-log-sentinel.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { splitQaModelRef } from "../../model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -217,6 +218,7 @@ type SlackApprovalArtifact = {
   codexModelKey?: string;
   decision: SlackQaApprovalDecision;
   finalCodexTurnStatus?: string;
+  operationVerified?: boolean;
   pendingActionValues?: string[];
   pendingCheckpointPath?: string;
   pendingMessageTs?: string;
@@ -1701,6 +1703,56 @@ function readAgentWaitStatus(result: unknown) {
   return typeof status === "string" && status.trim() ? status : "unknown";
 }
 
+function assertCodexApprovalTranscriptSucceeded(
+  messages: unknown,
+  run: SlackQaCodexApprovalScenarioRun,
+) {
+  const records = Array.isArray(messages) ? messages.map(asPlainRecord) : [];
+  const assistantReply = records
+    .toReversed()
+    .find((message) => message.role === "assistant" && extractGatewayMessageText(message));
+  if (!assistantReply || extractGatewayMessageText(assistantReply) !== run.token) {
+    throw new Error(`Codex approval run did not finish with assistant marker ${run.token}`);
+  }
+  if (run.appServerMethod !== "item/commandExecution/requestApproval") {
+    return;
+  }
+  const commandSucceeded = records.some((message) => {
+    if (message.role !== "toolResult" || message.isError === true) {
+      return false;
+    }
+    return extractGatewayMessageText(message)
+      .split(/\r?\n/u)
+      .some((line) => line.trim() === run.token);
+  });
+  if (!commandSucceeded) {
+    throw new Error(`Codex command result did not contain marker ${run.token}`);
+  }
+}
+
+async function assertCodexApprovalOperationSucceeded(params: {
+  context: Omit<SlackQaScenarioContext, "sentTs">;
+  run: SlackQaCodexApprovalScenarioRun;
+  sessionKey: string;
+}) {
+  const history = asPlainRecord(
+    await params.context.gateway.call(
+      "chat.history",
+      { sessionKey: params.sessionKey, limit: 24 },
+      { timeoutMs: 10_000 },
+    ),
+  );
+  assertCodexApprovalTranscriptSucceeded(history.messages, params.run);
+  if (params.run.appServerMethod !== "item/fileChange/requestApproval") {
+    return;
+  }
+  const targetPath = resolveCodexFileApprovalTargetPath(params.run.token);
+  const contents = await fs.readFile(targetPath, "utf8");
+  if (contents.trim() !== params.run.token) {
+    throw new Error(`Codex file result at ${targetPath} did not contain the expected marker`);
+  }
+}
+
 function findPendingCodexPluginApprovalRecord(params: {
   approvalId: string;
   appServerMethod: SlackQaCodexApprovalMethod;
@@ -1933,6 +1985,11 @@ async function runSlackCodexApprovalScenarioInner(params: {
       `Codex approval run ${codexRun.runId} finished with status ${finalCodexTurnStatus}`,
     );
   }
+  await assertCodexApprovalOperationSucceeded({
+    context: params.context,
+    run: params.run,
+    sessionKey: codexRun.sessionKey,
+  });
   const resolved = await waitForSlackApprovalResolvedUpdate({
     approvalKind: params.run.approvalKind,
     channelId: params.channelId,
@@ -1967,6 +2024,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
       codexModelKey: params.primaryModel,
       decision: params.run.decision,
       finalCodexTurnStatus,
+      operationVerified: true,
       pendingActionValues: pending.actionValues,
       pendingCheckpointPath: pendingCheckpoint?.checkpointPath,
       pendingMessageTs: pending.message.ts,
@@ -2151,6 +2209,7 @@ function toSlackQaScenarioArtifactResults(params: {
         codexModelKey: approval.codexModelKey,
         decision: approval.decision,
         finalCodexTurnStatus: approval.finalCodexTurnStatus,
+        operationVerified: approval.operationVerified,
         pendingActionValues: params.includeContent ? approval.pendingActionValues : undefined,
         pendingCheckpointPath: approval.pendingCheckpointPath,
         pendingMessageTs: params.redactMetadata ? undefined : approval.pendingMessageTs,
@@ -2213,6 +2272,9 @@ function renderSlackQaMarkdown(params: {
       }
       if (scenario.approval.finalCodexTurnStatus) {
         lines.push(`- Codex turn status: ${scenario.approval.finalCodexTurnStatus}`);
+      }
+      if (scenario.approval.operationVerified) {
+        lines.push("- Codex operation marker: verified");
       }
       lines.push(`- Approval ID: \`${scenario.approval.approvalId}\``);
       lines.push(`- Decision: ${scenario.approval.decision}`);
@@ -2660,6 +2722,7 @@ export async function runSlackQaLive(params: {
 
 export const testing = {
   assertSlackCodexApprovalModelSupported,
+  assertCodexApprovalTranscriptSucceeded,
   buildCodexApprovalInstruction,
   buildSlackApprovalCheckpointMessage,
   buildSlackQaConfig,
