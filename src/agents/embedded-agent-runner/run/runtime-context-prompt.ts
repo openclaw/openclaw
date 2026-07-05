@@ -34,6 +34,11 @@ export type RuntimeContextCustomMessage = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
+type ModelPromptHookContext = {
+  prepend: string;
+  append: string;
+};
+
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
@@ -73,14 +78,21 @@ function removePromptContextAroundOccurrence(params: {
   prompt: string;
   hiddenBefore: string;
   hiddenAfter: string;
+  hookContext?: ModelPromptHookContext;
 }): string | null {
   const hiddenBefore = params.hiddenBefore.trim();
   const hiddenAfter = params.hiddenAfter.trim();
+  const prependContext = params.hookContext?.prepend;
+  const appendContext = params.hookContext?.append;
+  const prependIndex = prependContext ? params.text.indexOf(prependContext) : -1;
+  const appendIndex = appendContext ? params.text.lastIndexOf(appendContext) : -1;
+  const searchStart = prependIndex === -1 ? 0 : prependIndex + prependContext.length;
+  const searchEnd = appendIndex < searchStart ? params.text.length : appendIndex;
   let stripped: string | null = null;
-  let searchFrom = 0;
-  while (searchFrom <= params.text.length) {
+  let searchFrom = searchStart;
+  while (searchFrom <= searchEnd) {
     const index = params.text.indexOf(params.prompt, searchFrom);
-    if (index === -1) {
+    if (index === -1 || index + params.prompt.length > searchEnd) {
       return stripped;
     }
     const before = params.text.slice(0, index).trimEnd();
@@ -112,6 +124,7 @@ export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
   modelPrompt?: string;
+  modelPromptHookContext?: ModelPromptHookContext;
   emptyTranscriptMode?: EmptyTranscriptMode;
 }): RuntimeContextPromptParts {
   const transcriptPrompt = params.transcriptPrompt;
@@ -187,6 +200,7 @@ export function resolveRuntimeContextPromptParts(params: {
           prompt: transcriptPrompt ?? extracted.text,
           hiddenBefore: hiddenPromptParts.before,
           hiddenAfter: hiddenPromptParts.after,
+          hookContext: params.modelPromptHookContext,
         }) ?? modelPromptText)
       : modelPromptText;
 

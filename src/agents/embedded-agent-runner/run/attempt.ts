@@ -4265,6 +4265,12 @@ export async function runEmbeddedAttempt(
             modelPrompt: hasPromptBuildContext
               ? promptForModelBeforeRuntimeContextSplit
               : undefined,
+            modelPromptHookContext: hasPromptBuildContext
+              ? {
+                  prepend: promptBuildPrependContext ?? "",
+                  append: promptBuildAppendContext ?? "",
+                }
+              : undefined,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",

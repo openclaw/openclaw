@@ -190,11 +190,31 @@ describe("runtime context prompt submission", () => {
         effectivePrompt,
         transcriptPrompt: userText,
         modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+        modelPromptHookContext: { prepend: effectivePrompt, append: "" },
       }),
     ).toEqual({
       prompt: userText,
       modelPrompt: [effectivePrompt, userText].join("\n\n"),
       runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+    });
+  });
+
+  it("strips the active prompt before append hooks that quote the body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const effectivePrompt = [systemEvent, userText].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+        modelPromptHookContext: { prepend: "", append: effectivePrompt },
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, effectivePrompt].join("\n\n"),
+      runtimeContext: systemEvent,
     });
   });
 
