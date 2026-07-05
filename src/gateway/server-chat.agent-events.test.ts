@@ -151,6 +151,7 @@ describe("agent event handler", () => {
   function emitRun1AssistantText(
     harness: ReturnType<typeof createHarness>,
     text: string,
+    field: "text" | "delta" = "text",
   ): ReturnType<typeof createHarness> {
     harness.chatRunState.registry.add("run-1", {
       sessionKey: "session-1",
@@ -161,7 +162,7 @@ describe("agent event handler", () => {
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
-      data: { text },
+      data: { [field]: text },
     });
     return harness;
   }
@@ -411,10 +412,11 @@ describe("agent event handler", () => {
     expect("isHeartbeat" in normalNodeSend).toBe(false);
   });
 
-  it("emits chat delta for assistant text-only events", () => {
+  it.each(["text", "delta"] as const)("emits chat delta for assistant %s-only events", (field) => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
       "Hello world",
+      field,
     );
     const chatCalls = chatBroadcastCalls(broadcast);
     expect(chatCalls).toHaveLength(1);

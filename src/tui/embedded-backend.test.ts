@@ -413,7 +413,7 @@ describe("EmbeddedTuiBackend", () => {
     registeredListener?.({
       runId: "run-local-1",
       stream: "assistant",
-      data: { text: "hello", delta: "hello" },
+      data: { delta: "hello" },
     });
     registeredListener?.({
       runId: "run-local-1",
@@ -430,7 +430,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-local-1",
           stream: "assistant",
-          data: { text: "hello", delta: "hello" },
+          data: { delta: "hello" },
         },
       },
       {

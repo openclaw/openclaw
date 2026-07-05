@@ -15,6 +15,23 @@ import {
 
 export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
+/** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
+export function resolveAssistantLiveChatInput(
+  data: unknown,
+): { text: string; delta: string } | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const record = data as { text?: unknown; delta?: unknown };
+  if (typeof record.text !== "string" && typeof record.delta !== "string") {
+    return undefined;
+  }
+  return {
+    text: typeof record.text === "string" ? record.text : "",
+    delta: typeof record.delta === "string" ? record.delta : "",
+  };
+}
+
 function capLiveAssistantBuffer(text: string): string {
   if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
     return text;

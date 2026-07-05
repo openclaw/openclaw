@@ -16,6 +16,7 @@ import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
   normalizeLiveAssistantEventText,
   projectLiveAssistantBufferedText,
+  resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
@@ -1393,10 +1394,11 @@ export function createAgentEventHandler({
           sessionAgentId,
         );
       }
+      const assistantLiveChatInput =
+        evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
       if (
         !isAborted &&
-        evt.stream === "assistant" &&
-        (typeof evt.data?.text === "string" || typeof evt.data?.delta === "string") &&
+        assistantLiveChatInput &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
         emitChatDelta(
@@ -1405,8 +1407,8 @@ export function createAgentEventHandler({
           clientRunId,
           evt.runId,
           evt.seq,
-          evt.data.text,
-          evt.data.delta,
+          assistantLiveChatInput.text,
+          assistantLiveChatInput.delta,
           {
             controlUiVisible: isControlUiVisible,
           },
