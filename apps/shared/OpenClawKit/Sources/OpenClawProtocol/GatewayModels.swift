@@ -7778,21 +7778,25 @@ public struct ChatAbortParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let runid: String?
+    public let preservesideruns: Bool?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
-        runid: String?)
+        runid: String?,
+        preservesideruns: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.runid = runid
+        self.preservesideruns = preservesideruns
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case runid = "runId"
+        case preservesideruns = "preserveSideRuns"
     }
 }
 

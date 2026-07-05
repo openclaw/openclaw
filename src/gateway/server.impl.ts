@@ -896,6 +896,7 @@ export async function startGatewayServer(
     addChatRun,
     removeChatRun,
     chatAbortControllers,
+    chatQueuedTurns,
     toolEventRecipients,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
@@ -1065,6 +1066,7 @@ export async function startGatewayServer(
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       chatRunState,
       chatAbortControllers,
+      chatQueuedTurns,
       restartRecoveryCandidates,
       removeChatRun,
       agentRunSeq,
@@ -1137,6 +1139,7 @@ export async function startGatewayServer(
           logHealth,
           dedupe,
           chatAbortControllers,
+          chatQueuedTurns,
           restartRecoveryCandidates,
           chatRunState,
           chatRunBuffers,
@@ -1466,6 +1469,7 @@ export async function startGatewayServer(
           terminalSessions,
           agentRunSeq,
           chatAbortControllers,
+          chatQueuedTurns,
           chatAbortedRuns: chatRunState.abortedRuns,
           chatRunBuffers: chatRunState.buffers,
           chatDeltaSentAt: chatRunState.deltaSentAt,
