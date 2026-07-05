@@ -92,6 +92,10 @@ function actionOpacity(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
 }
 
+async function trimmedTextContents(locator: Locator): Promise<string[]> {
+  return (await locator.allTextContents()).map((text) => text.trim());
+}
+
 async function captureUiProof(page: Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
@@ -151,6 +155,15 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const sidebarRows = page.locator(".sidebar-recent-sessions__list .sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
+      const sessionGroups = page.locator(".sidebar-recent-sessions__group");
+      const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
+      const chatsGroup = sessionGroups.filter({ hasText: "Chats" });
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Release planning"]);
+      await expect
+        .poll(() => trimmedTextContents(chatsGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Main", "Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())

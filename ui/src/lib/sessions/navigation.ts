@@ -214,6 +214,10 @@ export function getVisibleSessionRows(
 }
 
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
+  if (pinnedStateDiff !== 0) {
+    return pinnedStateDiff;
+  }
   const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
   return pinnedDiff !== 0 ? pinnedDiff : (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
@@ -237,15 +241,21 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     currentSessionKey && currentSessionKey.toLowerCase() !== "unknown"
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
-  const recentSessions = getVisibleSessionRows(input.result, {
+  const sortedSessions = getVisibleSessionRows(input.result, {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
   })
     .filter((row) => !matchesCurrentSession(row))
-    .toSorted(compareSessionRowsByUpdatedAt)
-    .slice(0, 9);
+    .toSorted(compareSessionRowsByUpdatedAt);
+  // Pinned chats are explicit user choices, so the recent-chat cap only
+  // trims unpinned rows. Otherwise a tenth pin silently vanishes.
+  const pinnedSessions = sortedSessions.filter((row) => row.pinned === true);
+  const recentSessions = [
+    ...pinnedSessions,
+    ...sortedSessions.filter((row) => row.pinned !== true).slice(0, 9),
+  ];
   return {
     currentSessionKey,
     selectedAgentId,
