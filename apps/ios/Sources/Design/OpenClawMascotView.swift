@@ -31,11 +31,11 @@ struct OpenClawMascotPose: Equatable {
 
     static func at(time: TimeInterval) -> OpenClawMascotPose {
         OpenClawMascotPose(
-            floatOffset: -2.5 * (1 - cos(2 * .pi * cyclePhase(time, period: 4))),
-            antennaDegrees: -3 * sin(2 * .pi * cyclePhase(time, period: 2)),
-            leftClawDegrees: clawSnapDegrees(phase: cyclePhase(time, period: 4)),
-            rightClawDegrees: clawSnapDegrees(phase: cyclePhase(time - 0.2, period: 4)),
-            eyeGlowOpacity: blinkOpacity(phase: cyclePhase(time, period: 3)))
+            floatOffset: -2.5 * (1 - cos(2 * .pi * Self.cyclePhase(time, period: 4))),
+            antennaDegrees: -3 * sin(2 * .pi * Self.cyclePhase(time, period: 2)),
+            leftClawDegrees: Self.clawSnapDegrees(phase: Self.cyclePhase(time, period: 4)),
+            rightClawDegrees: Self.clawSnapDegrees(phase: Self.cyclePhase(time - 0.2, period: 4)),
+            eyeGlowOpacity: Self.blinkOpacity(phase: Self.cyclePhase(time, period: 3)))
     }
 
     private static func cyclePhase(_ time: TimeInterval, period: TimeInterval) -> CGFloat {
@@ -49,9 +49,9 @@ struct OpenClawMascotPose: Equatable {
             return 0
         }
         if phase < 0.9 {
-            return -8 * easeInOut((phase - 0.85) / 0.05)
+            return -8 * Self.easeInOut((phase - 0.85) / 0.05)
         }
-        return -8 * (1 - easeInOut((phase - 0.9) / 0.05))
+        return -8 * (1 - Self.easeInOut((phase - 0.9) / 0.05))
     }
 
     private static func blinkOpacity(phase: CGFloat) -> CGFloat {
@@ -59,7 +59,7 @@ struct OpenClawMascotPose: Equatable {
         if phase < 0.9 {
             return 1
         }
-        let dip = phase < 0.95 ? easeInOut((phase - 0.9) / 0.05) : 1 - easeInOut((phase - 0.95) / 0.05)
+        let dip = phase < 0.95 ? Self.easeInOut((phase - 0.9) / 0.05) : 1 - Self.easeInOut((phase - 0.95) / 0.05)
         return 1 - 0.7 * dip
     }
 
@@ -148,39 +148,43 @@ private struct OpenClawMascotCanvas: View {
         context.translateBy(x: 0, y: pose.floatOffset)
 
         let bodyShading = GraphicsContext.Shading.linearGradient(
-            Gradient(colors: [bodyColorTop, bodyColorBottom]),
+            Gradient(colors: [Self.bodyColorTop, Self.bodyColorBottom]),
             startPoint: .zero,
             endPoint: CGPoint(x: 120, y: 120))
         let antennaStroke = StrokeStyle(lineWidth: 3, lineCap: .round)
 
         // Same paint order as favicon.svg: body, claws, antennae, eyes.
-        context.fill(bodyPath, with: bodyShading)
-        drawRotated(context: context, degrees: pose.leftClawDegrees, pivot: leftClawPivot) {
-            $0.fill(leftClawPath, with: bodyShading)
+        context.fill(Self.bodyPath, with: bodyShading)
+        Self.drawRotated(context: context, degrees: pose.leftClawDegrees, pivot: Self.leftClawPivot) {
+            $0.fill(Self.leftClawPath, with: bodyShading)
         }
-        drawRotated(context: context, degrees: pose.rightClawDegrees, pivot: rightClawPivot) {
-            $0.fill(rightClawPath, with: bodyShading)
+        Self.drawRotated(context: context, degrees: pose.rightClawDegrees, pivot: Self.rightClawPivot) {
+            $0.fill(Self.rightClawPath, with: bodyShading)
         }
-        drawRotated(context: context, degrees: pose.antennaDegrees, pivot: leftAntennaPivot) {
-            $0.stroke(leftAntennaPath, with: .color(bodyColorTop), style: antennaStroke)
+        Self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: Self.leftAntennaPivot) {
+            $0.stroke(Self.leftAntennaPath, with: .color(Self.bodyColorTop), style: antennaStroke)
         }
-        drawRotated(context: context, degrees: pose.antennaDegrees, pivot: rightAntennaPivot) {
-            $0.stroke(rightAntennaPath, with: .color(bodyColorTop), style: antennaStroke)
+        Self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: Self.rightAntennaPivot) {
+            $0.stroke(Self.rightAntennaPath, with: .color(Self.bodyColorTop), style: antennaStroke)
         }
 
-        context.fill(Path(ellipseIn: CGRect(x: 39, y: 29, width: 12, height: 12)), with: .color(eyeColor))
-        context.fill(Path(ellipseIn: CGRect(x: 69, y: 29, width: 12, height: 12)), with: .color(eyeColor))
+        context.fill(Path(ellipseIn: CGRect(x: 39, y: 29, width: 12, height: 12)), with: .color(Self.eyeColor))
+        context.fill(Path(ellipseIn: CGRect(x: 69, y: 29, width: 12, height: 12)), with: .color(Self.eyeColor))
         var glowContext = context
         glowContext.opacity = pose.eyeGlowOpacity
-        glowContext.fill(Path(ellipseIn: CGRect(x: 43.5, y: 31.5, width: 5, height: 5)), with: .color(eyeGlowColor))
-        glowContext.fill(Path(ellipseIn: CGRect(x: 73.5, y: 31.5, width: 5, height: 5)), with: .color(eyeGlowColor))
+        glowContext.fill(
+            Path(ellipseIn: CGRect(x: 43.5, y: 31.5, width: 5, height: 5)),
+            with: .color(Self.eyeGlowColor))
+        glowContext.fill(
+            Path(ellipseIn: CGRect(x: 73.5, y: 31.5, width: 5, height: 5)),
+            with: .color(Self.eyeGlowColor))
     }
 
     private static func drawRotated(
         context: GraphicsContext,
         degrees: CGFloat,
         pivot: CGPoint,
-        draw: (inout GraphicsContext) -> Void
+        draw: (inout GraphicsContext) -> Void,
     ) {
         var rotated = context
         rotated.translateBy(x: pivot.x, y: pivot.y)
