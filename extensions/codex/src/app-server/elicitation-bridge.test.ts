@@ -201,6 +201,26 @@ function appsForPlugin(
     .toSorted();
 }
 
+function hasLoneSurrogate(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (i + 1 >= text.length) {
+        return true;
+      }
+      const next = text.charCodeAt(i + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      i++;
+    }
+  }
+  return false;
+}
+
 describe("Codex app-server elicitation bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
@@ -1641,5 +1661,33 @@ describe("Codex app-server elicitation bridge", () => {
       fields: ["confirmChoice"],
       outcome: "approved-once",
     });
+  });
+
+  it("does not split surrogate pairs when truncating display parameter values", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-safe", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-safe", decision: "allow-once" });
+
+    // 116 "b" + "😀" + "tail" = 122 chars. The emoji at UTF-16 positions 116-117 crosses
+    // the 120-char truncateDisplayText() boundary (120 - 3 = 117). Old raw slice(0, 117)
+    // would keep the lone high surrogate; truncateUtf16Safe backs off to 116.
+    const displayValue = `${"b".repeat(116)}😀tail`;
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          tool_params_display: [{ name: "key", display_name: "Value", value: displayValue }],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
+    const description = String(approvalCallParams.description ?? "");
+    expect(hasLoneSurrogate(description)).toBe(false);
   });
 });

@@ -115,6 +115,26 @@ function createParams(): EmbeddedRunAttemptParams {
   } as unknown as EmbeddedRunAttemptParams;
 }
 
+function hasLoneSurrogate(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (i + 1 >= text.length) {
+        return true;
+      }
+      const next = text.charCodeAt(i + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      i++;
+    }
+  }
+  return false;
+}
+
 describe("Codex app-server approval bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
@@ -2705,5 +2725,36 @@ describe("Codex app-server approval bridge", () => {
       decision: "decline",
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
+  });
+
+  it("does not split surrogate pairs when truncating command previews", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-safe", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-safe", decision: "allow-once" });
+
+    // 176 "a" + "😀" + "tail" = 182 chars. The emoji at positions 176-177 crosses the
+    // 180-char truncate() boundary (180 - 3 = 177). Old raw slice(0, 177) would keep the
+    // lone high surrogate; truncateUtf16Safe backs off to 176.
+    const command = `${"a".repeat(176)}😀tail`;
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-utf16",
+        command,
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const event = findApprovalEvent(params, { status: "pending" });
+    expect(hasLoneSurrogate(String(event.command ?? ""))).toBe(false);
+
+    const description = String(gatewayRequestPayload().description);
+    expect(hasLoneSurrogate(description)).toBe(false);
   });
 });
