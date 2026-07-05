@@ -154,6 +154,7 @@ export async function runNativeHookRelayCli(
           opts,
           provider,
           event,
+          rawPayload,
           error,
         });
       }

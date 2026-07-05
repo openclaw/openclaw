@@ -388,6 +388,55 @@ describe("native hook relay CLI", () => {
     );
   }, 1_000);
 
+  it("keeps skill workshop lifecycle approvals fail-closed when gateway fallback times out", async () => {
+    const invokeBridge = vi.fn(async () => {
+      throw new Error("bridge unavailable");
+    });
+    const callGateway = vi.fn(async () => await new Promise<never>(() => {}));
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "loop-detection-only",
+        timeout: "25",
+      },
+      {
+        stdin: createReadableTextStream(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "skill_workshop",
+            tool_input: { action: "apply", proposal_id: "proposal-1" },
+          }),
+        ),
+        stdout,
+        stderr,
+        invokeBridge: invokeBridge as never,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay timed out",
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay timed out");
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "nativeHook.invoke",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  }, 1_000);
+
   it("rejects oversized hook input without touching the gateway", async () => {
     const callGateway = vi.fn();
     const stderr = createWritableTextBuffer();
