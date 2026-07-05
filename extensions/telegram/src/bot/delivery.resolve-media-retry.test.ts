@@ -221,6 +221,10 @@ function createRateLimitGrammyError(retryAfterSeconds = 3): GrammyError {
   );
 }
 
+function createFileAccessError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
 function resolveMediaWithDefaults(
   ctx: TelegramContext,
   overrides: Partial<Parameters<typeof resolveMedia>[0]> = {},
@@ -805,6 +809,168 @@ describe("resolveMedia getFile retry", () => {
 
     expect(rootRead).not.toHaveBeenCalled();
     expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveMedia local Bot API container paths", () => {
+  beforeEach(() => {
+    readRemoteMediaBuffer.mockReset();
+    saveMediaBuffer.mockReset();
+    saveRemoteMedia.mockClear();
+    rootRead.mockReset();
+  });
+
+  it("maps container-absolute file paths onto a trusted host data root", async () => {
+    const getFile = vi.fn().mockResolvedValue({
+      file_path: `/var/lib/telegram-bot-api/${BOT_TOKEN}/documents/file_12.zip`,
+    });
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("zip-data"),
+      realPath: `/host/telegram-bot-api/data/${BOT_TOKEN}/documents/file_12.zip`,
+      stat: { size: 8 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/file_12.zip",
+      contentType: "application/zip",
+    });
+
+    const result = await resolveMediaWithDefaults(
+      makeCtx("document", getFile, { file_name: "file_12.zip", mime_type: "application/zip" }),
+      { trustedLocalFileRoots: ["/host/telegram-bot-api/data"] },
+    );
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(rootRead).toHaveBeenCalledWith({
+      rootDir: "/host/telegram-bot-api/data",
+      relativePath: `${BOT_TOKEN}/documents/file_12.zip`,
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expectResolvedMediaFields(result, "container-mapped document", {
+      path: "/tmp/inbound/file_12.zip",
+      contentType: "application/zip",
+      placeholder: "<media:document>",
+    });
+  });
+
+  it("maps container paths when the trusted root is the per-token directory", async () => {
+    const getFile = vi.fn().mockResolvedValue({
+      file_path: `/var/lib/telegram-bot-api/${BOT_TOKEN}/documents/file_7.zip`,
+    });
+    rootRead.mockRejectedValueOnce(createFileAccessError("not-found", "file not found"));
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("zip-data"),
+      realPath: "/host/telegram-bot-api/token/documents/file_7.zip",
+      stat: { size: 8 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/file_7.zip",
+      contentType: "application/zip",
+    });
+
+    const result = await resolveMediaWithDefaults(
+      makeCtx("document", getFile, { file_name: "file_7.zip", mime_type: "application/zip" }),
+      { trustedLocalFileRoots: ["/host/telegram-bot-api/token"] },
+    );
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(rootRead).toHaveBeenNthCalledWith(1, {
+      rootDir: "/host/telegram-bot-api/token",
+      relativePath: `${BOT_TOKEN}/documents/file_7.zip`,
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(rootRead).toHaveBeenNthCalledWith(2, {
+      rootDir: "/host/telegram-bot-api/token",
+      relativePath: "documents/file_7.zip",
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expectResolvedMediaFields(result, "per-token-root document", {
+      path: "/tmp/inbound/file_7.zip",
+      contentType: "application/zip",
+      placeholder: "<media:document>",
+    });
+  });
+
+  it("accepts the colon-to-tilde token directory used on restricted filesystems", async () => {
+    const token = "123:secret";
+    const getFile = vi.fn().mockResolvedValue({
+      file_path: "/var/lib/telegram-bot-api/123~secret/documents/file_9.pdf",
+    });
+    rootRead.mockRejectedValueOnce(createFileAccessError("not-found", "file not found"));
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      realPath: "/host/telegram-bot-api/token/documents/file_9.pdf",
+      stat: { size: 8 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/file_9.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMediaWithDefaults(
+      makeCtx("document", getFile, { file_name: "file_9.pdf", mime_type: "application/pdf" }),
+      { token, trustedLocalFileRoots: ["/host/telegram-bot-api/token"] },
+    );
+
+    expect(rootRead).toHaveBeenCalledTimes(2);
+    expect(rootRead).toHaveBeenLastCalledWith({
+      rootDir: "/host/telegram-bot-api/token",
+      relativePath: "documents/file_9.pdf",
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expectResolvedMediaFields(result, "tilde-token document", {
+      path: "/tmp/inbound/file_9.pdf",
+      contentType: "application/pdf",
+      placeholder: "<media:document>",
+    });
+  });
+
+  it("preserves non-missing trusted-root read failures", async () => {
+    const getFile = vi.fn().mockResolvedValue({
+      file_path: `/var/lib/telegram-bot-api/${BOT_TOKEN}/documents/file_3.zip`,
+    });
+    rootRead.mockRejectedValue(createFileAccessError("too-large", "file exceeds limit"));
+
+    await expectMediaFetchError(
+      resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/zip" }), {
+        trustedLocalFileRoots: ["/host/telegram-bot-api/data"],
+      }),
+      {
+        code: "fetch_failed",
+        messageIncludes: "file exceeds limit",
+      },
+    );
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects container paths when all trusted candidates are missing", async () => {
+    const getFile = vi.fn().mockResolvedValue({
+      file_path: `/var/lib/telegram-bot-api/${BOT_TOKEN}/documents/file_3.zip`,
+    });
+    rootRead.mockRejectedValue(createFileAccessError("not-found", "file not found"));
+
+    await expectMediaFetchError(
+      resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/zip" }), {
+        trustedLocalFileRoots: ["/host/telegram-bot-api/data"],
+      }),
+      { code: "fetch_failed", messageIncludes: "outside trustedLocalFileRoots" },
+    );
+    expect(rootRead).toHaveBeenCalledTimes(2);
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects dot-segment escapes before reading a trusted root", async () => {
+    const getFile = vi.fn().mockResolvedValue({
+      file_path: `/var/lib/telegram-bot-api/${BOT_TOKEN}/../outside.zip`,
+    });
+
+    await expectMediaFetchError(
+      resolveMediaWithDefaults(makeCtx("document", getFile), {
+        trustedLocalFileRoots: ["/host/telegram-bot-api/data"],
+      }),
+      { code: "fetch_failed", messageIncludes: "outside trustedLocalFileRoots" },
+    );
+    expect(rootRead).not.toHaveBeenCalled();
   });
 });
 

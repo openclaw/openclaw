@@ -1,7 +1,7 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,23 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
     });
   }
   throw new Error("timed out waiting for condition");
+}
+
+// writeFileSync is not atomic for concurrent readers: the pid file can exist
+// before its payload is flushed, so wait for non-empty content or the parse
+// races into NaN under parallel-suite load. Generous budget: probe children
+// boot node + tsx before the descendant pid lands.
+async function waitForPidFile(pidPath: string, timeoutMs = 15_000): Promise<number> {
+  let content = "";
+  await waitForCondition(() => {
+    try {
+      content = readFileSync(pidPath, "utf8").trim();
+    } catch {
+      return false;
+    }
+    return content.length > 0;
+  }, timeoutMs);
+  return Number.parseInt(content, 10);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -191,9 +208,7 @@ describe("script-specific dev tooling hardening", () => {
       "--channel requires a value",
     );
     for (const flag of ["--channel", "--token", "--timeout-ms", "--state-dir"]) {
-      expect(() => discordSmokeTesting.parseArgs([flag, "-h"])).toThrow(
-        `${flag} requires a value`,
-      );
+      expect(() => discordSmokeTesting.parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
   });
 
@@ -767,8 +782,7 @@ describe("script-specific dev tooling hardening", () => {
       );
 
       try {
-        await waitForCondition(() => existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -810,8 +824,7 @@ describe("script-specific dev tooling hardening", () => {
       );
 
       try {
-        await waitForCondition(() => existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -927,8 +940,8 @@ describe("script-specific dev tooling hardening", () => {
       let closeCalls = 0;
 
       try {
-        await waitForCondition(() => isProcessAlive(child.pid!) && existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        await waitForCondition(() => isProcessAlive(child.pid!));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -1007,8 +1020,8 @@ describe("script-specific dev tooling hardening", () => {
       });
 
       try {
-        await waitForCondition(() => existsSync(readyPath) && existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        await waitForCondition(() => existsSync(readyPath));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 

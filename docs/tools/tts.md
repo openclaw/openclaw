@@ -8,14 +8,14 @@ title: "Text-to-speech"
 sidebarTitle: "Text to speech (TTS)"
 ---
 
-OpenClaw can convert outbound replies into audio across **14 speech providers**
-and deliver native voice messages on Feishu, Matrix, Telegram, and WhatsApp,
-audio attachments everywhere else, and PCM/Ulaw streams for telephony and Talk.
+OpenClaw converts outbound replies into audio across **14 speech providers**:
+native voice messages on Feishu, Matrix, Telegram, and WhatsApp; audio
+attachments everywhere else; and PCM/Ulaw streams for telephony and Talk.
 
-TTS is the speech-output half of Talk's `stt-tts` mode. Provider-native
-`realtime` Talk sessions synthesize speech inside the realtime provider instead
-of calling this TTS path, while `transcription` sessions do not synthesize an
-assistant voice response.
+TTS is the speech-output half of Talk's `stt-tts` mode (`talk.speak` calls this
+same synthesis path). Provider-native `realtime` Talk sessions synthesize
+speech inside the realtime provider instead; `transcription` sessions never
+synthesize an assistant voice reply.
 
 ## Quick start
 
@@ -94,7 +94,9 @@ config; new configs should always use `microsoft`.
 ## Configuration
 
 TTS config lives under `messages.tts` in `~/.openclaw/openclaw.json`. Pick a
-preset and adapt the provider block:
+preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
+fields shown below are canonical; each provider's own `voice`/`voiceId`/
+`voiceName` field names still work as legacy aliases.
 
 <Tabs>
   <Tab title="Azure Speech">
@@ -679,6 +681,7 @@ Behavior notes:
 - `/tts persona <id>` writes the local persona preference; `/tts persona off` clears it.
 - `/tts latest` reads the latest assistant reply from the current session transcript and sends it as audio once. It stores only a hash of that reply on the session entry to suppress duplicate voice sends.
 - `/tts audio` generates a one-off audio reply (does **not** toggle TTS on).
+- `/tts limit <chars>` accepts **100–4096** (4096 is the Telegram caption/message max); values outside that range are rejected.
 - `limit` and `summary` are stored in **local prefs**, not the main config.
 - `/tts status` includes fallback diagnostics for the latest attempt — `Fallback: <primary> -> <used>`, `Attempts: ...`, and per-attempt detail (`provider:outcome(reasonCode) latency`).
 - `/status` shows the active TTS mode plus configured provider, model, voice, and sanitized custom endpoint metadata when TTS is enabled.
@@ -689,52 +692,48 @@ Slash commands write local overrides to `prefsPath`. The default is
 `~/.openclaw/settings/tts.json`; override with the `OPENCLAW_TTS_PREFS` env var
 or `messages.tts.prefsPath`.
 
-| Stored field | Effect                                       |
-| ------------ | -------------------------------------------- |
-| `auto`       | Local auto-TTS override (`always`, `off`, …) |
-| `provider`   | Local primary provider override              |
-| `persona`    | Local persona override                       |
-| `maxLength`  | Summary threshold (default `1500` chars)     |
-| `summarize`  | Summary toggle (default `true`)              |
+| Stored field | Effect                                                                           |
+| ------------ | -------------------------------------------------------------------------------- |
+| `auto`       | Local auto-TTS override (`always`, `off`, …)                                     |
+| `provider`   | Local primary provider override                                                  |
+| `persona`    | Local persona override                                                           |
+| `maxLength`  | Summary/truncation threshold (default `1500` chars, `/tts limit` range 100–4096) |
+| `summarize`  | Summary toggle (default `true`)                                                  |
 
 These override the effective config from `messages.tts` plus the active
 `agents.list[].tts` block for that host.
 
-## Output formats (fixed)
+## Output formats
 
 TTS voice delivery is channel-capability driven. Channel plugins advertise
 whether voice-style TTS should ask providers for a native `voice-note` target or
-keep normal `audio-file` synthesis and only mark compatible output for voice
-delivery.
+keep normal `audio-file` synthesis, and whether the channel transcodes
+non-native output before sending.
 
-- **Voice-note capable channels**: voice-note replies prefer Opus (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
-  - 48kHz / 64kbps is a good voice message tradeoff.
-- **Feishu / WhatsApp**: when a voice-note reply is produced as MP3/WebM/WAV/M4A
-  or another likely audio file, the channel plugin transcodes it to 48kHz
-  Ogg/Opus with `ffmpeg` before sending the native voice message. WhatsApp sends
-  the result through the Baileys `audio` payload with `ptt: true` and
-  `audio/ogg; codecs=opus`. If conversion fails, Feishu receives the original
-  file as an attachment; WhatsApp send fails rather than posting an incompatible
-  PTT payload.
-- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
-  - 44.1kHz / 128kbps is the default balance for speech clarity.
-- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For channel-advertised voice-note targets, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery when the channel advertises transcoding.
-- **Xiaomi MiMo**: MP3 by default, or WAV when configured. For channel-advertised voice-note targets, OpenClaw transcodes Xiaomi output to 48kHz Opus with `ffmpeg` before delivery when the channel advertises transcoding.
-- **Local CLI**: uses the configured `outputFormat`. Voice-note targets are
-  converted to Ogg/Opus and telephony output is converted to raw 16 kHz mono PCM
-  with `ffmpeg`.
-- **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
-- **Gradium**: WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
-- **Inworld**: MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
-- **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.
-- **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
+| Target                                | Format                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
+| Other channels                        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps is the default balance for speech.                  |
+| Talk / telephony                      | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                 |
+
+Per-provider notes:
+
+- **Feishu / WhatsApp transcoding:** when a voice-note reply lands as MP3/WebM/WAV/M4A or another likely audio file, the channel plugin transcodes it to 48 kHz Ogg/Opus with `ffmpeg` (`libopus`, 64 kbps) before sending the native voice message. WhatsApp sends the result through the Baileys `audio` payload with `ptt: true` and `audio/ogg; codecs=opus`. On transcode failure: Feishu catches the error and falls back to sending the original file as a plain attachment; WhatsApp has no fallback, so the send itself fails rather than posting an incompatible PTT payload.
+- **MiniMax:** MP3 (`speech-2.8-hd` model, 32 kHz sample rate) for normal audio attachments; transcoded to 48 kHz Opus with `ffmpeg` for channel-advertised voice-note targets.
+- **Xiaomi MiMo:** MP3 by default, or WAV when configured; transcoded to 48 kHz Opus with `ffmpeg` for channel-advertised voice-note targets.
+- **Local CLI:** uses the configured `outputFormat`. Voice-note targets are converted to Ogg/Opus and telephony output is converted to raw 16 kHz mono PCM with `ffmpeg`.
+- **Google Gemini:** returns raw 24 kHz PCM. OpenClaw wraps it as WAV for audio attachments, transcodes it to 48 kHz Opus for voice-note targets, and returns PCM directly for Talk/telephony.
+- **Gradium:** WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
+- **Inworld:** MP3 for normal audio attachments, native `OGG_OPUS` for voice-note targets, and raw `PCM` at 22050 Hz for Talk/telephony.
+- **xAI:** MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. Uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported.
+- **Microsoft:** uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
-  - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice messages.
+  - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need guaranteed Opus voice messages.
   - If the configured Microsoft output format fails, OpenClaw retries with MP3.
+  - When no explicit voice override is set and the default English voice is used, OpenClaw auto-switches to a Chinese neural voice (`zh-CN-XiaoxiaoNeural`, `zh-CN` locale) if the reply text is CJK-dominant.
 
-OpenAI/ElevenLabs output formats are fixed per channel (see above).
+OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
 ## Auto-TTS behavior
 
@@ -749,8 +748,13 @@ When `messages.tts.auto` is enabled, OpenClaw:
   after the text stream completes; the generated media goes through the same
   channel media normalization as normal reply attachments.
 
-If the reply exceeds `maxLength` and summary is off (or no API key for the
-summary model), audio is skipped and the normal text reply is sent.
+If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
+
+- **Summary on** (default) and a summary model is available: summarizes the
+  text to roughly `maxLength` chars, then synthesizes the summary.
+- **Summary off**, summarization fails, or no API key is available for the
+  summary model: truncates the text to `maxLength` chars and synthesizes the
+  truncated text.
 
 ```text
 Reply -> TTS enabled?
@@ -759,30 +763,10 @@ Reply -> TTS enabled?
           yes -> send text
           no  -> length > limit?
                    no  -> TTS -> attach audio
-                   yes -> summary enabled?
-                            no  -> send text
+                   yes -> summary enabled and available?
+                            no  -> truncate -> TTS -> attach audio
                             yes -> summarize -> TTS -> attach audio
 ```
-
-## Output formats by channel
-
-| Target                                | Format                                                                                                                                |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Feishu / Matrix / Telegram / WhatsApp | Voice-note replies prefer **Opus** (`opus_48000_64` from ElevenLabs, `opus` from OpenAI). 48 kHz / 64 kbps balances clarity and size. |
-| Other channels                        | **MP3** (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI). 44.1 kHz / 128 kbps default for speech.                                 |
-| Talk / telephony                      | Provider-native **PCM** (Inworld 22050 Hz, Google 24 kHz), or `ulaw_8000` from Gradium for telephony.                                 |
-
-Per-provider notes:
-
-- **Feishu / WhatsApp transcoding:** When a voice-note reply lands as MP3/WebM/WAV/M4A, the channel plugin transcodes to 48 kHz Ogg/Opus with `ffmpeg`. WhatsApp sends through Baileys with `ptt: true` and `audio/ogg; codecs=opus`. If conversion fails: Feishu falls back to attaching the original file; WhatsApp send fails rather than posting an incompatible PTT payload.
-- **MiniMax / Xiaomi MiMo:** Default MP3 (32 kHz for MiniMax `speech-2.8-hd`); transcoded to 48 kHz Opus for voice-note targets via `ffmpeg`.
-- **Local CLI:** Uses configured `outputFormat`. Voice-note targets are converted to Ogg/Opus and telephony output to raw 16 kHz mono PCM.
-- **Google Gemini:** Returns raw 24 kHz PCM. OpenClaw wraps as WAV for attachments, transcodes to 48 kHz Opus for voice-note targets, returns PCM directly for Talk/telephony.
-- **Inworld:** MP3 attachments, native `OGG_OPUS` voice-note, raw `PCM` 22050 Hz for Talk/telephony.
-- **xAI:** MP3 by default; `responseFormat` may be `mp3|wav|pcm|mulaw|alaw`. Uses xAI's batch REST endpoint — streaming WebSocket TTS is **not** used. Native Opus voice-note format is **not** supported.
-- **Microsoft:** Uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`). Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need guaranteed Opus voice messages. If the configured Microsoft format fails, OpenClaw retries with MP3.
-
-OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
 ## Field reference
 
@@ -815,11 +799,11 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="providers.<id>" type="object">
       Provider-owned settings keyed by speech provider id. Legacy direct blocks (`messages.tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `messages.tts.providers.<id>`.
     </ParamField>
-    <ParamField path="maxTextLength" type="number">
-      Hard cap for TTS input characters. `/tts audio` fails if exceeded.
+    <ParamField path="maxTextLength" type="number" default="4096">
+      Hard cap for TTS input characters. `/tts audio` and `tts.convert` fail if exceeded.
     </ParamField>
-    <ParamField path="timeoutMs" type="number">
-      Request timeout in milliseconds.
+    <ParamField path="timeoutMs" type="number" default="30000">
+      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `messages.tts.timeoutMs` wins over any plugin-authored provider default.
     </ParamField>
     <ParamField path="prefsPath" type="string">
       Override the local prefs JSON path (provider/limit/summary). Default `~/.openclaw/settings/tts.json`.
@@ -838,10 +822,10 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
   <Accordion title="ElevenLabs">
     <ParamField path="apiKey" type="string">Falls back to `ELEVENLABS_API_KEY` or `XI_API_KEY`.</ParamField>
-    <ParamField path="model" type="string">Model id (e.g. `eleven_multilingual_v2`, `eleven_v3`).</ParamField>
-    <ParamField path="speakerVoiceId" type="string">ElevenLabs voice id. Legacy alias: `voiceId`.</ParamField>
+    <ParamField path="model" type="string">Model id. Default `eleven_multilingual_v2`. Legacy ids `eleven_turbo_v2_5`/`eleven_turbo_v2` are normalized to the matching `flash` model.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">ElevenLabs voice id. Default `pMsXgVXv3BLzUgSXRplE`. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="voiceSettings" type="object">
-      `stability`, `similarityBoost`, `style` (each `0..1`), `useSpeakerBoost` (`true|false`), `speed` (`0.5..2.0`, `1.0` = normal).
+      `stability`, `similarityBoost`, `style` (each `0..1`, defaults `0.5`/`0.75`/`0`), `useSpeakerBoost` (`true|false`, default `true`), `speed` (`0.5..2.0`, default `1.0`).
     </ParamField>
     <ParamField path="applyTextNormalization" type='"auto" | "on" | "off"'>Text normalization mode.</ParamField>
     <ParamField path="languageCode" type="string">2-letter ISO 639-1 (e.g. `en`, `de`).</ParamField>
@@ -873,7 +857,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
     <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
     <ParamField path="speakerVoiceId" type="string">Default `Sarah`. Legacy alias: `voiceId`.</ParamField>
-    <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
+    <ParamField path="temperature" type="number">Sampling temperature `0..2` (exclusive of 0).</ParamField>
 
   </Accordion>
 
@@ -888,7 +872,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
   <Accordion title="Microsoft (no API key)">
     <ParamField path="enabled" type="boolean" default="true">Allow Microsoft speech usage.</ParamField>
-    <ParamField path="speakerVoice" type="string">Microsoft neural voice name (e.g. `en-US-MichelleNeural`). Legacy alias: `voice`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Microsoft neural voice name (e.g. `en-US-MichelleNeural`). Legacy alias: `voice`. If the default English voice is in effect and reply text is CJK-dominant, OpenClaw auto-switches to `zh-CN-XiaoxiaoNeural`.</ParamField>
     <ParamField path="lang" type="string">Language code (e.g. `en-US`).</ParamField>
     <ParamField path="outputFormat" type="string">Microsoft output format. Default `audio-24khz-48kbitrate-mono-mp3`. Not all formats are supported by the bundled Edge-backed transport.</ParamField>
     <ParamField path="rate / pitch / volume" type="string">Percent strings (e.g. `+10%`, `-5%`).</ParamField>
@@ -910,12 +894,12 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
   <Accordion title="OpenAI">
     <ParamField path="apiKey" type="string">Falls back to `OPENAI_API_KEY`.</ParamField>
-    <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
-    <ParamField path="speakerVoice" type="string">Voice name (e.g. `alloy`, `cedar`). Legacy alias: `voice`.</ParamField>
+    <ParamField path="model" type="string">OpenAI TTS model id. Default `gpt-4o-mini-tts`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Voice name (e.g. `alloy`, `cedar`). Default `coral`. Legacy alias: `voice`.</ParamField>
     <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
     <ParamField path="extraBody / extra_body" type="Record<string, unknown>">Extra JSON fields merged into `/audio/speech` request bodies after generated OpenAI TTS fields. Use this for OpenAI-compatible endpoints such as Kokoro that require provider-specific keys like `lang`; unsafe prototype keys are ignored.</ParamField>
     <ParamField path="baseUrl" type="string">
-      Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
+      Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted, and `speed` loses its `0.25..4.0` range check.
     </ParamField>
   </Accordion>
 
@@ -934,7 +918,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="appKey" type="string">App key header. Default `aGjiRDfUWi`. Env: `VOLCENGINE_TTS_APP_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Override the Seed Speech TTS HTTP endpoint. Env: `VOLCENGINE_TTS_BASE_URL`.</ParamField>
     <ParamField path="speakerVoice" type="string">Voice type. Default `en_female_anna_mars_bigtts`. Env: `VOLCENGINE_TTS_VOICE`. Legacy alias: `voice`.</ParamField>
-    <ParamField path="speedRatio" type="number">Provider-native speed ratio.</ParamField>
+    <ParamField path="speedRatio" type="number">Provider-native speed ratio, `0.2..3`.</ParamField>
     <ParamField path="emotion" type="string">Provider-native emotion tag.</ParamField>
     <ParamField path="appId / token / cluster" type="string" deprecated>Legacy Volcengine Speech Console fields. Env: `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOLCENGINE_TTS_CLUSTER` (default `volcano_tts`).</ParamField>
   </Accordion>
@@ -945,7 +929,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="speakerVoiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="language" type="string">BCP-47 language code or `auto`. Default `en`.</ParamField>
     <ParamField path="responseFormat" type='"mp3" | "wav" | "pcm" | "mulaw" | "alaw"'>Default `mp3`.</ParamField>
-    <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
+    <ParamField path="speed" type="number">Provider-native speed override, `0.7..1.5`.</ParamField>
   </Accordion>
 
   <Accordion title="Xiaomi MiMo">
@@ -977,15 +961,16 @@ provider default.
 
 ## Gateway RPC
 
-| Method            | Purpose                                  |
-| ----------------- | ---------------------------------------- |
-| `tts.status`      | Read current TTS state and last attempt. |
-| `tts.enable`      | Set local auto preference to `always`.   |
-| `tts.disable`     | Set local auto preference to `off`.      |
-| `tts.convert`     | One-off text → audio.                    |
-| `tts.setProvider` | Set local provider preference.           |
-| `tts.setPersona`  | Set local persona preference.            |
-| `tts.providers`   | List configured providers and status.    |
+| Method            | Purpose                                      |
+| ----------------- | -------------------------------------------- |
+| `tts.status`      | Read current TTS state and last attempt.     |
+| `tts.enable`      | Set local auto preference to `always`.       |
+| `tts.disable`     | Set local auto preference to `off`.          |
+| `tts.convert`     | One-off text → audio.                        |
+| `tts.setProvider` | Set local provider preference.               |
+| `tts.personas`    | List configured personas and the active one. |
+| `tts.setPersona`  | Set local persona preference.                |
+| `tts.providers`   | List configured providers and status.        |
 
 ## Service links
 

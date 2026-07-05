@@ -222,6 +222,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   clients: Iterable<SharedGatewayAuthClient>;
+  reconcileTerminalSessions: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
+  commitTerminalConfig: () => void;
 };
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
@@ -736,6 +738,8 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
+    onConfigChange: (plan, nextConfig) => params.reconcileTerminalSessions(plan, nextConfig),
+    onConfigApplied: () => params.commitTerminalConfig(),
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =
         params.sharedGatewaySessionGenerationState.current;

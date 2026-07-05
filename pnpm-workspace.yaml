@@ -3,6 +3,7 @@ packages:
   - ui
   - packages/*
   - extensions/*
+  - examples/*
 
 minimumReleaseAge: 2880
 
@@ -10,6 +11,7 @@ minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.9"
   - "@openclaw/fs-safe@0.4.1"
   - "@openclaw/proxyline@0.3.3"
+  - "@openclaw/uirouter@0.1.0"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"

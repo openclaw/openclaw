@@ -437,8 +437,10 @@ export const zh_CN: TranslationMap = {
     tabHint: "{agent} · {cwd}",
     exited: "exited",
     exitedCode: "exited ({code})",
+    detached: "已分离",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "代理",

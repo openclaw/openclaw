@@ -799,6 +799,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     distFile: "string-normalization.mjs",
   },
   {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "utf16-slice",
+    srcFile: "utf16-slice.ts",
+    distFile: "utf16-slice.mjs",
+  },
+  {
     packageName: "@openclaw/terminal-core",
     packageDir: "terminal-core",
     subpath: "",

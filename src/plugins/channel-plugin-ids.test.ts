@@ -1909,6 +1909,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             defaults: {
               model: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             },
+            list: [{ id: "ops", utilityModel: "openai/gpt-5.5-nano" }],
           },
           channels: {},
           plugins: {
@@ -1921,7 +1922,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         env: createPluginPlanningTestEnv(),
         index,
       }),
-    ).toEqual(["amazon-bedrock", "browser"]);
+    ).toEqual(["amazon-bedrock", "browser", "openai"]);
   });
 
   it("keeps configured memory embedding providers in restrictive startup metadata scopes", () => {

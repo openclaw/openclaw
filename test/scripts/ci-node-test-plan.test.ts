@@ -216,11 +216,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-unit-src-security",
       },
       {
-        configs: ["test/vitest/vitest.unit-ui.config.ts"],
-        requiresDist: false,
-        shardName: "core-unit-ui",
-      },
-      {
         configs: ["test/vitest/vitest.unit-support.config.ts"],
         requiresDist: false,
         shardName: "core-unit-support",

@@ -10,6 +10,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
 import type { ChatRunState } from "./server-chat-state.js";
@@ -43,6 +44,7 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: Pick<
     ChatRunState,
@@ -110,8 +112,7 @@ export function startGatewayMaintenanceTimers(params: {
       }
       const keyRunId = key.slice(key.indexOf(":") + 1);
       if (keyRunId) {
-        const directEntry = params.chatAbortControllers.get(keyRunId);
-        if (directEntry) {
+        if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
           return keyRunId;
         }
       }
@@ -146,10 +147,10 @@ export function startGatewayMaintenanceTimers(params: {
       }
       const runId = resolveDedupeRunId(key, dedupeEntry);
       const entry = runId ? params.chatAbortControllers.get(runId) : undefined;
-      if (!entry) {
-        return false;
+      if (entry) {
+        return isAgentKey ? entry.kind === "agent" : entry.kind !== "agent";
       }
-      return isAgentKey ? entry.kind === "agent" : entry.kind !== "agent";
+      return Boolean(isChatKey && runId && params.chatQueuedTurns.has(runId));
     };
     for (const [k, v] of params.dedupe) {
       if (isActiveRunDedupeKey(k, v) || isPendingAcceptedRunDedupeKey(k, v)) {

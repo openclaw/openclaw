@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as tar from "tar";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -18,6 +19,8 @@ const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
 const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+const AI_RUNTIME_PACKAGE = "@openclaw/ai";
+const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -421,15 +424,161 @@ async function cleanPackedOpenClawTarballs(outputDir) {
   );
 }
 
+function isPackedAiRuntimeTarball(filename) {
+  return /^openclaw-ai-[A-Za-z0-9._-]+\.tgz$/u.test(filename);
+}
+
+export async function prepareBundledAiRuntimePackage(
+  sourceDir,
+  outputDir,
+  runCaptureImpl = runCapture,
+  options = {},
+) {
+  const packageJsonPath = path.join(sourceDir, "package.json");
+  const aiRuntimePath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
+  const aiRuntimeBackupPath = path.join(
+    sourceDir,
+    "node_modules",
+    "@openclaw",
+    AI_RUNTIME_BACKUP_DIR,
+  );
+  const extractAiRuntime =
+    options.extractAiRuntime ??
+    ((tarballPath, destination) =>
+      Promise.resolve(tar.x({ cwd: destination, file: tarballPath, strip: 1 })));
+  const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
+  let packageJson;
+  try {
+    packageJson = JSON.parse(originalPackageJson);
+  } catch (error) {
+    throw new Error(`failed to parse ${packageJsonPath}`, { cause: error });
+  }
+  if (typeof packageJson.dependencies?.[AI_RUNTIME_PACKAGE] !== "string") {
+    throw new Error("root package.json must declare @openclaw/ai as a dependency");
+  }
+
+  try {
+    await fs.access(aiRuntimeBackupPath);
+    throw new Error(`refusing to overwrite existing ${aiRuntimeBackupPath}`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  let packedAiTarballs = [];
+  let packageJsonChanged = false;
+  let originalAiRuntimeMoved = false;
+  let stagedAiRuntimeCreated = false;
+  const cleanup = async () => {
+    let cleanupError;
+    const attempt = async (action) => {
+      try {
+        await action();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    };
+    if (packageJsonChanged) {
+      await attempt(async () => await fs.writeFile(packageJsonPath, originalPackageJson));
+    }
+    if (stagedAiRuntimeCreated) {
+      await attempt(async () => await fs.rm(aiRuntimePath, { force: true, recursive: true }));
+    }
+    if (originalAiRuntimeMoved) {
+      await attempt(async () => await fs.rename(aiRuntimeBackupPath, aiRuntimePath));
+    }
+    await attempt(async () => {
+      await Promise.all(packedAiTarballs.map((filename) => fs.rm(filename, { force: true })));
+    });
+    packageJsonChanged = false;
+    stagedAiRuntimeCreated = false;
+    originalAiRuntimeMoved = false;
+    packedAiTarballs = [];
+    if (cleanupError) {
+      throw cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+    }
+  };
+
+  try {
+    await runCaptureImpl(
+      "pnpm",
+      ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
+      sourceDir,
+      {
+        deferForwardedSignalExit: true,
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      },
+    );
+    packedAiTarballs = (await fs.readdir(outputDir))
+      .filter(isPackedAiRuntimeTarball)
+      .map((filename) => path.join(outputDir, filename));
+    if (packedAiTarballs.length !== 1) {
+      throw new Error(
+        `expected one packed @openclaw/ai tarball in ${outputDir}, found ${packedAiTarballs.length}`,
+      );
+    }
+
+    try {
+      await fs.lstat(aiRuntimePath);
+      await fs.rename(aiRuntimePath, aiRuntimeBackupPath);
+      originalAiRuntimeMoved = true;
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    await fs.mkdir(aiRuntimePath, { recursive: true });
+    stagedAiRuntimeCreated = true;
+    await extractAiRuntime(packedAiTarballs[0], aiRuntimePath);
+
+    const stagedPackageJsonPath = path.join(aiRuntimePath, "package.json");
+    const stagedPackageJson = JSON.parse(await fs.readFile(stagedPackageJsonPath, "utf8"));
+    if (typeof stagedPackageJson.version !== "string" || !stagedPackageJson.version) {
+      throw new Error("packed @openclaw/ai package must declare a version");
+    }
+    for (const [name, version] of Object.entries(stagedPackageJson.dependencies ?? {})) {
+      if (packageJson.dependencies[name] !== version) {
+        throw new Error(
+          `root package.json must declare ${name}@${version} to bundle @openclaw/ai without duplicate dependencies`,
+        );
+      }
+    }
+    // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
+    // recursively bundling duplicate packages alongside the one private workspace runtime.
+    delete stagedPackageJson.dependencies;
+    await fs.writeFile(stagedPackageJsonPath, `${JSON.stringify(stagedPackageJson, null, 2)}\n`);
+
+    packageJson.dependencies[AI_RUNTIME_PACKAGE] = stagedPackageJson.version;
+    const bundleDependencies = packageJson.bundleDependencies ?? [];
+    if (!Array.isArray(bundleDependencies)) {
+      throw new Error("root package.json bundleDependencies must be an array when present");
+    }
+    packageJson.bundleDependencies = [...new Set([...bundleDependencies, AI_RUNTIME_PACKAGE])];
+    packageJsonChanged = true;
+    await fs.writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    return cleanup;
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
+}
+
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
   const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
+  const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
   console.error("==> Packing OpenClaw package");
   await prepareChangelog(sourceDir);
   let packOutput;
+  let cleanupBundledAiRuntime = async () => {};
   try {
     await cleanPackedOpenClawTarballs(outputDir);
+    cleanupBundledAiRuntime = await prepareBundledAiRuntime(sourceDir, outputDir, runCaptureImpl);
     packOutput = await runCaptureImpl(
       "npm",
       ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
@@ -443,7 +592,11 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
       },
     );
   } finally {
-    await restoreChangelog(sourceDir);
+    try {
+      await cleanupBundledAiRuntime();
+    } finally {
+      await restoreChangelog(sourceDir);
+    }
   }
   return await newestOpenClawTarball(outputDir, packOutput);
 }
