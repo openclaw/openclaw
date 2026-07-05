@@ -439,6 +439,25 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             snapshotId: snapshotId)
     }
 
+    private static func parseChatCompletionPayload(
+        _ payload: [String: Any]) -> WatchChatCompletionMessage?
+    {
+        guard (payload["type"] as? String) == WatchPayloadType.chatCompletion.rawValue else {
+            return nil
+        }
+        let commandId = (payload["commandId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let replyText = (payload["replyText"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !commandId.isEmpty, !replyText.isEmpty else { return nil }
+        let sentAtMs = (payload["sentAtMs"] as? Int)
+            ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        return WatchChatCompletionMessage(
+            commandId: commandId,
+            replyText: replyText,
+            sentAtMs: sentAtMs)
+    }
+
     private static func parseChatItem(_ item: Any) -> WatchChatItem? {
         guard let dict = item as? [String: Any] else { return nil }
         guard let id = (dict["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -607,6 +626,12 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         if let snapshot = Self.parseAppSnapshotPayload(payload) {
             Task { @MainActor in
                 self.store.consume(appSnapshot: snapshot)
+            }
+            return
+        }
+        if let completion = Self.parseChatCompletionPayload(payload) {
+            Task { @MainActor in
+                self.store.consume(chatCompletion: completion)
             }
         }
     }

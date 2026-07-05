@@ -1444,6 +1444,13 @@ export const es: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Detalles de uso del contexto",
+        open: "Abrir detalles de uso del contexto",
+        summary: "Uso del contexto de la sesión: {used} de {limit} ({pct}%)",
+        contextWindow: "Ventana de contexto",
+        latestRunTokens: "Tokens de la ejecución más reciente",
+      },
       dismissTalkError: "Descartar error de Talk",
       startTalk: "Start Talk",
       stillListening: "Sigo escuchando",
