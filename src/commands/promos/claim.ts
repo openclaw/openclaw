@@ -228,6 +228,7 @@ export async function promosClaimCommand(
 
   const registered: string[] = [];
   const skippedAliases: string[] = [];
+  const invalidAliases: string[] = [];
   const updated = await updateConfig((cfg, context) => {
     let base = cfg;
     // The credential-reuse path skips the auth flow, which is where plugin
@@ -255,7 +256,7 @@ export async function promosClaimCommand(
       try {
         alias = model.alias ? normalizeAlias(model.alias) : undefined;
       } catch {
-        skippedAliases.push(model.alias ?? "");
+        invalidAliases.push(model.alias ?? "");
       }
       if (alias && !models[key]?.alias) {
         if (aliasTaken(models, alias)) {
@@ -312,6 +313,9 @@ export async function promosClaimCommand(
     runtime.log(
       `  Alias "${sanitizeTerminalText(alias)}" is already in use; kept your existing alias.`,
     );
+  }
+  for (const alias of invalidAliases) {
+    runtime.log(`  Alias "${sanitizeTerminalText(alias)}" is not a valid model alias; skipped it.`);
   }
   if (makeDefault && suggested) {
     runtime.log(`  Default model set to ${sanitizeTerminalText(suggested.modelRef)}.`);
