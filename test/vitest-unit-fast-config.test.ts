@@ -106,7 +106,9 @@ describe("unit-fast vitest lane", () => {
 
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.setupFiles).toStrictEqual([]);
+    // Env isolation only: the fast shards install the isolated test home but
+    // must not pull in the shared setup's module mocks.
+    expect(testConfig.setupFiles).toStrictEqual([expect.stringMatching(/test\/setup\.env\.ts$/u)]);
     expect(testConfig.include).toContain(
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
     );
@@ -210,6 +212,9 @@ describe("unit-fast vitest lane", () => {
     expect(timerConfig.include).toEqual(unitFastTimerTestFiles);
     expect(timerConfig.fileParallelism).toBe(false);
     expect(timerConfig.maxWorkers).toBe(1);
+    expect(timerConfig.setupFiles).toStrictEqual([
+      expect.stringMatching(/test\/setup\.env\.ts$/u),
+    ]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {
