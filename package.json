@@ -1433,6 +1433,10 @@
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
     },
+    "./plugin-sdk/tool-results": {
+      "types": "./dist/plugin-sdk/tool-results.d.ts",
+      "default": "./dist/plugin-sdk/tool-results.js"
+    },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"

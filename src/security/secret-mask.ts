@@ -1,5 +1,5 @@
-/** Masks credential-like values for diagnostics while preserving enough prefix/suffix to identify them. */
-export const maskApiKey = (value: string): string => {
+/** Masks credential-like values while preserving the existing UTF-16 prefix/suffix policy. */
+export function maskApiKey(value: string): string {
   const trimmed = stripControlCharacters(value).trim();
   if (!trimmed) {
     return "missing";
@@ -11,16 +11,16 @@ export const maskApiKey = (value: string): string => {
     return `${trimmed.slice(0, 2)}...${trimmed.slice(-2)}`;
   }
   return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
-};
+}
 
 function stripControlCharacters(value: string): string {
-  let out = "";
-  for (const char of value) {
-    const code = char.charCodeAt(0);
+  let result = "";
+  for (const character of value) {
+    const code = character.charCodeAt(0);
     const isControl = (code >= 0x00 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f);
     if (!isControl) {
-      out += char;
+      result += character;
     }
   }
-  return out;
+  return result;
 }

@@ -314,6 +314,83 @@ describe("TerminalConnection", () => {
     expect(conn.size).toBe(2);
   });
 
+  it("attach replays the buffer before events that raced ahead, then resumes live", async () => {
+    const client = makeFakeClient();
+    const conn = new TerminalConnection(client);
+    const data: string[] = [];
+    let resolveAttach: (() => void) | undefined;
+    client.request = ((method: string, params: unknown) => {
+      client.requests.push({ method, params });
+      if (method === "terminal.attach") {
+        return new Promise<unknown>((resolve) => {
+          resolveAttach = () =>
+            resolve({
+              sessionId: "s1",
+              agentId: "main",
+              shell: "/bin/zsh",
+              cwd: "/work",
+              confined: false,
+              buffer: "replayed history",
+            });
+        });
+      }
+      return Promise.resolve({});
+    }) as typeof client.request;
+
+    const attachPromise = conn.attach("s1", {
+      onData: (d) => data.push(d),
+      onExit: () => {},
+    });
+    // Post-snapshot bytes the server emits between rebind and the response.
+    client.emit("terminal.data", { sessionId: "s1", seq: 5, data: " tail" });
+    expect(data).toEqual([]);
+
+    resolveAttach?.();
+    const result = await attachPromise;
+    expect(result.buffer).toBe("replayed history");
+    expect(client.requests[0]).toEqual({
+      method: "terminal.attach",
+      params: { sessionId: "s1" },
+    });
+    // Buffer first, then the raced event, then live data.
+    client.emit("terminal.data", { sessionId: "s1", seq: 6, data: " live" });
+    expect(data).toEqual(["replayed history", " tail", " live"]);
+  });
+
+  it("drops the listener when an attach fails so failures do not leak subscriptions", async () => {
+    const client = makeFakeClient();
+    const conn = new TerminalConnection(client);
+    client.request = ((method: string, params: unknown) => {
+      client.requests.push({ method, params });
+      // Expired/unknown session after the detach grace period.
+      return Promise.reject(new Error("unknown terminal session"));
+    }) as typeof client.request;
+
+    await expect(conn.attach("gone", { onData: () => {}, onExit: () => {} })).rejects.toThrow(
+      "unknown terminal session",
+    );
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
+  });
+
+  it("lists attachable sessions and tolerates a missing sessions field", async () => {
+    const client = makeFakeClient();
+    const conn = new TerminalConnection(client);
+    const info = {
+      sessionId: "s1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      confined: false,
+      attached: false,
+      createdAtMs: 1,
+    };
+    client.nextResponse = { sessions: [info] };
+    expect(await conn.list()).toEqual([info]);
+    client.nextResponse = {};
+    expect(await conn.list()).toEqual([]);
+  });
+
   it("dispose() drops the gateway subscription and clears buffered state", async () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);

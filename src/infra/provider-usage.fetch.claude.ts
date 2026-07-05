@@ -21,8 +21,6 @@ type ClaudeWebOrganizationsResponse = Array<{
   name?: string;
 }>;
 
-type ClaudeWebUsageResponse = ClaudeUsageResponse;
-
 function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
   const windows: UsageWindow[] = [];
 
@@ -116,7 +114,7 @@ async function fetchClaudeWebUsage(
   if (!parsedUsage.ok) {
     return null;
   }
-  const data = parsedUsage.data as ClaudeWebUsageResponse;
+  const data = parsedUsage.data as ClaudeUsageResponse;
   const windows = buildClaudeUsageWindows(data);
 
   if (windows.length === 0) {

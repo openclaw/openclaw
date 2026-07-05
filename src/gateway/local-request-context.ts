@@ -22,8 +22,6 @@ type LocalGatewayRequestContextParams = {
   getRuntimeConfig: () => OpenClawConfig;
 };
 
-type LocalGatewayScopeParams = LocalGatewayRequestContextParams;
-
 function cronUnavailable(): never {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
@@ -156,7 +154,10 @@ export function createLocalGatewayRequestContext(
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
-export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
+export function withLocalGatewayRequestScope<T>(
+  params: LocalGatewayRequestContextParams,
+  run: () => T,
+): T {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context) {
     return run();

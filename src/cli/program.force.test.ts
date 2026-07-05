@@ -320,6 +320,16 @@ describe("gateway --force helpers (Windows netstat path)", () => {
       ),
     ].join("\r\n");
 
+  const makeLocalizedNetstatOutput = () =>
+    [
+      "Proto  Local Address          Foreign Address        State           PID",
+      "  TCP    0.0.0.0:18789        0.0.0.0:0              ABHOEREN        42",
+      "  TCP    [::1]:18789          [::]:0                 ABHOEREN        99",
+      "  TCP    127.0.0.1:18789      127.0.0.1:0            ABHOEREN        122",
+      "  TCP    127.0.0.1:18789      127.0.0.1:50123        ESTABLISHED     123",
+      "  TCP    127.0.0.1:18789      0.0.0.0:0                              124",
+    ].join("\r\n");
+
   it("returns empty list when netstat finds no listeners on the port", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
     expect(listPortListeners(18789)).toStrictEqual([]);
@@ -328,11 +338,14 @@ describe("gateway --force helpers (Windows netstat path)", () => {
   it("parses PIDs from netstat output correctly", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
     expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
-    expect(execFileSync).toHaveBeenCalledWith(
-      getWindowsSystem32ExePath("netstat.exe"),
-      ["-ano", "-p", "TCP"],
-      { encoding: "utf-8" },
-    );
+    expect(execFileSync).toHaveBeenCalledWith(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
+      encoding: "utf-8",
+    });
+  });
+
+  it("parses localized Windows listener rows without depending on the state text", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeLocalizedNetstatOutput());
+    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
   });
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {

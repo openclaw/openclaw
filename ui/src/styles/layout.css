@@ -1277,6 +1277,29 @@
   min-height: 0;
 }
 
+.content--workboard {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 16px;
+}
+
+.content--workboard > * + * {
+  margin-top: 14px;
+}
+
+.content--workboard > openclaw-router-outlet,
+.content--workboard openclaw-workboard-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.content--workboard openclaw-workboard-page {
+  gap: 14px;
+}
+
 :root[data-theme-mode="light"] .content {
   background: var(--bg-content);
 }

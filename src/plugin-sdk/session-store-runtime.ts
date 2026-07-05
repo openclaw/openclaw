@@ -55,8 +55,6 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
   update: SessionStoreEntryPatch;
 };
 
-type ReadSessionUpdatedAtParams = SessionStoreReadParams;
-
 type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
   key: string;
 };
@@ -149,7 +147,7 @@ export async function patchSessionEntry(
 }
 
 /** Reads the last activity timestamp for one session entry. */
-export function readSessionUpdatedAt(params: ReadSessionUpdatedAtParams): number | undefined {
+export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
 }
 

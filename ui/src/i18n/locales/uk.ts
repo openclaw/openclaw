@@ -441,6 +441,7 @@ export const uk: TranslationMap = {
     tabHint: "{agent} · {cwd}",
     exited: "exited",
     exitedCode: "exited ({code})",
+    detached: "відʼєднано",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
   },

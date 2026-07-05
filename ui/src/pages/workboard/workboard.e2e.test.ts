@@ -469,7 +469,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writableGateway.resolveDeferred("workboard.cards.update", { card: reviewedCard });
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
-      await reviewedCardSurface.getByTitle("View details").click();
+      await reviewedCardSurface.getByRole("button", { name: "View details", exact: true }).click();
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });

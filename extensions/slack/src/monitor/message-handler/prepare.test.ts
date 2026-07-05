@@ -1394,6 +1394,192 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.RawBody).toContain("bot DM");
   });
 
+  it("drops channel message mentioning another user when ignoreOtherMentions=true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+    slackCtx.historyLimit = 5;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@U456> hey",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(Array.from(slackCtx.channelHistories.values()).flat()).toMatchObject([
+      { body: "<@U456> hey", sender: "U1" },
+    ]);
+  });
+
+  it("drops other-user mentions even in a bot-participated thread", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+    recordSlackThreadParticipation("default", "C123", "10.000");
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@U456> hey",
+        thread_ts: "10.000",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("drops a user-group mention when the bot is not a member", async () => {
+    const usergroupsUsersList = vi.fn().mockResolvedValue({ ok: true, users: ["U456"] });
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      appClient: {
+        usergroups: { users: { list: usergroupsUsersList } },
+      } as unknown as App["client"],
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<!subteam^S123|team> hey",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(usergroupsUsersList).toHaveBeenCalledWith({ usergroup: "S123", team_id: "T1" });
+  });
+
+  it("does not drop channel message mentioning bot alongside another user when ignoreOtherMentions=true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@B1> <@U456> hey",
+      }),
+    );
+
+    assertPrepared(prepared);
+  });
+
+  it("does not drop DM mentioning another user when ignoreOtherMentions=true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "D123",
+        channel_type: "im",
+        text: "<@U456> hey",
+      }),
+    );
+
+    assertPrepared(prepared);
+  });
+
+  it("does not drop channel message with no user mentions when ignoreOtherMentions=true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "hello team",
+      }),
+    );
+
+    assertPrepared(prepared);
+  });
+
+  it("does not drop when botUserId is unresolved (no native identity)", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+    slackCtx.botUserId = undefined as unknown as string;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@U456> hey",
+      }),
+    );
+
+    assertPrepared(prepared);
+  });
+
+  it("does not drop when botUserId is unresolved even with mention regexes configured", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { groupChat: { mentionPatterns: ["\\bmy-bot\\b"] } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
+    });
+    slackCtx.botUserId = undefined as unknown as string;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      defaultAccount,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@U456> hey",
+      }),
+    );
+
+    assertPrepared(prepared);
+  });
+
   it("drops bot-authored room messages when owner presence lookup fails (#59284)", async () => {
     const members = vi.fn().mockRejectedValue(new Error("missing_scope"));
     const slackCtx = createInboundSlackCtx({

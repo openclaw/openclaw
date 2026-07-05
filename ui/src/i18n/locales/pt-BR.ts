@@ -440,6 +440,7 @@ export const pt_BR: TranslationMap = {
     tabHint: "{agent} · {cwd}",
     exited: "exited",
     exitedCode: "exited ({code})",
+    detached: "desanexado",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
   },
