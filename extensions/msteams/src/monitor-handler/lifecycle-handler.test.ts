@@ -26,11 +26,18 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   };
 });
 
+let handleMSTeamsDmConversationBoundary: typeof import("./lifecycle-handler.js").handleMSTeamsDmConversationBoundary;
 let handleMSTeamsLifecycleRemove: typeof import("./lifecycle-handler.js").handleMSTeamsLifecycleRemove;
 
 type SessionEntry = {
   sessionId?: string;
   updatedAt: number;
+  route?: unknown;
+  deliveryContext?: unknown;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  origin?: unknown;
 };
 
 function setupStore(store: Record<string, SessionEntry>) {
@@ -60,6 +67,7 @@ function createDeps(remove = vi.fn(async () => true)) {
   const deps = createMSTeamsMessageHandlerDeps();
   deps.conversationStore = {
     ...deps.conversationStore,
+    list: vi.fn(async () => []),
     remove,
   } as MSTeamsConversationStore;
   return { deps, remove };
@@ -77,7 +85,8 @@ function createContext(activity: Record<string, unknown>): MSTeamsTurnContext {
 
 describe("handleMSTeamsLifecycleRemove", () => {
   beforeAll(async () => {
-    ({ handleMSTeamsLifecycleRemove } = await import("./lifecycle-handler.js"));
+    ({ handleMSTeamsDmConversationBoundary, handleMSTeamsLifecycleRemove } =
+      await import("./lifecycle-handler.js"));
   });
 
   beforeEach(() => {
@@ -88,9 +97,18 @@ describe("handleMSTeamsLifecycleRemove", () => {
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-msteams-sessions.json");
   });
 
-  it("stales a personal app remove session and removes the cached conversation reference", async () => {
+  it("rotates a personal app remove session and removes the cached conversation reference", async () => {
     const store = {
-      "msteams:direct:user-aad": { sessionId: "old-session", updatedAt: 1_000 },
+      "msteams:direct:user-aad": {
+        sessionId: "old-session",
+        updatedAt: 1_000,
+        route: { channel: "msteams" },
+        deliveryContext: { channel: "msteams" },
+        lastChannel: "msteams",
+        lastTo: "user:user-aad",
+        lastAccountId: "default",
+        origin: { provider: "msteams" },
+      },
       "msteams:direct:other-user": { sessionId: "other-session", updatedAt: 2_000 },
     };
     setupStore(store);
@@ -118,6 +136,11 @@ describe("handleMSTeamsLifecycleRemove", () => {
     });
     expect(remove).toHaveBeenCalledWith("19:personal-chat");
     expect(store["msteams:direct:user-aad"].updatedAt).toBe(0);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("old-session");
+    expect(store["msteams:direct:user-aad"].route).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].deliveryContext).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastChannel).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
     expect(store["msteams:direct:other-user"].updatedAt).toBe(2_000);
   });
 
@@ -144,9 +167,38 @@ describe("handleMSTeamsLifecycleRemove", () => {
 
     expect(result.sessionsReset).toBe(1);
     expect(store["msteams:direct:user-aad"].updatedAt).toBe(0);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("old-session");
   });
 
-  it("ignores installation add events", async () => {
+  it("ignores first-install add events when no existing session is active", async () => {
+    const store: Record<string, SessionEntry> = {};
+    setupStore(store);
+    const { deps, remove } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "add",
+        from: { id: "user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:personal-chat",
+          conversationType: "personal",
+        },
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      handled: false,
+      reason: "installation-add-existing",
+      conversationRemoved: false,
+      sessionsReset: 0,
+    });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("rotates a personal app add event when an existing session is active", async () => {
     const store = {
       "msteams:direct:user-aad": { sessionId: "old-session", updatedAt: 1_000 },
     };
@@ -167,13 +219,53 @@ describe("handleMSTeamsLifecycleRemove", () => {
       deps,
     );
 
-    expect(result.handled).toBe(false);
+    expect(result).toEqual({
+      handled: true,
+      reason: "installation-add-existing",
+      conversationRemoved: false,
+      sessionsReset: 1,
+    });
     expect(remove).not.toHaveBeenCalled();
-    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
-    expect(store["msteams:direct:user-aad"].updatedAt).toBe(1_000);
+    expect(store["msteams:direct:user-aad"].updatedAt).toBe(0);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("old-session");
   });
 
-  it("stales a channel removal base session and channel thread sessions", async () => {
+  it("does not treat channel installation add events as reinstall boundaries", async () => {
+    const store = {
+      "msteams:channel:19:team-channel@thread.tacv2": {
+        sessionId: "base",
+        updatedAt: 1_000,
+      },
+    };
+    setupStore(store);
+    const { deps, remove } = createDeps();
+
+    const result = await handleMSTeamsLifecycleRemove(
+      createContext({
+        type: "installationUpdate",
+        action: "add",
+        from: { id: "user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "bot-id" },
+        conversation: {
+          id: "19:team-channel@thread.tacv2",
+          conversationType: "channel",
+        },
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      handled: false,
+      reason: "installation-add-existing",
+      conversationRemoved: false,
+      sessionsReset: 0,
+    });
+    expect(remove).not.toHaveBeenCalled();
+    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
+    expect(store["msteams:channel:19:team-channel@thread.tacv2"].updatedAt).toBe(1_000);
+  });
+
+  it("rotates a channel removal base session and channel thread sessions", async () => {
     const channelId = "19:team-channel@thread.tacv2";
     const baseKey = `msteams:channel:${channelId}`;
     const threadKey = `${baseKey}:thread:root-message`;
@@ -212,7 +304,9 @@ describe("handleMSTeamsLifecycleRemove", () => {
     });
     expect(remove).toHaveBeenCalledWith(channelId);
     expect(store[baseKey].updatedAt).toBe(0);
+    expect(store[baseKey].sessionId).not.toBe("base");
     expect(store[threadKey].updatedAt).toBe(0);
+    expect(store[threadKey].sessionId).not.toBe("thread");
     expect(store[unrelatedKey].updatedAt).toBe(3_000);
   });
 
@@ -281,5 +375,139 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(result.sessionsReset).toBe(0);
     expect(store["msteams:direct:user-aad"].updatedAt).toBe(2_000);
     expect(store["msteams:direct:user-aad"].sessionId).toBe("fresh-session");
+  });
+
+  it("rotates a personal DM session when the stored conversation id changes", async () => {
+    const store = {
+      "msteams:direct:user-aad": {
+        sessionId: "old-session",
+        updatedAt: 1_000,
+        route: { channel: "msteams" },
+        deliveryContext: { channel: "msteams" },
+        lastChannel: "msteams",
+        lastTo: "user:user-aad",
+        lastAccountId: "default",
+        origin: { provider: "msteams" },
+      },
+    };
+    setupStore(store);
+    const { deps, remove } = createDeps();
+    vi.mocked(deps.conversationStore.list).mockResolvedValue([
+      {
+        conversationId: "a:old-personal-chat",
+        reference: {
+          lastSeenAt: "2026-07-05T12:00:00.000Z",
+          user: { id: "29:user", aadObjectId: "user-aad" },
+          agent: { id: "bot-id", name: "Bot" },
+          bot: { id: "bot-id", name: "Bot" },
+          conversation: {
+            id: "a:old-personal-chat",
+            conversationType: "personal",
+          },
+        },
+      },
+    ]);
+
+    const result = await handleMSTeamsDmConversationBoundary({
+      deps,
+      conversationId: "a:new-personal-chat",
+      senderId: "user-aad",
+      botId: "bot-id",
+      routeSessionKey: "msteams:direct:user-aad",
+      agentId: "default",
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      previousConversationRemoved: true,
+      sessionsReset: 1,
+    });
+    expect(remove).toHaveBeenCalledWith("a:old-personal-chat");
+    expect(store["msteams:direct:user-aad"].updatedAt).toBe(0);
+    expect(store["msteams:direct:user-aad"].sessionId).not.toBe("old-session");
+    expect(store["msteams:direct:user-aad"].route).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].deliveryContext).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].lastChannel).toBeUndefined();
+    expect(store["msteams:direct:user-aad"].origin).toBeUndefined();
+  });
+
+  it("does not rotate a personal DM session when the stored conversation id matches", async () => {
+    const store = {
+      "msteams:direct:user-aad": { sessionId: "old-session", updatedAt: 1_000 },
+    };
+    setupStore(store);
+    const { deps, remove } = createDeps();
+    vi.mocked(deps.conversationStore.list).mockResolvedValue([
+      {
+        conversationId: "a:personal-chat",
+        reference: {
+          lastSeenAt: "2026-07-05T12:00:00.000Z",
+          user: { id: "29:user", aadObjectId: "user-aad" },
+          agent: { id: "bot-id", name: "Bot" },
+          conversation: {
+            id: "a:personal-chat",
+            conversationType: "personal",
+          },
+        },
+      },
+    ]);
+
+    const result = await handleMSTeamsDmConversationBoundary({
+      deps,
+      conversationId: "a:personal-chat",
+      senderId: "user-aad",
+      botId: "bot-id",
+      routeSessionKey: "msteams:direct:user-aad",
+      agentId: "default",
+    });
+
+    expect(result).toEqual({
+      handled: false,
+      previousConversationRemoved: false,
+      sessionsReset: 0,
+    });
+    expect(remove).not.toHaveBeenCalled();
+    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
+    expect(store["msteams:direct:user-aad"].updatedAt).toBe(1_000);
+  });
+
+  it("does not rotate a personal DM session for a different stored bot", async () => {
+    const store = {
+      "msteams:direct:user-aad": { sessionId: "old-session", updatedAt: 1_000 },
+    };
+    setupStore(store);
+    const { deps, remove } = createDeps();
+    vi.mocked(deps.conversationStore.list).mockResolvedValue([
+      {
+        conversationId: "a:old-personal-chat",
+        reference: {
+          lastSeenAt: "2026-07-05T12:00:00.000Z",
+          user: { id: "29:user", aadObjectId: "user-aad" },
+          agent: { id: "other-bot-id", name: "Other Bot" },
+          conversation: {
+            id: "a:old-personal-chat",
+            conversationType: "personal",
+          },
+        },
+      },
+    ]);
+
+    const result = await handleMSTeamsDmConversationBoundary({
+      deps,
+      conversationId: "a:new-personal-chat",
+      senderId: "user-aad",
+      botId: "bot-id",
+      routeSessionKey: "msteams:direct:user-aad",
+      agentId: "default",
+    });
+
+    expect(result).toEqual({
+      handled: false,
+      previousConversationRemoved: false,
+      sessionsReset: 0,
+    });
+    expect(remove).not.toHaveBeenCalled();
+    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
+    expect(store["msteams:direct:user-aad"].updatedAt).toBe(1_000);
   });
 });
