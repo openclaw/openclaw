@@ -527,7 +527,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         }
         if hasSameSnapshotOwner,
            let sentAtMs = message.sentAtMs,
-           let lastSentAtMs = self.lastExecApprovalSnapshotSentAtMs,
+           let lastSentAtMs = lastExecApprovalSnapshotSentAtMs,
            sentAtMs < lastSentAtMs
         {
             return
@@ -565,7 +565,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             selectedExecApprovalID = self.sortedExecApprovals.first?.id
         }
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
-        let currentNotificationIdentifiers = Set(self.execApprovals.compactMap { record in
+        let currentNotificationIdentifiers = Set(execApprovals.compactMap { record in
             Self.execApprovalNotificationIdentifier(for: record.approval)
         })
         let removedApprovals = existingRecords.map(\.approval).filter { approval in
@@ -583,15 +583,16 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             return
         }
         if let sentAtMs = message.sentAtMs,
-           let currentSentAtMs = self.appSnapshot?.sentAtMs,
+           let currentSentAtMs = appSnapshot?.sentAtMs,
            sentAtMs < currentSentAtMs
         {
             return
         }
+        let hasExistingAppSnapshot = self.appSnapshot != nil
         let previousGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID)
         let nextGatewayID = Self.normalizedGatewayID(message.gatewayStableID)
         var merged = message
-        if previousGatewayID == nextGatewayID {
+        if hasExistingAppSnapshot, previousGatewayID == nextGatewayID {
             if merged.chatItems == nil {
                 merged.chatItems = self.appSnapshot?.chatItems
             }
@@ -602,7 +603,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.appSnapshot = merged
         self.appSnapshotUpdatedAt = Date()
         self.appSnapshotStatusText = nil
-        if previousGatewayID != nextGatewayID {
+        if !hasExistingAppSnapshot || previousGatewayID != nextGatewayID {
             if Self.normalizedGatewayID(self.gatewayStableID) != nextGatewayID {
                 self.clearMessagePrompt()
             }
@@ -839,12 +840,11 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         guard let incomingGatewayID = Self.normalizedGatewayID(payload.gatewayStableID) else {
             return false
         }
-        guard let activeGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID) else {
-            return true
-        }
+        guard let activeSnapshot = appSnapshot else { return true }
+        let activeGatewayID = Self.normalizedGatewayID(activeSnapshot.gatewayStableID)
         guard incomingGatewayID != activeGatewayID else { return true }
         if let payloadSentAtMs = payload.sentAtMs,
-           let snapshotSentAtMs = self.appSnapshot?.sentAtMs,
+           let snapshotSentAtMs = activeSnapshot.sentAtMs,
            payloadSentAtMs <= snapshotSentAtMs
         {
             return false
@@ -867,12 +867,13 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
 
     private func acceptsGatewayOwner(_ gatewayStableID: String?) -> Bool {
         guard let incomingGatewayID = Self.normalizedGatewayID(gatewayStableID) else { return false }
-        guard let activeGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID) else { return true }
+        guard let activeSnapshot = appSnapshot else { return true }
+        guard let activeGatewayID = Self.normalizedGatewayID(activeSnapshot.gatewayStableID) else { return false }
         return incomingGatewayID == activeGatewayID
     }
 
     func replayDeferredGatewayPayloads() {
-        guard let activeGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID) else {
+        guard let activeGatewayID = Self.normalizedGatewayID(appSnapshot?.gatewayStableID) else {
             let snapshotSentAtMs = self.appSnapshot?.sentAtMs
             let nowMs = Self.nowMs()
             self.deferredGatewayPayloads.removeAll { payload in
@@ -1045,10 +1046,25 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         let ownerlessApprovals = state.execApprovals.filter { record in
             Self.normalizedGatewayID(record.approval.gatewayStableID) == nil
         }
-        self.execApprovals = state.execApprovals.filter { record in
+        let taggedApprovals = state.execApprovals.filter { record in
             Self.normalizedGatewayID(record.approval.gatewayStableID) != nil
         }
-        self.selectedExecApprovalID = state.selectedExecApprovalID
+        let activeGatewayID = state.appSnapshot.flatMap { snapshot in
+            Self.normalizedGatewayID(snapshot.gatewayStableID)
+        }
+        let invalidatedApprovals: [WatchExecApprovalRecord]
+        if state.appSnapshot != nil {
+            self.execApprovals = taggedApprovals.filter { record in
+                Self.normalizedGatewayID(record.approval.gatewayStableID) == activeGatewayID
+            }
+            invalidatedApprovals = taggedApprovals.filter { record in
+                Self.normalizedGatewayID(record.approval.gatewayStableID) != activeGatewayID
+            }
+        } else {
+            self.execApprovals = taggedApprovals
+            invalidatedApprovals = []
+        }
+        selectedExecApprovalID = state.selectedExecApprovalID
         self.lastExecApprovalSnapshotID = state.lastExecApprovalSnapshotID
         self.lastExecApprovalSnapshotGatewayStableID = state.lastExecApprovalSnapshotGatewayStableID
         self.lastExecApprovalSnapshotSentAtMs = state.lastExecApprovalSnapshotSentAtMs
@@ -1061,17 +1077,26 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
 
+        if state.appSnapshot != nil,
+           Self.normalizedGatewayID(self.lastExecApprovalSnapshotGatewayStableID) != activeGatewayID
+        {
+            self.lastExecApprovalSnapshotID = nil
+            self.lastExecApprovalSnapshotGatewayStableID = nil
+            self.lastExecApprovalSnapshotSentAtMs = nil
+        }
+        if let selectedExecApprovalID,
+           !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
+        {
+            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
+        }
+        self.removeExecApprovalNotifications(approvals: invalidatedApprovals.map(\.approval))
+
         guard !ownerlessApprovals.isEmpty else { return }
         // Older Watch state has no gateway owner and cannot be resolved safely after
         // gateway switches. Drop it, clear its old alert keys, and force a fresh snapshot.
         self.lastExecApprovalSnapshotID = nil
         self.lastExecApprovalSnapshotGatewayStableID = nil
         self.lastExecApprovalSnapshotSentAtMs = nil
-        if let selectedExecApprovalID,
-           !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
-        {
-            self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
-        }
         self.removeLocalNotifications(identifiers: ownerlessApprovals.compactMap { record in
             let approvalID = record.id.trimmingCharacters(in: .whitespacesAndNewlines)
             return approvalID.isEmpty ? nil : "watch.execApproval.\(approvalID)"

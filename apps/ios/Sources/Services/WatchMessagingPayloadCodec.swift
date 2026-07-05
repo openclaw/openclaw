@@ -20,7 +20,8 @@ enum WatchMessagingPayloadCodec {
 
     static func encodeNotificationPayload(
         id: String,
-        params: OpenClawWatchNotifyParams) -> [String: Any]
+        params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?) -> [String: Any]
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.notify.rawValue,
@@ -36,7 +37,7 @@ enum WatchMessagingPayloadCodec {
         if let sessionKey = nonEmpty(params.sessionKey) {
             payload["sessionKey"] = sessionKey
         }
-        if let gatewayStableID = nonEmpty(params.gatewayStableID) {
+        if let gatewayStableID = nonEmpty(gatewayStableID) {
             payload["gatewayStableID"] = gatewayStableID
         }
         if let kind = nonEmpty(params.kind) {

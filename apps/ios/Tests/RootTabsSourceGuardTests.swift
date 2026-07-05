@@ -705,7 +705,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("case .settings:"))
         #expect(rootSource
             .matches(
-                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: self\.handleSettingsRouteChange/)
+                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: handleSettingsRouteChange/)
             .count >= 1)
         #expect(rootSource
             .contains(
@@ -727,8 +727,8 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.selectedSettingsRoute = nil"))
         #expect(rootSource.contains("self.selectedSidebarDestination = .settings"))
         #expect(rootSource.contains("self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId"))
-        #expect(rootSource.contains("onRouteChange: self.handleSettingsRouteChange"))
-        #expect(rootSource.contains("navigateToRoute: self.pushSidebarSettingsRoute"))
+        #expect(rootSource.contains("onRouteChange: handleSettingsRouteChange"))
+        #expect(rootSource.contains("navigateToRoute: pushSidebarSettingsRoute"))
         #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
         #expect(rootSource.contains("self.sidebarNavigationPath.append(route)"))
         #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))
@@ -804,7 +804,9 @@ struct RootTabsSourceGuardTests {
             from: "private func maybeOpenSettingsForGatewaySetup()",
             to: "private func maybeRequestLocalNetworkAccess")
         let consumedGatewaySetup = try #require(
-            gatewaySetupSource.range(of: "self.appModel.consumePendingGatewaySetupLink()"))
+            gatewaySetupSource.range(of: "appModel.consumePendingGatewaySetupLink()"))
+        let onboardingSetupOwnerGuard = try #require(
+            gatewaySetupSource.range(of: "guard !self.showOnboarding else { return }"))
         let deliveredGatewaySetup = try #require(
             gatewaySetupSource.range(of: "self.gatewaySetupRequest = GatewaySetupRequest"))
         let pendingSetupHandler = try Self.extract(
@@ -879,7 +881,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
         // Operator auth/pairing problems can coexist with a connected node, so the
         // root's only remediation surface must not depend on aggregate status.
-        #expect(activeProblemToast.contains("self.appModel.lastGatewayProblem"))
+        #expect(activeProblemToast.contains("appModel.lastGatewayProblem"))
         #expect(!activeProblemToast.contains("gatewayStatus"))
         // Every problem report re-surfaces a swiped-away toast or shakes the
         // visible one; value equality alone must not keep the toast hidden.
@@ -914,6 +916,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
+        #expect(onboardingSetupOwnerGuard.lowerBound < consumedGatewaySetup.lowerBound)
         #expect(consumedGatewaySetup.lowerBound < deliveredGatewaySetup.lowerBound)
         #expect(settingsSource.contains("QRScannerView("))
         #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
@@ -1058,10 +1061,10 @@ struct RootTabsSourceGuardTests {
             to: "func markAppSnapshotRequestStarted()")
 
         #expect(appSnapshotConsume.lowerBound < approvalSnapshotConsume.lowerBound)
-        #expect(consumeAppSnapshot.contains("if previousGatewayID == nextGatewayID"))
+        #expect(consumeAppSnapshot.contains("if hasExistingAppSnapshot, previousGatewayID == nextGatewayID"))
         let ownerMatchedMerge = try Self.extract(
             consumeAppSnapshot,
-            from: "if previousGatewayID == nextGatewayID",
+            from: "if hasExistingAppSnapshot, previousGatewayID == nextGatewayID",
             to: "self.appSnapshot = merged")
         #expect(ownerMatchedMerge.contains("merged.chatItems = self.appSnapshot?.chatItems"))
         #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
@@ -1083,10 +1086,22 @@ struct RootTabsSourceGuardTests {
             source,
             from: "func replayDeferredGatewayPayloads()",
             to: "private func clearMessagePrompt()")
+        let routeGatewayPayload = try Self.extract(
+            source,
+            from: "private func routeGatewayPayload(_ payload: DeferredGatewayPayload)",
+            to: "private func acceptsGatewayOwner")
+        let acceptsGatewayOwner = try Self.extract(
+            source,
+            from: "private func acceptsGatewayOwner(_ gatewayStableID: String?)",
+            to: "func replayDeferredGatewayPayloads()")
 
         #expect(consumeMessage.contains("self.routeGatewayPayload(.notification"))
         #expect(consumeAppSnapshot.contains("self.clearMessagePrompt()"))
+        #expect(consumeAppSnapshot.contains("if !hasExistingAppSnapshot || previousGatewayID != nextGatewayID"))
         #expect(source.contains("private var deferredGatewayPayloads: [DeferredGatewayPayload]"))
+        #expect(routeGatewayPayload.contains("guard let activeSnapshot = appSnapshot else { return true }"))
+        #expect(acceptsGatewayOwner.contains("guard let activeSnapshot = appSnapshot else { return true }"))
+        #expect(acceptsGatewayOwner.contains("else { return false }"))
         #expect(replay.contains("WatchDeferredPayloadOrdering.indicesOldestFirst"))
         #expect(replay.contains("WatchDeferredPayloadOrdering.isExpired"))
         #expect(replay.contains("WatchDeferredPayloadOrdering.isNewerThanSnapshot"))

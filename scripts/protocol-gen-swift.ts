@@ -54,7 +54,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["SessionsMessagesUnsubscribeParams", ["agentId"]],
   ["SessionsAbortParams", ["agentId"]],
   ["SessionsListParams", ["archived"]],
-  ["SessionsPatchParams", ["agentId", "archived", "pinned"]],
+  ["SessionsPatchParams", ["agentId", "category", "archived", "pinned"]],
   ["SessionsResetParams", ["agentId"]],
   [
     "SessionsDeleteParams",

@@ -164,6 +164,9 @@ struct TerminalHubScreen: View {
 
     private static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
         guard let config else { return nil }
+        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
+        // must honor that boundary or a stale token can override the supplied password.
+        guard config.nodeOptions.allowStoredDeviceAuth else { return nil }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
         let identity = DeviceIdentityStore.loadOrCreate()
         return DeviceAuthStore.loadToken(
@@ -208,7 +211,7 @@ private struct TerminalWebView: UIViewRepresentable {
         // Ephemeral store: credentials arrive per load via the auth user
         // script; nothing needs to persist across loads.
         config.websiteDataStore = .nonPersistent()
-        if let authScript = self.authScript {
+        if let authScript {
             config.userContentController.addUserScript(WKUserScript(
                 source: authScript,
                 injectionTime: .atDocumentStart,

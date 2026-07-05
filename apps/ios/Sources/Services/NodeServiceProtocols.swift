@@ -76,7 +76,7 @@ struct WatchMessagingStatus: Equatable {
     var activationState: String
 }
 
-struct WatchQuickReplyEvent: Equatable {
+struct WatchQuickReplyEvent: Codable, Equatable {
     var replyId: String
     var promptId: String
     var actionId: String
@@ -86,6 +86,11 @@ struct WatchQuickReplyEvent: Equatable {
     var note: String?
     var sentAtMs: Int?
     var transport: String
+}
+
+enum WatchMessageKind: String, Codable, Equatable {
+    case chat
+    case quickReply
 }
 
 struct WatchExecApprovalResolveEvent: Codable, Equatable {
@@ -117,6 +122,7 @@ struct WatchAppCommandEvent: Codable, Equatable {
     var text: String?
     var sentAtMs: Int?
     var transport: String
+    var messageKind: WatchMessageKind? = nil
 }
 
 struct WatchNotificationSendResult: Equatable {
@@ -136,7 +142,8 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?)
     func sendNotification(
         id: String,
-        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
+        params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?) async throws -> WatchNotificationSendResult
     func sendExecApprovalPrompt(
         _ message: OpenClawWatchExecApprovalPromptMessage) async throws -> WatchNotificationSendResult
     func sendExecApprovalResolved(

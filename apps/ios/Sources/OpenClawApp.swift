@@ -459,6 +459,7 @@ enum WatchPromptNotificationBridge {
     static func scheduleMirroredWatchPromptNotificationIfNeeded(
         invokeID: String,
         params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?,
         sendResult: WatchNotificationSendResult) async
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
@@ -498,7 +499,7 @@ enum WatchPromptNotificationBridge {
         if let sessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines), !sessionKey.isEmpty {
             userInfo[self.sessionKeyKey] = sessionKey
         }
-        if let gatewayStableID = params.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let gatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !gatewayStableID.isEmpty
         {
             userInfo[self.gatewayStableIDKey] = gatewayStableID
