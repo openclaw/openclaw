@@ -1080,6 +1080,8 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 
 `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
 
+By default, the acknowledgement stays static while Slack's native assistant thread status shows progress with rotating loading messages. Set `messages.statusReactions.enabled: true` to opt into the queued/thinking/tool/done/error reaction lifecycle instead.
+
 ### Emoji (`ackReaction`)
 
 Resolution order:

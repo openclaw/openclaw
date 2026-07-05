@@ -1796,6 +1796,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Slack lifecycle reactions off by default when an ack reaction exists", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
+      enabled: false,
+      initialEmoji: "eyes",
+    });
+    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);

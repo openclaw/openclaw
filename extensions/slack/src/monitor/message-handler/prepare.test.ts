@@ -860,6 +860,45 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(await prepared.ackReactionPromise).toBe(true);
   });
 
+  it("defaults Slack to a static ack reaction while native thread status handles progress", async () => {
+    const addReaction = vi.fn().mockResolvedValue({ ok: true });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        reactions: { add: addReaction },
+      } as unknown as App["client"],
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@B1> hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
+    expect(await prepared.ackReactionPromise).toBe(true);
+    expect(addReaction).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "1.000",
+      name: "eyes",
+    });
+  });
+
   it("keeps unmentioned room events quiet even when group replies are automatic", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
