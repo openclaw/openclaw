@@ -1446,6 +1446,13 @@ export const ru: TranslationMap = {
       placeholderWithAttachments: "Добавьте сообщение или вставьте еще изображения...",
       placeholderDisconnected: "Подключитесь к шлюзу, чтобы начать общение...",
       attachFile: "Прикрепить файл",
+      contextUsage: {
+        title: "Сведения об использовании контекста",
+        open: "Открыть сведения об использовании контекста",
+        summary: "Использование контекста сеанса: {used} из {limit} ({pct}%)",
+        contextWindow: "Окно контекста",
+        latestRunTokens: "Токены последнего запуска",
+      },
       dismissTalkError: "Скрыть ошибку Talk",
       startTalk: "Начать Talk",
       stillListening: "Прослушивание продолжается",

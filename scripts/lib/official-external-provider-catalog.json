@@ -151,6 +151,14 @@
           "id": "cerebras",
           "label": "Cerebras"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "cerebras-native",
+            "hosts": [
+              "api.cerebras.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "cerebras",
@@ -200,6 +208,14 @@
           "id": "chutes",
           "label": "Chutes"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "chutes-native",
+            "hosts": [
+              "llm.chutes.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "chutes",
@@ -403,6 +419,14 @@
           "id": "deepinfra",
           "label": "DeepInfra"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "deepinfra-native",
+            "hosts": [
+              "api.deepinfra.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "deepinfra",
@@ -470,6 +494,14 @@
           "id": "deepseek",
           "label": "DeepSeek"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "deepseek-native",
+            "hosts": [
+              "api.deepseek.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "deepseek",
@@ -519,6 +551,14 @@
           "id": "gmi",
           "label": "GMI Cloud"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "gmi-native",
+            "hosts": [
+              "api.gmi-serving.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "gmi",
@@ -562,6 +602,14 @@
           "id": "groq",
           "label": "Groq"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "groq-native",
+            "hosts": [
+              "api.groq.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "groq",
@@ -809,6 +857,23 @@
           "id": "qwen",
           "label": "Qwen Cloud"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "modelstudio-native",
+            "baseUrls": [
+              "https://coding-intl.dashscope.aliyuncs.com/v1",
+              "https://coding.dashscope.aliyuncs.com/v1",
+              "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            ]
+          },
+          {
+            "endpointClass": "qwen-portal-native",
+            "baseUrls": [
+              "https://portal.qwen.ai/v1"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "qwen",
@@ -1021,6 +1086,15 @@
           "id": "moonshot",
           "label": "Moonshot"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "moonshot-native",
+            "baseUrls": [
+              "https://api.moonshot.ai/v1",
+              "https://api.moonshot.cn/v1"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "moonshot",
@@ -1270,6 +1344,14 @@
           "id": "zai",
           "label": "Z.AI"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "zai-native",
+            "hosts": [
+              "api.z.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "zai",

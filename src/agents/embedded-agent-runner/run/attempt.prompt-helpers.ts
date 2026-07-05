@@ -25,7 +25,7 @@ import { wrapPluginSystemContextSection } from "../../hook-system-context-bounda
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
-import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
+import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
@@ -655,6 +655,6 @@ export function buildAfterTurnRuntimeContextFromUsage(
 ): ContextEngineRuntimeContext {
   return buildAfterTurnRuntimeContext({
     ...params,
-    currentTokenCount: derivePromptTokens(params.lastCallUsage),
+    currentTokenCount: deriveContextPromptTokens({ lastCallUsage: params.lastCallUsage }),
   });
 }

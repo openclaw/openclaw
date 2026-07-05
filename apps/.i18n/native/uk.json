@@ -10354,6 +10354,36 @@
       "translated": "Далі"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian працює…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "Перезапустити"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "Введіть секрет…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Відповісти Crestodian… (yes налаштує все)"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "Поговорити з Crestodian"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian — це custodian для налаштування OpenClaw. Він знаходить доступ до AI, який у вас уже є — логін Claude Code або Codex чи API keys — і налаштовує все, коли ви скажете yes. Просто скажіть йому, чого ви хочете."
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Назад"
@@ -10584,14 +10614,9 @@
       "translated": "Надати дозволи"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "Ці дозволи macOS дають OpenClaw змогу автоматизувати програми та захоплювати контекст на цьому Mac."
-    },
-    {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "Оновити статус"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "Ці дозволи macOS дають OpenClaw змогу автоматизувати програми й збирати контекст на цьому Mac. Статус оновлюється автоматично."
     },
     {
       "id": "native.apple.8d7590f1d8f61a1d",
@@ -10694,9 +10719,9 @@
       "translated": "Знайомство з вашим агентом"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "Це окремий чат для ознайомлення. Ваш агент представиться, дізнається, хто ви, і допоможе підключити WhatsApp або Telegram, якщо захочете."
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "Це спеціальний чат для онбордингу. Ваш агент представиться, дізнається, хто ви, і допоможе підключити Discord, Slack, Telegram, WhatsApp або інший канал, якщо ви захочете."
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10734,9 +10759,9 @@
       "translated": "Натисніть іконку OpenClaw у рядку меню для швидкого чату та стану."
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "Підключити WhatsApp або Telegram"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Підключити Discord, Slack, Telegram, WhatsApp, …"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "Поки що немає повідомлених Skills."
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "Майстер налаштування"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Виконайте покрокове налаштування з Gateway. Це синхронізує онбординг із CLI."
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "Помилка майстра"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "Повторити"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "Налаштування призупинено"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "Відновіть OpenClaw, щоб запустити локальний Gateway і продовжити налаштування."
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "Відновити налаштування"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "Запуск майстра…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "Майстер завершено. Перейдіть до наступного кроку."
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "Очікування на майстер…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "Непідтримуваний тип кроку"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "Продовжити"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "Запустити"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

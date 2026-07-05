@@ -10354,6 +10354,36 @@
       "translated": "Suivant"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian est en cours d’exécution…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "Redémarrer"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "Saisissez le secret…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Répondre à Crestodian… (yes configure tout)"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "Parler à Crestodian"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian est le gardien de configuration d’OpenClaw. Il trouve les accès à l’IA dont vous disposez déjà — une connexion Claude Code ou Codex, ou des clés API — et configure tout lorsque vous dites yes. Dites-lui simplement ce que vous voulez."
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Retour"
@@ -10584,14 +10614,9 @@
       "translated": "Accorder les autorisations"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "Ces autorisations macOS permettent à OpenClaw d’automatiser des apps et de capturer le contexte sur ce Mac."
-    },
-    {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "Actualiser l’état"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "Ces autorisations macOS permettent à OpenClaw d’automatiser des apps et de capturer le contexte sur ce Mac. L’état se met à jour automatiquement."
     },
     {
       "id": "native.apple.8d7590f1d8f61a1d",
@@ -10694,9 +10719,9 @@
       "translated": "Découvrez votre agent"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "Il s’agit d’une conversation d’intégration dédiée. Votre agent se présentera, apprendra qui vous êtes et vous aidera à connecter WhatsApp ou Telegram si vous le souhaitez."
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "Il s’agit d’un chat d’intégration dédié. Votre agent se présentera, apprendra qui vous êtes et vous aidera à connecter Discord, Slack, Telegram, WhatsApp ou un autre canal si vous le souhaitez."
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10734,9 +10759,9 @@
       "translated": "Cliquez sur l’icône OpenClaw dans la barre des menus pour accéder rapidement au chat et au statut."
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "Connecter WhatsApp ou Telegram"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Connecter Discord, Slack, Telegram, WhatsApp, …"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "Aucune skill signalée pour le moment."
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "Assistant de configuration"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Suivez la configuration guidée depuis le Gateway. Cela maintient l’intégration synchronisée avec le CLI."
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "Erreur de l’assistant"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "Réessayer"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "La configuration est en pause"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "Reprenez OpenClaw pour démarrer le Gateway local et poursuivre la configuration."
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "Reprendre la configuration"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "Démarrage de l’assistant…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "Assistant terminé. Passez à l’étape suivante."
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "En attente de l’assistant…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "Type d’étape non pris en charge"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "Continuer"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "Exécuter"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

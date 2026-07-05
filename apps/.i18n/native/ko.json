@@ -10354,6 +10354,36 @@
       "translated": "다음"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian이 작업 중입니다…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "다시 시작"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "비밀 값 입력…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Crestodian에게 답장… (yes라고 하면 모든 설정이 완료됩니다)"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "Crestodian과 대화"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian은 OpenClaw의 설정 관리자입니다. 이미 보유한 AI 액세스 권한(Claude Code 또는 Codex 로그인, API keys)을 찾아, 사용자가 yes라고 말하면 모든 설정을 완료합니다. 원하는 것을 말하기만 하면 됩니다."
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "뒤로"
@@ -10584,14 +10614,9 @@
       "translated": "권한 부여"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "이 macOS 권한을 통해 OpenClaw가 이 Mac에서 앱을 자동화하고 컨텍스트를 캡처할 수 있습니다."
-    },
-    {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "상태 새로 고침"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "이 macOS 권한을 통해 OpenClaw가 이 Mac에서 앱을 자동화하고 컨텍스트를 캡처할 수 있습니다. 상태는 자동으로 업데이트됩니다."
     },
     {
       "id": "native.apple.8d7590f1d8f61a1d",
@@ -10694,9 +10719,9 @@
       "translated": "agent를 만나보세요"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "이것은 전용 온보딩 채팅입니다. agent가 자신을 소개하고, 사용자가 누구인지 파악하며, 원한다면 WhatsApp 또는 Telegram 연결을 도와줍니다."
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "전용 온보딩 채팅입니다. 에이전트가 자신을 소개하고, 사용자가 누구인지 파악한 뒤, 원한다면 Discord, Slack, Telegram, WhatsApp 또는 다른 채널 연결을 도와줍니다."
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10734,9 +10759,9 @@
       "translated": "빠른 채팅과 상태 확인을 위해 OpenClaw 메뉴 막대 아이콘을 클릭하세요."
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "WhatsApp 또는 Telegram 연결"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Discord, Slack, Telegram, WhatsApp, … 연결"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "아직 보고된 Skills가 없습니다."
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "설정 마법사"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Gateway의 안내 설정을 따르세요. 이렇게 하면 온보딩이 CLI와 동기화된 상태로 유지됩니다."
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "마법사 오류"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "다시 시도"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "설정이 일시 중지됨"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "로컬 Gateway를 시작하고 설정을 계속하려면 OpenClaw를 재개하세요."
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "설정 재개"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "마법사를 시작하는 중…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "마법사가 완료되었습니다. 다음 단계로 계속하세요."
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "마법사를 기다리는 중…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "지원되지 않는 단계 유형"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "계속"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "실행"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

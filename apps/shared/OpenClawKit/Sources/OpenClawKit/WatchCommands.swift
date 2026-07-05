@@ -11,6 +11,7 @@ public enum OpenClawWatchPayloadType: String, Codable, Sendable, Equatable {
     case appSnapshot = "watch.app.snapshot"
     case appSnapshotRequest = "watch.app.snapshotRequest"
     case appCommand = "watch.app.command"
+    case chatCompletion = "watch.chat.completion"
     case execApprovalPrompt = "watch.execApproval.prompt"
     case execApprovalResolve = "watch.execApproval.resolve"
     case execApprovalResolved = "watch.execApproval.resolved"
@@ -211,6 +212,20 @@ public struct OpenClawWatchChatItem: Codable, Sendable, Equatable, Identifiable 
         self.role = role
         self.text = text
         self.timestampMs = timestampMs
+    }
+}
+
+public struct OpenClawWatchChatCompletionMessage: Codable, Sendable, Equatable {
+    public var type: OpenClawWatchPayloadType
+    public var commandId: String
+    public var replyText: String
+    public var sentAtMs: Int?
+
+    public init(commandId: String, replyText: String, sentAtMs: Int? = nil) {
+        self.type = .chatCompletion
+        self.commandId = commandId
+        self.replyText = replyText
+        self.sentAtMs = sentAtMs
     }
 }
 

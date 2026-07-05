@@ -15,6 +15,23 @@ import {
 
 export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
+/** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
+export function resolveAssistantLiveChatInput(
+  data: unknown,
+): { text: string; delta: string } | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const record = data as { text?: unknown; delta?: unknown };
+  if (typeof record.text !== "string" && typeof record.delta !== "string") {
+    return undefined;
+  }
+  return {
+    text: typeof record.text === "string" ? record.text : "",
+    delta: typeof record.delta === "string" ? record.delta : "",
+  };
+}
+
 function capLiveAssistantBuffer(text: string): string {
   if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
     return text;
@@ -46,18 +63,9 @@ export function resolveMergedAssistantText(params: {
   return capLiveAssistantBuffer(previousText);
 }
 
-/** Removes runtime-only context/directive tags from live assistant event text. */
-export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
-  text: string;
-  delta: string;
-} {
-  return {
-    text: stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(params.text).text),
-    delta:
-      typeof params.delta === "string"
-        ? stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(params.delta).text)
-        : "",
-  };
+/** Removes runtime-only context/directive tags from the merged live assistant buffer. */
+export function normalizeLiveAssistantBufferedText(text: string): string {
+  return stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
 }
 
 /** Projects buffered assistant text into display text or a suppressed/pending state. */

@@ -314,6 +314,9 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
+private const val defaultManualGatewayPort = 18789
+private const val tailnetTlsGatewayPort = 443
+
 private fun gatewayPort(
   port: Int,
   defaultPort: Int,
@@ -323,6 +326,15 @@ private fun gatewayPort(
     port in 1..65535 -> port
     else -> null
   }
+
+/** Resolves the manual port default shared by onboarding, settings, and the Connect tab. */
+internal fun resolveDefaultManualGatewayPort(
+  hostInput: String,
+  tls: Boolean,
+): Int {
+  val host = hostInput.trim().trimEnd('/').removeSuffix(".").lowercase(Locale.US)
+  return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
+}
 
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
@@ -343,7 +355,7 @@ internal fun composeGatewayManualUrl(
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
-      if (tls) 443 else return null
+      resolveDefaultManualGatewayPort(bareHost, tls)
     } else {
       portTrimmed.toIntOrNull() ?: return null
     }

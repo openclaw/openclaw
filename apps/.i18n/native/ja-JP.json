@@ -10354,6 +10354,36 @@
       "translated": "次へ"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian が作業中…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "再起動"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "シークレットを入力…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Crestodian に返信…（yes ですべて設定されます）"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "Crestodian と話す"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian は OpenClaw のセットアップ管理者です。Claude Code や Codex のログイン情報、または API キーなど、すでにお持ちの AI アクセスを見つけ、yes と答えるとすべてを設定します。やりたいことを伝えるだけです。"
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "戻る"
@@ -10584,14 +10614,9 @@
       "translated": "権限を付与"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "これらの macOS 権限により、OpenClaw はこの Mac 上でアプリを自動操作し、コンテキストを取得できます。"
-    },
-    {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "ステータスを更新"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "これらの macOS 権限により、OpenClaw はこの Mac 上のアプリを自動操作し、コンテキストを取得できます。ステータスは自動的に更新されます。"
     },
     {
       "id": "native.apple.8d7590f1d8f61a1d",
@@ -10694,9 +10719,9 @@
       "translated": "エージェントに会う"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "これは専用のオンボーディングチャットです。エージェントが自己紹介し、あなたについて学び、必要に応じて WhatsApp または Telegram の接続を手伝います。"
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "これは専用のオンボーディングチャットです。エージェントが自己紹介し、あなたのことを把握し、必要に応じて Discord、Slack、Telegram、WhatsApp、または別のチャンネルへの接続を支援します。"
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10734,9 +10759,9 @@
       "translated": "クイックチャットとステータスを確認するには、OpenClaw メニューバーアイコンをクリックしてください。"
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "WhatsApp または Telegram を接続"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Discord、Slack、Telegram、WhatsApp、… を接続"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "まだ Skills は報告されていません。"
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "セットアップウィザード"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Gateway のガイド付きセットアップに従ってください。これにより、オンボーディングが CLI と同期されます。"
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "ウィザードエラー"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "再試行"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "セットアップは一時停止中です"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "OpenClaw を再開してローカル Gateway を起動し、セットアップを続行します。"
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "セットアップを再開"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "ウィザードを開始しています…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "ウィザードが完了しました。次のステップに進んでください。"
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "ウィザードを待機しています…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "サポートされていないステップタイプ"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "続行"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "実行"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

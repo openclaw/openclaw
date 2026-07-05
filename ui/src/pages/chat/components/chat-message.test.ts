@@ -1104,8 +1104,9 @@ describe("grouped chat rendering", () => {
 
     const activity = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
     expect(activity.textContent).toContain("Activity: 2 tools");
-    expect(activity.textContent).toContain("read_file");
-    expect(activity.textContent).toContain("run_command");
+    expect(activity.querySelector(".chat-activity-group__preview")).toBeNull();
+    expect(activity.textContent).not.toContain("read_file");
+    expect(activity.textContent).not.toContain("run_command");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
@@ -1214,6 +1215,62 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
     expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("keeps recovered coalesced tool failures neutral in the activity list", () => {
+    const container = document.createElement("div");
+    const group: MessageGroup = {
+      kind: "group",
+      key: "recovered-tool-group",
+      role: "tool",
+      turnSucceeded: true,
+      messages: [
+        {
+          key: "recovered-tool-message",
+          message: {
+            role: "assistant",
+            isError: true,
+            content: [
+              {
+                type: "tool_use",
+                id: "call-recovered",
+                name: "bash",
+                input: { command: "run fallback" },
+              },
+              {
+                type: "tool_result",
+                id: "call-recovered",
+                name: "bash",
+                text: "Primary path failed",
+                isError: true,
+              },
+            ],
+            timestamp: 1000,
+          },
+        },
+        {
+          key: "recovered-followup",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-followup",
+            toolName: "read_file",
+            content: "Fallback context",
+            timestamp: 1001,
+          },
+        },
+      ],
+      timestamp: 1000,
+      isStreaming: false,
+    };
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: (id) => id === "activity:recovered-tool-group",
+    });
+
+    const summaries = container.querySelectorAll(".chat-tool-msg-summary");
+    expect(summaries).toHaveLength(2);
+    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
+    expect(summaries[0]?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("bash");
   });
 
   it("hides grouped tool activity when tool calls are disabled", () => {
@@ -1328,6 +1385,78 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
+  });
+
+  it("renders assistant tool content as a flat concise tool row without a top-level call id", () => {
+    const container = document.createElement("div");
+    const message = {
+      id: "assistant-tool-content",
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call-content-only",
+          name: "bash",
+          input: { command: "bash" },
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
+    const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("bash");
+    expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
+  });
+
+  it("keeps top-level tool-name results collapsed", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        toolName: "bash",
+        content: "A long tool result that should stay behind the disclosure.",
+        timestamp: Date.now(),
+      },
+      { isToolMessageExpanded: () => false },
+    );
+
+    expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
+    expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(container.querySelector(".chat-text")).toBeNull();
+  });
+
+  it("omits normalized duplicate names from standalone tool results", () => {
+    const container = document.createElement("div");
+    const message = {
+      role: "toolResult",
+      toolCallId: "call-heartbeat",
+      toolName: "heartbeat_respond",
+      content: [
+        {
+          type: "tool_result",
+          name: "heartbeat_respond",
+          text: "Acknowledged",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "heartbeat_respond",
+    );
+    expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
   });
 
   it("cleans collapsed tool connector copy while preserving expanded raw input", () => {
@@ -2529,6 +2658,36 @@ describe("grouped chat rendering", () => {
     expect(bubble.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
       "Live history preview",
     );
+  });
+
+  it("keeps lifted assistant canvas previews beside flat tool rows", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-tool-canvas",
+        role: "assistant",
+        toolName: "bash",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-tool-canvas",
+            name: "bash",
+            input: { command: "render preview" },
+          },
+          createAssistantCanvasBlock({ suffix: "tool_canvas" }),
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: true, isToolMessageExpanded: () => true },
+    );
+
+    expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
+    const iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
+    expect(iframe.getAttribute("src")).toBe(
+      "/__openclaw__/canvas/documents/cv_inline_tool_canvas/index.html",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
   });
 
   it("reserves layout space for assistant message actions", () => {

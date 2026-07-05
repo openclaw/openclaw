@@ -10354,6 +10354,36 @@
       "translated": "Tiếp theo"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian đang hoạt động…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "Khởi động lại"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "Nhập bí mật…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Trả lời Crestodian… (yes sẽ thiết lập mọi thứ)"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "Trò chuyện với Crestodian"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian là người quản lý thiết lập của OpenClaw. Nó tìm quyền truy cập AI mà bạn đã có — thông tin đăng nhập Claude Code hoặc Codex, hoặc khóa API — và thiết lập mọi thứ khi bạn nói yes. Chỉ cần cho nó biết bạn muốn gì."
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Quay lại"
@@ -10584,14 +10614,9 @@
       "translated": "Cấp quyền"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "Các quyền macOS này cho phép OpenClaw tự động hóa ứng dụng và thu thập ngữ cảnh trên máy Mac này."
-    },
-    {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "Làm mới trạng thái"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "Các quyền macOS này cho phép OpenClaw tự động hóa ứng dụng và thu thập ngữ cảnh trên máy Mac này. Trạng thái sẽ tự động cập nhật."
     },
     {
       "id": "native.apple.8d7590f1d8f61a1d",
@@ -10694,9 +10719,9 @@
       "translated": "Gặp agent của bạn"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "Đây là cuộc trò chuyện giới thiệu chuyên dụng. Agent của bạn sẽ tự giới thiệu, tìm hiểu bạn là ai và giúp bạn kết nối WhatsApp hoặc Telegram nếu bạn muốn."
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "Đây là cuộc trò chuyện hướng dẫn làm quen chuyên dụng. Agent của bạn sẽ tự giới thiệu, tìm hiểu bạn là ai và giúp bạn kết nối Discord, Slack, Telegram, WhatsApp hoặc kênh khác nếu bạn muốn."
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10734,9 +10759,9 @@
       "translated": "Nhấp vào biểu tượng OpenClaw trên thanh menu để trò chuyện nhanh và xem trạng thái."
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "Kết nối WhatsApp hoặc Telegram"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Kết nối Discord, Slack, Telegram, WhatsApp, …"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "Chưa có Skills nào được báo cáo."
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "Trình hướng dẫn thiết lập"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Làm theo thiết lập có hướng dẫn từ Gateway. Việc này giúp quá trình onboarding đồng bộ với CLI."
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "Lỗi trình hướng dẫn"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "Thử lại"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "Thiết lập đang tạm dừng"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "Tiếp tục OpenClaw để khởi động Gateway cục bộ và tiếp tục thiết lập."
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "Tiếp tục thiết lập"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "Đang khởi động trình hướng dẫn…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "Trình hướng dẫn đã hoàn tất. Tiếp tục sang bước tiếp theo."
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "Đang chờ trình hướng dẫn…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "Loại bước không được hỗ trợ"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "Tiếp tục"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "Chạy"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

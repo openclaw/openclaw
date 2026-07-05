@@ -1,4 +1,5 @@
 import CoreLocation
+import CryptoKit
 import Observation
 import OpenClawChatUI
 import OpenClawKit
@@ -22,6 +23,27 @@ private struct GatewayRelayIdentityResponse: Decodable {
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
     var statusText: String?
+}
+
+private struct WatchChatMetadataEnvelope: Decodable {
+    struct Metadata: Decodable {
+        var id: String?
+    }
+
+    var metadata: Metadata?
+    var messageToolMirror: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case metadata = "__openclaw"
+        case messageToolMirror = "openclawMessageToolMirror"
+    }
+}
+
+private struct WatchChatMessageEntry {
+    var message: OpenClawChatMessage
+    var text: String
+    var serverId: String?
+    var isMessageToolMirror: Bool
 }
 
 private struct ExecApprovalGatewayEventPayload: Decodable {
@@ -271,7 +293,8 @@ final class NodeAppModel {
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
     private static let foregroundResumeHealthTimeoutSeconds = 1
-    private static let watchChatCompletionWaitMs = 45000
+    private static let watchChatCompletionWaitMs = 75000
+    private static let watchChatRunWaitSliceMs = 60000
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -3570,41 +3593,99 @@ extension NodeAppModel {
         }
     }
 
-    private nonisolated static func decodeWatchChatMessage(
-        _ raw: OpenClawKit.AnyCodable) -> OpenClawChatMessage?
+    private nonisolated static func watchChatReplyText(
+        from raw: [OpenClawKit.AnyCodable],
+        runId: String,
+        submittedText: String,
+        submittedAtMs: Int) -> String?
     {
-        guard let data = try? JSONEncoder().encode(raw) else { return nil }
-        return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        let entries = raw.compactMap(self.decodeWatchChatMessage)
+        if let directReply = entries.last(where: {
+            self.isTerminalWatchAssistant($0) && $0.message.idempotencyKey == runId
+        }) {
+            return directReply.text
+        }
+
+        let userIdempotencyKey = "\(runId):user"
+        let exactUserIndex = entries.lastIndex(where: {
+            $0.message.role.lowercased() == "user" &&
+                $0.message.idempotencyKey == userIdempotencyKey
+        })
+        let queuedUserIndex = entries.lastIndex(where: { entry in
+            guard entry.message.role.lowercased() == "user",
+                  let timestampMs = self.watchTimestampMs(entry.message.timestamp),
+                  timestampMs >= submittedAtMs
+            else {
+                return false
+            }
+            return entry.text.contains(submittedText)
+        })
+        guard let userIndex = exactUserIndex ?? queuedUserIndex else { return nil }
+        return entries[(userIndex + 1)...].first(where: {
+            self.isTerminalWatchAssistant($0)
+        })?.text
+    }
+
+    private nonisolated static func isTerminalWatchAssistant(_ entry: WatchChatMessageEntry) -> Bool {
+        guard entry.message.role.lowercased() == "assistant" else { return false }
+        if entry.isMessageToolMirror {
+            return true
+        }
+        guard let stopReason = entry.message.stopReason?.lowercased() else { return false }
+        // Tool-use rows can contain visible progress text, but a later assistant row owns the final reply.
+        return stopReason != "tooluse" && stopReason != "tool_use" && stopReason != "tool_calls"
+    }
+
+    private nonisolated static func decodeWatchChatMessage(
+        _ raw: OpenClawKit.AnyCodable) -> WatchChatMessageEntry?
+    {
+        guard let data = try? JSONEncoder().encode(raw),
+              let message = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data),
+              let text = self.nonEmptyWatchChatText(self.watchChatText(from: message))
+        else {
+            return nil
+        }
+        let metadata = try? JSONDecoder().decode(WatchChatMetadataEnvelope.self, from: data)
+        return WatchChatMessageEntry(
+            message: message,
+            text: text,
+            serverId: metadata?.metadata?.id,
+            isMessageToolMirror: metadata?.messageToolMirror != nil)
     }
 
     private nonisolated static func makeWatchChatItems(
         from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem]
     {
-        var readableMessages: [(OpenClawChatMessage, String)] = []
-        for item in raw.reversed() {
-            guard let message = self.decodeWatchChatMessage(item) else { continue }
-            let text = self.watchChatText(from: message)
-            guard !text.isEmpty else { continue }
-            readableMessages.append((message, text))
-            if readableMessages.count == self.watchChatPreviewItemLimit {
-                break
-            }
+        let readableMessages = raw.compactMap(self.decodeWatchChatMessage)
+        var idOccurrences: [String: Int] = [:]
+        let identified = readableMessages.map { entry -> (WatchChatMessageEntry, String) in
+            let baseId = entry.serverId.map { "\(entry.message.role)-\($0)" }
+                ?? self.watchChatFallbackKey(entry)
+            idOccurrences[baseId, default: 0] += 1
+            let stableId = "\(baseId)-\(idOccurrences[baseId]!)"
+            return (entry, stableId)
         }
-        return Array(readableMessages.reversed()).enumerated().map { index, entry in
-            let timestampMs = self.watchTimestampMs(entry.0.timestamp)
-            let stableTime = timestampMs.map(String.init) ?? entry.0.id.uuidString
+        return identified.suffix(self.watchChatPreviewItemLimit).map { entry, stableId in
+            let timestampMs = self.watchTimestampMs(entry.message.timestamp)
             return OpenClawWatchChatItem(
-                id: "\(entry.0.role)-\(stableTime)-\(index)",
-                role: entry.0.role,
-                text: self.truncatedWatchChatText(entry.1),
+                id: stableId,
+                role: entry.message.role,
+                text: self.truncatedWatchChatText(entry.text),
                 timestampMs: timestampMs)
         }
+    }
+
+    private nonisolated static func watchChatFallbackKey(_ entry: WatchChatMessageEntry) -> String {
+        let timestamp = self.watchTimestampMs(entry.message.timestamp).map(String.init) ?? "missing"
+        let source = "\(entry.message.role)\u{0}\(timestamp)\u{0}\(entry.text)"
+        let digest = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "\(entry.message.role)-\(digest)"
     }
 
     private nonisolated static func watchChatText(from message: OpenClawChatMessage) -> String {
         let parts = message.content.compactMap { content -> String? in
             let kind = (content.type ?? "text").lowercased()
-            guard kind.isEmpty || kind == "text" else { return nil }
+            guard kind.isEmpty || kind == "text" || kind == "output_text" else { return nil }
             if let text = self.nonEmptyWatchChatText(content.text) {
                 return text
             }
@@ -3784,14 +3865,24 @@ extension NodeAppModel {
         self.focusChatSession(sessionKey)
 
         do {
+            let submittedAtMs = Int(Date().timeIntervalSince1970 * 1000)
             if self.isAppleReviewDemoModeEnabled {
-                _ = try await self.appleReviewDemoChatTransport.sendMessage(
+                let response = try await self.appleReviewDemoChatTransport.sendMessage(
                     sessionKey: sessionKey,
                     message: text,
                     thinking: "auto",
                     idempotencyKey: event.commandId,
                     attachments: [])
-                await self.syncWatchAppSnapshot(reason: "watch_chat_sent", includeChat: true)
+                let history = try await self.appleReviewDemoChatTransport.requestHistory(sessionKey: sessionKey)
+                if let replyText = Self.watchChatReplyText(
+                    from: history.messages ?? [],
+                    runId: response.runId,
+                    submittedText: text,
+                    submittedAtMs: submittedAtMs)
+                {
+                    await self.sendWatchChatCompletion(commandId: event.commandId, replyText: replyText)
+                }
+                await self.syncWatchAppSnapshot(reason: "watch_chat_completed", includeChat: true)
                 return true
             }
 
@@ -3806,6 +3897,8 @@ extension NodeAppModel {
             }
 
             let transport = IOSGatewayChatTransport(gateway: self.operatorSession)
+            let completionDeadline = Date().addingTimeInterval(
+                Double(Self.watchChatCompletionWaitMs) / 1000)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 message: text,
@@ -3813,10 +3906,19 @@ extension NodeAppModel {
                 idempotencyKey: event.commandId,
                 attachments: [])
             await self.syncWatchAppSnapshot(reason: "watch_chat_sent", includeChat: true)
-            let completed = await transport.waitForRunCompletion(
+            _ = await transport.waitForRunCompletion(
                 runId: response.runId,
-                timeoutMs: Self.watchChatCompletionWaitMs)
-            guard completed else { return true }
+                timeoutMs: Self.watchChatRunWaitSliceMs)
+            if let replyText = await self.waitForWatchChatReply(
+                transport: transport,
+                sessionKey: sessionKey,
+                runId: response.runId,
+                submittedText: text,
+                submittedAtMs: submittedAtMs,
+                deadline: completionDeadline)
+            {
+                await self.sendWatchChatCompletion(commandId: event.commandId, replyText: replyText)
+            }
             await self.syncWatchAppSnapshot(reason: "watch_chat_completed", includeChat: true)
             return true
         } catch {
@@ -3827,6 +3929,43 @@ extension NodeAppModel {
                     gatewayStableID: self.normalizedWatchChatGatewayStableID(event))
             }
             return false
+        }
+    }
+
+    private func waitForWatchChatReply(
+        transport: IOSGatewayChatTransport,
+        sessionKey: String,
+        runId: String,
+        submittedText: String,
+        submittedAtMs: Int,
+        deadline: Date) async -> String?
+    {
+        repeat {
+            if let payload = try? await transport.requestHistory(sessionKey: sessionKey),
+               let replyText = Self.watchChatReplyText(
+                   from: payload.messages ?? [],
+                   runId: runId,
+                   submittedText: submittedText,
+                   submittedAtMs: submittedAtMs)
+            {
+                return replyText
+            }
+            guard Date() < deadline else { return nil }
+            try? await Task.sleep(for: .seconds(1))
+        } while !Task.isCancelled
+        return nil
+    }
+
+    private func sendWatchChatCompletion(commandId: String, replyText: String) async {
+        do {
+            _ = try await self.watchMessagingService.sendChatCompletion(
+                OpenClawWatchChatCompletionMessage(
+                    commandId: commandId,
+                    replyText: replyText,
+                    sentAtMs: Int(Date().timeIntervalSince1970 * 1000)))
+        } catch {
+            GatewayDiagnostics.log(
+                "watch chat completion failed commandId=\(commandId) error=\(error.localizedDescription)")
         }
     }
 
@@ -5199,6 +5338,19 @@ extension NodeAppModel {
 
     nonisolated static func _test_makeWatchChatItems(from raw: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem] {
         self.makeWatchChatItems(from: raw)
+    }
+
+    nonisolated static func _test_watchChatReplyText(
+        from raw: [OpenClawKit.AnyCodable],
+        runId: String,
+        submittedText: String,
+        submittedAtMs: Int) -> String?
+    {
+        self.watchChatReplyText(
+            from: raw,
+            runId: runId,
+            submittedText: submittedText,
+            submittedAtMs: submittedAtMs)
     }
 
     func _test_isGatewayConnected() -> Bool {

@@ -1400,6 +1400,13 @@ export const zh_TW: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "上下文使用詳細資料",
+        open: "開啟上下文使用詳細資料",
+        summary: "工作階段上下文使用量：{used} / {limit}（{pct}%）",
+        contextWindow: "上下文視窗",
+        latestRunTokens: "最新執行權杖",
+      },
       dismissTalkError: "關閉 Talk 錯誤",
       startTalk: "Start Talk",
       stillListening: "仍在聆聽",
