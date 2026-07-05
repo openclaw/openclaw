@@ -80,7 +80,7 @@ describe("codex plugin", () => {
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
-      sourceVisibleReplies: "message_tool",
+      sourceVisibleReplies: "automatic",
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
@@ -139,7 +139,7 @@ describe("codex plugin", () => {
   it("claims the Codex routing providers by default", () => {
     const harness = createCodexAppServerAgentHarness();
 
-    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
+    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("automatic");
     expect(
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,

@@ -47,10 +47,11 @@ continue with the newly selected model.
 ## Visible replies and heartbeats
 
 Direct/source chat turns through the Codex harness default to automatic final
-assistant delivery for internal WebChat surfaces, matching the Pi harness
-contract: the agent replies normally and OpenClaw posts the final text to the
-source conversation. Set `messages.visibleReplies: "message_tool"` to keep
-final assistant text private unless the agent calls `message(action="send")`.
+assistant delivery for source surfaces, including Telegram direct messages and
+internal WebChat. This matches the Pi harness contract: the agent replies
+normally and OpenClaw posts the final text to the source conversation. Set
+`messages.visibleReplies: "message_tool"` to keep final assistant text private
+unless the agent calls `message(action="send")`.
 
 Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
 catalog by default so the agent can record whether the wake should stay quiet

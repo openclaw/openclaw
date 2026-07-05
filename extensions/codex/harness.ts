@@ -54,7 +54,7 @@ export function createCodexAppServerAgentHarness(options?: {
     label: options?.label ?? "Codex agent harness",
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
-      sourceVisibleReplies: "message_tool",
+      sourceVisibleReplies: "automatic",
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();

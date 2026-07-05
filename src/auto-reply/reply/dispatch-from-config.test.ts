@@ -12072,12 +12072,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible direct reply");
   });
 
-  it("keeps Codex direct source delivery message-tool-only when config is unset", async () => {
+  it("keeps Codex direct source delivery automatic when config is unset", async () => {
     setNoAbort();
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { sourceVisibleReplies: "automatic" },
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(async () => ({}) as never),
     });
@@ -12089,8 +12089,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private final reply" } satisfies ReplyPayload;
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "visible final reply" } satisfies ReplyPayload;
     });
 
     const result = await dispatchReplyFromConfig({
@@ -12105,8 +12105,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible final reply");
   });
 
   it("uses Codex direct source delivery defaults before a session entry exists", async () => {
@@ -12114,15 +12114,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      deliveryDefaults: { sourceVisibleReplies: "automatic" },
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(async () => ({}) as never),
     });
     sessionStoreMocks.currentEntry = undefined;
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private first reply" } satisfies ReplyPayload;
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "visible first reply" } satisfies ReplyPayload;
     });
 
     const result = await dispatchReplyFromConfig({
@@ -12139,8 +12139,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible first reply");
   });
 
   it("uses channel model overrides before Codex first-turn direct source delivery defaults", async () => {
