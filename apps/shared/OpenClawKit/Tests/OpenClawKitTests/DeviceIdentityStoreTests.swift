@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `device auth store reports failed durable writes`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -32,7 +32,7 @@ struct DeviceIdentityStoreTests {
         #expect(DeviceAuthStore.loadToken(deviceId: "unwritable-device", role: "node") == nil)
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `device auth tokens are isolated by gateway owner`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -85,7 +85,7 @@ struct DeviceIdentityStoreTests {
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-a") == nil)
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `legacy device auth migration claims only the proven role`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -191,7 +191,7 @@ struct DeviceIdentityStoreTests {
         #expect(!FileManager.default.fileExists(atPath: sharedDeviceURL.path))
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `secondary profiles use separate identity and auth files`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

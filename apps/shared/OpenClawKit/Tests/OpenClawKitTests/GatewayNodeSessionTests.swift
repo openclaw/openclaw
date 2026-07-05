@@ -620,7 +620,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `scanned setup code prefers bootstrap auth over stored device token`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -676,7 +676,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `credentialless setup handoff does not send a stored device token`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -736,7 +736,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `stored device token cannot cross gateway owner`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -798,7 +798,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `share extension identity profile uses separate node identity and token store`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1009,7 +1009,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `bootstrap hello stores additional device tokens`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1089,7 +1089,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `failed device token write is not reported as an issued role`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1141,7 +1141,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `non bootstrap hello stores primary device token but not additional bootstrap tokens`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1203,7 +1203,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `untrusted bootstrap hello does not persist bootstrap handoff tokens`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1266,7 +1266,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
+    @Test(.stateDirectoryIsolated)
     func `private lan bootstrap persists handoff tokens for reconnect`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
