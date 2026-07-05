@@ -2061,6 +2061,33 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
+  it("rejects extensionless or unknown files when MIME detection returns undefined", async () => {
+    // Create a file with no discernible format (.bin extension, random content).
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-gen-nomime-${Date.now()}.bin`);
+    await fs.writeFile(inputPath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--file",
+          inputPath,
+          "--prompt",
+          "make a cover",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Only image files are supported"),
+    );
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
   it("reports the expanded image.edit flags in capability inspect", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

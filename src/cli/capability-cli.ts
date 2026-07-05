@@ -1005,9 +1005,9 @@ async function runImageGenerate(params: {
     params.file && params.file.length > 0
       ? await Promise.all(
           (await readInputFiles(params.file)).map(async (entry) => {
-            const mimeType =
-              (await detectMime({ buffer: entry.buffer, filePath: entry.path })) ?? "image/png";
-            if (!mimeType.startsWith("image/")) {
+            const mimeType = await detectMime({ buffer: entry.buffer, filePath: entry.path });
+            // Reject extensionless files where MIME detection returns undefined.
+            if (!mimeType || !mimeType.startsWith("image/")) {
               throw new Error(
                 `Unsupported --file for image ${params.capability}: ${entry.path}. Only image files are supported.`,
               );
