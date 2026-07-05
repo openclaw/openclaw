@@ -91,7 +91,7 @@ describe("extractSwiftHandledEvents", () => {
 });
 
 describe("extractKotlinHandledEvents", () => {
-  it("collects when-block case literals and comparisons at the top level only", () => {
+  it("collects when-block case literals and comparisons inside handler functions only", () => {
     const source = `
       fun handleGatewayEvent(event: String, payloadJson: String?) {
         when (event) {
@@ -107,8 +107,13 @@ describe("extractKotlinHandledEvents", () => {
           "sessions.changed", "session.message" -> refresh()
         }
       }
-      if (event == "connect.challenge") { return }
-      val other = keyEvent == "not.a.gateway.event"
+      private fun handleEvent(
+        frame: JsonObject,
+      ) {
+        val event = frame["event"].asStringOrNull() ?: return
+        if (event == "connect.challenge") { return }
+        val other = keyEvent == "not.a.gateway.event"
+      }
     `;
     const handled = extractKotlinHandledEvents(source);
     expect([...handled].toSorted()).toEqual([
@@ -118,6 +123,25 @@ describe("extractKotlinHandledEvents", () => {
       "sessions.changed",
       "tick",
     ]);
+  });
+
+  it("ignores event literals outside handler function bodies", () => {
+    // Regression guard: predicate helpers that are not called from the
+    // dispatch path must not count as coverage (false negative for the gate).
+    const source = `
+      internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean = event == "node.pair.requested" || event == "node.pair.resolved"
+      fun topLevelNotAHandler(event: String) {
+        if (event == "presence") { render() }
+        when (event) {
+          "cron" -> refresh()
+        }
+      }
+      fun handleGatewayEvent(event: String) {
+        if (event == "tick") { touch() }
+      }
+    `;
+    const handled = extractKotlinHandledEvents(source);
+    expect([...handled].toSorted()).toEqual(["tick"]);
   });
 });
 

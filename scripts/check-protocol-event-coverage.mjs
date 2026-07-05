@@ -11,7 +11,8 @@
 // Client "handled" sets are extracted with deliberately simple parsing over
 // the mobile app sources: Swift `switch <x>.event { case "..." }` blocks plus
 // `.event == "..."` comparisons, and Kotlin `when (event) { "..." -> }` blocks
-// plus `event == "..."` comparisons. Events a client intentionally does not
+// plus `event == "..."` comparisons scoped to `fun handle*Event(...)` bodies
+// so predicate helpers outside the dispatch path do not count as coverage. Events a client intentionally does not
 // consume live in scripts/protocol-event-coverage.allowlist.json with a
 // one-line reason. New gateway events that no client handles (and are not
 // allowlisted) fail the check.
@@ -42,6 +43,11 @@ const GATEWAY_EVENTS_BLOCK_RE = /export const GATEWAY_EVENTS = \[([\s\S]*?)\];/u
 const SWIFT_EVENT_SWITCH_RE = /\bswitch\s+\w+(?:\.\w+)*\.event\s*\{/u;
 const SWIFT_CASE_LABEL_RE = /^\s*case\s+(.+?):/u;
 const KOTLIN_EVENT_WHEN_RE = /\bwhen\s*\(\s*event\s*\)\s*\{/u;
+// Kotlin gateway handlers follow the `handle*Event` naming convention
+// (handleEvent, handleGatewayEvent, handleExecApprovalGatewayEvent, ...).
+// Handlers named differently surface as loud "unhandled" failures, which is
+// the safe direction for a coverage gate.
+const KOTLIN_HANDLER_FUN_RE = /\bfun\s+handle\w*Event\s*\(/u;
 const KOTLIN_CASE_LABEL_RE = /^\s*((?:"[^"]+"\s*,\s*)*"[^"]+")\s*->/u;
 const SWIFT_EVENT_COMPARISON_RE = /\.event\s*==\s*"([^"]+)"/gu;
 const KOTLIN_EVENT_COMPARISON_RE = /\bevent\s*==\s*"([^"]+)"/gu;
@@ -160,19 +166,67 @@ export function extractSwiftHandledEvents(source) {
   return new Set(names);
 }
 
+// Collects the bodies of Kotlin gateway event handler functions
+// (`fun handle*Event(...)`). Signatures may span multiple lines, so scan
+// forward from the declaration to the first `{` before brace counting.
+function extractKotlinHandlerBodies(source) {
+  const bodies = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!KOTLIN_HANDLER_FUN_RE.test(lines[i])) {
+      continue;
+    }
+    let depth = 0;
+    let opened = false;
+    const body = [];
+    for (let j = i; j < lines.length; j += 1) {
+      const sanitized = sanitizeLineForBraces(lines[j]);
+      if (opened) {
+        body.push(lines[j]);
+      }
+      for (const char of sanitized) {
+        if (char === "{") {
+          depth += 1;
+          opened = true;
+        } else if (char === "}") {
+          depth -= 1;
+        }
+      }
+      if (opened && depth <= 0) {
+        break;
+      }
+    }
+    if (opened) {
+      bodies.push(body.join("\n"));
+    }
+  }
+  return bodies;
+}
+
 /**
  * Extracts event names a Kotlin source handles: string-literal case labels of
- * `when (event)` blocks plus `event == "..."` comparisons.
+ * `when (event)` blocks plus `event == "..."` comparisons, both scoped to
+ * `fun handle*Event(...)` bodies. Scoping matters: bare `event == "..."`
+ * literals also appear in predicate helpers that are not called from the
+ * dispatch path (e.g. gatewayEventInvalidatesNodesDevices in NodeRuntime.kt),
+ * and counting those would silently mark events as covered. Swift extraction
+ * stays tree-wide because Swift consumption always reads `.event` off a
+ * received EventFrame, which does not have that false-positive shape.
  */
 export function extractKotlinHandledEvents(source) {
-  const names = collectBlockCaseLabels(source, KOTLIN_EVENT_WHEN_RE, (line, sink) => {
-    const label = KOTLIN_CASE_LABEL_RE.exec(line);
-    if (label) {
-      pushStringLiterals(label[1], sink);
+  const names = [];
+  for (const body of extractKotlinHandlerBodies(source)) {
+    names.push(
+      ...collectBlockCaseLabels(body, KOTLIN_EVENT_WHEN_RE, (line, sink) => {
+        const label = KOTLIN_CASE_LABEL_RE.exec(line);
+        if (label) {
+          pushStringLiterals(label[1], sink);
+        }
+      }),
+    );
+    for (const comparison of body.matchAll(KOTLIN_EVENT_COMPARISON_RE)) {
+      names.push(comparison[1]);
     }
-  });
-  for (const comparison of source.matchAll(KOTLIN_EVENT_COMPARISON_RE)) {
-    names.push(comparison[1]);
   }
   return new Set(names);
 }

@@ -29,6 +29,8 @@
     "shutdown": "Android relies on socket close plus reconnect/backoff instead of the shutdown notice.",
     "heartbeat": "Android liveness uses tick and WebSocket-level ping; heartbeat is unused.",
     "cron": "Cron run activity is not surfaced in the Android app.",
+    "node.pair.requested": "No live Android consumer: gatewayEventInvalidatesNodesDevices in NodeRuntime.kt is not called from the gateway event dispatch path.",
+    "node.pair.resolved": "No live Android consumer: gatewayEventInvalidatesNodesDevices in NodeRuntime.kt is not called from the gateway event dispatch path.",
     "device.pair.requested": "Device pairing flows poll via device.pair.* methods on Android.",
     "device.pair.resolved": "Device pairing flows poll via device.pair.* methods on Android.",
     "voicewake.changed": "Android reads voicewake state on demand via voicewake.get; no push consumer yet.",
