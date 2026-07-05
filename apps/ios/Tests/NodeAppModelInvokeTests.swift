@@ -2124,6 +2124,33 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel._test_queuedWatchReplyCount() == 0)
     }
 
+    @Test @MainActor func watchReplyBindsLegacyPromptToCurrentGateway() async {
+        NodeAppModel._test_resetPersistedWatchReplyQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.enterAppleReviewDemoMode()
+        let initialOpenChatRequestID = appModel.openChatRequestID
+        let event = WatchQuickReplyEvent(
+            replyId: "reply-legacy-prompt",
+            promptId: "prompt-from-previous-release",
+            actionId: "approve",
+            actionLabel: "Approve",
+            sessionKey: "main",
+            gatewayStableID: nil,
+            note: nil,
+            sentAtMs: 1238,
+            transport: "sendMessage")
+
+        watchService.emitReply(event)
+        await Task.yield()
+        watchService.emitReply(event)
+        await Task.yield()
+
+        #expect(appModel.openChatRequestID == initialOpenChatRequestID + 1)
+        #expect(appModel._test_queuedWatchReplyCount() == 0)
+    }
+
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async throws {
         let appModel = NodeAppModel()
         let url = try #require(URL(string: "openclaw://agent?message=hello"))

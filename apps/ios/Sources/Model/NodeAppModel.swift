@@ -3293,10 +3293,23 @@ extension NodeAppModel {
             return
         }
         let payloadGatewayID = event.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let sourceGatewayID = payloadGatewayID.isEmpty
-            ? (self.watchMessageOutbox.gatewayStableID(forPromptID: event.promptId) ?? "")
-            : payloadGatewayID
         let currentGatewayID = self.currentWatchChatGatewayStableID()
+        let routedGatewayID = self.watchMessageOutbox.gatewayStableID(forPromptID: event.promptId) ?? ""
+        let sourceGatewayID: String
+        if !payloadGatewayID.isEmpty {
+            sourceGatewayID = payloadGatewayID
+        } else if !routedGatewayID.isEmpty {
+            sourceGatewayID = routedGatewayID
+        } else if let currentGatewayID {
+            // Shipped prompts predate gateway routing metadata and cannot be migrated after delivery.
+            // Bind that prompt once; explicit or persisted owners never use this fallback.
+            sourceGatewayID = currentGatewayID
+            self.watchMessageOutbox.recordPromptRoute(
+                promptID: event.promptId,
+                gatewayStableID: currentGatewayID)
+        } else {
+            sourceGatewayID = ""
+        }
         if !sourceGatewayID.isEmpty, let currentGatewayID, currentGatewayID != sourceGatewayID {
             self.watchReplyLogger.info("watch reply dropped: stale gateway target")
             return
