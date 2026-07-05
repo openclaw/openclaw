@@ -2,6 +2,14 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- **iMessage group warnings:** suppress the false drop-all startup warning when an effective group sender allowlist can admit groups, and point true empty-allowlist configurations at the correct remedy. (#100046)
+
 ## 2026.7.1
 
 ### Highlights
