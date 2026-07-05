@@ -28,4 +28,14 @@ class NetworkMonitorTest {
     online = false // onLost
     assertEquals(true, shouldEmitOnlineTransition(online))
   }
+
+  @Test
+  fun suppressesReconnectWhenOneOfMultipleValidatedNetworksIsLost() {
+    val state = ValidatedNetworkState<String>()
+
+    assertEquals(true, state.markValidated("wifi"))
+    assertEquals(false, state.markValidated("cellular"))
+    state.markLost("wifi")
+    assertEquals(false, state.markValidated("cellular"))
+  }
 }

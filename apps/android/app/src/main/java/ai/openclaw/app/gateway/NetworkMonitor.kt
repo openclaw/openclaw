@@ -26,7 +26,7 @@ class NetworkMonitor(
   // Tracks the last emitted transport state so capability churn (e.g. signal strength
   // changes) does not re-fire the reconnect path. Only a lost->validated transition
   // should signal.
-  @Volatile private var lastOnline = isCurrentlyOnline()
+  private val validatedNetworks = ValidatedNetworkState<Network>(initialValidatedNetworks())
 
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
@@ -41,12 +41,14 @@ class NetworkMonitor(
         capabilities: NetworkCapabilities,
       ) {
         if (isTransportValidated(capabilities)) {
-          markOnline()
+          markOnline(network)
+        } else {
+          markLost(network)
         }
       }
 
       override fun onLost(network: Network) {
-        lastOnline = false
+        markLost(network)
       }
     }
 
@@ -73,16 +75,15 @@ class NetworkMonitor(
         null
       } ?: return
     if (isTransportValidated(caps)) {
-      markOnline()
+      markOnline(network)
     }
   }
 
-  private fun markOnline() {
+  private fun markOnline(network: Network) {
     // Dedupe via the pure transition rule so the semantics stay unit-testable.
-    if (!shouldEmitOnlineTransition(lastOnline)) {
+    if (!validatedNetworks.markValidated(network)) {
       return
     }
-    lastOnline = true
     try {
       onAvailable()
     } catch (err: Throwable) {
@@ -90,15 +91,38 @@ class NetworkMonitor(
     }
   }
 
-  private fun isCurrentlyOnline(): Boolean =
-    try {
-      val cm = connectivity ?: return false
-      val active = cm.activeNetwork ?: return false
-      val caps = cm.getNetworkCapabilities(active) ?: return false
-      isTransportValidated(caps)
+  private fun markLost(network: Network) {
+    validatedNetworks.markLost(network)
+  }
+
+  private fun initialValidatedNetworks(): Set<Network> {
+    return try {
+      val cm = connectivity ?: return emptySet()
+      val active = cm.activeNetwork ?: return emptySet()
+      val caps = cm.getNetworkCapabilities(active) ?: return emptySet()
+      if (isTransportValidated(caps)) setOf(active) else emptySet()
     } catch (_: Throwable) {
-      false
+      emptySet()
     }
+  }
+}
+
+internal class ValidatedNetworkState<T>(
+  initialValidatedNetworks: Set<T> = emptySet(),
+) {
+  private val validatedNetworks = initialValidatedNetworks.toMutableSet()
+
+  @Synchronized
+  fun markValidated(network: T): Boolean {
+    val wasOnline = validatedNetworks.isNotEmpty()
+    validatedNetworks.add(network)
+    return shouldEmitOnlineTransition(wasOnline)
+  }
+
+  @Synchronized
+  fun markLost(network: T) {
+    validatedNetworks.remove(network)
+  }
 }
 
 /**
