@@ -277,6 +277,12 @@ export function sanitizeBinaryOutput(text: string): string {
       continue;
     }
     if (code < 0x20) {
+      // ponytail: escape control chars instead of stripping —
+      // preserves SSH banner/ANSI content as readable text.
+      // Upgrade: could detect and preserve valid ANSI sequences,
+      // but that needs a stateful parser and this covers the
+      // "invisible output" regression.
+      chunks.push(`[${code.toString(16).padStart(2, "0")}]`);
       continue;
     }
     chunks.push(char);
