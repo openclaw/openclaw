@@ -38,13 +38,29 @@ describe("listSessionsFromStore resolver cache", () => {
         storePath: path.join(stateDir, "sessions.json"),
         store: {
           google: {
+            sessionId: "google",
             updatedAt: 1,
             modelProvider: "google-vertex",
             model: "gemini-3-flash-preview",
           },
-          openai: { updatedAt: 1, modelProvider: "openai", model: "gpt-5" },
-          anthropic: { updatedAt: 1, modelProvider: "anthropic", model: "claude-opus-4-7" },
-          openrouter: { updatedAt: 1, modelProvider: "openrouter", model: "z-ai/glm-5" },
+          openai: {
+            sessionId: "openai",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-5",
+          },
+          anthropic: {
+            sessionId: "anthropic",
+            updatedAt: 1,
+            modelProvider: "anthropic",
+            model: "claude-opus-4-7",
+          },
+          openrouter: {
+            sessionId: "openrouter",
+            updatedAt: 1,
+            modelProvider: "openrouter",
+            model: "z-ai/glm-5",
+          },
         },
         opts: {},
       });

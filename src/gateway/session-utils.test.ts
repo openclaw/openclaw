@@ -107,6 +107,7 @@ describe("gateway session utils", () => {
       storePath: "",
       store: {
         "agent:main:main": {
+          sessionId: "sess-main",
           updatedAt: 1,
           modelProvider: "anthropic",
           model: "claude-sonnet-4.6",

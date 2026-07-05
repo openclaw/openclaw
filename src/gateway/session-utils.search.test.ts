@@ -331,6 +331,7 @@ describe("listSessionsFromStore search", () => {
       storePath: "/tmp/sessions.json",
       store: {
         "agent:main:main": {
+          sessionId: "sess-main",
           updatedAt: 1,
           modelProvider: "openai",
           model: "gpt-5.4",
