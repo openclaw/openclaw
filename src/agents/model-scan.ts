@@ -1,3 +1,5 @@
+import type { OpenAICompletionsOptions } from "@openclaw/ai/internal/openai";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -17,8 +19,6 @@ import { formatErrorMessage } from "../infra/errors.js";
  * Scans remote provider model catalogs for configured providers.
  */
 import { readResponseWithLimit } from "../infra/http-body.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
 import { complete } from "../llm/stream.js";
 import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";

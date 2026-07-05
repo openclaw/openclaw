@@ -82,6 +82,9 @@ importers:
       '@mozilla/readability':
         specifier: 0.6.0
         version: 0.6.0
+      '@openclaw/ai':
+        specifier: workspace:*
+        version: link:packages/ai
       '@openclaw/fs-safe':
         specifier: 0.4.1
         version: 0.4.1(patch_hash=e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c)
@@ -306,6 +309,12 @@ importers:
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9
+
+  examples/ai-chat:
+    dependencies:
+      '@openclaw/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
 
   extensions/acpx:
     dependencies:
@@ -1828,9 +1837,30 @@ importers:
 
   packages/agent-core:
     dependencies:
-      '@openclaw/llm-core':
+      '@openclaw/ai':
         specifier: workspace:*
-        version: link:../llm-core
+        version: link:../ai
+      typebox:
+        specifier: 1.3.3
+        version: 1.3.3
+
+  packages/ai:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: 0.109.1
+        version: 0.109.1(zod@4.4.3)
+      '@google/genai':
+        specifier: 2.10.0
+        version: 2.10.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@mistralai/mistralai':
+        specifier: 2.4.0
+        version: 2.4.0(@opentelemetry/api@1.9.1)
+      openai:
+        specifier: 6.45.0
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.61)(@smithy/hash-node@4.4.5)(@smithy/signature-v4@5.6.1)(ws@8.21.0)(zod@4.4.3)
+      partial-json:
+        specifier: 0.1.7
+        version: 0.1.7
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1858,12 +1888,6 @@ importers:
       typebox:
         specifier: 1.3.3
         version: 1.3.3
-
-  packages/llm-runtime:
-    dependencies:
-      '@openclaw/llm-core':
-        specifier: workspace:*
-        version: link:../llm-core
 
   packages/markdown-core:
     dependencies:
@@ -3149,6 +3173,11 @@ packages:
   '@openclaw/libterminal@0.3.1':
     resolution: {integrity: sha512-nKEreLY6sdRvn+9UEcZhFpLYg3mJA4tmqNLZiYSMfislU11skiPWJfT7fn6ERsgAJsVMOSxeiVjBb5AX7dLKdQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
+    peerDependencies:
+      node-pty: '>=1.0.0'
+    peerDependenciesMeta:
+      node-pty:
+        optional: true
 
   '@openclaw/proxyline@0.3.3':
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
