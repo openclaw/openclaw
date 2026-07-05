@@ -21,6 +21,8 @@ import {
 import { resolveProviderInstallCatalogEntry } from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
+import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { normalizeAlias } from "../models/alias-name.js";
 import {
   applyDefaultModelPrimaryUpdate,
@@ -226,7 +228,7 @@ export async function promosClaimCommand(
 
   const registered: string[] = [];
   const skippedAliases: string[] = [];
-  await updateConfig((cfg, context) => {
+  const updated = await updateConfig((cfg, context) => {
     let base = cfg;
     // The credential-reuse path skips the auth flow, which is where plugin
     // enablement normally happens. Enable (or refuse) the provider plugin here
@@ -284,6 +286,23 @@ export async function promosClaimCommand(
     }
     return next;
   });
+
+  if (makeDefault && suggested) {
+    // `models set` repairs provider runtime plugin installs (Codex/Copilot)
+    // after a default change; a promo-selected default needs the same repair
+    // or an openai/* default can fail at execution time.
+    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+      cfg: updated,
+      model: suggested.modelRef,
+    });
+    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+      cfg: updated,
+      model: suggested.modelRef,
+    });
+    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+      runtime.error?.(warning);
+    }
+  }
 
   runtime.log(`Claimed "${sanitizeTerminalText(promotion.title)}".`);
   for (const key of registered) {

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
   promptYesNo: vi.fn(),
   enablePluginInConfig: vi.fn(),
+  repairCodex: vi.fn(),
+  repairCopilot: vi.fn(),
 }));
 
 vi.mock("../../infra/clawhub.js", async () => {
@@ -54,6 +56,14 @@ vi.mock("../../cli/prompt.js", () => ({
 
 vi.mock("../../plugins/enable.js", () => ({
   enablePluginInConfig: mocks.enablePluginInConfig,
+}));
+
+vi.mock("../codex-runtime-plugin-install.js", () => ({
+  repairCodexRuntimePluginInstallForModelSelection: mocks.repairCodex,
+}));
+
+vi.mock("../copilot-runtime-plugin-install.js", () => ({
+  repairCopilotRuntimePluginInstallForModelSelection: mocks.repairCopilot,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -123,6 +133,8 @@ beforeEach(() => {
     pluginId,
   }));
   mocks.fetchClawHubPromotion.mockResolvedValue(makePromotion());
+  mocks.repairCodex.mockResolvedValue({ warnings: [] });
+  mocks.repairCopilot.mockResolvedValue({ warnings: [] });
 });
 
 afterEach(() => {
@@ -149,6 +161,11 @@ describe("promosClaimCommand", () => {
 
     const next = mocks.replaceConfigFile.mock.calls[0]?.[0]?.nextConfig;
     expect(next.agents.defaults.model.primary).toBe("openrouter/example/model-alpha");
+    // Default changes must run the same runtime plugin repair as `models set`.
+    expect(mocks.repairCodex).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "openrouter/example/model-alpha" }),
+    );
+    expect(mocks.repairCopilot).toHaveBeenCalled();
   });
 
   it("skips aliases outside the models-aliases contract but still registers the model", async () => {

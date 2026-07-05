@@ -1771,6 +1771,9 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
 // into copy-paste CLI commands; anything else would be a shell-injection path.
 const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
+// Safe identifier grammar for provider ids, auth choice ids, and plugin names.
+const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
+
 export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   const context = "promotion";
   if (!isJsonObject(value)) {
@@ -1794,22 +1797,36 @@ export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
     endsAt: requiredNumberField(value, "endsAt", context),
     models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
   };
-  const optionalStrings = [
-    "sponsor",
-    "provider",
-    "authChoiceId",
-    "signupUrl",
-    "docsUrl",
-    "launchPageUrl",
-  ] as const;
+  const optionalStrings = ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"] as const;
   for (const field of optionalStrings) {
     const parsed = optionalStringField(value, field, context);
     if (parsed) {
       promotion[field] = parsed;
     }
   }
+  // Identifier fields are echoed into error messages and config; hold them to
+  // a safe identifier grammar so remote payloads cannot smuggle terminal
+  // controls or whitespace through failure paths.
+  const identifierFields = ["provider", "authChoiceId"] as const;
+  for (const field of identifierFields) {
+    const parsed = optionalStringField(value, field, context);
+    if (!parsed) {
+      continue;
+    }
+    if (!CLAWHUB_PROMOTION_IDENTIFIER_RE.test(parsed)) {
+      throw new Error(`Malformed ClawHub ${context}: ${field} contains unsupported characters.`);
+    }
+    promotion[field] = parsed;
+  }
   const pluginNames = optionalStringArrayField(value, "pluginNames", context);
   if (pluginNames && pluginNames.length > 0) {
+    for (const name of pluginNames) {
+      if (!CLAWHUB_PROMOTION_IDENTIFIER_RE.test(name)) {
+        throw new Error(
+          `Malformed ClawHub ${context}: pluginNames contains unsupported characters.`,
+        );
+      }
+    }
     promotion.pluginNames = pluginNames;
   }
   return promotion;
