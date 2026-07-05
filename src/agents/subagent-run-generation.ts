@@ -1,6 +1,12 @@
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+type ComparableSubagentRun = {
+  runId: string;
+  createdAt: number;
+  generation?: number;
+};
 
-type ComparableSubagentRun = Pick<SubagentRunRecord, "runId" | "createdAt" | "generation">;
+type GenerationalSubagentRun = ComparableSubagentRun & {
+  childSessionKey?: string;
+};
 
 function normalizeGeneration(entry: ComparableSubagentRun): number {
   return typeof entry.generation === "number" && Number.isFinite(entry.generation)
@@ -26,7 +32,7 @@ export function compareSubagentRunGeneration(
 
 /** Allocates a durable monotonic generation within one child session. */
 export function nextSubagentRunGeneration(
-  runs: Iterable<SubagentRunRecord>,
+  runs: Iterable<GenerationalSubagentRun>,
   childSessionKey: string,
 ): number {
   let generation = 0;
