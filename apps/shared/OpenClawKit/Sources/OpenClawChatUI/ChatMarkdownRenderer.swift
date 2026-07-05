@@ -50,9 +50,9 @@ struct ChatMarkdownRenderer: View {
                 .textSelection(.enabled)
                 .lineSpacing(self.variant == .compact ? 2 : 4)
         case let .code(code):
-            ChatCodeBlockView(block: code, textColor: self.textColor)
+            ChatCodeBlockView(block: code)
         case let .table(table):
-            ChatMarkdownTableView(table: table, textColor: self.textColor)
+            ChatMarkdownTableView(table: table)
         }
     }
 

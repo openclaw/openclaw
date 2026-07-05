@@ -3,7 +3,6 @@ import SwiftUI
 @MainActor
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
-    let textColor: Color
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -15,7 +14,7 @@ struct ChatCodeBlockView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
                     .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(self.textColor)
+                    .foregroundStyle(OpenClawChatTheme.assistantText)
                     .lineSpacing(2)
                     .textSelection(.enabled)
             }
@@ -43,7 +42,6 @@ struct ChatCodeBlockView: View {
 @MainActor
 struct ChatMarkdownTableView: View {
     let table: ChatMarkdownTable
-    let textColor: Color
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -78,7 +76,7 @@ struct ChatMarkdownTableView: View {
     private func cell(_ text: String, column: Int, isHeader: Bool) -> some View {
         Text(self.inlineMarkdown(text))
             .font(isHeader ? OpenClawChatTypography.footnoteSemiBold : OpenClawChatTypography.footnote)
-            .foregroundStyle(self.textColor)
+            .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
     }
 
