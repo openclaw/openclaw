@@ -1143,7 +1143,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (rejectsManualResponseCreate) {
           this.responseCreateInFlight = false;
           this.manualResponseCreateEventId = null;
-          this.restoreAutoRespondAfterManualResponse();
+          if (this.responseCreatePending) {
+            this.flushPendingResponseCreate();
+          } else {
+            this.restoreAutoRespondAfterManualResponse();
+          }
         }
         this.config.onError?.(new Error(detail));
       }

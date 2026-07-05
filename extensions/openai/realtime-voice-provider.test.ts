@@ -1897,6 +1897,72 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("flushes a queued manual response after the prior request is rejected", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.triggerGreeting?.("Say exactly: first greeting.");
+    const firstResponseCreate = parseSent(socket).findLast(
+      (event) => event.type === "response.create",
+    );
+    if (!firstResponseCreate?.event_id) {
+      throw new Error("expected first response.create event id");
+    }
+    const sessionUpdateCount = parseSent(socket).filter(
+      (event) => event.type === "session.update",
+    ).length;
+
+    bridge.sendUserMessage?.("Say exactly: queued follow-up.");
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: {
+            event_id: firstResponseCreate.event_id,
+            message: "bad response request",
+          },
+        }),
+      ),
+    );
+
+    const responseCreates = parseSent(socket).filter((event) => event.type === "response.create");
+    expect(responseCreates).toHaveLength(2);
+    expect(responseCreates[1]).toEqual(expectedResponseCreateEvent());
+    expect(responseCreates[1]?.event_id).not.toBe(firstResponseCreate.event_id);
+    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(
+      sessionUpdateCount,
+    );
+    expect(onError).toHaveBeenCalledWith(new Error("bad response request"));
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+
+    expectRecordFields(
+      requireNestedRecord(parseSent(socket).at(-1)?.session, ["audio", "input", "turn_detection"]),
+      "restored turn detection",
+      {
+        create_response: true,
+        interrupt_response: true,
+      },
+    );
+  });
+
   it("does not request a realtime response for continuing tool results", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
