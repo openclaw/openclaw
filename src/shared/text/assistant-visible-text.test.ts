@@ -389,6 +389,31 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips standalone <parameter> tag wrappers preserving inner content (#98557)", () => {
+      expectVisibleText('<parameter name="assumptions">content</parameter>', "content");
+    });
+
+    it("strips standalone <parameter> tags with newline content (#98557)", () => {
+      expectVisibleText(
+        [
+          "Visible text",
+          '<parameter name="assumptions">',
+          "line 1",
+          "line 2",
+          "</parameter>",
+          "More visible",
+        ].join("\n"),
+        "Visible text\nline 1\nline 2\nMore visible",
+      );
+    });
+
+    it("strips standalone <parameter> wrappers inside visible rich content (#98557)", () => {
+      expectVisibleText(
+        'Results: <parameter name="assumptions">some content</parameter> after.',
+        "Results: some content after.",
+      );
+    });
+
     it("preserves XML-style explanations after lone <tool_call> tags", () => {
       expectVisibleText("Use <tool_call><arg> literally.", "Use <tool_call><arg> literally.");
     });

@@ -41,6 +41,7 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "tool_calls",
   "antml:invoke",
   "antml:parameter",
+  "parameter",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
@@ -450,9 +451,13 @@ export function stripToolCallXmlTags(
         }
       } else {
         const preserveEnd = tag.isTruncated ? tag.contentStart : tag.end;
-        result += text.slice(idx, preserveEnd);
-        if (!tag.isTruncated) {
-          visibleTagBalance.set(tag.tagName, (visibleTagBalance.get(tag.tagName) ?? 0) + 1);
+        const hasOpenVisibleTags =
+          visibleTagBalance.size > 0 && [...visibleTagBalance.values()].some((v) => v > 0);
+        if (tag.tagName !== "parameter" || hasOpenVisibleTags) {
+          result += text.slice(idx, preserveEnd);
+          if (!tag.isTruncated) {
+            visibleTagBalance.set(tag.tagName, (visibleTagBalance.get(tag.tagName) ?? 0) + 1);
+          }
         }
         lastIndex = preserveEnd;
         idx = Math.max(idx, preserveEnd - 1);
