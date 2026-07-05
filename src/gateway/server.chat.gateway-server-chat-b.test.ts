@@ -1394,7 +1394,11 @@ describe("gateway server chat", () => {
       });
 
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const context = createDirectChatContext();
+      const broadcast = vi.fn();
+      const context = {
+        ...createDirectChatContext(),
+        broadcast,
+      } as GatewayRequestContext;
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
         dispatchEntered.resolve();
         const signal = (args as { replyOptions?: GetReplyOptions }).replyOptions?.abortSignal;
@@ -1451,7 +1455,7 @@ describe("gateway server chat", () => {
       await send;
 
       await vi.waitFor(() => {
-        const chatBroadcasts = context.broadcast.mock.calls
+        const chatBroadcasts = broadcast.mock.calls
           .filter(([event]) => event === "chat")
           .map(([, payload]) => payload as { runId?: string; state?: string });
         expect(chatBroadcasts).toEqual(
