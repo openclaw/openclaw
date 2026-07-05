@@ -76,27 +76,8 @@ describe("auth-store", () => {
     expect(fsSync.existsSync(credsPath)).toBe(false);
   });
 
-  it("restores creds from a regular backup file", async () => {
+  it("restores malformed creds from a valid backup", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-restore");
-    const credsPath = path.join(authDir, "creds.json");
-    fsSync.writeFileSync(credsPath, "{", "utf-8");
-    fsSync.writeFileSync(
-      path.join(authDir, "creds.json.bak"),
-      JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
-      "utf-8",
-    );
-
-    await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(true);
-    expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual({
-      me: { id: "123@s.whatsapp.net" },
-    });
-  });
-
-  it("restores creds from backup when creds.json has malformed JSON longer than one byte", async () => {
-    // readWebCredsJsonRawSync returns content when stat.size > 1,
-    // so malformed JSON like "{x" (2 bytes) passes the size gate
-    // but fails JSON.parse — this exercises the inner try-catch fallthrough.
-    const authDir = createTempAuthDir("openclaw-wa-auth-malformed-multibyte");
     const credsPath = path.join(authDir, "creds.json");
     fsSync.writeFileSync(credsPath, "{x", "utf-8");
     fsSync.writeFileSync(
@@ -109,6 +90,16 @@ describe("auth-store", () => {
     expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual({
       me: { id: "123@s.whatsapp.net" },
     });
+  });
+
+  it("leaves malformed creds unchanged when the backup is malformed", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-malformed-backup");
+    const credsPath = path.join(authDir, "creds.json");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
+    fsSync.writeFileSync(path.join(authDir, "creds.json.bak"), "{y", "utf-8");
+
+    await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
   });
 
   it("preserves valid large creds instead of treating them as corrupt", async () => {
