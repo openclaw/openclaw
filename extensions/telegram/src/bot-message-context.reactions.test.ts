@@ -73,6 +73,7 @@ describe("buildTelegramMessageContext reactions", () => {
   it("does not create ack or status reactions for room events when scope does not force all messages", async () => {
     const setMessageReaction = vi.fn(async () => undefined);
     const { createStatusReactionController } = createStatusReactionControllerStub();
+    inboundBodyMock.mockResolvedValueOnce(createInboundBodyResult("room_event"));
 
     const ctx = await buildTelegramMessageContextForTest({
       message: {
