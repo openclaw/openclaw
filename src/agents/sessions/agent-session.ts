@@ -34,6 +34,7 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
+import { dropThinkingBlocks } from "../embedded-agent-runner/thinking.js";
 import type {
   Agent,
   AgentEvent,
@@ -363,6 +364,7 @@ export class AgentSession {
   // Retry state
   private retryAbortController: AbortController | undefined = undefined;
   private retryCount = 0;
+  private replayInvalidThinkingStripped = false;
 
   // Bash execution state
   private bashAbortController: AbortController | undefined = undefined;
@@ -2611,7 +2613,31 @@ export class AgentSession {
       return false;
     }
 
+    // Thinking-signature replay_invalid errors: retry once after stripping
+    // thinking blocks from history (e.g. when thinkingDefault changed to off
+    // across a gateway restart while the session transcript still carries
+    // signed thinking blocks).
+    if (this.isReplayInvalidThinkingError(message) && !this.replayInvalidThinkingStripped) {
+      return true;
+    }
+
     return isRetryableAssistantError(message);
+  }
+
+  /**
+   * Detect replay_invalid errors caused by thinking-signature mismatches
+   * (e.g. thinking blocks persisted under thinkingDefault: adaptive that
+   * become invalid after a gateway restart sets thinkingDefault: off).
+   */
+  private isReplayInvalidThinkingError(message: AssistantMessage): boolean {
+    const raw = message.errorMessage;
+    if (!raw) {
+      return false;
+    }
+    return (
+      /\bthinking\b/i.test(raw) &&
+      /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i.test(raw)
+    );
   }
 
   /**
@@ -2619,6 +2645,40 @@ export class AgentSession {
    * @returns true if the caller should continue the agent, false otherwise
    */
   private async prepareRetry(message: AssistantMessage): Promise<boolean> {
+    // Handle thinking-signature replay_invalid errors: strip thinking
+    // blocks from session history and retry once immediately.
+    if (this.isReplayInvalidThinkingError(message)) {
+      if (this.replayInvalidThinkingStripped) {
+        return false;
+      }
+      this.replayInvalidThinkingStripped = true;
+
+      const stateMessages = this.agent.state.messages;
+      const stripped = dropThinkingBlocks(stateMessages);
+      if (stripped !== stateMessages) {
+        this.agent.state.messages = stripped;
+      }
+
+      // Remove the errored assistant message that was just appended.
+      const finalMessages = this.agent.state.messages;
+      if (
+        finalMessages.length > 0 &&
+        finalMessages[finalMessages.length - 1].role === "assistant"
+      ) {
+        this.agent.state.messages = finalMessages.slice(0, -1);
+      }
+
+      this.emit({
+        type: "auto_retry_start",
+        attempt: 1,
+        maxAttempts: 1,
+        delayMs: 0,
+        errorMessage: message.errorMessage || "Thinking signature replay invalid",
+      });
+
+      return true;
+    }
+
     const settings = this.settingsManager.getRetrySettings();
     if (!settings.enabled) {
       return false;
