@@ -10,6 +10,8 @@ import {
   stagedPostCompactionDelegateCount,
 } from "../auto-reply/continuation-delegate-store.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
+import { peekSystemEvents } from "../infra/system-events.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -680,6 +682,107 @@ test("sessions.compact releases queued post-compaction delegates after manual co
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
   ws.close();
   resetTaskFlowRegistryForTests({ persist: false });
+});
+
+test("sessions.compact preserves legacy route fields when releasing post-compaction delegates", async () => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  const { dir } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-post-compaction-legacy.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello legacy route" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-post-compaction-legacy", {
+        lastChannel: "telegram",
+        lastTo: "chat-123",
+        lastAccountId: "acct-1",
+        lastThreadId: "topic-9",
+      }),
+    },
+  });
+  stagePostCompactionDelegate("agent:main:main", {
+    task: "rehydrate after compact with legacy route",
+    createdAt: Date.now(),
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+    ws,
+    "sessions.compact",
+    { key: "main" },
+  );
+
+  expectMainCompactionResult(compacted, true);
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  const queued = await loadPendingSessionDeliveries(process.env.OPENCLAW_STATE_DIR);
+  const [postCompaction] = queued.filter(
+    (entry) =>
+      entry.kind === "postCompactionDelegate" &&
+      entry.task === "rehydrate after compact with legacy route",
+  );
+  expect(postCompaction?.deliveryContext).toMatchObject({
+    channel: "telegram",
+    to: "chat-123",
+    accountId: "acct-1",
+    threadId: "topic-9",
+  });
+  ws.close();
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
+test("sessions.compact maxLines releases queued post-compaction delegates after trim", async () => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-post-compaction-trim.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-post-compaction-trim", 120);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-trim") } });
+  stagePostCompactionDelegate("agent:main:main", {
+    task: "rehydrate after maxLines compact",
+    createdAt: Date.now(),
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean; kept?: number }>(
+    ws,
+    "sessions.compact",
+    { key: "main", maxLines: 50 },
+  );
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  ws.close();
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
+test("sessions.compact skips post-compaction lifecycle when no delegates exist", async () => {
+  const { dir } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-post-compaction-empty.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello no delegates" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-post-compaction-empty") } });
+
+  const beforeEvents = peekSystemEvents("agent:main:main").length;
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+    ws,
+    "sessions.compact",
+    { key: "main" },
+  );
+
+  expectMainCompactionResult(compacted, true);
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  expect(peekSystemEvents("agent:main:main").slice(beforeEvents)).not.toContainEqual(
+    expect.stringContaining("[system:post-compaction]"),
+  );
+  ws.close();
 });
 
 test("sessions.compact emits a terminal operation event when persistence fails", async () => {

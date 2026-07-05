@@ -2,6 +2,7 @@
 // restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -45,6 +46,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation-delegate-store.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
@@ -59,6 +61,8 @@ import {
   deleteSessionEntryLifecycle,
   type SessionEntry,
   updateSessionStore,
+  resolveSessionStoreEntry,
+  loadSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import {
@@ -95,6 +99,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -161,8 +166,8 @@ function buildManualCompactionReleaseFollowupRun(params: {
   targetAgentId: string;
   workspaceDir: string;
 }): FollowupRun {
-  const deliveryContext = params.entry.deliveryContext;
-  const messageProvider = deliveryContext?.channel ?? params.entry.lastChannel;
+  const deliveryContext = deliveryContextFromSession(params.entry);
+  const messageProvider = deliveryContext?.channel;
   const cwd = normalizeOptionalString(params.entry.spawnedCwd);
   return {
     prompt: "",
@@ -190,6 +195,83 @@ function buildManualCompactionReleaseFollowupRun(params: {
       blockReplyBreak: "message_end",
     },
   };
+}
+
+function sessionHasPostCompactionDelegates(params: {
+  entry?: SessionEntry;
+  sessionKey: string;
+  store?: Record<string, SessionEntry>;
+}): boolean {
+  if (stagedPostCompactionDelegateCount(params.sessionKey) > 0) {
+    return true;
+  }
+  if ((params.entry?.pendingPostCompactionDelegates?.length ?? 0) > 0) {
+    return true;
+  }
+  if (params.store) {
+    const resolved = resolveSessionStoreEntry({
+      store: params.store,
+      sessionKey: params.sessionKey,
+    });
+    if ((resolved.existing?.pendingPostCompactionDelegates?.length ?? 0) > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function releaseManualPostCompactionDelegatesIfNeeded(params: {
+  cfg: OpenClawConfig;
+  compactionCount: number | undefined;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): Promise<void> {
+  if (
+    !sessionHasPostCompactionDelegates({
+      entry: params.entry,
+      sessionKey: params.sessionKey,
+      store: params.store,
+    })
+  ) {
+    return;
+  }
+  const releaseFollowupRun = buildManualCompactionReleaseFollowupRun({
+    cfg: params.cfg,
+    entry: params.entry,
+    model: params.model,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    targetAgentId: params.targetAgentId,
+    workspaceDir: params.workspaceDir,
+  });
+  try {
+    const { releasePostCompactionDelegatesAfterCompaction } =
+      await import("../../auto-reply/reply/agent-runner-execution.js");
+    await releasePostCompactionDelegatesAfterCompaction({
+      activeSessionStore: params.store,
+      compactionCount: params.compactionCount,
+      followupRun: releaseFollowupRun,
+      sessionEntry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  } catch (err) {
+    // Manual compaction already succeeded and the session store/transcript now
+    // reflects the compacted state. Match request_compaction's tolerant release
+    // semantics so post-compaction maintenance cannot turn a successful compact
+    // into a failed RPC.
+    log.warn(
+      `[sessions.compact:post-compaction-release-failed] session=${params.sessionKey} reason=${formatErrorMessage(err)}`,
+    );
+  }
 }
 
 function filterSessionStoreToConfiguredAgents(
@@ -2909,6 +2991,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
+              const storeAfterTrim = loadSessionStore(storePath, { skipCache: true });
+              const resolvedAfterTrim = resolveSessionStoreEntry({
+                store: storeAfterTrim,
+                sessionKey: target.canonicalKey,
+              });
+              const entryAfterTrim = resolvedAfterTrim.existing ?? latestEntry;
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: entryAfterTrim.compactionCount ?? 0,
+                entry: entryAfterTrim,
+                model: resolveSessionModelRef(cfg, entryAfterTrim, target.agentId),
+                sessionFile:
+                  entryAfterTrim.sessionFile ??
+                  latestEntry.sessionFile ??
+                  path.join(storePath, `.jsonl`),
+                sessionId: entryAfterTrim.sessionId,
+                sessionKey: target.canonicalKey,
+                store: storeAfterTrim,
+                storePath,
+                targetAgentId: target.agentId,
+                workspaceDir:
+                  normalizeOptionalString(entryAfterTrim.spawnedWorkspaceDir) ||
+                  resolveAgentWorkspaceDir(cfg, target.agentId),
+              });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
                 ...(target.canonicalKey === "global" && target.agentId
@@ -3055,36 +3161,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               return;
             }
             if (releaseSessionEntry && releaseSessionStore) {
-              const releaseFollowupRun = buildManualCompactionReleaseFollowupRun({
+              await releaseManualPostCompactionDelegatesIfNeeded({
                 cfg,
+                compactionCount: releaseSessionEntry.compactionCount ?? 0,
                 entry: releaseSessionEntry,
                 model: resolvedModel,
                 sessionFile: releaseSessionEntry.sessionFile ?? filePath,
                 sessionId: releaseSessionEntry.sessionId,
                 sessionKey: target.canonicalKey,
+                store: releaseSessionStore,
+                storePath,
                 targetAgentId: target.agentId,
                 workspaceDir,
               });
-              try {
-                const { releasePostCompactionDelegatesAfterCompaction } =
-                  await import("../../auto-reply/reply/agent-runner-execution.js");
-                await releasePostCompactionDelegatesAfterCompaction({
-                  activeSessionStore: releaseSessionStore,
-                  compactionCount: releaseSessionEntry.compactionCount ?? 0,
-                  followupRun: releaseFollowupRun,
-                  sessionEntry: releaseSessionEntry,
-                  sessionKey: target.canonicalKey,
-                  storePath,
-                });
-              } catch (err) {
-                // Manual compaction already succeeded and the session store now
-                // points at the rotated transcript. Match request_compaction's
-                // tolerant release semantics so post-compaction maintenance
-                // cannot turn a successful compaction into a failed RPC.
-                log.warn(
-                  `[sessions.compact:post-compaction-release-failed] session=${target.canonicalKey} reason=${formatErrorMessage(err)}`,
-                );
-              }
             }
           }
 
