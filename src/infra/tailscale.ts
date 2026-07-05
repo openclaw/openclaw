@@ -288,18 +288,17 @@ export async function hasTailscaleFunnelRouteForPort(
   port: number,
   exec: typeof runExec = runExec,
 ): Promise<boolean> {
-  let stdout: string;
+  let parsed: Record<string, unknown>;
   try {
     const tailscaleBin = await getTailscaleBinary();
     const result = await exec(tailscaleBin, ["funnel", "status", "--json"], {
       maxBuffer: 200_000,
       timeoutMs: 5_000,
     });
-    stdout = result.stdout;
+    parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
   } catch {
     return false;
   }
-  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
   return tailscaleFunnelStatusCoversPort(parsed, port);
 }
 
