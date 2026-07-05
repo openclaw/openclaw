@@ -37,7 +37,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { sliceUtf16Safe } from "../shared/utf16-slice.js";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,

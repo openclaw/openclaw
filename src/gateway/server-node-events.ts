@@ -19,7 +19,7 @@ import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
-import { sliceUtf16Safe } from "../shared/utf16-slice.js";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
