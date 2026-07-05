@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveSessionTranscriptPathInDir } from "../../../config/sessions/paths.js";
 import {
   appendSessionTranscriptEvent,
@@ -43,6 +43,25 @@ const lockOptions = {
 };
 
 const tempDirs: string[] = [];
+const LARGE_LINEAR_TRANSCRIPT_LINE = `${JSON.stringify({
+  type: "message",
+  id: "large-linear-user",
+  timestamp: "2026-01-01T00:00:00.000Z",
+  message: {
+    role: "user",
+    content: [{ type: "text", text: "界".repeat(Math.ceil((7 * 1024 * 1024) / 3)) }],
+  },
+})}\n`;
+const LARGE_LEGACY_DELIVERY_TRANSCRIPT_LINE = `${JSON.stringify({
+  type: "message",
+  id: "large-legacy-user",
+  timestamp: "2026-01-01T00:00:00.000Z",
+  message: {
+    role: "user",
+    content: [{ type: "text", text: "界".repeat(Math.ceil((8 * 1024 * 1024) / 3)) }],
+  },
+})}\n`;
+const LARGE_OWNED_TRANSCRIPT_TEXT = "界".repeat(1024 * 1024);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -61,6 +80,19 @@ async function createTempSessionFile(): Promise<string> {
   const sessionFile = path.join(dir, "session.jsonl");
   await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
   return sessionFile;
+}
+
+async function readSessionFileTail(sessionFile: string, maxBytes = 512): Promise<string> {
+  const stat = await fs.stat(sessionFile);
+  const length = Math.min(maxBytes, stat.size);
+  const buffer = Buffer.alloc(length);
+  const handle = await fs.open(sessionFile, "r");
+  try {
+    const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -1685,64 +1717,68 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
-  it("allows parentless delivery mirrors appended to large legacy linear transcripts", async () => {
-    const sessionFile = await createTempSessionFile();
-    await fs.appendFile(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: "large-legacy-user",
-        timestamp: new Date().toISOString(),
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "x".repeat(8 * 1024 * 1024) }],
+  describe("large legacy linear transcript delivery", () => {
+    let result: {
+      hasTakeover: boolean;
+      lastLine?: string;
+      mergedEntries: unknown;
+    };
+
+    beforeAll(async () => {
+      const sessionFile = await createTempSessionFile();
+      await fs.appendFile(sessionFile, LARGE_LEGACY_DELIVERY_TRANSCRIPT_LINE, "utf8");
+      const mergePromptReleasedSessionEntries = vi.fn();
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock,
+        lockOptions: { ...lockOptions, sessionFile },
+        mergePromptReleasedSessionEntries,
+      });
+
+      await controller.releaseForPrompt();
+      const sessionKey = "agent:main:large-linear-delivery";
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          sessionKey,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
         },
-      })}\n`,
-      "utf8",
-    );
-    const mergePromptReleasedSessionEntries = vi.fn();
-    const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
-      lockOptions: { ...lockOptions, sessionFile },
-      mergePromptReleasedSessionEntries,
+        async () =>
+          await runWithOwnedSessionTranscriptWritePublication(
+            { sessionFile, sessionKey },
+            async () =>
+              await appendSessionTranscriptMessage({
+                transcriptPath: sessionFile,
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "mirrored large transcript delivery" }],
+                  provider: "openclaw",
+                  model: "delivery-mirror",
+                },
+              }),
+          ),
+      );
+
+      result = {
+        hasTakeover: controller.hasSessionTakeover(),
+        lastLine: (await readSessionFileTail(sessionFile)).trimEnd().split("\n").at(-1),
+        mergedEntries: mergePromptReleasedSessionEntries.mock.calls[0]?.[0],
+      };
+      await controller.dispose();
     });
 
-    await controller.releaseForPrompt();
-    const sessionKey = "agent:main:large-linear-delivery";
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        sessionKey,
-        withSessionWriteLock: (operation, options) =>
-          controller.withSessionWriteLock(operation, options),
-      },
-      async () =>
-        await runWithOwnedSessionTranscriptWritePublication(
-          { sessionFile, sessionKey },
-          async () =>
-            await appendSessionTranscriptMessage({
-              transcriptPath: sessionFile,
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "mirrored large transcript delivery" }],
-                provider: "openclaw",
-                model: "delivery-mirror",
-              },
-            }),
-        ),
-    );
-
-    const lastLine = (await fs.readFile(sessionFile, "utf8")).trimEnd().split("\n").at(-1);
-    expect(lastLine).toBeDefined();
-    expect(JSON.parse(lastLine ?? "{}")).not.toHaveProperty("parentId");
-    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
-      expect.objectContaining({
-        type: "message",
-        parentId: null,
-        message: expect.objectContaining({ model: "delivery-mirror" }),
-      }),
-    ]);
-    expect(controller.hasSessionTakeover()).toBe(false);
+    it("allows parentless delivery mirrors appended to large legacy linear transcripts", () => {
+      expect(result.lastLine).toBeDefined();
+      expect(JSON.parse(result.lastLine ?? "{}")).not.toHaveProperty("parentId");
+      expect(result.mergedEntries).toEqual([
+        expect.objectContaining({
+          type: "message",
+          parentId: null,
+          message: expect.objectContaining({ model: "delivery-mirror" }),
+        }),
+      ]);
+      expect(result.hasTakeover).toBe(false);
+    });
   });
 
   it("refreshes the prompt fence after an owned write throws", async () => {
@@ -2972,54 +3008,59 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
   });
 
-  it("validates large owned entries after migrating a large linear transcript", async () => {
-    const sessionFile = await createTempSessionFile();
-    await fs.appendFile(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: "large-linear-user",
-        timestamp: new Date().toISOString(),
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "x".repeat(7 * 1024 * 1024) }],
+  describe("large owned linear transcript migration", () => {
+    let result: {
+      appendedId: string;
+      hasTakeover: boolean;
+      mergedEntries: unknown;
+      persistedParentLink: boolean;
+    };
+
+    beforeAll(async () => {
+      const sessionFile = await createTempSessionFile();
+      await fs.appendFile(sessionFile, LARGE_LINEAR_TRANSCRIPT_LINE, "utf8");
+      const mergePromptReleasedSessionEntries = vi.fn();
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock,
+        lockOptions: { ...lockOptions, sessionFile },
+        mergePromptReleasedSessionEntries,
+      });
+      await controller.releaseForPrompt();
+
+      const appended = await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
         },
-      })}\n`,
-      "utf8",
-    );
-    const mergePromptReleasedSessionEntries = vi.fn();
-    const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
-      lockOptions: { ...lockOptions, sessionFile },
-      mergePromptReleasedSessionEntries,
+        async () =>
+          await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: LARGE_OWNED_TRANSCRIPT_TEXT }],
+              provider: "anthropic",
+              model: "sonnet-4.6",
+            },
+          }),
+      );
+
+      result = {
+        appendedId: appended.messageId,
+        hasTakeover: controller.hasSessionTakeover(),
+        mergedEntries: mergePromptReleasedSessionEntries.mock.calls[0]?.[0],
+        persistedParentLink: (await fs.readFile(sessionFile, "utf8")).includes('"parentId"'),
+      };
+      await controller.dispose();
     });
-    await controller.releaseForPrompt();
 
-    const appended = await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        withSessionWriteLock: (operation, options) =>
-          controller.withSessionWriteLock(operation, options),
-      },
-      async () =>
-        await appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "y".repeat(3 * 1024 * 1024) }],
-            provider: "anthropic",
-            model: "sonnet-4.6",
-          },
-        }),
-    );
-
-    const persisted = await fs.readFile(sessionFile, "utf8");
-    expect(persisted).toContain('"parentId"');
-    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
-      expect.objectContaining({ type: "message", id: appended.messageId }),
-    ]);
-    expect(controller.hasSessionTakeover()).toBe(false);
-    await controller.dispose();
+    it("validates large owned entries after migrating a large linear transcript", () => {
+      expect(result.persistedParentLink).toBe(true);
+      expect(result.mergedEntries).toEqual([
+        expect.objectContaining({ type: "message", id: result.appendedId }),
+      ]);
+      expect(result.hasTakeover).toBe(false);
+    });
   });
 
   it("serializes concurrent nested owned transcript publications", async () => {

@@ -13,6 +13,13 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **iOS Voice Wake cleanup:** avoid initializing the microphone audio pipeline while disabling inactive Voice Wake, preventing simulator launch aborts and unnecessary audio setup.
+- **Cron duration validation:** reject positive durations that truncate below one millisecond instead of silently scheduling a zero-duration interval. (#100311) Thanks @qingminglong.
+- **Skill workshop proposals:** preserve the terminal newline in generated proposal Markdown while still rejecting blank raw content. (#100293) Thanks @anyech.
+- **Agent tool inputs and LSP startup:** treat blank optional integer arguments as absent, and fail embedded LSP startup immediately when its child process cannot spawn. (#100273, #99922) Thanks @snotty and @cxbAsDev.
+- **Gateway and memory diagnostics:** report failed start-session persistence and close-time memory work instead of silently discarding those failures. (#100313, #100308) Thanks @masatohoshino and @lin-hongkuan.
+- **Unicode and plugin package verification:** match native slice semantics for reversed UTF-16 bounds, and reject published plugin packages that omit `openclaw.plugin.json`. (#100014, #99904) Thanks @Simon-XYDT and @849261680.
+- **Android invoke cancellation:** preserve coroutine cancellation through camera handlers and the Gateway invoke boundary so cancelled work cannot emit a stale result. (#99916) Thanks @xialonglee.
+- **Codex native hook relay diagnostics:** avoid bridge registry writes before the local relay server begins listening. (#100300) Thanks @nankingjing.
 - **Agent stop recovery:** prevent late-aborting prompts from reacquiring orphaned session locks after teardown, so `/stop` leaves the conversation ready for the next turn.
 - **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
 - **WhatsApp credential recovery:** restore malformed primary auth state from a valid backup during startup. (#99070) Thanks @LeonidasLux.

@@ -633,6 +633,9 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "plugins.entries.minimax.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
   }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
+  }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
   }

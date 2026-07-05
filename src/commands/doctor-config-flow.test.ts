@@ -1511,6 +1511,14 @@ describe("doctor config flow", () => {
         },
       },
     });
+    await collectDoctorWarnings({
+      channels: {
+        googlechat: {
+          groupPolicy: "allowlist",
+          accounts: { work: { groupPolicy: "allowlist" } },
+        },
+      },
+    });
   });
 
   beforeEach(() => {

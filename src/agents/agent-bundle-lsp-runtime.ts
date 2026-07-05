@@ -30,6 +30,9 @@ type LspSession = {
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
+  // Preserve a spawn failure so requests created after the event reject immediately
+  // instead of waiting for the per-request timeout.
+  failure?: Error;
 };
 
 type PendingLspRequest = {
@@ -108,6 +111,14 @@ function registerActiveLspSession(session: LspSession): void {
 }
 
 function attachLspProcessHandlers(session: LspSession): void {
+  session.process.on("error", (error) => {
+    session.failure = error;
+    for (const pending of session.pendingRequests.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    session.pendingRequests.clear();
+  });
   session.process.stdout?.on("data", (chunk: Buffer | string) =>
     handleIncomingData(session, chunk),
   );
@@ -163,6 +174,9 @@ function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buf
 }
 
 function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
+  if (session.failure) {
+    return Promise.reject(session.failure);
+  }
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
