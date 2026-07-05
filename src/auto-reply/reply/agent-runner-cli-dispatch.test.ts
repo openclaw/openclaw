@@ -8,7 +8,10 @@ import {
   onAgentEvent,
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
-import type { ReasoningTextPayload } from "./agent-runner-cli-dispatch.js";
+import type {
+  ReasoningProgressPayload,
+  ReasoningTextPayload,
+} from "./agent-runner-cli-dispatch.js";
 import {
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -118,6 +121,53 @@ describe("runCliAgentWithLifecycle", () => {
     });
 
     expect(result.payloads).toEqual([{ text: "Only thinking more", isReasoning: true }]);
+  });
+
+  it("bridges thinking token progress without adding durable reasoning", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 200 },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-progress",
+      provider: "claude-cli",
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-progress",
+      },
+    });
+
+    expect(onReasoningProgress.mock.calls.map((call) => call[0])).toEqual([
+      { progressTokens: 50 },
+      { progressTokens: 200 },
+    ]);
+    expect(result.payloads).toEqual([{ text: "Visible answer" }]);
   });
 
   it("does not add a durable reasoning payload when the CLI emits no thinking", async () => {
