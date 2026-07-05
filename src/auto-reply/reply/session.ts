@@ -66,6 +66,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { sleep } from "../../utils.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,
@@ -221,7 +222,8 @@ type InitSessionStateAttemptContext = {
 
 type InitSessionStateAttemptOutcome =
   | { kind: "complete"; result: SessionInitResult }
-  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string };
+  | { kind: "lifecycle-mutation"; sessionId: string; sessionKey: string }
+  | { kind: "stale-snapshot"; sessionKey: string };
 
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
@@ -319,87 +321,114 @@ function resolveInitSessionStateAttemptContext(
   };
 }
 
+/** Max retries for stale-snapshot conflicts during concurrent session init. */
+const STALE_SNAPSHOT_MAX_RETRIES = 3;
+/** Base backoff delay (exponential: 200ms, 400ms, 800ms) between stale-snapshot retries. */
+const STALE_SNAPSHOT_BASE_DELAY_MS = 200;
+
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await initSessionStateAttempt(params);
 }
 
-async function initSessionStateAttempt(
-  params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
-): Promise<SessionInitResult> {
+async function initSessionStateAttempt(params: InitSessionStateParams): Promise<SessionInitResult> {
   const attemptContext = resolveInitSessionStateAttemptContext(params);
-  // Guarded revision checks only serialize correctly when the snapshot and
-  // commit share the same writer lane.
-  const attempt = await runExclusiveSessionStoreWrite(
-    attemptContext.storePath,
-    async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
-  );
-  if (attempt.kind === "complete") {
-    return attempt.result;
-  }
+  let lastStaleKey: string | undefined;
 
-  let rollover = attempt;
-  while (true) {
-    const candidate = rollover;
-    const identities = [candidate.sessionKey, candidate.sessionId];
-    let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
-    // Drain foreign owners before the rollover takes the writer lane. Holding
-    // that lane while waiting would deadlock owners that release after a write.
-    const outcome = await runExclusiveSessionLifecycleMutation({
-      scope: attemptContext.storePath,
-      identities,
-      signal: params.signal,
-      prepare: async () => {
-        // A queued rollover may change identity or become obsolete. Recheck
-        // before interrupting, then reacquire any refreshed identity first.
-        const revalidated = await runExclusiveSessionStoreWrite(
-          attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
-        );
-        if (
-          revalidated.kind === "complete" ||
-          revalidated.sessionKey !== candidate.sessionKey ||
-          revalidated.sessionId !== candidate.sessionId
-        ) {
-          preparedOutcome = revalidated;
-          return;
-        }
-        const drained = await interruptSessionWorkAdmissions({
-          scope: attemptContext.storePath,
-          identities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!drained) {
-          throw new Error(
-            `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
-          );
-        }
-      },
-      run: async () => {
-        if (preparedOutcome) {
-          return preparedOutcome;
-        }
-        // Interrupted owners can rebind while draining. The locked attempt
-        // must match this exact fenced identity before any rollover side effect.
-        return await runExclusiveSessionStoreWrite(
-          attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
-        );
-      },
-    });
-    if (outcome.kind === "complete") {
-      return outcome.result;
+  // Retry stale-snapshot conflicts outside the writer lock so each attempt
+  // acquires a fresh writer lane and re-reads the latest snapshot.
+  // Exponential backoff gives concurrent cross-process writers time to finish
+  // before the next attempt re-reads and re-commits.
+  for (let retries = 0; retries <= STALE_SNAPSHOT_MAX_RETRIES; retries++) {
+    const attempt = await runExclusiveSessionStoreWrite(
+      attemptContext.storePath,
+      async () => await initSessionStateAttemptLocked(params, attemptContext, undefined),
+    );
+    if (attempt.kind === "complete") {
+      return attempt.result;
     }
-    rollover = outcome;
+    if (attempt.kind === "stale-snapshot") {
+      lastStaleKey = attempt.sessionKey;
+      if (retries < STALE_SNAPSHOT_MAX_RETRIES) {
+        await sleep(STALE_SNAPSHOT_BASE_DELAY_MS * 2 ** retries);
+        continue;
+      }
+      throw new Error(`reply session initialization conflicted for ${lastStaleKey}`);
+    }
+
+    // lifecycle-mutation handling
+    let rollover = attempt;
+    while (true) {
+      const candidate = rollover;
+      const identities = [candidate.sessionKey, candidate.sessionId];
+      let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
+      // Drain foreign owners before the rollover takes the writer lane. Holding
+      // that lane while waiting would deadlock owners that release after a write.
+      const outcome = await runExclusiveSessionLifecycleMutation({
+        scope: attemptContext.storePath,
+        identities,
+        signal: params.signal,
+        prepare: async () => {
+          // A queued rollover may change identity or become obsolete. Recheck
+          // before interrupting, then reacquire any refreshed identity first.
+          const revalidated = await runExclusiveSessionStoreWrite(
+            attemptContext.storePath,
+            async () => await initSessionStateAttemptLocked(params, attemptContext, undefined),
+          );
+          if (
+            revalidated.kind === "complete" ||
+            (revalidated.kind !== "stale-snapshot" &&
+              (revalidated.sessionKey !== candidate.sessionKey ||
+                revalidated.sessionId !== candidate.sessionId))
+          ) {
+            preparedOutcome = revalidated;
+            return;
+          }
+          // Stale snapshot during lifecycle revalidation is unexpected — a
+          // writer that held the lock just committed. Treat it as terminal.
+          if (revalidated.kind === "stale-snapshot") {
+            throw new Error(
+              `reply session initialization conflicted for ${revalidated.sessionKey}`,
+            );
+          }
+          const drained = await interruptSessionWorkAdmissions({
+            scope: attemptContext.storePath,
+            identities,
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          });
+          if (!drained) {
+            throw new Error(
+              `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
+            );
+          }
+        },
+        run: async () => {
+          if (preparedOutcome) {
+            return preparedOutcome;
+          }
+          // Interrupted owners can rebind while draining. The locked attempt
+          // must match this exact fenced identity before any rollover side effect.
+          return await runExclusiveSessionStoreWrite(
+            attemptContext.storePath,
+            async () => await initSessionStateAttemptLocked(params, attemptContext, candidate),
+          );
+        },
+      });
+      if (outcome.kind === "complete") {
+        return outcome.result;
+      }
+      if (outcome.kind === "stale-snapshot") {
+        throw new Error(`reply session initialization conflicted for ${outcome.sessionKey}`);
+      }
+      rollover = outcome;
+    }
   }
+  throw new Error(`reply session initialization conflicted for ${lastStaleKey ?? "unknown"}`);
 }
 
 async function initSessionStateAttemptLocked(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
-  staleSnapshotRetried: boolean,
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
@@ -1020,10 +1049,7 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
-    }
-    throw new Error(`reply session initialization conflicted for ${sessionKey}`);
+    return { kind: "stale-snapshot", sessionKey };
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
