@@ -104,6 +104,7 @@ const {
       cpuCount?: number;
       loadAverage1m?: number;
       totalMemoryBytes?: number;
+      freeMemoryBytes?: number;
     },
   ) => number;
 };
@@ -583,7 +584,7 @@ describe("test-projects args", () => {
     ).toBe(3);
   });
 
-  it("uses a bounded local default for full-suite project parallelism", () => {
+  it("uses the global host worker budget for full-suite project parallelism", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         58,
@@ -596,7 +597,7 @@ describe("test-projects args", () => {
           totalMemoryBytes: 16 * 1024 ** 3,
         },
       ),
-    ).toBe(4);
+    ).toBe(2);
   });
 
   it("gives parallel Vitest shards separate filesystem module caches", () => {
