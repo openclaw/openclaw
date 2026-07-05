@@ -1356,6 +1356,7 @@ export async function runReplyAgent(params: {
     requesterSenderE164: followupRun.run.senderE164,
   });
   const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  let didSendDirectCompactionNoticePayload = false;
   const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
     ? async (phase: CompactionNoticePhase) => {
         if (!opts?.onBlockReply) {
@@ -1368,6 +1369,7 @@ export async function runReplyAgent(params: {
         });
         try {
           await opts.onBlockReply(noticePayload);
+          didSendDirectCompactionNoticePayload = true;
         } catch (err) {
           logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
         }
@@ -1945,6 +1947,7 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
+      didSendDirectCompactionNoticePayload ||
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
       hasVisibleOutboundDeliveryEvidence(runResult) ||

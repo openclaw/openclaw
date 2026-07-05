@@ -12,6 +12,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -4329,13 +4330,14 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      opts: GetReplyOptions;
     }> = {},
   ) {
     if (overrides.storePath && overrides.sessionStore) {
       registerFollowupTestSessionStore(overrides.storePath, overrides.sessionStore);
     }
     return createFollowupRunner({
-      opts: { onBlockReply },
+      opts: { ...overrides.opts, onBlockReply },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-6",
@@ -4354,13 +4356,27 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
+      opts: GetReplyOptions;
     }>;
+    agentEvent?: { stream: string; data: Record<string, unknown> };
   }) {
     const onBlockReply = createAsyncReplySpy();
-    runEmbeddedAgentMock.mockResolvedValueOnce({
+    const agentResult = {
       meta: {},
       ...params.agentResult,
-    });
+    };
+    if (params.agentEvent) {
+      runEmbeddedAgentMock.mockImplementationOnce(async (runParams: unknown) => {
+        const onAgentEvent = requireRecord(runParams, "embedded run params").onAgentEvent;
+        if (typeof onAgentEvent !== "function") {
+          throw new Error("expected embedded run onAgentEvent callback");
+        }
+        await onAgentEvent(params.agentEvent);
+        return agentResult;
+      });
+    } else {
+      runEmbeddedAgentMock.mockResolvedValueOnce(agentResult);
+    }
     const runner = createMessagingDedupeRunner(onBlockReply, params.runnerOverrides);
     await runner(params.queued ?? baseQueuedRun());
     return { onBlockReply };
@@ -4914,6 +4930,61 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).toHaveBeenCalledTimes(1);
     const routed = requireMockCallArg(routeReplyMock, 0);
     expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
+  it("routes the fallback after a hidden compaction retry", async () => {
+    await runMessagingCase({
+      agentResult: { payloads: [] },
+      agentEvent: {
+        stream: "compaction",
+        data: { phase: "end", completed: true, willRetry: true },
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors sendPolicy deny for queued origin delivery", async () => {
+    const onItemEvent = vi.fn();
+    const staleSessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const persistedSessionEntry: SessionEntry = {
+      ...staleSessionEntry,
+      sendPolicy: "deny",
+    };
+    const storePath = path.join(tmpdir(), "openclaw-followup-send-policy.json");
+    registerFollowupTestSessionStore(storePath, { main: persistedSessionEntry });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "must stay private" }] },
+      agentEvent: {
+        stream: "item",
+        data: { kind: "preamble", progressText: "also private" },
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: { ...baseQueuedRun("discord").run, verboseLevel: "on" },
+      } as FollowupRun,
+      runnerOverrides: {
+        sessionEntry: staleSessionEntry,
+        sessionKey: "main",
+        storePath,
+        opts: { onItemEvent },
+      },
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
   });
 
   it("keeps empty message-tool-only followup completions silent", async () => {
