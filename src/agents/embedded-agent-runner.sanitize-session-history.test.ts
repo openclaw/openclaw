@@ -2275,7 +2275,8 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
       sessionId: TEST_SESSION_ID,
     });
-    const validated = await validateReplayTurns({
+    // Validate replay turns to ensure sanitized output is safe for Anthropic replay
+    await validateReplayTurns({
       messages: sanitized,
       modelApi: "anthropic-messages",
       provider: "anthropic",
