@@ -10,7 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
@@ -196,6 +196,11 @@ export async function sandboxExplainCommand(
   const elevatedAgentEnabled = elevatedAgent?.enabled !== false;
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
+  const effectiveWorkspaceRoot =
+    sandboxCfg.workspaceAccess === "rw"
+      ? resolveAgentWorkspaceDir(cfg, resolvedAgentId)
+      : sandboxCfg.workspaceRoot;
+
   const globalAllow = channel ? elevatedGlobal?.allowFrom?.[channel] : undefined;
   const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 
@@ -265,6 +270,7 @@ export async function sandboxExplainCommand(
       scope: sandboxCfg.scope,
       workspaceAccess: sandboxCfg.workspaceAccess,
       workspaceRoot: sandboxCfg.workspaceRoot,
+      effectiveWorkspaceRoot,
       sessionIsSandboxed,
       tools: {
         allow: toolPolicy.allow,
@@ -316,7 +322,9 @@ export async function sandboxExplainCommand(
   lines.push(
     `  ${key("workspaceAccess:")} ${value(
       payload.sandbox.workspaceAccess,
-    )} ${key("workspaceRoot:")} ${value(payload.sandbox.workspaceRoot)}`,
+    )} ${key("workspaceRoot:")} ${value(
+      payload.sandbox.workspaceRoot,
+    )} ${key("effectiveWorkspaceRoot:")} ${value(payload.sandbox.effectiveWorkspaceRoot)}`,
   );
   lines.push("");
   lines.push(heading("Sandbox tool policy:"));
