@@ -1,5 +1,4 @@
 // Msteams plugin module implements monitor handler behavior.
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
