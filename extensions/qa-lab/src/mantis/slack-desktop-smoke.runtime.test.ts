@@ -209,6 +209,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain('active_pnpm_version="$(pnpm --version 2>/dev/null || true)"');
     expect(remoteScript).toContain("https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz");
     expect(remoteScript).toContain('sha512sum "$pnpm_archive"');
+    expect(remoteScript).toContain('chmod +x "$pnpm_cli"');
     expect(remoteScript).toContain('ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"');
     expect(remoteScript).toContain('export PATH="$pnpm_bin_dir:$PATH"');
     expect(remoteScript).toContain("Expected pnpm $pnpm_version, got $active_pnpm_version.");

@@ -766,6 +766,7 @@ console.log(match[1] + " " + match[2]);
     fi
     tar -xzf "$pnpm_archive" -C "$pnpm_root"
     pnpm_cli="$pnpm_root/package/bin/pnpm.cjs"
+    chmod +x "$pnpm_cli"
     pnpm_bin_dir="$pnpm_root/bin"
     mkdir -p "$pnpm_bin_dir"
     ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"
