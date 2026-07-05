@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   killPidIfAlive,
@@ -223,9 +223,20 @@ describe("runInstallPolicy", () => {
       const forkScriptPath = await writeForkingNoOutputScript(sourceDir);
       const pidPath = path.join(sourceDir, "forked.pid");
       let childPid: number | undefined;
+      const nativeSetTimeout = globalThis.setTimeout;
+      const noOutputTimeouts: Array<() => void> = [];
+      const setTimeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay, ...args) => {
+          if (delay === 1_000) {
+            noOutputTimeouts.push(() => callback(...args));
+            return nativeSetTimeout(() => undefined, 60_000);
+          }
+          return nativeSetTimeout(callback, delay, ...args);
+        });
 
       try {
-        const result = await runInstallPolicy({
+        const resultPromise = runInstallPolicy({
           config: {
             security: {
               installPolicy: {
@@ -235,10 +246,9 @@ describe("runInstallPolicy", () => {
                   command: forkScriptPath,
                   env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
                   allowInsecurePath: true,
-                  // The first no-output window must absorb shell spawn latency
-                  // under parallel-suite load; the script's readiness byte then
-                  // pins the killing silence window after the pid write.
-                  noOutputTimeoutMs: 1000,
+                  // Preserve production-like startup headroom; the test fires
+                  // the re-armed timer only after the readiness byte arrives.
+                  noOutputTimeoutMs: 1_000,
                   timeoutMs: 10_000,
                 },
               },
@@ -246,11 +256,17 @@ describe("runInstallPolicy", () => {
           },
           request: baseRequest(sourceDir),
         });
+        await vi.waitFor(() => {
+          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+        });
+        childPid = await readPidFile(pidPath);
+        noOutputTimeouts.at(-1)?.();
+        const result = await resultPromise;
 
         expect(result?.blocked?.reason).toContain("policy command produced no output");
-        childPid = await readPidFile(pidPath);
         expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
       } finally {
+        setTimeoutSpy.mockRestore();
         killPidIfAlive(childPid);
       }
     },

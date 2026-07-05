@@ -18,7 +18,7 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
@@ -1173,8 +1173,66 @@ export function renderFallbackIndicator(status: FallbackStatus | null | undefine
 export type ContextNoticeOptions = {
   compactBusy?: boolean;
   compactDisabled?: boolean;
+  messages?: unknown[];
   onCompact?: () => void | Promise<void>;
 };
+
+type ProviderCostStats = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  provider: string | null;
+  model: string | null;
+};
+
+function readCostRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function readCostValue(
+  cost: Record<string, unknown> | null,
+  key: "input" | "output" | "cacheRead" | "cacheWrite",
+) {
+  const value = cost?.[key];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
+  if (!messages?.length) {
+    return null;
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = readCostRecord(messages[index]);
+    if (message?.role === "user") {
+      return null;
+    }
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const directCost = readCostRecord(message.cost);
+    const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
+    const stats: ProviderCostStats = {
+      provider: typeof message.provider === "string" ? message.provider.trim() || null : null,
+      model:
+        (typeof message.responseModel === "string" ? message.responseModel.trim() : "") ||
+        (typeof message.model === "string" ? message.model.trim() : "") ||
+        null,
+    };
+    for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+      const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
+      if (cost !== undefined) {
+        stats[key] = cost;
+      }
+    }
+    if (
+      [stats.input, stats.output, stats.cacheRead, stats.cacheWrite].some((value) => value != null)
+    ) {
+      return stats;
+    }
+  }
+  return null;
+}
 
 function parseHexRgb(hex: string): [number, number, number] | null {
   const h = hex.trim().replace(/^#/, "");
@@ -1224,6 +1282,8 @@ export function getContextNoticeViewModel(
   limit: number;
   input: number | null;
   output: number | null;
+  cost: number | null;
+  provider: string | null;
   model: string | null;
   detail: string;
   color: string;
@@ -1245,11 +1305,19 @@ export function getContextNoticeViewModel(
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
+  const cost =
+    typeof session?.estimatedCostUsd === "number" &&
+    Number.isFinite(session.estimatedCostUsd) &&
+    session.estimatedCostUsd >= 0
+      ? session.estimatedCostUsd
+      : null;
   const usage = {
     used,
     limit,
     input,
     output,
+    cost,
+    provider: session?.modelProvider?.trim() || null,
     model: session?.model?.trim() || null,
   };
   if (!warning) {
@@ -1304,8 +1372,20 @@ export function renderContextNotice(
     pct: String(model.pct),
   });
   const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
+  const providerCosts = latestProviderCostStats(options.messages);
+  const provider = providerCosts?.provider ?? model.provider;
+  const responseModel = providerCosts?.model ?? model.model;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
+  const renderCostStat = (label: string, value: number | undefined) =>
+    value === undefined
+      ? nothing
+      : html`
+          <div>
+            <dt>${label}</dt>
+            <dd>${formatCost(value)}</dd>
+          </div>
+        `;
   return html`
     <div class="context-usage" style="--ctx-color:${model.color};--ctx-bg:${model.bg}">
       <details>
@@ -1362,12 +1442,39 @@ export function renderContextNotice(
               <dt>${t("usage.breakdown.output")}</dt>
               <dd>${formatStat(model.output)}</dd>
             </div>
+            ${model.cost === null
+              ? nothing
+              : html`
+                  <div>
+                    <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                    <dd>${formatCost(model.cost)}</dd>
+                  </div>
+                `}
           </dl>
-          ${model.model
+          ${providerCosts
+            ? html`
+                <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
+                <dl class="context-usage__stats context-usage__stats--cost">
+                  ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
+                  ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
+                  ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
+                  ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
+                </dl>
+              `
+            : nothing}
+          ${provider
+            ? html`
+                <div class="context-usage__model">
+                  <span>${t("sessionsView.provider")}</span>
+                  <strong>${provider}</strong>
+                </div>
+              `
+            : nothing}
+          ${responseModel
             ? html`
                 <div class="context-usage__model">
                   <span>${t("sessionsView.model")}</span>
-                  <strong>${model.model}</strong>
+                  <strong>${responseModel}</strong>
                 </div>
               `
             : nothing}
@@ -1948,6 +2055,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
           compactBusy,
           compactDisabled: !canCompose || isBusy || showAbortableUi,
+          messages: props.messages,
           onCompact: props.onCompact,
         })}
         ${renderChatRunControls({

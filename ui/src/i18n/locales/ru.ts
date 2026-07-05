@@ -1472,6 +1472,7 @@ export const ru: TranslationMap = {
         summary: "Использование контекста сеанса: {used} из {limit} ({pct}%)",
         contextWindow: "Окно контекста",
         latestRunTokens: "Токены последнего запуска",
+        estimatedCost: "Оцен. стоимость",
       },
       dismissTalkError: "Скрыть ошибку Talk",
       startTalk: "Начать Talk",

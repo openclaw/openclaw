@@ -505,6 +505,7 @@ export const sharedVitestConfig = {
       "package.json",
       "pnpm-lock.yaml",
       "test/setup.ts",
+      "test/setup.env.ts",
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",

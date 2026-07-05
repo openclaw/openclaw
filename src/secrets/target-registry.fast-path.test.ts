@@ -121,4 +121,14 @@ describe("secret target registry fast path", () => {
     expect(target?.entry.id).toBe("channels.telegram.botToken");
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
+
+  it("resolves auth-profile plan targets without loading plugin metadata", () => {
+    const target = resolvePlanTargetAgainstRegistry({
+      type: "auth-profiles.api_key.key",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
+
+    expect(target?.entry.id).toBe("auth-profiles.api_key.key");
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
 });
