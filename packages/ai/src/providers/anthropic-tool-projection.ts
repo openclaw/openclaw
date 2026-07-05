@@ -38,6 +38,37 @@ function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
 }
 
+function normalizeAnthropicJsonSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeAnthropicJsonSchema);
+  }
+  if (!isRecord(schema)) {
+    return schema;
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "additionalItems" && Array.isArray(schema.items)) {
+      continue;
+    }
+    normalized[key] = normalizeAnthropicJsonSchema(value);
+  }
+
+  if (Array.isArray(schema.items)) {
+    normalized.prefixItems = schema.items.map(normalizeAnthropicJsonSchema);
+    const additionalItems = schema.additionalItems;
+    if (additionalItems === false) {
+      normalized.items = false;
+    } else if (isRecord(additionalItems) || Array.isArray(additionalItems)) {
+      normalized.items = normalizeAnthropicJsonSchema(additionalItems);
+    } else {
+      delete normalized.items;
+    }
+  }
+
+  return normalized;
+}
+
 /** Snapshots direct/custom tool descriptors before Anthropic payload construction. */
 export function projectAnthropicTools(
   tools: readonly AnthropicToolDescriptor[],
@@ -62,8 +93,13 @@ export function projectAnthropicTools(
         unavailableOriginalNames.add(name);
         continue;
       }
-      const properties = schemaProjection.schema.properties;
-      const required = schemaProjection.schema.required;
+      const anthropicSchema = normalizeAnthropicJsonSchema(schemaProjection.schema);
+      if (!isRecord(anthropicSchema)) {
+        unavailableOriginalNames.add(name);
+        continue;
+      }
+      const properties = anthropicSchema.properties;
+      const required = anthropicSchema.required;
       if (
         (properties !== undefined && properties !== null && !isRecord(properties)) ||
         (required !== undefined &&
