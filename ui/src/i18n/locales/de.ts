@@ -443,12 +443,13 @@ export const de: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Steuerung",
-    agent: "Agent",
     settings: "Einstellungen",
     expand: "Seitenleiste ausklappen",
     collapse: "Seitenleiste einklappen",
     resize: "Seitenleiste in der Größe ändern",
+    more: "Mehr",
+    customize: "Seitenleiste anpassen",
+    customizeReset: "Auf Standardwerte zurücksetzen",
   },
   terminal: {
     title: "Terminal",

@@ -439,12 +439,13 @@ export const ar: TranslationMap = {
   },
   nav: {
     chat: "الدردشة",
-    control: "التحكم",
-    agent: "الوكيل",
     settings: "الإعدادات",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
     resize: "تغيير حجم الشريط الجانبي",
+    more: "المزيد",
+    customize: "تخصيص الشريط الجانبي",
+    customizeReset: "إعادة التعيين إلى الإعدادات الافتراضية",
   },
   terminal: {
     title: "Terminal",

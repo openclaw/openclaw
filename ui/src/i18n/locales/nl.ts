@@ -442,12 +442,13 @@ export const nl: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Control",
-    agent: "Agent",
     settings: "Instellingen",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
     resize: "Zijbalkgrootte aanpassen",
+    more: "Meer",
+    customize: "Zijbalk aanpassen",
+    customizeReset: "Standaardinstellingen herstellen",
   },
   terminal: {
     title: "Terminal",

@@ -437,12 +437,13 @@ export const zh_TW: TranslationMap = {
   },
   nav: {
     chat: "聊天",
-    control: "控制",
-    agent: "代理",
     settings: "設置",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
     resize: "調整側邊欄大小",
+    more: "更多",
+    customize: "自訂側邊欄",
+    customizeReset: "重設為預設值",
   },
   terminal: {
     title: "Terminal",

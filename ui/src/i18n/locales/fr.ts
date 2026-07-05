@@ -443,12 +443,13 @@ export const fr: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Contrôle",
-    agent: "Agent",
     settings: "Paramètres",
     expand: "Développer la barre latérale",
     collapse: "Réduire la barre latérale",
     resize: "Redimensionner la barre latérale",
+    more: "Plus",
+    customize: "Personnaliser la barre latérale",
+    customizeReset: "Réinitialiser les paramètres par défaut",
   },
   terminal: {
     title: "Terminal",

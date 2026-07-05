@@ -246,7 +246,8 @@ export class OverviewPage extends LitElement {
       ...this.settings,
       themeMode: this.context.theme.mode,
       navCollapsed: navigation.navCollapsed,
-      navGroupsCollapsed: navigation.navGroupsCollapsed,
+      sidebarPinnedRoutes: [...navigation.sidebarPinnedRoutes],
+      sidebarMoreExpanded: navigation.sidebarMoreExpanded,
       recentSessionsCollapsed: navigation.recentSessionsCollapsed,
       locale,
     };

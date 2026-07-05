@@ -440,12 +440,13 @@ export const hi: TranslationMap = {
   },
   nav: {
     chat: "चैट",
-    control: "नियंत्रण",
-    agent: "एजेंट",
     settings: "सेटिंग्स",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
     resize: "साइडबार का आकार बदलें",
+    more: "अधिक",
+    customize: "साइडबार कस्टमाइज़ करें",
+    customizeReset: "डिफ़ॉल्ट पर रीसेट करें",
   },
   terminal: {
     title: "टर्मिनल",

@@ -444,12 +444,13 @@ export const ja_JP: TranslationMap = {
   },
   nav: {
     chat: "チャット",
-    control: "コントロール",
-    agent: "エージェント",
     settings: "設定",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
     resize: "サイドバーのサイズを変更",
+    more: "その他",
+    customize: "サイドバーをカスタマイズ",
+    customizeReset: "デフォルトに戻す",
   },
   terminal: {
     title: "Terminal",

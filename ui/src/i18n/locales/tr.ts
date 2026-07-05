@@ -442,12 +442,13 @@ export const tr: TranslationMap = {
   },
   nav: {
     chat: "Sohbet",
-    control: "Kontrol",
-    agent: "Aracı",
     settings: "Ayarlar",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
     resize: "Kenar çubuğunu yeniden boyutlandır",
+    more: "Daha fazla",
+    customize: "Kenar çubuğunu özelleştir",
+    customizeReset: "Varsayılanlara sıfırla",
   },
   terminal: {
     title: "Terminal",

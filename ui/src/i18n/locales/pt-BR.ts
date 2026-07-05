@@ -440,12 +440,13 @@ export const pt_BR: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Controle",
-    agent: "Agente",
     settings: "Configurações",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
     resize: "Redimensionar barra lateral",
+    more: "Mais",
+    customize: "Personalizar barra lateral",
+    customizeReset: "Restaurar padrões",
   },
   terminal: {
     title: "Terminal",

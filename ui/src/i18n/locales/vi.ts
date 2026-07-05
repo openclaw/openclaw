@@ -440,12 +440,13 @@ export const vi: TranslationMap = {
   },
   nav: {
     chat: "Trò chuyện",
-    control: "Điều khiển",
-    agent: "Agent",
     settings: "Cài đặt",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
     resize: "Thay đổi kích thước thanh bên",
+    more: "Thêm",
+    customize: "Tùy chỉnh thanh bên",
+    customizeReset: "Đặt lại về mặc định",
   },
   terminal: {
     title: "Terminal",

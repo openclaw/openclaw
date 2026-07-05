@@ -441,12 +441,13 @@ export const uk: TranslationMap = {
   },
   nav: {
     chat: "Чат",
-    control: "Керування",
-    agent: "Агент",
     settings: "Налаштування",
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
     resize: "Змінити розмір бічної панелі",
+    more: "Більше",
+    customize: "Налаштувати бічну панель",
+    customizeReset: "Скинути до типових налаштувань",
   },
   terminal: {
     title: "Terminal",

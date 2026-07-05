@@ -21,8 +21,10 @@ export class AppTopbar extends LitElement {
   @property({ attribute: false }) routeOwnsHeader = false;
   @property({ attribute: false }) headerError: string | null = null;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
+  @property({ attribute: false }) navCollapsed = false;
   @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onToggleTerminal?: () => void;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) overviewHref = "";
@@ -79,6 +81,17 @@ export class AppTopbar extends LitElement {
               >
                 <span class="topbar-search__label">${t("common.search")}</span>
                 <kbd class="topbar-search__kbd">⌘K</kbd>
+              </button>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${this.navCollapsed ? t("nav.expand") : t("nav.collapse")}>
+              <button
+                class="topbar-icon-btn topbar-sidebar-toggle"
+                type="button"
+                @click=${() => this.onToggleSidebar?.()}
+                aria-label=${this.navCollapsed ? t("nav.expand") : t("nav.collapse")}
+                aria-expanded=${String(!this.navCollapsed)}
+              >
+                ${this.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
               </button>
             </openclaw-tooltip>
             ${this.terminalAvailable

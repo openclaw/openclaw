@@ -441,12 +441,13 @@ export const fa: TranslationMap = {
   },
   nav: {
     chat: "چت",
-    control: "کنترل",
-    agent: "عامل",
     settings: "تنظیمات",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
     resize: "تغییر اندازه نوار کناری",
+    more: "بیشتر",
+    customize: "سفارشی‌سازی نوار کناری",
+    customizeReset: "بازنشانی به پیش‌فرض‌ها",
   },
   terminal: {
     title: "Terminal",

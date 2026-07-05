@@ -441,12 +441,13 @@ export const es: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Control",
-    agent: "Agente",
     settings: "Ajustes",
     expand: "Expandir barra lateral",
     collapse: "Contraer barra lateral",
     resize: "Redimensionar la barra lateral",
+    more: "Más",
+    customize: "Personalizar barra lateral",
+    customizeReset: "Restablecer valores predeterminados",
   },
   terminal: {
     title: "Terminal",

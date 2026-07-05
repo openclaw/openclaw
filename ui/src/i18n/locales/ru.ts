@@ -443,12 +443,13 @@ export const ru: TranslationMap = {
   },
   nav: {
     chat: "Чат",
-    control: "Управление",
-    agent: "Агент",
     settings: "Настройки",
     expand: "Развернуть боковую панель",
     collapse: "Свернуть боковую панель",
     resize: "Изменить размер боковой панели",
+    more: "Ещё",
+    customize: "Настроить боковую панель",
+    customizeReset: "Сбросить настройки",
   },
   terminal: {
     title: "Терминал",

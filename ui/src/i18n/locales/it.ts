@@ -444,12 +444,13 @@ export const it: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Controllo",
-    agent: "Agente",
     settings: "Impostazioni",
     expand: "Espandi barra laterale",
     collapse: "Comprimi barra laterale",
     resize: "Ridimensiona barra laterale",
+    more: "Altro",
+    customize: "Personalizza barra laterale",
+    customizeReset: "Ripristina impostazioni predefinite",
   },
   terminal: {
     title: "Terminal",

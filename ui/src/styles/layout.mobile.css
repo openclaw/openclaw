@@ -155,9 +155,14 @@
     pointer-events: auto;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+     the desktop rail toggle makes no sense once the sidebar is a drawer. */
   .topbar-nav-toggle {
     display: inline-flex;
+  }
+
+  .topbar-sidebar-toggle {
+    display: none;
   }
 
   .sidebar,
@@ -184,17 +189,6 @@
   .sidebar-shell__header {
     min-height: 0;
     padding: 0 4px 16px;
-  }
-
-  .sidebar-shell__header .nav-collapse-toggle {
-    display: none;
-  }
-
-  .shell--nav-drawer-open .sidebar-shell__header .nav-collapse-toggle {
-    display: flex;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
   }
 
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell__header {

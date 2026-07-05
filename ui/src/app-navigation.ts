@@ -5,24 +5,61 @@ import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
-type SidebarSection = {
-  label: string;
-  routes: readonly NavigationRouteId[];
-};
-
 type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
-export const SIDEBAR_SECTIONS = [
-  { label: "chat", routes: ["chat"] },
-  {
-    label: "control",
-    routes: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
-  },
-  { label: "agent", routes: ["agents", "skills", "skill-workshop", "nodes", "dreams"] },
-  { label: "settings", routes: ["config"] },
-] as const satisfies readonly SidebarSection[];
+// The sidebar shows a small user-customizable pinned set; every other nav route
+// lives in the collapsed "More" section. Chat is reachable through the session
+// list and Settings/Docs live in the sidebar footer, so neither is listed here.
+export const SIDEBAR_NAV_ROUTES = [
+  "overview",
+  "activity",
+  "workboard",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "agents",
+  "skills",
+  "skill-workshop",
+  "nodes",
+  "dreams",
+] as const satisfies readonly NavigationRouteId[];
+
+export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "overview",
+  "workboard",
+  "agents",
+] as const satisfies readonly SidebarNavRoute[];
+
+/**
+ * Normalize a persisted pinned-route list. Returns null when the value is not a
+ * list (caller falls back to defaults); unknown or duplicate entries are dropped
+ * so prefs survive route renames/removals without a migration.
+ */
+export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const pinned: SidebarNavRoute[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry === "string" &&
+      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
+      !pinned.includes(entry as SidebarNavRoute)
+    ) {
+      pinned.push(entry as SidebarNavRoute);
+    }
+  }
+  return pinned;
+}
+
+export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+}
 
 export const SETTINGS_NAVIGATION_ROUTES = [
   "config",
@@ -66,16 +103,6 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
-}
-
-export function isRouteInSidebarSection(
-  section: SidebarSection,
-  routeId: NavigationRouteId,
-): boolean {
-  if (section.label === "settings") {
-    return isSettingsNavigationRoute(routeId);
-  }
-  return section.routes.includes(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
