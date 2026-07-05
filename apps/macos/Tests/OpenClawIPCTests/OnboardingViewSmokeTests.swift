@@ -110,6 +110,15 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
+    @Test func `Crestodian setup requires a nonempty auth value`() {
+        #expect(!OnboardingView.hasCrestodianSetupAuth([:]))
+        #expect(!OnboardingView.hasCrestodianSetupAuth(["token": "  "]))
+        #expect(OnboardingView.hasCrestodianSetupAuth(["mode": "token"]))
+        #expect(OnboardingView.hasCrestodianSetupAuth([
+            "token": ["source": "env", "provider": "default", "id": "GATEWAY_TOKEN"],
+        ]))
+    }
+
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
@@ -142,8 +151,8 @@ struct OnboardingViewSmokeTests {
         }
     }
 
-    @Test("permission list covers every capability in importance order")
-    func permissionImportanceOrder() {
+    @Test
+    func `permission list covers every capability in importance order`() {
         #expect(Set(Capability.importanceOrdered) == Set(Capability.allCases))
         #expect(Capability.importanceOrdered.count == Capability.allCases.count)
         // App control and context capture lead; location stays last.

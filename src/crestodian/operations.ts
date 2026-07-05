@@ -6,6 +6,7 @@ import {
   type InferenceBackendCandidate,
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
+import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -435,28 +436,27 @@ function formatCreateAgentWorkspace(workspace: string | undefined): string {
 }
 
 function formatConfigSetValueForPlan(configPath: string, value: string): string {
-  if (SENSITIVE_CONFIG_KEY_RE.test(configPath)) {
+  if (isSensitiveConfigPath(configPath)) {
     return "<redacted>";
   }
   return value;
 }
 
-const SENSITIVE_CONFIG_KEY_RE = /(secret|token|password|key|credential)/i;
 const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 const CONFIG_SCHEMA_CHILDREN_MAX = 40;
 
-function redactConfigValue(value: unknown, keyHint: string): unknown {
+function redactConfigValue(value: unknown, configPath: string): unknown {
   if (typeof value === "string" || typeof value === "number") {
-    return SENSITIVE_CONFIG_KEY_RE.test(keyHint) ? "<redacted>" : value;
+    return isSensitiveConfigPath(configPath) ? "<redacted>" : value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => redactConfigValue(entry, keyHint));
+    return value.map((entry) => redactConfigValue(entry, `${configPath}[]`));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
         key,
-        redactConfigValue(entry, key),
+        redactConfigValue(entry, configPath ? `${configPath}.${key}` : key),
       ]),
     );
   }
@@ -737,8 +737,7 @@ export async function executeCrestodianOperation(
       );
       return { applied: false };
     }
-    const lastSegment = operation.path.split(".").at(-1) ?? operation.path;
-    const redacted = redactConfigValue(lookup.value, lastSegment);
+    const redacted = redactConfigValue(lookup.value, operation.path);
     const rendered = JSON.stringify(redacted, null, 2) ?? "null";
     runtime.log(
       rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS

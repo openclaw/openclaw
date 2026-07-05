@@ -61,11 +61,32 @@ extension OnboardingView {
         }
         if let gateway = root["gateway"] as? [String: Any],
            let auth = gateway["auth"] as? [String: Any],
-           auth["mode"] != nil || auth["token"] != nil || auth["password"] != nil
+           Self.hasCrestodianSetupAuth(auth)
         {
             self.crestodianSetupComplete = true
             return
         }
         self.crestodianSetupComplete = false
+    }
+
+    static func hasCrestodianSetupAuth(_ auth: [String: Any]) -> Bool {
+        if let mode = auth["mode"] as? String,
+           !mode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return true
+        }
+        return ["token", "password"].contains { key in
+            if let value = auth[key] as? String {
+                return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            guard let ref = auth[key] as? [String: Any], ref.count == 3,
+                  let source = ref["source"] as? String,
+                  ["env", "file", "exec"].contains(source),
+                  let provider = ref["provider"] as? String,
+                  !provider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let id = ref["id"] as? String
+            else { return false }
+            return !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 }

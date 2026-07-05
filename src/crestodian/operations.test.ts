@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import {
+  describeCrestodianPersistentOperation,
   executeCrestodianOperation,
   isPersistentCrestodianOperation,
   parseCrestodianOperation,
@@ -100,6 +101,9 @@ const mockConfig = vi.hoisted(() => {
     },
     currentConfig() {
       return cloneConfig();
+    },
+    setConfig(config: TestConfig) {
+      state.config = structuredClone(config);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -299,6 +303,36 @@ describe("parseCrestodianOperation", () => {
       false,
     );
     expect(isPersistentCrestodianOperation({ kind: "config-schema" })).toBe(false);
+  });
+
+  it("redacts sensitive config values using their complete paths", async () => {
+    mockConfig.setConfig({
+      models: {
+        providers: {
+          local: {
+            localService: {
+              env: { HF_HOME: "/private/model-cache" },
+            },
+          },
+        },
+      },
+    });
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    await executeCrestodianOperation(
+      { kind: "config-get", path: "models.providers.local.localService" },
+      runtime,
+    );
+
+    expect(lines.join("\n")).toContain('"HF_HOME": "<redacted>"');
+    expect(lines.join("\n")).not.toContain("/private/model-cache");
+    expect(
+      describeCrestodianPersistentOperation({
+        kind: "config-set",
+        path: "models.providers.local.localService.env.HF_HOME",
+        value: "/private/model-cache",
+      }),
+    ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
   });
 
   it("parses channel listing and connect requests", () => {

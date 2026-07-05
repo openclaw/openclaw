@@ -16563,7 +16563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 104,
+      "line": 116,
       "path": "apps/macos/Sources/OpenClaw/OnboardingCrestodianChat.swift",
       "source": "Crestodian is working…",
       "surface": "apple",
@@ -16571,15 +16571,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 129,
+      "line": 141,
       "path": "apps/macos/Sources/OpenClaw/OnboardingCrestodianChat.swift",
-      "source": "Retry",
+      "source": "Restart",
       "surface": "apple",
-      "id": "native.apple.601ec9555686264b"
+      "id": "native.apple.105683a219ce17d7"
     },
     {
       "kind": "ui-call",
-      "line": 136,
+      "line": 152,
+      "path": "apps/macos/Sources/OpenClaw/OnboardingCrestodianChat.swift",
+      "source": "Enter secret…",
+      "surface": "apple",
+      "id": "native.apple.839da8db3e4256b2"
+    },
+    {
+      "kind": "ui-call",
+      "line": 154,
       "path": "apps/macos/Sources/OpenClaw/OnboardingCrestodianChat.swift",
       "source": "Reply to Crestodian… (yes sets everything up)",
       "surface": "apple",
@@ -19603,7 +19611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 454,
+      "line": 457,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " [\\(initial)]",
       "surface": "apple",
@@ -19611,7 +19619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 501,
+      "line": 504,
       "path": "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
       "source": " — \\(option.hint!)",
       "surface": "apple",

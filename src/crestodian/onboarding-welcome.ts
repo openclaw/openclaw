@@ -1,4 +1,5 @@
 // First-run onboarding welcome: state findings, propose setup, wait for "yes".
+import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { CrestodianChatEngine } from "./chat-engine.js";
 import { formatCrestodianOnboardingWelcome } from "./overview.js";
@@ -31,11 +32,16 @@ export async function buildOnboardingWelcome(params: {
     }
   })();
   const auth = authoredConfig?.gateway?.auth;
+  const hasAuthMode = normalizeSecretInputString(auth?.mode) !== undefined;
+  const hasAuthSecret =
+    isSecretRef(auth?.token) ||
+    normalizeSecretInputString(auth?.token) !== undefined ||
+    isSecretRef(auth?.password) ||
+    normalizeSecretInputString(auth?.password) !== undefined;
   const hasAuthoredSetup = Boolean(
     (authoredConfig?.wizard && Object.keys(authoredConfig.wizard).length > 0) ||
-    auth?.mode ||
-    auth?.token ||
-    auth?.password,
+    hasAuthMode ||
+    hasAuthSecret,
   );
   if (hasAuthoredSetup && overview.defaultModel) {
     const welcome = formatCrestodianOnboardingWelcome(overview);
