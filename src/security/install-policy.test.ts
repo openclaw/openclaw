@@ -688,15 +688,19 @@ describe("runInstallPolicy", () => {
 });
 
 describe("runPolicyCommand stream errors", () => {
-  function createFakeChild(): ChildProcess {
+  function createFakeChild(): {
+    child: ChildProcess;
+    kill: ReturnType<typeof vi.fn>;
+  } {
     const child = new EventEmitter() as EventEmitter & ChildProcess;
+    const kill = vi.fn(() => true);
     child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
     child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
     child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
     child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
     child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
-    child.kill = vi.fn(() => true) as ChildProcess["kill"];
-    return child;
+    child.kill = kill as ChildProcess["kill"];
+    return { child, kill };
   }
 
   beforeEach(() => {
@@ -714,7 +718,7 @@ describe("runPolicyCommand stream errors", () => {
     async (streamName) => {
       const dir = await makeTempDir();
       const policyScriptPath = await writePolicyScript(dir);
-      const child = createFakeChild();
+      const { child, kill } = createFakeChild();
       spawnMock.mockImplementation(() => {
         queueMicrotask(() => {
           child.stdout?.emit(
@@ -734,7 +738,7 @@ describe("runPolicyCommand stream errors", () => {
 
       expect(result?.blocked?.code).toBe("security_scan_failed");
       expect(result?.blocked?.reason).toContain(`policy ${streamName} stream failed`);
-      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
     },
   );
 });

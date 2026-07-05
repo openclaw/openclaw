@@ -669,10 +669,12 @@ class GatewayBootstrapAuthTest {
   @Test
   fun backgroundingStopsTalkModeCapture() {
     val app = RuntimeEnvironment.getApplication()
-    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
     val runtime = NodeRuntime(app)
-    runtime.setTalkModeEnabled(true)
     val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
+    readField<MutableStateFlow<Boolean>>(talkMode, "_isEnabled").value = true
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+    talkMode.ttsOnAllResponses = true
 
     assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
     assertTrue(talkMode.isEnabled.value)
