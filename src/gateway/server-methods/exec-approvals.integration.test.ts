@@ -16,7 +16,6 @@ import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import type { GatewayClient } from "../client.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 import {
   connectOk,
@@ -111,7 +110,6 @@ describe("exec-approvals node preflight (real gateway)", () => {
     // Connect the pre-paired node that DOES advertise exec-approvals commands.
     // Because it is already paired, reconcileNodePairingOnConnect will find the
     // paired entry and set effectiveCommands to include exec-approvals.
-    let capableNodeClient: InstanceType<typeof GatewayClient> | undefined;
     capableNode = await connectGatewayClient({
       url: `ws://127.0.0.1:${gateway.port}`,
       token: "secret",
@@ -133,16 +131,15 @@ describe("exec-approvals node preflight (real gateway)", () => {
       deviceIdentity: capableIdent,
       timeoutMessage: "timeout waiting for capable-node to connect",
       onEvent: (evt) => {
-        if (capableNodeClient) {
+        if (capableNode) {
           acknowledgeNodeInvokeRequestForTest({
-            client: capableNodeClient,
+            client: capableNode,
             event: evt,
             onInvoke: () => {},
           });
         }
       },
     });
-    capableNodeClient = capableNode;
 
     // Connect a node that declares exec-approvals commands WITHOUT
     // pre-pairing.  reconcileNodePairingOnConnect returns effectiveCommands:[]

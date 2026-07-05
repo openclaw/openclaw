@@ -98,11 +98,11 @@ stores relate.
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
 
-| Declared commands                                     | Required scopes                       |
-| ----------------------------------------------------- | ------------------------------------- |
-| none                                                  | `operator.pairing`                    |
-| non-exec node commands                                | `operator.pairing` + `operator.write` |
-| `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                     | Required scopes                       |
+| ------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                  | `operator.pairing`                    |
+| non-exec node commands                                                                | `operator.pairing` + `operator.write` |
+| `system.run`, `system.run.prepare`, `system.which`, `system.execApprovals.get`, or `system.execApprovals.set` | `operator.pairing` + `operator.admin` |
 
 Node pairing establishes identity and trust; it does not replace a node's own
 `system.run` exec approval policy.
