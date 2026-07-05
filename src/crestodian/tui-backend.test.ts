@@ -73,4 +73,62 @@ describe("runCrestodianTui", () => {
       throw new Error("expected crestodian TUI backend");
     }
   });
+
+  it("catches a rejecting respond promise in sendChat and emits an error event", async () => {
+    const backendWithEngine = await new Promise<{
+      backend: {
+        sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+        onEvent?: (evt: {
+          event: string;
+          payload?: { state?: string; errorMessage?: string };
+        }) => void;
+        engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
+      };
+      dispose: () => Promise<void>;
+    }>((resolve) => {
+      void runCrestodianTui(
+        {
+          deps: { loadOverview: async () => overview },
+          runTui: async (opts) => {
+            const backend = opts.backend as {
+              sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+              onEvent?: (evt: {
+                event: string;
+                payload?: { state?: string; errorMessage?: string };
+              }) => void;
+              engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
+              dispose: () => Promise<void>;
+            };
+            resolve({ backend, dispose: async () => backend.dispose() });
+            return { exitReason: "exit" };
+          },
+        },
+        createRuntime(),
+      );
+    });
+
+    const { backend, dispose } = backendWithEngine;
+    backend.engine = {
+      handle: async () => {
+        throw new Error("simulated engine failure");
+      },
+      dispose: async () => {},
+    };
+
+    const events: Array<{ event: string; payload?: { state?: string; errorMessage?: string } }> =
+      [];
+    backend.onEvent = (evt) => events.push(evt);
+
+    await backend.sendChat({ message: "hello" });
+    // Wait for the fire-and-forget catch handler to run.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    const errorEvent = events.find((e) => e.event === "chat" && e.payload?.state === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent?.payload?.errorMessage).toMatch(/simulated engine failure/);
+
+    await dispose();
+  });
 });

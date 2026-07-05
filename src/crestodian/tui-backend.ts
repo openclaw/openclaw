@@ -137,7 +137,12 @@ class CrestodianTuiBackend implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
     this.messages.push(message("user", opts.message));
-    void this.respond(runId, opts.sessionKey, text);
+    void this.respond(runId, opts.sessionKey, text).catch((err: unknown) => {
+      // Defensive catch: respond already handles its own errors, but if the
+      // promise itself ever rejects (e.g. a future engine change), surface it
+      // as a chat error event instead of becoming an unhandled rejection.
+      this.emitError(runId, opts.sessionKey, err);
+    });
     return { runId };
   }
 
