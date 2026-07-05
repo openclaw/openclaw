@@ -392,7 +392,9 @@ struct OnboardingAISetupView: View {
                     self.candidateRow(candidate)
                 }
             }
-        } else if self.model.phase != .connected {
+        } else if self.model.phase != .connected, self.model.detectError == nil {
+            // A failed detect must not claim "nothing found" — the error card
+            // below owns that state and the claim would be unproven.
             self.noCandidatesIntro
         }
 
