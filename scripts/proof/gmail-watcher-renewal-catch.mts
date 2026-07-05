@@ -160,12 +160,11 @@ globalThis.setInterval = (callback, _delay, ...args) => {
   return originalSetInterval(callback, 100, ...args);
 };
 
-try {
-  runGmailService({});
-} catch (err) {
-  console.error("[foreground] synchronous throw:", String(err));
-  process.exit(3);
-}
+const servicePromise = runGmailService({});
+servicePromise.catch((err) => {
+  console.error("[foreground] service rejected:", String(err));
+});
+
 await new Promise((resolve) => {
   setTimeout(resolve, 3000);
 });
@@ -175,6 +174,7 @@ if (unhandled.length > 0) {
   process.exit(2);
 }
 console.log("FOREGROUND_DONE");
+process.exit(0);
 `,
     "utf8",
   );
