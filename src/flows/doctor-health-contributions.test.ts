@@ -2775,7 +2775,10 @@ describe("doctor health contributions", () => {
       ).resolves.toMatchObject({
         findings: [],
       });
-      expect(accessSpy).toHaveBeenCalledWith("/tmp/openclaw-home", fs.constants.W_OK);
+      expect(accessSpy).toHaveBeenCalledWith(
+        "/tmp/openclaw-home",
+        fs.constants.W_OK | fs.constants.X_OK,
+      );
     });
 
     it("reports an unwritable config directory for an existing config", async () => {
@@ -2827,13 +2830,43 @@ describe("doctor health contributions", () => {
       ).resolves.toMatchObject({
         findings: [],
       });
-      expect(accessSpy).toHaveBeenCalledWith("/tmp", fs.constants.W_OK);
+      expect(accessSpy).toHaveBeenCalledWith("/tmp", fs.constants.W_OK | fs.constants.X_OK);
     });
 
     it("reports an unwritable existing parent when the config file is missing", async () => {
       vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
       vi.spyOn(fs, "accessSync").mockImplementation(() => {
         throw new Error("EACCES");
+      });
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp",
+            target: "/tmp/openclaw-home",
+            requirement: "writable-config-directory",
+          }),
+        ],
+      });
+    });
+
+    it("reports an existing parent without search permission", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
+      vi.spyOn(fs, "accessSync").mockImplementation((_path, mode) => {
+        if (mode === (fs.constants.W_OK | fs.constants.X_OK)) {
+          throw new Error("EACCES");
+        }
       });
 
       await expect(

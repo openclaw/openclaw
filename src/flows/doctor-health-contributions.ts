@@ -1347,7 +1347,7 @@ async function collectWriteConfigHealthFindings(
     return findings;
   }
   try {
-    fs.accessSync(existingParent, fs.constants.W_OK);
+    fs.accessSync(existingParent, fs.constants.W_OK | fs.constants.X_OK);
   } catch {
     findings.push({
       checkId: "core/doctor/write-config",
