@@ -11,7 +11,11 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
+import {
+  buildGatewaySessionInfo,
+  filterAndSortSessionEntries,
+  listSessionsFromStore,
+} from "./session-utils.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
 const MAIN_SESSION_ID = "sess-main";
@@ -485,14 +489,14 @@ describe("listSessionsFromStore search", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const result = listSearchSessions({
+      const entries = filterAndSortSessionEntries({
         cfg,
         store,
         opts: { search: testCase.search },
+        now,
       });
 
-      expect(result.sessions.map((session) => session.key)).toEqual([testCase.expectedKey]);
-      expect(result.totalCount).toBe(1);
+      expect(entries.map(([key]) => key)).toEqual([testCase.expectedKey]);
     }
   });
 
