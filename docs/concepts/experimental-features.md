@@ -25,7 +25,7 @@ Experimental features are opt-in preview surfaces behind explicit flags. They ne
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` drops heavyweight optional tools from the agent's direct surface every turn: `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. Explicitly allowed or delivery-required tools remain direct. Lean mode also defaults plugin/MCP/client catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.list[].experimental.localModelLean` to scope this to one agent.
+`agents.defaults.experimental.localModelLean: true` drops heavyweight optional tools from the agent's direct surface every turn: `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults plugin/MCP/client catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.list[].experimental.localModelLean` to scope this to one agent.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
@@ -85,7 +85,7 @@ For one agent only:
 }
 ```
 
-Restart the Gateway after changing the flag. `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` are omitted when lean mode is on unless you explicitly preserve them with `tools.allow` or `tools.alsoAllow`.
+Restart the Gateway after changing the flag. Lean filtering removes `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` unless you explicitly preserve them with `tools.allow` or `tools.alsoAllow`; Tool Search may still catalog preserved tools instead of exposing them directly.
 
 ## Experimental does not mean hidden
 

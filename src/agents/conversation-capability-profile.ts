@@ -238,7 +238,7 @@ export function resolveConversationCapabilityProfile(
       store: subagentStore,
     },
   );
-  const explicitOverridePolicies = [
+  const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,
     effective.agentPolicy,
@@ -247,10 +247,18 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
-    inheritedToolPolicy,
-    params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined,
   ];
-  const inheritancePolicies = [profilePolicy, providerProfilePolicy, ...explicitOverridePolicies];
+  const runtimeToolPolicy = params.runtimeToolAllowlist
+    ? { allow: params.runtimeToolAllowlist }
+    : undefined;
+  const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
+    inheritedToolPolicy,
+    runtimeToolPolicy,
+  ];
 
   return {
     agentId: effective.agentId,
