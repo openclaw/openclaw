@@ -7,7 +7,7 @@ read_when:
   - Updating community project highlights
 ---
 
-OpenClaw projects are not toy demos. People are shipping PR review loops, mobile apps, home automation, voice systems, devtools, and memory-heavy workflows from the channels they already use — chat-native builds on Telegram, WhatsApp, Discord, and terminals; real automation for booking, shopping, and support without waiting for an API; and physical-world integrations with printers, vacuums, cameras, and home systems.
+Community-built OpenClaw projects: PR review loops, mobile apps, home automation, voice systems, devtools, and memory workflows, built chat-native on Telegram, WhatsApp, Discord, and terminals.
 
 <Info>
 **Want to be featured?** Share your project in [#self-promotion on Discord](https://discord.gg/clawd) or [tag @openclaw on X](https://x.com/openclaw).

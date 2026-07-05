@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
@@ -26,6 +27,10 @@ import Testing
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 30000) == 35)
     }
 
+    @Test func compactionLeavesTerminalTimeoutToGateway() {
+        #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
+    }
+
     @Test func agentWaitCompletionDecodesFallbackRunId() throws {
         let data = Data(#"{"status":"completed"}"#.utf8)
         let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")
@@ -39,6 +44,21 @@ import Testing
         #expect(params["includeGlobal"] as? Bool == true)
         #expect(params["includeUnknown"] as? Bool == false)
         #expect(params["limit"] as? Int == 12)
+    }
+
+    @Test func commandsListParamsRequestTextScopeWithArgs() throws {
+        let params = try self.object(from: IOSGatewayChatTransport.makeCommandsListParamsJSON())
+        #expect(params["scope"] as? String == "text")
+        #expect(params["includeArgs"] as? Bool == true)
+        #expect(params["agentId"] == nil)
+    }
+
+    @Test func commandsListParamsIncludeAgentForAgentScopedSession() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(sessionKey: "agent:reviewer:ios-main"))
+        #expect(params["scope"] as? String == "text")
+        #expect(params["includeArgs"] as? Bool == true)
+        #expect(params["agentId"] as? String == "reviewer")
     }
 
     @Test func chatSendParamsOmitEmptyAttachmentsAndKeepSessionFields() throws {
@@ -158,5 +178,25 @@ import Testing
             stateversion: nil)
         let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
         #expect(mapped == nil)
+    }
+}
+
+@Suite struct LocalFixtureChatTransportTests {
+    @Test func sentUserTurnCarriesGatewayIdempotencyMetadata() async throws {
+        let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
+
+        _ = try await transport.sendMessage(
+            sessionKey: "main",
+            message: "hello",
+            thinking: "auto",
+            idempotencyKey: "fixture-run",
+            attachments: [])
+        let history = try await transport.requestHistory(sessionKey: "main")
+        let decoded = try #require(history.messages).compactMap { payload -> OpenClawChatMessage? in
+            guard let data = try? JSONEncoder().encode(payload) else { return nil }
+            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        }
+
+        #expect(decoded.last(where: { $0.role == "user" })?.idempotencyKey == "fixture-run:user")
     }
 }

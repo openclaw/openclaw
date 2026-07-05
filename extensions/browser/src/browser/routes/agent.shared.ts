@@ -108,7 +108,7 @@ export async function requirePwAi(
     [
       `Playwright is not available in this gateway build; '${feature}' is unsupported.`,
       "Reinstall or update OpenClaw so the core browser runtime dependency is present, then restart the gateway. In Docker, also install Chromium with the bundled playwright-core CLI.",
-      "Docs: /tools/browser#playwright-requirement",
+      "Docs: /tools/browser-control#playwright-requirement",
     ].join("\n"),
   );
   return null;

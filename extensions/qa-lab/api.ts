@@ -101,6 +101,7 @@ export {
   testing as __testing,
   buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
+  type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
   resolveQaControlUiRoot,

@@ -53,6 +53,8 @@ describe("ClawRouter plugin", () => {
       inspectToolSchemas: expect.any(Function),
       normalizeResolvedModel: expect.any(Function),
       normalizeToolSchemas: expect.any(Function),
+      prepareDynamicModel: expect.any(Function),
+      resolveDynamicModel: expect.any(Function),
       resolveUsageAuth: expect.any(Function),
       sanitizeReplayHistory: expect.any(Function),
       wrapSimpleCompletionStreamFn: expect.any(Function),
@@ -175,6 +177,63 @@ describe("ClawRouter plugin", () => {
         }),
       }),
     ).rejects.toThrow(/401/u);
+  });
+
+  it("resolves configured catalog models through a stored auth profile", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "resolved-proxy-key",
+      mode: "api-key",
+      source: "auth profile",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(LIVE_CATALOG)),
+    );
+    const provider = await registerSingleProviderPlugin(plugin);
+    const context = {
+      config: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      modelRegistry: { find: vi.fn(() => null) },
+      authProfileId: "clawrouter-profile",
+      authProfileMode: "api_key",
+    };
+
+    expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
+    await provider?.prepareDynamicModel?.(context as never);
+
+    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
+      provider: "clawrouter",
+      api: "openai-responses",
+      baseUrl: "https://clawrouter.openclaw.ai/v1",
+      params: {
+        clawrouterRoute: {
+          api: "openai-responses",
+          baseUrl: "https://clawrouter.openclaw.ai/v1",
+        },
+      },
+    });
+    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "clawrouter",
+      cfg: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      profileId: "clawrouter-profile",
+      lockedProfile: true,
+    });
+    expect(
+      provider?.resolveDynamicModel?.({
+        ...context,
+        authProfileId: "another-profile",
+      } as never),
+    ).toBeUndefined();
+
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue(undefined);
+    await provider?.prepareDynamicModel?.(context as never);
+    expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
   });
 
   it("dispatches replay and tool policies by upstream protocol family", async () => {

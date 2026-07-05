@@ -25,6 +25,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
@@ -958,7 +959,7 @@ export function collectForbiddenPackContentPaths(
 export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
-  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTag = escapeRegExp(tag);
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
   return regex.exec(item)?.[1]?.trim() ?? null;
 }

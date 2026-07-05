@@ -36,7 +36,7 @@ import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isAbortError } from "../../infra/unhandled-rejections.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";

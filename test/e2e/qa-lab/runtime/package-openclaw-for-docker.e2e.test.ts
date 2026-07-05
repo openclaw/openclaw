@@ -10,8 +10,11 @@ import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
   parseArgs,
+  prepareBundledAiRuntimePackage,
   runCommandForTest,
 } from "../../../../scripts/package-openclaw-for-docker.mjs";
+
+const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 0) {
@@ -215,9 +218,83 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+  it("bundles and restores the separately packed AI runtime", async () => {
+    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-ai-source-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-ai-output-"));
+    const packageJsonPath = path.join(sourceDir, "package.json");
+    const originalPackageJson = `${JSON.stringify(
+      {
+        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "1.2.3" },
+        files: ["dist"],
+        name: "openclaw",
+        version: "2026.6.17",
+      },
+      null,
+      2,
+    )}\n`;
+    const installedAiPath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
+    fs.mkdirSync(path.join(sourceDir, "packages", "ai"), { recursive: true });
+    fs.mkdirSync(installedAiPath, { recursive: true });
+    fs.writeFileSync(path.join(installedAiPath, "original-marker"), "workspace package");
+    fs.writeFileSync(packageJsonPath, originalPackageJson);
+
+    try {
+      const cleanup = await prepareBundledAiRuntimePackage(
+        sourceDir,
+        outputDir,
+        async (command: string, args: string[], cwd: string) => {
+          expect({ args, command, cwd }).toEqual({
+            args: ["--dir", "packages/ai", "pack", "--silent", "--pack-destination", outputDir],
+            command: "pnpm",
+            cwd: sourceDir,
+          });
+          fs.writeFileSync(path.join(outputDir, "openclaw-ai-2026.6.17.tgz"), "ai package");
+          return "";
+        },
+        {
+          extractAiRuntime: async (_tarballPath: string, destination: string) => {
+            fs.writeFileSync(
+              path.join(destination, "package.json"),
+              `${JSON.stringify({
+                dependencies: { "dep-a": "1.2.3" },
+                name: "@openclaw/ai",
+                version: "2026.6.17",
+              })}\n`,
+            );
+            fs.writeFileSync(path.join(destination, "runtime.js"), "export {};\n");
+          },
+        },
+      );
+
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+        bundleDependencies: string[];
+        dependencies: Record<string, string>;
+      };
+      expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
+      expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
+      expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);
+      expect(fs.existsSync(path.join(installedAiPath, "runtime.js"))).toBe(true);
+      const stagedAiPackageJson = JSON.parse(
+        fs.readFileSync(path.join(installedAiPath, "package.json"), "utf8"),
+      ) as { dependencies?: Record<string, string> };
+      expect(stagedAiPackageJson.dependencies).toBeUndefined();
+
+      await cleanup();
+      expect(fs.readFileSync(packageJsonPath, "utf8")).toBe(originalPackageJson);
+      expect(fs.readFileSync(path.join(installedAiPath, "original-marker"), "utf8")).toBe(
+        "workspace package",
+      );
+      expect(fs.existsSync(path.join(outputDir, "openclaw-ai-2026.6.17.tgz"))).toBe(false);
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("trims and restores the changelog around ignore-scripts package artifacts", async () => {
     const calls: string[] = [];
     const tarball = await packOpenClawPackageForDocker("/repo", "/out", {
+      prepareBundledAiRuntime: skipBundledAiRuntime,
       prepareChangelog: async (cwd: string) => {
         calls.push(`prepare:${cwd}`);
       },
@@ -255,6 +332,7 @@ describe("package-openclaw-for-docker", () => {
     ]) {
       await expect(
         packOpenClawPackageForDocker("/repo", "/out", {
+          prepareBundledAiRuntime: skipBundledAiRuntime,
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
           runCaptureImpl: async () => `${filename}\n`,
@@ -270,6 +348,7 @@ describe("package-openclaw-for-docker", () => {
       fs.writeFileSync(path.join(outputDir, String.raw`openclaw-nested\evil.tgz`), "");
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
+          prepareBundledAiRuntime: skipBundledAiRuntime,
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
           runCaptureImpl: async () => "npm notice\n",
@@ -278,6 +357,7 @@ describe("package-openclaw-for-docker", () => {
 
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
+          prepareBundledAiRuntime: skipBundledAiRuntime,
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
           runCaptureImpl: async () => {
@@ -298,6 +378,7 @@ describe("package-openclaw-for-docker", () => {
 
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
+          prepareBundledAiRuntime: skipBundledAiRuntime,
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
           runCaptureImpl: async () => {
@@ -321,6 +402,12 @@ describe("package-openclaw-for-docker", () => {
 
     await expect(
       packOpenClawPackageForDocker("/repo", "/out", {
+        prepareBundledAiRuntime: async () => {
+          calls.push("embed");
+          return async () => {
+            calls.push("cleanup");
+          };
+        },
         prepareChangelog: async (cwd: string) => {
           calls.push(`prepare:${cwd}`);
         },
@@ -334,7 +421,7 @@ describe("package-openclaw-for-docker", () => {
       }),
     ).rejects.toThrow("pack failed");
 
-    expect(calls).toEqual(["prepare:/repo", "pack", "restore:/repo"]);
+    expect(calls).toEqual(["prepare:/repo", "embed", "pack", "cleanup", "restore:/repo"]);
   });
 
   it("clamps oversized command timers before scheduling", async () => {

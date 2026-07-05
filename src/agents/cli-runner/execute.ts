@@ -10,6 +10,7 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   emitAgentEvent,
@@ -34,6 +35,8 @@ import {
   parseCliOutput,
   type CliOutput,
   type CliStreamingDelta,
+  type CliThinkingDelta,
+  type CliThinkingProgress,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
@@ -89,7 +92,7 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
@@ -247,9 +250,7 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
 }
 
 function createCliAbortError(): Error {
-  const error = new Error("CLI run aborted");
-  error.name = "AbortError";
-  return error;
+  return createAbortError("CLI run aborted");
 }
 
 function buildCliLogArgs(params: {
@@ -378,6 +379,21 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
+  switch (reusableSession.mode) {
+    case "reuse":
+      return "reusable";
+    case "reuse-with-drift":
+      return `reusable-drift:${reusableSession.drift.reasons.join(",")}`;
+    case "invalidate":
+      return `invalidated:${reusableSession.invalidatedReason}`;
+    case "none":
+      return "none";
+  }
+  const exhaustive: never = reusableSession;
+  return exhaustive;
+}
+
 /** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
@@ -387,15 +403,9 @@ export function buildCliExecLogLine(params: {
   useResume: boolean;
   cliSessionId?: string;
   resolvedSessionId?: string;
-  reusableSessionId?: string;
-  invalidatedReason?: string;
+  reusableSession: CliReusableSession;
   hasHistoryPrompt: boolean;
 }): string {
-  const reuseState = params.reusableSessionId
-    ? "reusable"
-    : params.invalidatedReason
-      ? `invalidated:${params.invalidatedReason}`
-      : "none";
   return [
     `cli exec: provider=${params.provider}`,
     `model=${params.model}`,
@@ -404,7 +414,7 @@ export function buildCliExecLogLine(params: {
     `useResume=${params.useResume ? "true" : "false"}`,
     `session=${params.cliSessionId ? "present" : "none"}`,
     `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
-    `reuse=${reuseState}`,
+    `reuse=${formatCliSessionReuseLogState(params.reusableSession)}`,
     `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
   ].join(" ");
 }
@@ -446,13 +456,15 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
+  const resendSystemPromptForSoftResume = context.reusableCliSession.mode === "reuse-with-drift";
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isNew || resendSystemPromptForSoftResume,
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
-    systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
       ? await executeDeps.writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,
@@ -475,8 +487,10 @@ export async function executePreparedCliRun(
   } = await prepareCliPromptImagePayload({
     backend,
     prompt,
+    imagePrompt: params.imagePrompt,
     workspaceDir: context.workspaceDir,
     images: params.images,
+    imageOrder: params.imageOrder,
   });
   prompt = promptWithImages;
 
@@ -523,6 +537,7 @@ export async function executePreparedCliRun(
     imagePaths,
     promptArg: argsPrompt,
     useResume,
+    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
   const claudeOwnerKey = buildClaudeOwnerKey({
@@ -663,8 +678,7 @@ export async function executePreparedCliRun(
             useResume,
             cliSessionId: cliSessionIdToUse,
             resolvedSessionId,
-            reusableSessionId: context.reusableCliSession.sessionId,
-            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            reusableSession: context.reusableCliSession,
             hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
           }),
         );
@@ -1017,6 +1031,35 @@ export async function executePreparedCliRun(
             },
           });
         };
+        // Emit-always: thinking reaches the agent-event bus and session archive
+        // like the embedded reasoning stream; /reasoning and /verbose gate only
+        // presentation. Text stays raw here to match the thinking-stream contract
+        // shared with embedded-agent-subscribe, which archives untransformed
+        // reasoning regardless of source.
+        const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: { text, delta, ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}) },
+          });
+        };
+        const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: { progressTokens },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -1037,6 +1080,8 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,
+            onThinkingDelta: emitCliThinkingDelta,
+            onThinkingProgress: emitCliThinkingProgress,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1064,6 +1109,8 @@ export async function executePreparedCliRun(
                 backend,
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
+                onThinkingDelta: emitCliThinkingDelta,
+                onThinkingProgress: emitCliThinkingProgress,
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:

@@ -49,6 +49,7 @@ describe("handleControlUiHttpRequest", () => {
       chatMessageMaxWidth?: string;
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
+      terminalEnabled: boolean;
     };
   }
 
@@ -340,7 +341,7 @@ describe("handleControlUiHttpRequest", () => {
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { res, setHeader } = makeMockHttpResponse();
+        const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
@@ -350,7 +351,9 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
-        const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
@@ -359,6 +362,59 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+      },
+    });
+  });
+
+  it("marks terminal-enabled documents and allows the terminal WASM runtime", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: true } } },
+          },
+        );
+        expect(handled).toBe(true);
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
+        expect(String(csp)).toContain("script-src 'self' 'wasm-unsafe-eval'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
+      },
+    });
+  });
+
+  it("uses effective terminal availability instead of raw restart-pending config", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+          root: { kind: "resolved", path: tmp },
+          config: { gateway: { terminal: { enabled: true } } },
+          terminalEnabled: false,
+        });
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
+        expect(String(csp)).not.toContain("'wasm-unsafe-eval'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+
+        const bootstrap = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          bootstrap.res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: false } } },
+            terminalEnabled: true,
+          },
+        );
+        expect(parseBootstrapPayload(bootstrap.end).terminalEnabled).toBe(true);
       },
     });
   });
@@ -783,7 +839,9 @@ describe("handleControlUiHttpRequest", () => {
           },
         );
         expect(handled).toBe(true);
-        expect(end).toHaveBeenCalledWith(html);
+        expect(end).toHaveBeenCalledWith(
+          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+        );
       },
     });
   });
@@ -840,6 +898,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
+        expect(parsed.terminalEnabled).toBe(false);
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });

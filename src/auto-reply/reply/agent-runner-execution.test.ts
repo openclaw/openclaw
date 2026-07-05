@@ -465,6 +465,7 @@ function createMockReplyOperation(): {
       terminalRecovery: false,
       phase: "running",
       result: null,
+      hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
       setPhase: vi.fn(),
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
@@ -3465,7 +3466,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
-  it("bridges CLI assistant agent events into onReasoningStream for live reasoning preview (opus-4-7 text_delta path)", async () => {
+  it("bridges CLI thinking agent events into onReasoningStream with the reasoning opt-in gate", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3479,13 +3480,18 @@ describe("runAgentTurnWithFallback", () => {
       );
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
-        data: { text: "Thinking", delta: "Thinking" },
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
-        data: { text: "Thinking about it", delta: " about it" },
+        stream: "thinking",
+        data: { text: "Thinking", delta: "", isReasoningSnapshot: true },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking about it", delta: " about it", isReasoningSnapshot: true },
       });
       return { payloads: [{ text: "Thinking about it" }], meta: {} };
     });
@@ -3521,11 +3527,21 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    const reasoningTexts = onReasoningStream.mock.calls.map((call) => call[0].text);
-    expect(reasoningTexts).toEqual(["Thinking", "Thinking about it"]);
+    expect(onReasoningStream.mock.calls.map((call) => call[0])).toEqual([
+      {
+        text: "Thinking",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+      {
+        text: "Thinking about it",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
+    ]);
   });
 
-  it("does not bridge CLI assistant events to onReasoningStream when silentExpected is set", async () => {
+  it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3539,12 +3555,12 @@ describe("runAgentTurnWithFallback", () => {
       );
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "heartbeat scratch text", delta: "heartbeat scratch text" },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
       });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -4564,6 +4580,82 @@ describe("runAgentTurnWithFallback", () => {
       phase: "start",
       status: "running",
     });
+  });
+
+  it("hides internal lifecycle events while preserving visible tool progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:exec-1",
+          kind: "tool",
+          title: "exec pwd",
+          name: "exec",
+          phase: "start",
+          status: "running",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "wait",
+          phase: "start",
+          args: { runId: "ordinary_wait" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "wait",
+          phase: "start",
+          args: { runId: "cm_1" },
+          hideFromChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:wait-1",
+          kind: "tool",
+          title: "wait",
+          name: "wait",
+          phase: "start",
+          status: "running",
+          hideFromChannelProgress: true,
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onToolStart).toHaveBeenCalledTimes(2);
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "exec", phase: "start" }),
+    );
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "wait", phase: "start" }),
+    );
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "exec", phase: "start" }),
+    );
   });
 
   it("forwards raw tool progress detail mode to tool-start reply options", async () => {
