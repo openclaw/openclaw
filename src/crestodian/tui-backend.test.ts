@@ -90,7 +90,7 @@ describe("runCrestodianTui", () => {
         {
           deps: { loadOverview: async () => overview },
           runTui: async (opts) => {
-            const backend = opts.backend as {
+            const backend = opts.backend as unknown as {
               sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
               onEvent?: (evt: {
                 event: string;
