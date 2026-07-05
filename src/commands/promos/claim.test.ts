@@ -159,7 +159,8 @@ describe("promosClaimCommand", () => {
   });
 
   it("runs the provider auth choice when no credentials exist", async () => {
-    mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
+    // First check fails (no credentials); post-apply revalidation succeeds.
+    mocks.hasAvailableAuthForProvider.mockResolvedValueOnce(false).mockResolvedValue(true);
     mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({
       config: { plugins: { entries: { openrouter: { enabled: true } } } },
     });
@@ -175,6 +176,31 @@ describe("promosClaimCommand", () => {
     );
     // Auth config write plus the model registration write.
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts when the auth flow asks for retry instead of completing", async () => {
+    mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({
+      config: {},
+      retrySelection: true,
+    });
+
+    await expect(
+      promosClaimCommand("spring-models", { apiKey: "sk-test" }, makeRuntime()),
+    ).rejects.toThrow(/not completed/);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("aborts when auth is still unavailable after the flow returns", async () => {
+    // Both the pre-check and the post-apply revalidation report no usable auth
+    // (e.g. the provider plugin was disabled and the flow returned unchanged).
+    mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
+
+    await expect(
+      promosClaimCommand("spring-models", { apiKey: "sk-test" }, makeRuntime()),
+    ).rejects.toThrow(/not completed/);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("fails when the promotion's auth choice is unknown locally", async () => {

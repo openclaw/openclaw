@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 /** Claims a ClawHub promotion: configures provider auth and registers its models. */
 import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -134,7 +135,7 @@ async function ensureProviderAuth(params: {
     );
   }
   if (promotion.signupUrl) {
-    runtime.log(`Get a free key for this promotion: ${promotion.signupUrl}`);
+    runtime.log(`Get a free key for this promotion: ${sanitizeTerminalText(promotion.signupUrl)}`);
   }
   const apiKey = opts.apiKey?.trim();
   if (apiKey && !catalogEntry.optionKey) {
@@ -150,7 +151,14 @@ async function ensureProviderAuth(params: {
     setDefaultModel: false,
     opts: apiKey && catalogEntry.optionKey ? { [catalogEntry.optionKey]: apiKey } : undefined,
   });
-  if (!applied) {
+  // The apply flow can return success-shaped results without usable auth
+  // (cancelled retrySelection, disabled/unresolvable plugin). Revalidate
+  // before persisting so a claim never registers models the user cannot run.
+  const authCompleted =
+    applied &&
+    !applied.retrySelection &&
+    (await hasAvailableAuthForProvider({ provider, cfg: applied.config }));
+  if (!applied || !authCompleted) {
     throw new Error(`Authentication for "${provider}" was not completed; nothing was changed.`);
   }
   await replaceConfigFile({ nextConfig: applied.config, baseHash: snapshot.hash });
@@ -238,15 +246,17 @@ export async function promosClaimCommand(
     return next;
   });
 
-  runtime.log(`Claimed "${promotion.title}".`);
+  runtime.log(`Claimed "${sanitizeTerminalText(promotion.title)}".`);
   for (const key of registered) {
-    runtime.log(`  Added model: ${key}`);
+    runtime.log(`  Added model: ${sanitizeTerminalText(key)}`);
   }
   for (const alias of skippedAliases) {
-    runtime.log(`  Alias "${alias}" is already in use; kept your existing alias.`);
+    runtime.log(
+      `  Alias "${sanitizeTerminalText(alias)}" is already in use; kept your existing alias.`,
+    );
   }
   if (makeDefault && suggested) {
-    runtime.log(`  Default model set to ${suggested.modelRef}.`);
+    runtime.log(`  Default model set to ${sanitizeTerminalText(suggested.modelRef)}.`);
     runtime.log(
       `  Revert anytime with ${formatCliCommand("openclaw models set <previous-model>")}.`,
     );

@@ -67,6 +67,23 @@ describe("promosListCommand", () => {
     expect(lines.join("\n")).toContain("No active promotions");
   });
 
+  it("strips terminal control sequences from remote promotion text", async () => {
+    mocks.fetchClawHubPromotions.mockResolvedValue([
+      {
+        ...promotion,
+        title: "Free\u001b[31m models",
+        blurb: "Offer\u001b]0;pwned\u0007 text",
+      },
+    ]);
+    const { runtime, lines } = makeRuntime();
+
+    await promosListCommand({}, runtime);
+
+    const output = lines.join("\n");
+    expect(output).not.toContain("\u001b");
+    expect(output).toContain("Free");
+  });
+
   it("emits JSON with --json", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
     const { runtime, lines } = makeRuntime();

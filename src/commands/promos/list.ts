@@ -1,4 +1,5 @@
 /** Lists active ClawHub promotional model offers. */
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -21,15 +22,18 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
     runtime.log("No active promotions right now.");
     return;
   }
+  // Promotion text is remote content; strip control sequences before it can
+  // reach an interactive terminal.
+  const safe = sanitizeTerminalText;
   for (const promotion of promotions) {
-    const sponsor = promotion.sponsor ? ` — ${promotion.sponsor}` : "";
-    runtime.log(`${promotion.title}${sponsor} (${formatWindowEnd(promotion)})`);
-    runtime.log(`  ${promotion.blurb}`);
+    const sponsor = promotion.sponsor ? ` — ${safe(promotion.sponsor)}` : "";
+    runtime.log(`${safe(promotion.title)}${sponsor} (${formatWindowEnd(promotion)})`);
+    runtime.log(`  ${safe(promotion.blurb)}`);
     for (const model of promotion.models) {
-      const alias = model.alias ? ` (${model.alias})` : "";
+      const alias = model.alias ? ` (${safe(model.alias)})` : "";
       const suggested = model.suggestedDefault ? " — suggested default" : "";
-      runtime.log(`  · ${model.modelRef}${alias}${suggested}`);
+      runtime.log(`  · ${safe(model.modelRef)}${alias}${suggested}`);
     }
-    runtime.log(`  Claim: ${formatCliCommand(`openclaw promos claim ${promotion.slug}`)}`);
+    runtime.log(`  Claim: ${formatCliCommand(`openclaw promos claim ${safe(promotion.slug)}`)}`);
   }
 }
