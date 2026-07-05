@@ -43,7 +43,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **WhatsApp quoted replies:** preserve bot-authored outbound quote metadata so replies to those messages keep their reply bubble in WhatsApp Desktop. (#94879) Thanks @Bartok9.
 - **Control UI terminal tabs:** vertically center the new-session button in the terminal tab strip.
 - **Control UI composer scrollbar:** show the message-field scrollbar only when the draft actually overflows its autosized height.
 - **Control UI terminal cursor:** hide the browser-native contenteditable caret so the integrated terminal shows only its canvas-rendered cursor.
