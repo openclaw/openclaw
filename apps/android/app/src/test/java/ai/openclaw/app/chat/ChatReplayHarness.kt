@@ -89,9 +89,20 @@ internal data class ReplayHistoryMessage(
 internal fun historyResponse(
   sessionId: String,
   messages: List<ReplayHistoryMessage>,
+  inFlightRun: Pair<String, String>? = null,
 ): String =
   buildJsonObject {
     put("sessionId", JsonPrimitive(sessionId))
+    if (inFlightRun != null) {
+      put(
+        "inFlightRun",
+        buildJsonObject {
+          put("runId", JsonPrimitive(inFlightRun.first))
+          put("text", JsonPrimitive(inFlightRun.second))
+        },
+      )
+      put("sessionInfo", buildJsonObject { put("hasActiveRun", JsonPrimitive(true)) })
+    }
     put(
       "messages",
       JsonArray(

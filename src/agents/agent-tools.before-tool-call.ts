@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -32,6 +33,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
@@ -927,12 +929,19 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
+    // UNAVAILABLE can also arrive as a structured response. Only validation
+    // rejection proves a healthy Gateway rejected the approval payload.
+    const requestRejected =
+      err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
+    const reason = requestRejected
+      ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
+      : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      reason,
       params: params.baseParams,
     };
   }

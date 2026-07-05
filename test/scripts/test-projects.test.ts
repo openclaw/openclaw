@@ -3820,7 +3820,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
-  it("uses the large host-aware local profile on roomy local hosts", () => {
+  it("uses the global host worker budget for roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         61,
@@ -3831,7 +3831,7 @@ describe("scripts/test-projects full-suite sharding", () => {
           totalMemoryBytes: 48 * 1024 ** 3,
         },
       ),
-    ).toBe(10);
+    ).toBe(6);
   });
 
   it("keeps CI full-suite runs serial even on roomy hosts", () => {

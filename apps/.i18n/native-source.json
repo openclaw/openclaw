@@ -8691,7 +8691,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 132,
+      "line": 139,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Settings",
       "surface": "apple",
@@ -8699,7 +8699,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 229,
+      "line": 243,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -8707,7 +8707,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 250,
+      "line": 265,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset Onboarding?",
       "surface": "apple",
@@ -8715,7 +8715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 254,
+      "line": 269,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset",
       "surface": "apple",
@@ -8723,7 +8723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 258,
+      "line": 273,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -8731,7 +8731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 262,
+      "line": 277,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This disconnects, clears saved gateway credentials, and reopens onboarding.",
       "surface": "apple",
@@ -8739,7 +8739,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 265,
+      "line": 280,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -8747,7 +8747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 272,
+      "line": 287,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -8755,7 +8755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 326,
+      "line": 342,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -8763,7 +8763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 340,
+      "line": 356,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -8771,7 +8771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 348,
+      "line": 364,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
@@ -8859,7 +8859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 664,
+      "line": 867,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -8867,7 +8867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 664,
+      "line": 867,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -8875,7 +8875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 729,
+      "line": 932,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -8883,7 +8883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 729,
+      "line": 932,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -8891,7 +8891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 776,
+      "line": 979,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -8899,7 +8899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 776,
+      "line": 979,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -8907,7 +8907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 781,
+      "line": 984,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -8915,7 +8915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 781,
+      "line": 984,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -8923,7 +8923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 783,
+      "line": 986,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -8931,7 +8931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 783,
+      "line": 986,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -8939,7 +8939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 804,
+      "line": 1007,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "\\(diagnosticsIssueCount)",
       "surface": "apple",
@@ -8947,7 +8947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 815,
+      "line": 1018,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location off",
       "surface": "apple",
@@ -8955,7 +8955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 817,
+      "line": 1020,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using",
       "surface": "apple",
@@ -8963,7 +8963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 819,
+      "line": 1022,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Off",
       "surface": "apple",
@@ -8971,7 +8971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 821,
+      "line": 1024,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Always",
       "surface": "apple",
@@ -8979,7 +8979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 823,
+      "line": 1026,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always",
       "surface": "apple",
@@ -8987,7 +8987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 825,
+      "line": 1028,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective While Using",
       "surface": "apple",
@@ -8995,7 +8995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 827,
+      "line": 1030,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective Off",
       "surface": "apple",
@@ -9003,7 +9003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 855,
+      "line": 1058,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Checking iOS notification permission.",
       "surface": "apple",
@@ -9011,7 +9011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 857,
+      "line": 1060,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw can show approval prompts and event alerts when the app is not active.",
       "surface": "apple",
@@ -9019,7 +9019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 859,
+      "line": 1062,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Notifications have been denied. Enable them in iOS Settings.",
       "surface": "apple",
@@ -9027,7 +9027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 861,
+      "line": 1064,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Enable notifications to receive approval prompts and event alerts outside the app.",
       "surface": "apple",
@@ -9035,7 +9035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 863,
+      "line": 1066,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw cannot determine the current notification permission state.",
       "surface": "apple",
@@ -10667,7 +10667,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 7,
+      "line": 8,
       "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
       "source": "Trust this gateway?",
       "surface": "apple",
@@ -10675,7 +10675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 21,
+      "line": 22,
       "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -10683,7 +10683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 27,
+      "line": 28,
       "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
       "source": "Trust and connect",
       "surface": "apple",
@@ -10995,7 +10995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2343,
+      "line": 2545,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -11003,7 +11003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2343,
+      "line": 2545,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -11011,7 +11011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2676,
+      "line": 3100,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -11019,7 +11019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2676,
+      "line": 3100,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -11027,7 +11027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2680,
+      "line": 3104,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -11035,7 +11035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2680,
+      "line": 3104,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -11043,7 +11043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2988,
+      "line": 3392,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -11051,7 +11051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2988,
+      "line": 3392,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -11243,7 +11243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 148,
+      "line": 185,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Back",
       "surface": "apple",
@@ -11251,7 +11251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 157,
+      "line": 194,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Close",
       "surface": "apple",
@@ -11259,7 +11259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 172,
+      "line": 209,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Done",
       "surface": "apple",
@@ -11267,7 +11267,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 180,
+      "line": 217,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -11275,7 +11275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 185,
+      "line": 222,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "OK",
       "surface": "apple",
@@ -11283,7 +11283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 214,
+      "line": 327,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -11291,7 +11291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 221,
+      "line": 335,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -11299,7 +11299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 228,
+      "line": 342,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Photos",
       "surface": "apple",
@@ -11307,7 +11307,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 353,
+      "line": 398,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "LAN or Tailscale host",
       "surface": "apple",
@@ -11315,7 +11315,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 361,
+      "line": 406,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "VPS with domain",
       "surface": "apple",
@@ -11323,7 +11323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 372,
+      "line": 417,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "For local iOS app development",
       "surface": "apple",
@@ -11331,7 +11331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 388,
+      "line": 433,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Continue",
       "surface": "apple",
@@ -11339,7 +11339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 397,
+      "line": 442,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Developer mode",
       "surface": "apple",
@@ -11347,7 +11347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 425,
+      "line": 470,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Off",
       "surface": "apple",
@@ -11355,7 +11355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 425,
+      "line": 470,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "On",
       "surface": "apple",
@@ -11363,7 +11363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 432,
+      "line": 477,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Mode",
       "surface": "apple",
@@ -11371,7 +11371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 433,
+      "line": 478,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Discovery",
       "surface": "apple",
@@ -11379,7 +11379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 435,
+      "line": 480,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Progress",
       "surface": "apple",
@@ -11387,7 +11387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 437,
+      "line": 482,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Status",
       "surface": "apple",
@@ -11395,7 +11395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 456,
+      "line": 505,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Choose a mode first.",
       "surface": "apple",
@@ -11403,15 +11403,63 @@
     },
     {
       "kind": "ui-call",
-      "line": 461,
+      "line": 510,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Back to Mode Selection",
       "surface": "apple",
       "id": "native.apple.378c2c7be159c1f2"
     },
     {
+      "kind": "conditional-branch",
+      "line": 522,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "Plaintext (local network)",
+      "surface": "apple",
+      "id": "native.apple.4014217851d06190"
+    },
+    {
       "kind": "ui-call",
-      "line": 473,
+      "line": 522,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "Security",
+      "surface": "apple",
+      "id": "native.apple.cf616b515da5bc19"
+    },
+    {
+      "kind": "ui-call",
+      "line": 545,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "Use Manual Setup",
+      "surface": "apple",
+      "id": "native.apple.db7b52a1bbc6fac5"
+    },
+    {
+      "kind": "ui-call",
+      "line": 551,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "Setup Link",
+      "surface": "apple",
+      "id": "native.apple.7dbdf9a439f64f08"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 555,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "surface": "apple",
+      "id": "native.apple.6bfb611862fb1687"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 555,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "surface": "apple",
+      "id": "native.apple.3329c7f367f10c78"
+    },
+    {
+      "kind": "ui-call",
+      "line": 566,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "No gateways found yet.",
       "surface": "apple",
@@ -11419,7 +11467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 498,
+      "line": 591,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Resolving…",
       "surface": "apple",
@@ -11427,7 +11475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 514,
+      "line": 607,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Restart Discovery",
       "surface": "apple",
@@ -11435,7 +11483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 520,
+      "line": 613,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Discovered Gateways",
       "surface": "apple",
@@ -11443,7 +11491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 524,
+      "line": 617,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Manual Fallback",
       "surface": "apple",
@@ -11451,7 +11499,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 529,
+      "line": 622,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Domain Settings",
       "surface": "apple",
@@ -11459,7 +11507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 544,
+      "line": 637,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Developer Local",
       "surface": "apple",
@@ -11467,7 +11515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 547,
+      "line": 640,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Default host is localhost. Use your Mac LAN IP if simulator networking requires it.",
       "surface": "apple",
@@ -11475,7 +11523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 571,
+      "line": 664,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway rejected credentials. Scan a fresh QR code or update token/password.",
       "surface": "apple",
@@ -11483,7 +11531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 575,
+      "line": 668,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Auth token looks valid.",
       "surface": "apple",
@@ -11491,7 +11539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 589,
+      "line": 682,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Resume After Approval",
       "surface": "apple",
@@ -11499,7 +11547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 595,
+      "line": 688,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Pairing Approval",
       "surface": "apple",
@@ -11507,7 +11555,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 605,
+      "line": 698,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
       "surface": "apple",
@@ -11515,7 +11563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 619,
+      "line": 712,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Scan QR Code Again",
       "surface": "apple",
@@ -11523,7 +11571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 632,
+      "line": 725,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Retry Connection",
       "surface": "apple",
@@ -11531,7 +11579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 665,
+      "line": 758,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Go to Chat",
       "surface": "apple",
@@ -11539,7 +11587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 679,
+      "line": 772,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Paste setup code",
       "surface": "apple",
@@ -11547,7 +11595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 695,
+      "line": 788,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Applying...",
       "surface": "apple",
@@ -11555,7 +11603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 699,
+      "line": 792,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Apply Setup Code",
       "surface": "apple",
@@ -11563,7 +11611,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 714,
+      "line": 807,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Setup Code",
       "surface": "apple",
@@ -11571,7 +11619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 717,
+      "line": 810,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Use this if you received a setup code instead of a QR code.",
       "surface": "apple",
@@ -11579,7 +11627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 724,
+      "line": 817,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Host",
       "surface": "apple",
@@ -11587,7 +11635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 728,
+      "line": 821,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Port",
       "surface": "apple",
@@ -11595,7 +11643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 731,
+      "line": 824,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Use TLS",
       "surface": "apple",
@@ -11603,7 +11651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 732,
+      "line": 825,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Discovery Domain (optional)",
       "surface": "apple",
@@ -11611,7 +11659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 737,
+      "line": 830,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -11619,7 +11667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 740,
+      "line": 833,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -11627,7 +11675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 784,
+      "line": 877,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -11659,7 +11707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 209,
+      "line": 212,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Settings",
       "surface": "apple",
@@ -11667,7 +11715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 308,
+      "line": 311,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -11675,7 +11723,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 338,
+      "line": 341,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw \\(self.sidebarGatewayStatusTitle)",
       "surface": "apple",
@@ -11683,7 +11731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 343,
+      "line": 346,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Online",
       "surface": "apple",
@@ -11691,7 +11739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 345,
+      "line": 348,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -11699,7 +11747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 347,
+      "line": 350,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -11707,7 +11755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 349,
+      "line": 352,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Offline",
       "surface": "apple",
@@ -11715,7 +11763,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 429,
+      "line": 432,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Chat",
       "surface": "apple",
@@ -11723,7 +11771,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 442,
+      "line": 445,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Overview",
       "surface": "apple",
@@ -11731,7 +11779,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 466,
+      "line": 469,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agents",
       "surface": "apple",
@@ -11739,7 +11787,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 473,
+      "line": 476,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Instances",
       "surface": "apple",
@@ -11747,7 +11795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 484,
+      "line": 487,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -11755,7 +11803,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 491,
+      "line": 494,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -11763,7 +11811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 498,
+      "line": 501,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -11771,7 +11819,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 630,
+      "line": 634,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -11779,7 +11827,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 757,
+      "line": 761,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -11787,7 +11835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1006,
+      "line": 1010,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -11795,7 +11843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1006,
+      "line": 1010,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -11803,7 +11851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1042,
+      "line": 1046,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -11811,7 +11859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1042,
+      "line": 1046,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -12275,7 +12323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 285,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -12283,7 +12331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 285,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -12291,7 +12339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 957,
+      "line": 959,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -12299,7 +12347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 957,
+      "line": 959,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speech error: \\(msg)",
       "surface": "apple",
@@ -12307,7 +12355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1158,
+      "line": 1160,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Aborted",
       "surface": "apple",
@@ -12315,7 +12363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1158,
+      "line": 1160,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Chat error",
       "surface": "apple",
@@ -12323,7 +12371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2988,
+      "line": 3006,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -12331,7 +12379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2988,
+      "line": 3006,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -12531,7 +12579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 275,
+      "line": 281,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Review again",
       "surface": "apple",
@@ -12539,7 +12587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 285,
+      "line": 291,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Open all approvals",
       "surface": "apple",
@@ -12547,7 +12595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 335,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "\\(self.chatCount)",
       "surface": "apple",
@@ -12555,7 +12603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 333,
+      "line": 339,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "\\(self.approvalCount)",
       "surface": "apple",
@@ -12563,7 +12611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 338,
+      "line": 344,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "AI agent online",
       "surface": "apple",
@@ -12571,7 +12619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 338,
+      "line": 344,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Reconnect on iPhone",
       "surface": "apple",
@@ -12579,7 +12627,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 345,
+      "line": 351,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Pairing",
       "surface": "apple",
@@ -12587,7 +12635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 345,
+      "line": 351,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Running",
       "surface": "apple",
@@ -12595,7 +12643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 365,
+      "line": 371,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Ready for quick actions",
       "surface": "apple",
@@ -12603,7 +12651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 365,
+      "line": 371,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Waiting for iPhone sync",
       "surface": "apple",
@@ -12611,7 +12659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 369,
+      "line": 375,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "1 approval waiting",
       "surface": "apple",
@@ -12619,7 +12667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 369,
+      "line": 375,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "\\(self.approvalCount) approvals",
       "surface": "apple",
@@ -12627,7 +12675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 378,
+      "line": 384,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Decide from watch",
       "surface": "apple",
@@ -12635,7 +12683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 378,
+      "line": 384,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No approvals",
       "surface": "apple",
@@ -12643,7 +12691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 432,
+      "line": 438,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "1 recent message",
       "surface": "apple",
@@ -12651,7 +12699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 432,
+      "line": 438,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "\\(self.chatCount) recent messages",
       "surface": "apple",
@@ -12659,7 +12707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 434,
+      "line": 440,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No messages synced",
       "surface": "apple",
@@ -12667,7 +12715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 464,
+      "line": 470,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Synced",
       "surface": "apple",
@@ -12675,7 +12723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 464,
+      "line": 470,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Waiting for iPhone",
       "surface": "apple",
@@ -12683,7 +12731,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 730,
+      "line": 736,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Inbox",
       "surface": "apple",
@@ -12691,7 +12739,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 906,
+      "line": 912,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -12699,7 +12747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 995,
+      "line": 1001,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "You",
       "surface": "apple",
@@ -12707,7 +12755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 997,
+      "line": 1003,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "System",
       "surface": "apple",
@@ -12715,7 +12763,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1042,
+      "line": 1048,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -12723,7 +12771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1137,
+      "line": 1143,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No chat synced",
       "surface": "apple",
@@ -12731,7 +12779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1144,
+      "line": 1150,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Tap the message pill below to start from your watch.",
       "surface": "apple",
@@ -12739,7 +12787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1192,
+      "line": 1198,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Message OpenClaw",
       "surface": "apple",
@@ -12747,7 +12795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1295,
+      "line": 1301,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approvals",
       "surface": "apple",
@@ -12755,7 +12803,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1298,
+      "line": 1304,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Clear",
       "surface": "apple",
@@ -12763,7 +12811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1299,
+      "line": 1305,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "No approvals waiting",
       "surface": "apple",
@@ -12771,7 +12819,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1359,
+      "line": 1365,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approval",
       "surface": "apple",
@@ -12779,7 +12827,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1373,
+      "line": 1379,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Sending decision...",
       "surface": "apple",
@@ -12787,7 +12835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1377,
+      "line": 1383,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Approve",
       "surface": "apple",
@@ -12795,7 +12843,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1383,
+      "line": 1392,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
       "source": "Deny",
       "surface": "apple",

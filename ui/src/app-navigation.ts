@@ -61,6 +61,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   debug: "bug",
   logs: "scrollText",
   dreams: "moon",
+  plugin: "puzzle",
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
@@ -159,6 +160,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   dreams: { titleKey: "tabs.dreams", subtitleKey: "subtitles.dreams" },
+  plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
 };
 
 export function titleForRoute(routeId: NavigationRouteId): string {

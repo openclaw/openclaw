@@ -89,8 +89,13 @@ class ChatController internal constructor(
   private var lastHealthPollAtMs: Long? = null
   private var commandsAgentId: String? = null
 
+  // Armed on disconnect so the next health event refetches history and re-adopts
+  // any run the gateway still reports in flight (chat.history `inFlightRun`).
+  private var restoreRunStateOnReconnect = false
+
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
+    restoreRunStateOnReconnect = true
     _healthOk.value = false
     _errorText.value = null
     _commands.value = emptyList()
@@ -421,10 +426,19 @@ class ChatController internal constructor(
       "health" -> {
         _healthOk.value = true
         refreshCommandsAfterReconnect()
+        if (restoreRunStateOnReconnect) {
+          restoreRunStateOnReconnect = false
+          refreshHistoryForRecovery()
+        }
       }
       "seqGap" -> {
-        _errorText.value = "Event stream interrupted; try refreshing."
+        // Missed events may include deltas or the terminal state of a pending run;
+        // refetch history and rebuild run state from the gateway snapshot.
         clearPendingRuns()
+        pendingToolCallsById.clear()
+        publishPendingToolCalls()
+        _streamingAssistantText.value = null
+        refreshHistoryForRecovery()
       }
       "chat" -> {
         if (payloadJson.isNullOrBlank()) return
@@ -448,6 +462,21 @@ class ChatController internal constructor(
     }
   }
 
+  /**
+   * Reconnect/seq-gap recovery: refetch history for the current session without the
+   * beginHistoryLoad transient-state reset. Disconnect (or the seqGap handler) already
+   * cleared run state, and resetting healthOk here would block sends after reconnect.
+   */
+  private fun refreshHistoryForRecovery() {
+    val key = normalizeRequestedSessionKey(_sessionKey.value)
+    val generation = historyLoadGeneration.incrementAndGet()
+    _sessionKey.value = key
+    _historyLoading.value = true
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = false, refreshSessions = true)
+    }
+  }
+
   private suspend fun bootstrap(
     sessionKey: String,
     generation: Long,
@@ -466,6 +495,7 @@ class ChatController internal constructor(
       prunePersistedOptimisticMessages(history.messages)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
+      adoptInFlightRun(history.inFlightRun)
       _historyLoading.value = false
       history.thinkingLevel
         ?.trim()
@@ -709,6 +739,28 @@ class ChatController internal constructor(
       pendingToolCallsById.values.sortedBy { it.startedAtMs }
   }
 
+  /**
+   * Adopts the run the gateway reports still streaming for this session so reconnect,
+   * cold start, and seq-gap recovery restore pending/streaming UI state. Snapshot absence
+   * never clears local state: live terminal events and the pending-run timeout own
+   * completion, and a snapshot fetched before our own send must not cancel that run.
+   */
+  private fun adoptInFlightRun(run: ChatInFlightRun?) {
+    if (run == null) return
+    val runId = run.runId.trim()
+    if (runId.isEmpty()) return
+    synchronized(pendingRuns) {
+      // A different locally-owned run means this snapshot predates it; ignore.
+      if (pendingRuns.isNotEmpty() && runId !in pendingRuns) return
+      pendingRuns.add(runId)
+      _pendingRunCount.value = pendingRuns.size
+    }
+    armPendingRunTimeout(runId)
+    if (run.text.isNotEmpty()) {
+      _streamingAssistantText.value = run.text
+    }
+  }
+
   private fun armPendingRunTimeout(runId: String) {
     pendingRunTimeoutJobs[runId]?.cancel()
     pendingRunTimeoutJobs[runId] =
@@ -832,7 +884,14 @@ class ChatController internal constructor(
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
+      inFlightRun = parseInFlightRun(root),
     )
+  }
+
+  private fun parseInFlightRun(root: JsonObject): ChatInFlightRun? {
+    val obj = root["inFlightRun"].asObjectOrNull() ?: return null
+    val runId = obj["runId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return ChatInFlightRun(runId = runId, text = obj["text"].asStringOrNull().orEmpty())
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {

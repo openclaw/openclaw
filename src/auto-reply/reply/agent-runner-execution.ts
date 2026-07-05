@@ -627,6 +627,8 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
       /** Payloads successfully sent directly during tool flush. */
       directlySentBlockPayloads?: ReplyPayload[];
+      /** Prepared terminal failure, appended only after delivery evidence settles. */
+      terminalFailurePayload?: ReplyPayload;
     }
   | { kind: "final"; payload: ReplyPayload };
 
@@ -2060,6 +2062,7 @@ async function runAgentTurnWithFallbackInternal(
   let compactionTraceparent: string | undefined;
   let didResetAfterCompactionFailure = false;
   let fallbackExhausted = false;
+  let terminalRunFailed = false;
   let pendingLifecycleTerminal:
     | {
         provider: string;
@@ -3542,6 +3545,7 @@ async function runAgentTurnWithFallbackInternal(
         const exhaustionError = new Error(
           terminalErrorMessage ?? "All model fallback candidates failed",
         );
+        terminalRunFailed = true;
         emitSettledLifecycleError(exhaustionError, {
           ...terminalMetadata,
           fallbackExhaustedFailure: true,
@@ -3550,6 +3554,7 @@ async function runAgentTurnWithFallbackInternal(
         params.replyOperation?.fail("run_failed", exhaustionError);
       } else if (deferredLifecycleError || embeddedError) {
         const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
+        terminalRunFailed = true;
         emitSettledLifecycleError(terminalError, terminalMetadata);
         params.replyOperation?.retainFailureUntilComplete();
         params.replyOperation?.fail("run_failed", terminalError);
@@ -4022,6 +4027,18 @@ async function runAgentTurnWithFallbackInternal(
       }
     }
   }
+  const terminalFailurePayload = terminalRunFailed
+    ? markAgentRunFailureReplyPayload({
+        text: resolveExternalRunFailureTextForConversation({
+          text: params.isHeartbeat
+            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          sessionCtx: params.sessionCtx,
+          isGenericRunnerFailure: true,
+          cfg: params.followupRun.run.config,
+        }),
+      })
+    : undefined;
 
   return {
     kind: "success",
@@ -4039,6 +4056,7 @@ async function runAgentTurnWithFallbackInternal(
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
+    ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
   };
 }
 
