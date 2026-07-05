@@ -323,6 +323,54 @@ describe("update-startup", () => {
     };
   }
 
+  function createExtendedStableConfig(params?: {
+    checkOnStart?: boolean;
+    autoEnabled?: boolean;
+  }) {
+    return {
+      update: {
+        ...(params?.checkOnStart === false ? { checkOnStart: false } : {}),
+        channel: "extended-stable" as const,
+        ...(params?.autoEnabled ? { auto: { enabled: true } } : {}),
+      },
+    };
+  }
+
+  async function runExtendedStableUpdateCheck(params?: {
+    cfg?: ReturnType<typeof createExtendedStableConfig>;
+    log?: { info: ReturnType<typeof vi.fn> };
+    onUpdateAvailableChange?: Parameters<
+      typeof runGatewayUpdateCheck
+    >[0]["onUpdateAvailableChange"];
+    runAutoUpdate?: ReturnType<typeof createAutoUpdateSuccessMock>;
+    isNixMode?: boolean;
+  }) {
+    const log = params?.log ?? { info: vi.fn() };
+    await runGatewayUpdateCheck({
+      cfg: params?.cfg ?? createExtendedStableConfig(),
+      log,
+      isNixMode: params?.isNixMode ?? false,
+      allowInTests: true,
+      ...(params?.onUpdateAvailableChange
+        ? { onUpdateAvailableChange: params.onUpdateAvailableChange }
+        : {}),
+      ...(params?.runAutoUpdate ? { runAutoUpdate: params.runAutoUpdate } : {}),
+    });
+    return log;
+  }
+
+  async function seedExtendedStableAvailability(params?: {
+    onUpdateAvailableChange?: Parameters<
+      typeof runGatewayUpdateCheck
+    >[0]["onUpdateAvailableChange"];
+  }) {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("extended-stable", "2.0.0");
+    await runExtendedStableUpdateCheck({
+      onUpdateAvailableChange: params?.onUpdateAvailableChange,
+    });
+  }
+
   async function runAutoUpdateCheckWithDefaults(params: {
     cfg: { update?: Record<string, unknown> };
     runAutoUpdate?: ReturnType<typeof createAutoUpdateSuccessMock>;
@@ -437,6 +485,83 @@ describe("update-startup", () => {
     });
   });
 
+  it.each([
+    { channel: "stable" as const, persistedTag: undefined, expectedTag: "latest" },
+    { channel: "stable" as const, persistedTag: "latest", expectedTag: "latest" },
+    { channel: "beta" as const, persistedTag: "beta", expectedTag: "beta" },
+    { channel: "beta" as const, persistedTag: "latest", expectedTag: "latest" },
+    {
+      channel: "extended-stable" as const,
+      persistedTag: "extended-stable",
+      expectedTag: "extended-stable",
+    },
+    { channel: "dev" as const, persistedTag: "dev", expectedTag: "dev" },
+  ])(
+    "hydrates $channel cached availability from its compatible $expectedTag tag",
+    async ({ channel, persistedTag, expectedTag }) => {
+      writePersistedUpdateCheckState({
+        lastCheckedAt: new Date(Date.now()).toISOString(),
+        lastAvailableVersion: "2.0.0",
+        lastAvailableTag: persistedTag,
+      });
+      const onUpdateAvailableChange = vi.fn();
+
+      await runGatewayUpdateCheck({
+        cfg: { update: { channel } },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+        onUpdateAvailableChange,
+      });
+
+      expect(checkUpdateStatus).not.toHaveBeenCalled();
+      expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+      expect(onUpdateAvailableChange).toHaveBeenCalledWith({
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: expectedTag,
+      });
+      expect(getUpdateAvailable()).toEqual({
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: expectedTag,
+      });
+    },
+  );
+
+  it.each([
+    { channel: "stable" as const, persistedTag: "beta" },
+    { channel: "stable" as const, persistedTag: "extended-stable" },
+    { channel: "beta" as const, persistedTag: undefined },
+    { channel: "beta" as const, persistedTag: "extended-stable" },
+    { channel: "extended-stable" as const, persistedTag: "latest" },
+    { channel: "extended-stable" as const, persistedTag: "beta" },
+    { channel: "dev" as const, persistedTag: "latest" },
+  ])(
+    "suppresses $persistedTag persisted availability on the $channel channel",
+    async ({ channel, persistedTag }) => {
+      writePersistedUpdateCheckState({
+        lastCheckedAt: new Date(Date.now()).toISOString(),
+        lastAvailableVersion: "2.0.0",
+        lastAvailableTag: persistedTag,
+      });
+      const onUpdateAvailableChange = vi.fn();
+
+      await runGatewayUpdateCheck({
+        cfg: { update: { channel } },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+        onUpdateAvailableChange,
+      });
+
+      expect(checkUpdateStatus).not.toHaveBeenCalled();
+      expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+      expect(onUpdateAvailableChange).not.toHaveBeenCalled();
+      expect(getUpdateAvailable()).toBeNull();
+    },
+  );
+
   it("emits update change callback when update state clears", async () => {
     mockPackageInstallStatus();
     vi.mocked(resolveNpmChannelTag)
@@ -478,21 +603,68 @@ describe("update-startup", () => {
     await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
-  it("skips all startup and background work for extended-stable", async () => {
+  it("discovers and deduplicates an exact extended-stable update without auto-applying", async () => {
+    const onUpdateAvailableChange = vi.fn();
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+    mockPackageUpdateStatus("extended-stable", "2.0.0");
+    const log = { info: vi.fn() };
+
+    await runExtendedStableUpdateCheck({
+      cfg: createExtendedStableConfig({ autoEnabled: true }),
+      log,
+      onUpdateAvailableChange,
+      runAutoUpdate,
+    });
+    vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
+    await runExtendedStableUpdateCheck({
+      cfg: createExtendedStableConfig({ autoEnabled: true }),
+      log,
+      onUpdateAvailableChange,
+      runAutoUpdate,
+    });
+
+    expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
+    expect(resolveNpmChannelTag).toHaveBeenNthCalledWith(1, {
+      channel: "extended-stable",
+      timeoutMs: 2500,
+    });
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith(
+      `update available (extended-stable): v2.0.0 (current v1.0.0). Run: ${formatCliCommand("openclaw update")}`,
+    );
+    expect(onUpdateAvailableChange).toHaveBeenCalledTimes(1);
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "extended-stable",
+    });
+    expect(getUpdateAvailable()).toEqual({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "extended-stable",
+    });
+    expect(readPersistedUpdateCheckState()).toMatchObject({
+      lastNotifiedVersion: "2.0.0",
+      lastNotifiedTag: "extended-stable",
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "extended-stable",
+    });
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()?.autoFirstSeenVersion).toBeUndefined();
+  });
+
+  it("does no extended-stable hint or auto work when checkOnStart is false", async () => {
+    await seedExtendedStableAvailability();
+    vi.mocked(resolveOpenClawPackageRoot).mockClear();
+    vi.mocked(checkUpdateStatus).mockClear();
+    vi.mocked(resolveNpmChannelTag).mockClear();
     const onUpdateAvailableChange = vi.fn();
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
-    await runGatewayUpdateCheck({
-      cfg: {
-        update: {
-          channel: "extended-stable",
-          checkOnStart: true,
-          auto: { enabled: true },
-        },
-      },
-      log: { info: vi.fn() },
-      isNixMode: false,
-      allowInTests: true,
+    await runExtendedStableUpdateCheck({
+      cfg: createExtendedStableConfig({ checkOnStart: false, autoEnabled: true }),
       onUpdateAvailableChange,
       runAutoUpdate,
     });
@@ -501,8 +673,119 @@ describe("update-startup", () => {
     expect(checkUpdateStatus).not.toHaveBeenCalled();
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(runAutoUpdate).not.toHaveBeenCalled();
-    expect(readPersistedUpdateCheckState()).toBeNull();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(onUpdateAvailableChange).toHaveBeenCalledOnce();
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith(null);
+    expect(getUpdateAvailable()).toBeNull();
+  });
+
+  it.each([
+    { name: "equal", version: "1.0.0" },
+    { name: "older", version: "0.9.0" },
+  ])("clears stale extended-stable availability for an $name target", async ({ version }) => {
+    const onUpdateAvailableChange = vi.fn();
+    await seedExtendedStableAvailability({ onUpdateAvailableChange });
+    onUpdateAvailableChange.mockClear();
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "extended-stable",
+      version,
+    });
+    vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
+    const log = { info: vi.fn() };
+
+    await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
+
+    expect(log.info).not.toHaveBeenCalled();
+    expect(onUpdateAvailableChange).toHaveBeenCalledOnce();
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith(null);
+    expect(getUpdateAvailable()).toBeNull();
+    expect(readPersistedUpdateCheckState()).toMatchObject({
+      lastNotifiedVersion: "2.0.0",
+      lastNotifiedTag: "extended-stable",
+    });
+    expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
+    expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBeUndefined();
+  });
+
+  it.each(["selector_missing", "selector_query_failed", "exact_package_mismatch"] as const)(
+    "clears stale extended-stable availability when exact resolution fails with %s",
+    async (failure) => {
+      const onUpdateAvailableChange = vi.fn();
+      await seedExtendedStableAvailability({ onUpdateAvailableChange });
+      onUpdateAvailableChange.mockClear();
+      vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+        tag: "extended-stable",
+        version: null,
+        reason: failure,
+      });
+      vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
+      const log = { info: vi.fn() };
+
+      await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
+
+      expect(log.info).not.toHaveBeenCalled();
+      expect(onUpdateAvailableChange).toHaveBeenCalledOnce();
+      expect(onUpdateAvailableChange).toHaveBeenCalledWith(null);
+      expect(getUpdateAvailable()).toBeNull();
+      expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
+      expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBeUndefined();
+      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves cross-channel persisted availability when extended-stable resolution fails", async () => {
+    writePersistedUpdateCheckState({
+      lastCheckedAt: "2026-01-16T10:00:00.000Z",
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+    });
+    mockPackageInstallStatus();
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "extended-stable",
+      version: null,
+      reason: "selector_query_failed",
+    });
+    const onUpdateAvailableChange = vi.fn();
+
+    await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
+
     expect(onUpdateAvailableChange).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
+    expect(readPersistedUpdateCheckState()).toMatchObject({
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+    });
+  });
+
+  it("does not resolve the npm channel for an extended-stable Git install", async () => {
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "git",
+      packageManager: "unknown",
+    } satisfies UpdateCheckResult);
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runExtendedStableUpdateCheck({ runAutoUpdate });
+
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
+  });
+
+  it("skips all extended-stable work in Nix mode", async () => {
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runExtendedStableUpdateCheck({ isNixMode: true, runAutoUpdate });
+
+    expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
   });
 
   it("defers stable auto-update until rollout window is due", async () => {
@@ -745,17 +1028,44 @@ describe("update-startup", () => {
     stop();
   });
 
-  it("does not schedule recurring checks for extended-stable", async () => {
+  it("schedules an initial and recurring 24-hour extended-stable hint check with cleanup", async () => {
+    mockPackageUpdateStatus("extended-stable", "2.0.0");
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
       cfg: { update: { channel: "extended-stable" } },
       log: { info: vi.fn() },
       isNixMode: false,
     });
 
-    await vi.runAllTimersAsync();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
+
+      stop();
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  it("does not schedule extended-stable polling when checkOnStart is false", async () => {
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(48 * 60 * 60 * 1000);
 
     expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
     expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     stop();
   });
 });
