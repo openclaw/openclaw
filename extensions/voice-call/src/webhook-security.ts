@@ -8,6 +8,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
+import { normalizeProxyIp } from "./proxy-ip.js";
 import type { WebhookContext } from "./types.js";
 import { createWebhookReplayCache, markWebhookReplay } from "./webhook-replay.js";
 
@@ -207,8 +208,13 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
   const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean) ?? [];
   const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
   const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
+  const normalizedTrustedProxyIps = new Set(
+    trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
+  );
+  const normalizedRemoteIp = normalizeProxyIp(remoteIP);
   const fromTrustedProxy =
-    !hasTrustedProxyIPs || (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
+    !hasTrustedProxyIPs ||
+    (normalizedRemoteIp ? normalizedTrustedProxyIps.has(normalizedRemoteIp) : false);
 
   // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
   const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;

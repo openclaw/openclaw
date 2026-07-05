@@ -8389,6 +8389,26 @@
       "translated": "Một phần: \\(self.summary.totals.missingCostEntries) mục thiếu chi phí"
     },
     {
+      "id": "native.apple.84f1d9ae4965cfe0",
+      "source": "Crestodian",
+      "translated": "Crestodian"
+    },
+    {
+      "id": "native.apple.69557562fe99d402",
+      "source": "Your setup helper. It can check status, fix config, switch models, ",
+      "translated": "Trợ lý thiết lập của bạn. Công cụ này có thể kiểm tra trạng thái, sửa cấu hình, chuyển đổi mô hình, "
+    },
+    {
+      "id": "native.apple.648423d89aec0c13",
+      "source": "Chat",
+      "translated": "Trò chuyện"
+    },
+    {
+      "id": "native.apple.bd180b943ee89cfe",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "Mẹo: thử “status”, “doctor”, “set default model …” hoặc “connect telegram”."
+    },
+    {
       "id": "native.apple.779f488d2ddd9eaf",
       "source": "Edit cron job",
       "translated": "Chỉnh sửa cron job"
@@ -10354,6 +10374,126 @@
       "translated": "Tiếp theo"
     },
     {
+      "id": "native.apple.99c49ed9c135cdcd",
+      "source": "Claude (Anthropic)",
+      "translated": "Claude (Anthropic)"
+    },
+    {
+      "id": "native.apple.5c0a3a27717239d6",
+      "source": "OpenAI",
+      "translated": "OpenAI"
+    },
+    {
+      "id": "native.apple.f85f71cced8225d6",
+      "source": "Google Gemini",
+      "translated": "Google Gemini"
+    },
+    {
+      "id": "native.apple.0a6a895baa7f708e",
+      "source": "Looking for AI you already use…",
+      "translated": "Đang tìm AI bạn đã sử dụng…"
+    },
+    {
+      "id": "native.apple.9d19cb7eb5fa6d79",
+      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
+      "translated": "Đang kiểm tra Claude Code, Codex, Gemini và các khóa API đã lưu."
+    },
+    {
+      "id": "native.apple.7e1e827f427bc317",
+      "source": "Couldn’t check this Mac for AI accounts",
+      "translated": "Không thể kiểm tra máy Mac này để tìm tài khoản AI"
+    },
+    {
+      "id": "native.apple.87a3b9052eedd7eb",
+      "source": "Try again",
+      "translated": "Thử lại"
+    },
+    {
+      "id": "native.apple.3a585b31d77507d8",
+      "source": "None of the found options worked",
+      "translated": "Không có tùy chọn nào tìm thấy hoạt động"
+    },
+    {
+      "id": "native.apple.86f29266102f1bf3",
+      "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key below.",
+      "translated": "Chi tiết được liệt kê trên từng tùy chọn ở trên. Bạn có thể sửa đăng nhập rồi thử lại, hoặc kết nối bằng khóa API bên dưới."
+    },
+    {
+      "id": "native.apple.ff87d5ec9e15e581",
+      "source": "Check again",
+      "translated": "Kiểm tra lại"
+    },
+    {
+      "id": "native.apple.dc51d7deab7b6c1e",
+      "source": "Need help? Chat with Crestodian",
+      "translated": "Cần trợ giúp? Trò chuyện với Crestodian"
+    },
+    {
+      "id": "native.apple.6bf2e2bdd950a97d",
+      "source": "Your AI is ready",
+      "translated": "AI của bạn đã sẵn sàng"
+    },
+    {
+      "id": "native.apple.c3ed46eded513a65",
+      "source": "No AI accounts found on this Mac",
+      "translated": "Không tìm thấy tài khoản AI nào trên máy Mac này"
+    },
+    {
+      "id": "native.apple.f87ba9e9eb97d8bb",
+      "source": "That’s fine — you can connect one with an API key. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
+      "translated": "Không sao — bạn có thể kết nối một tài khoản bằng khóa API. Nếu bạn dùng Claude Code, Codex hoặc Gemini CLI trên máy Mac này, hãy đăng nhập ở đó trước rồi nhấn “Kiểm tra lại”."
+    },
+    {
+      "id": "native.apple.f51a11c7f56bdb29",
+      "source": "Recommended",
+      "translated": "Được đề xuất"
+    },
+    {
+      "id": "native.apple.361c4a91a6aef57b",
+      "source": "Connect with an API key instead…",
+      "translated": "Kết nối bằng khóa API thay thế…"
+    },
+    {
+      "id": "native.apple.99c1034543042eca",
+      "source": "Connect with an API key",
+      "translated": "Kết nối bằng khóa API"
+    },
+    {
+      "id": "native.apple.9da1d31635dca50b",
+      "source": "Provider",
+      "translated": "Nhà cung cấp"
+    },
+    {
+      "id": "native.apple.41d117fdc784999f",
+      "source": "Connect",
+      "translated": "Kết nối"
+    },
+    {
+      "id": "native.apple.3863947506f62f17",
+      "source": "Create a key at \\(self.model.manualProvider.consoleName), paste it here, and OpenClaw checks it with a real test question.",
+      "translated": "Tạo khóa tại \\(self.model.manualProvider.consoleName), dán vào đây và OpenClaw sẽ kiểm tra bằng một câu hỏi thử nghiệm thực tế."
+    },
+    {
+      "id": "native.apple.ce55144c35473419",
+      "source": "That key didn’t work",
+      "translated": "Khóa đó không hoạt động"
+    },
+    {
+      "id": "native.apple.95ba6710c48389ae",
+      "source": "Crestodian — setup helper",
+      "translated": "Crestodian — trình trợ giúp thiết lập"
+    },
+    {
+      "id": "native.apple.06d9df11b5b462b4",
+      "source": "Done",
+      "translated": "Xong"
+    },
+    {
+      "id": "native.apple.c3460290224a3ed3",
+      "source": "Open help…",
+      "translated": "Mở trợ giúp…"
+    },
+    {
       "id": "native.apple.6124d93872cfcfe4",
       "source": "Crestodian is working…",
       "translated": "Crestodian đang hoạt động…"
@@ -10374,14 +10514,9 @@
       "translated": "Trả lời Crestodian… (yes sẽ thiết lập mọi thứ)"
     },
     {
-      "id": "native.apple.a63c9bf74cc6fa3e",
-      "source": "Talk to Crestodian",
-      "translated": "Trò chuyện với Crestodian"
-    },
-    {
-      "id": "native.apple.c29bee62e4f63d1c",
-      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
-      "translated": "Crestodian là người quản lý thiết lập của OpenClaw. Nó tìm quyền truy cập AI mà bạn đã có — thông tin đăng nhập Claude Code hoặc Codex, hoặc khóa API — và thiết lập mọi thứ khi bạn nói yes. Chỉ cần cho nó biết bạn muốn gì."
+      "id": "native.apple.78d1ad73762a7ce8",
+      "source": "Connect your AI",
+      "translated": "Kết nối AI của bạn"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
@@ -10394,9 +10529,14 @@
       "translated": "Chào mừng đến với OpenClaw"
     },
     {
-      "id": "native.apple.dd7411f18b0fe203",
-      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
-      "translated": "OpenClaw là trợ lý AI cá nhân của bạn. OpenClaw có thể trả lời câu hỏi, làm việc với tệp và ứng dụng, cũng như kết nối với các dịch vụ như WhatsApp và Telegram thông qua Gateway do bạn kiểm soát."
+      "id": "native.apple.0629bbbd6db95199",
+      "source": "Your personal AI assistant, living on your own Mac.",
+      "translated": "Trợ lý AI cá nhân của bạn, chạy trên chính máy Mac của bạn."
+    },
+    {
+      "id": "native.apple.ff6f4069f0185b9b",
+      "source": "It answers questions, works with your files and apps, and can chat with you on WhatsApp or Telegram. Setup takes about two minutes.",
+      "translated": "Trợ lý trả lời câu hỏi, làm việc với tệp và ứng dụng của bạn, đồng thời có thể trò chuyện với bạn trên WhatsApp hoặc Telegram. Quá trình thiết lập mất khoảng hai phút."
     },
     {
       "id": "native.apple.86e4509eb0626ec8",
@@ -10409,14 +10549,14 @@
       "translated": "Giao nhiệm vụ cho trợ lý của bạn và để trợ lý hỗ trợ trên máy Mac của bạn."
     },
     {
-      "id": "native.apple.16ab10ed9293b718",
-      "source": "Connect the tools you use",
-      "translated": "Kết nối các công cụ bạn dùng"
+      "id": "native.apple.8496e933d9cbc56d",
+      "source": "Chat wherever you like",
+      "translated": "Trò chuyện ở bất cứ đâu bạn muốn"
     },
     {
-      "id": "native.apple.687c1c2abdb8581e",
-      "source": "Bring conversations and services together in one assistant.",
-      "translated": "Tập hợp các cuộc trò chuyện và dịch vụ vào một trợ lý duy nhất."
+      "id": "native.apple.d6ca07ea4a825a3f",
+      "source": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "translated": "Ứng dụng này, WhatsApp, Telegram, Discord, Slack — tùy bạn chọn."
     },
     {
       "id": "native.apple.caf822c2d393914f",
@@ -10424,9 +10564,9 @@
       "translated": "Luôn nắm quyền kiểm soát"
     },
     {
-      "id": "native.apple.203bfa5e80135faa",
-      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
-      "translated": "Chọn nơi Gateway chạy và những quyền mà OpenClaw nhận được."
+      "id": "native.apple.46514f735df5cddc",
+      "source": "Everything runs where you decide, with permissions you grant.",
+      "translated": "Mọi thứ chạy ở nơi bạn quyết định, với các quyền bạn cấp."
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
@@ -10434,24 +10574,39 @@
       "translated": "OpenClaw có thể thực hiện hành động bằng các quyền và dịch vụ bạn bật. Hãy xem lại lời nhắc và chỉ kết nối các công cụ bạn tin tưởng."
     },
     {
-      "id": "native.apple.2033d33228ce52d7",
-      "source": "Where should OpenClaw run?",
-      "translated": "OpenClaw nên chạy ở đâu?"
+      "id": "native.apple.a5d02aaf6208e924",
+      "source": "Where should your assistant live?",
+      "translated": "Trợ lý của bạn nên chạy ở đâu?"
     },
     {
-      "id": "native.apple.4791cce2ae762f19",
-      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
-      "translated": "Để thiết lập đơn giản nhất, hãy chạy Gateway trên máy Mac này. OpenClaw sẽ cài đặt Gateway và duy trì Gateway chạy cho bạn."
+      "id": "native.apple.e6acb60b10ef1206",
+      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "Hầu hết mọi người chọn máy Mac này — OpenClaw sẽ cài đặt mọi thứ và duy trì chạy trong nền. Bạn có thể thay đổi bất cứ lúc nào trong Cài đặt."
     },
     {
-      "id": "native.apple.300a583f28880928",
-      "source": "This Mac",
-      "translated": "Máy Mac này"
+      "id": "native.apple.21f1053c1054db24",
+      "source": "On this Mac",
+      "translated": "Trên máy Mac này"
     },
     {
-      "id": "native.apple.43f381cd291c5e11",
-      "source": "Don’t start the Gateway yet.",
-      "translated": "Chưa khởi động Gateway."
+      "id": "native.apple.848c45dfcda2c160",
+      "source": "On another computer",
+      "translated": "Trên máy tính khác"
+    },
+    {
+      "id": "native.apple.1921bcc57bcd747d",
+      "source": "Set up later",
+      "translated": "Thiết lập sau"
+    },
+    {
+      "id": "native.apple.3647303a73877ecf",
+      "source": "Skip Gateway setup for now; pick Local or Remote later in Settings → General.",
+      "translated": "Tạm thời bỏ qua thiết lập Gateway; chọn Local hoặc Remote sau trong Cài đặt → Cài đặt chung."
+    },
+    {
+      "id": "native.apple.d54084b48f40aa0a",
+      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "OK — OpenClaw sẽ chưa khởi động gì cả. Chọn Cục bộ hoặc Từ xa sau trong Cài đặt → Chung."
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -10469,19 +10624,29 @@
       "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
-      "id": "native.apple.ea066347e0bcb237",
-      "source": "Retry remote discovery (Tailscale DNS-SD + Serve probe).",
-      "translated": "Thử lại khám phá từ xa (Tailscale DNS-SD + Serve probe)."
+      "id": "native.apple.9ab228a4cb7d4403",
+      "source": "1 gateway found on your network — click to choose it.",
+      "translated": "Đã tìm thấy 1 gateway trên mạng của bạn — nhấp để chọn."
     },
     {
-      "id": "native.apple.d8b14de6ceb397fb",
-      "source": "Searching for nearby gateways…",
-      "translated": "Đang tìm kiếm các gateway ở gần…"
+      "id": "native.apple.279c63b244b85ece",
+      "source": "\\(count) gateways found on your network — click to choose one.",
+      "translated": "Đã tìm thấy \\(count) gateway trên mạng của bạn — nhấp để chọn một gateway."
     },
     {
-      "id": "native.apple.98436332aec81f9b",
-      "source": "Nearby gateways",
-      "translated": "Các gateway ở gần"
+      "id": "native.apple.43777eabc068e240",
+      "source": "No gateways found on your network yet.",
+      "translated": "Chưa tìm thấy gateway nào trên mạng của bạn."
+    },
+    {
+      "id": "native.apple.b485089ad79067a9",
+      "source": "Look again",
+      "translated": "Tìm lại"
+    },
+    {
+      "id": "native.apple.e39798604090ef9c",
+      "source": "Retry discovery (Bonjour + Tailscale DNS-SD).",
+      "translated": "Thử khám phá lại (Bonjour + Tailscale DNS-SD)."
     },
     {
       "id": "native.apple.94575e6937b47f7b",
@@ -10619,44 +10784,49 @@
       "translated": "Các quyền macOS này cho phép OpenClaw tự động hóa ứng dụng và thu thập ngữ cảnh trên máy Mac này. Trạng thái sẽ tự động cập nhật."
     },
     {
-      "id": "native.apple.8d7590f1d8f61a1d",
-      "source": "Setting up OpenClaw",
-      "translated": "Đang thiết lập OpenClaw"
+      "id": "native.apple.42af85cdf91d0264",
+      "source": "Getting things ready",
+      "translated": "Đang chuẩn bị"
     },
     {
-      "id": "native.apple.e88512a0fe7fb140",
-      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
-      "translated": "OpenClaw đang cài đặt Gateway cục bộ và runtime được quản lý của Gateway."
+      "id": "native.apple.183aee003b44ede6",
+      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
+      "translated": "OpenClaw đang thiết lập dịch vụ nền trên máy Mac này. Việc này thường mất chưa đến một phút — không cần Terminal, không cần mật khẩu quản trị viên."
     },
     {
-      "id": "native.apple.0c05ab4b362710de",
-      "source": "Checking existing setup…",
-      "translated": "Đang kiểm tra thiết lập hiện có…"
+      "id": "native.apple.d0b8cf59f852b3d0",
+      "source": "Install OpenClaw",
+      "translated": "Cài đặt OpenClaw"
     },
     {
-      "id": "native.apple.56b68eb592ecf449",
-      "source": "Installing the Gateway…",
-      "translated": "Đang cài đặt Gateway…"
+      "id": "native.apple.0112e18fa97e7c0c",
+      "source": "Start the background service",
+      "translated": "Khởi động dịch vụ nền"
     },
     {
-      "id": "native.apple.80155398d97fbe63",
-      "source": "Gateway installed",
-      "translated": "Đã cài đặt Gateway"
+      "id": "native.apple.d1f9f278b55fe9b0",
+      "source": "Runs quietly and starts again after a restart.",
+      "translated": "Chạy âm thầm và tự khởi động lại sau khi khởi động lại máy."
     },
     {
-      "id": "native.apple.2d2acbf2e16f8604",
-      "source": "Retry setup",
-      "translated": "Thử thiết lập lại"
+      "id": "native.apple.0357f1eea66db068",
+      "source": "Ready for the next step",
+      "translated": "Sẵn sàng cho bước tiếp theo"
     },
     {
-      "id": "native.apple.4d58294df8d0b1e6",
-      "source": "Check again",
-      "translated": "Kiểm tra lại"
+      "id": "native.apple.9f58badc863cbf2b",
+      "source": "Once the service answers, you’ll connect your AI.",
+      "translated": "Khi dịch vụ phản hồi, bạn sẽ kết nối AI của mình."
     },
     {
-      "id": "native.apple.15cfa96c75b57b04",
-      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
-      "translated": "Sử dụng bản cài đặt riêng trong không gian người dùng. Không cần Terminal, quyền quản trị viên hoặc Homebrew."
+      "id": "native.apple.3bcb83316b3d90bb",
+      "source": "The Gateway didn’t start",
+      "translated": "Gateway không khởi động"
+    },
+    {
+      "id": "native.apple.f36edc58238aa8ce",
+      "source": "Try again",
+      "translated": "Thử lại"
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10719,14 +10889,19 @@
       "translated": "Gặp agent của bạn"
     },
     {
-      "id": "native.apple.2c5c8568a34d4f0f",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
-      "translated": "Đây là cuộc trò chuyện hướng dẫn làm quen chuyên dụng. Agent của bạn sẽ tự giới thiệu, tìm hiểu bạn là ai và giúp bạn kết nối Discord, Slack, Telegram, WhatsApp hoặc kênh khác nếu bạn muốn."
+      "id": "native.apple.6c35dc9becd6ca0f",
+      "source": "Your agent introduces itself, picks a name with you, and helps you connect WhatsApp, Telegram, or another channel — just chat.",
+      "translated": "Agent của bạn sẽ tự giới thiệu, cùng bạn chọn tên và giúp bạn kết nối WhatsApp, Telegram hoặc một kênh khác — chỉ cần trò chuyện."
     },
     {
-      "id": "native.apple.5e1277166b2ad41a",
-      "source": "All set",
-      "translated": "Đã hoàn tất"
+      "id": "native.apple.25e82538dc9e9aad",
+      "source": "You’re all set!",
+      "translated": "Bạn đã sẵn sàng!"
+    },
+    {
+      "id": "native.apple.9f73f753266a9fa2",
+      "source": "Finish opens the chat — say hi to your new agent.",
+      "translated": "Hoàn tất sẽ mở cuộc trò chuyện — hãy chào agent mới của bạn."
     },
     {
       "id": "native.apple.678dee9dedd72ce4",
@@ -11362,6 +11537,11 @@
       "id": "native.apple.f5f4ff67674093ec",
       "source": "Voice & Talk",
       "translated": "Giọng nói & Trò chuyện"
+    },
+    {
+      "id": "native.apple.f5aa19bc071cf585",
+      "source": "Crestodian",
+      "translated": "Crestodian"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",

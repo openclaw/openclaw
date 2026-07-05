@@ -7,6 +7,7 @@ struct WatchReplyDraft {
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
     var note: String?
     var sentAtMs: Int
 }
@@ -114,6 +115,11 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
            !sessionKey.isEmpty
         {
             payload["sessionKey"] = sessionKey
+        }
+        if let gatewayStableID = draft.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            payload["gatewayStableID"] = gatewayStableID
         }
         if let note = draft.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
             payload["note"] = note
@@ -250,6 +256,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayStableID = (payload["gatewayStableID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let kind = (payload["kind"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let details = (payload["details"] as? String)?
@@ -266,6 +274,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             sentAtMs: sentAtMs,
             promptId: promptId,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             kind: kind,
             details: details,
             expiresAtMs: expiresAtMs,
@@ -439,6 +448,25 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             snapshotId: snapshotId)
     }
 
+    private static func parseChatCompletionPayload(
+        _ payload: [String: Any]) -> WatchChatCompletionMessage?
+    {
+        guard (payload["type"] as? String) == WatchPayloadType.chatCompletion.rawValue else {
+            return nil
+        }
+        let commandId = (payload["commandId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let replyText = (payload["replyText"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !commandId.isEmpty, !replyText.isEmpty else { return nil }
+        let sentAtMs = (payload["sentAtMs"] as? Int)
+            ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        return WatchChatCompletionMessage(
+            commandId: commandId,
+            replyText: replyText,
+            sentAtMs: sentAtMs)
+    }
+
     private static func parseChatItem(_ item: Any) -> WatchChatItem? {
         guard let dict = item as? [String: Any] else { return nil }
         guard let id = (dict["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -607,6 +635,12 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         if let snapshot = Self.parseAppSnapshotPayload(payload) {
             Task { @MainActor in
                 self.store.consume(appSnapshot: snapshot)
+            }
+            return
+        }
+        if let completion = Self.parseChatCompletionPayload(payload) {
+            Task { @MainActor in
+                self.store.consume(chatCompletion: completion)
             }
         }
     }

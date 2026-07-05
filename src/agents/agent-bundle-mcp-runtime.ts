@@ -185,13 +185,21 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
       }
-      const schemaError = findJsonSchemaShapeError(schema as never);
-      if (schemaError) {
-        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${schemaError}`);
+      let validator: ReturnType<typeof Compile>;
+      try {
+        const schemaError = findJsonSchemaShapeError(schema as never);
+        if (schemaError) {
+          throw new Error(schemaError);
+        }
+        validator = Compile(
+          normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+        );
+      } catch (error) {
+        const setupError = toErrorObject(error, "schema setup failed");
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${setupError.message}`, {
+          cause: error,
+        });
       }
-      const validator = Compile(
-        normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
-      );
       return (input: unknown) => {
         const valid = validator.Check(input);
         if (valid) {

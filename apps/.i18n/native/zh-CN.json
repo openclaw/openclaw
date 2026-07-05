@@ -8389,6 +8389,26 @@
       "translated": "部分：\\(self.summary.totals.missingCostEntries) 个条目缺少费用"
     },
     {
+      "id": "native.apple.84f1d9ae4965cfe0",
+      "source": "Crestodian",
+      "translated": "Crestodian"
+    },
+    {
+      "id": "native.apple.69557562fe99d402",
+      "source": "Your setup helper. It can check status, fix config, switch models, ",
+      "translated": "你的设置助手。它可以检查状态、修复配置、切换模型，"
+    },
+    {
+      "id": "native.apple.648423d89aec0c13",
+      "source": "Chat",
+      "translated": "聊天"
+    },
+    {
+      "id": "native.apple.bd180b943ee89cfe",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "提示：试试“status”、“doctor”、“set default model …”或“connect telegram”。"
+    },
+    {
       "id": "native.apple.779f488d2ddd9eaf",
       "source": "Edit cron job",
       "translated": "编辑 cron job"
@@ -10354,6 +10374,126 @@
       "translated": "下一步"
     },
     {
+      "id": "native.apple.99c49ed9c135cdcd",
+      "source": "Claude (Anthropic)",
+      "translated": "Claude (Anthropic)"
+    },
+    {
+      "id": "native.apple.5c0a3a27717239d6",
+      "source": "OpenAI",
+      "translated": "OpenAI"
+    },
+    {
+      "id": "native.apple.f85f71cced8225d6",
+      "source": "Google Gemini",
+      "translated": "Google Gemini"
+    },
+    {
+      "id": "native.apple.0a6a895baa7f708e",
+      "source": "Looking for AI you already use…",
+      "translated": "正在查找你已在使用的 AI…"
+    },
+    {
+      "id": "native.apple.9d19cb7eb5fa6d79",
+      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
+      "translated": "正在检查 Claude Code、Codex、Gemini 和已保存的 API 密钥。"
+    },
+    {
+      "id": "native.apple.7e1e827f427bc317",
+      "source": "Couldn’t check this Mac for AI accounts",
+      "translated": "无法检查这台 Mac 上的 AI 账号"
+    },
+    {
+      "id": "native.apple.87a3b9052eedd7eb",
+      "source": "Try again",
+      "translated": "重试"
+    },
+    {
+      "id": "native.apple.3a585b31d77507d8",
+      "source": "None of the found options worked",
+      "translated": "找到的选项都无法使用"
+    },
+    {
+      "id": "native.apple.86f29266102f1bf3",
+      "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key below.",
+      "translated": "每个选项的详细信息已列在上方。你可以修复登录后重试，或在下方使用 API 密钥连接。"
+    },
+    {
+      "id": "native.apple.ff87d5ec9e15e581",
+      "source": "Check again",
+      "translated": "再次检查"
+    },
+    {
+      "id": "native.apple.dc51d7deab7b6c1e",
+      "source": "Need help? Chat with Crestodian",
+      "translated": "需要帮助？与 Crestodian 聊聊"
+    },
+    {
+      "id": "native.apple.6bf2e2bdd950a97d",
+      "source": "Your AI is ready",
+      "translated": "你的 AI 已准备就绪"
+    },
+    {
+      "id": "native.apple.c3ed46eded513a65",
+      "source": "No AI accounts found on this Mac",
+      "translated": "在这台 Mac 上未找到 AI 账号"
+    },
+    {
+      "id": "native.apple.f87ba9e9eb97d8bb",
+      "source": "That’s fine — you can connect one with an API key. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
+      "translated": "没关系 — 你可以使用 API 密钥连接一个。如果你在这台 Mac 上使用 Claude Code、Codex 或 Gemini CLI，请先在那里登录，然后点击“再次检查”。"
+    },
+    {
+      "id": "native.apple.f51a11c7f56bdb29",
+      "source": "Recommended",
+      "translated": "推荐"
+    },
+    {
+      "id": "native.apple.361c4a91a6aef57b",
+      "source": "Connect with an API key instead…",
+      "translated": "改用 API 密钥连接…"
+    },
+    {
+      "id": "native.apple.99c1034543042eca",
+      "source": "Connect with an API key",
+      "translated": "使用 API key 连接"
+    },
+    {
+      "id": "native.apple.9da1d31635dca50b",
+      "source": "Provider",
+      "translated": "提供商"
+    },
+    {
+      "id": "native.apple.41d117fdc784999f",
+      "source": "Connect",
+      "translated": "连接"
+    },
+    {
+      "id": "native.apple.3863947506f62f17",
+      "source": "Create a key at \\(self.model.manualProvider.consoleName), paste it here, and OpenClaw checks it with a real test question.",
+      "translated": "在 \\(self.model.manualProvider.consoleName) 创建一个 key，将其粘贴到这里，OpenClaw 会用一个真实的测试问题进行检查。"
+    },
+    {
+      "id": "native.apple.ce55144c35473419",
+      "source": "That key didn’t work",
+      "translated": "该 key 无法使用"
+    },
+    {
+      "id": "native.apple.95ba6710c48389ae",
+      "source": "Crestodian — setup helper",
+      "translated": "Crestodian — 设置助手"
+    },
+    {
+      "id": "native.apple.06d9df11b5b462b4",
+      "source": "Done",
+      "translated": "完成"
+    },
+    {
+      "id": "native.apple.c3460290224a3ed3",
+      "source": "Open help…",
+      "translated": "打开帮助…"
+    },
+    {
       "id": "native.apple.6124d93872cfcfe4",
       "source": "Crestodian is working…",
       "translated": "Crestodian 正在工作…"
@@ -10374,14 +10514,9 @@
       "translated": "回复 Crestodian…（输入 yes 会完成所有设置）"
     },
     {
-      "id": "native.apple.a63c9bf74cc6fa3e",
-      "source": "Talk to Crestodian",
-      "translated": "与 Crestodian 对话"
-    },
-    {
-      "id": "native.apple.c29bee62e4f63d1c",
-      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
-      "translated": "Crestodian 是 OpenClaw 的设置托管员。它会查找你已有的 AI 访问权限——Claude Code 或 Codex 登录，或 API 密钥——并在你说 yes 时完成所有设置。只需告诉它你想要什么。"
+      "id": "native.apple.78d1ad73762a7ce8",
+      "source": "Connect your AI",
+      "translated": "连接你的 AI"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
@@ -10394,9 +10529,14 @@
       "translated": "欢迎使用 OpenClaw"
     },
     {
-      "id": "native.apple.dd7411f18b0fe203",
-      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
-      "translated": "OpenClaw 是你的个人 AI 助手。它可以回答问题、处理文件和应用，并通过你控制的 Gateway 连接到 WhatsApp 和 Telegram 等服务。"
+      "id": "native.apple.0629bbbd6db95199",
+      "source": "Your personal AI assistant, living on your own Mac.",
+      "translated": "你的个人 AI 助手，运行在你自己的 Mac 上。"
+    },
+    {
+      "id": "native.apple.ff6f4069f0185b9b",
+      "source": "It answers questions, works with your files and apps, and can chat with you on WhatsApp or Telegram. Setup takes about two minutes.",
+      "translated": "它可以回答问题、处理你的文件和 app，还能在 WhatsApp 或 Telegram 上与你聊天。设置大约需要两分钟。"
     },
     {
       "id": "native.apple.86e4509eb0626ec8",
@@ -10409,14 +10549,14 @@
       "translated": "将任务交给你的助手，让它在你的 Mac 上协助你。"
     },
     {
-      "id": "native.apple.16ab10ed9293b718",
-      "source": "Connect the tools you use",
-      "translated": "连接你使用的工具"
+      "id": "native.apple.8496e933d9cbc56d",
+      "source": "Chat wherever you like",
+      "translated": "随时随地聊天"
     },
     {
-      "id": "native.apple.687c1c2abdb8581e",
-      "source": "Bring conversations and services together in one assistant.",
-      "translated": "将对话和服务汇集到一个助手中。"
+      "id": "native.apple.d6ca07ea4a825a3f",
+      "source": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "translated": "这个 app、WhatsApp、Telegram、Discord、Slack — 由你选择。"
     },
     {
       "id": "native.apple.caf822c2d393914f",
@@ -10424,9 +10564,9 @@
       "translated": "掌控一切"
     },
     {
-      "id": "native.apple.203bfa5e80135faa",
-      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
-      "translated": "选择 Gateway 的运行位置以及 OpenClaw 获得哪些权限。"
+      "id": "native.apple.46514f735df5cddc",
+      "source": "Everything runs where you decide, with permissions you grant.",
+      "translated": "一切都在你决定的位置运行，并使用你授予的权限。"
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
@@ -10434,24 +10574,39 @@
       "translated": "OpenClaw 可以使用你启用的权限和服务执行操作。请审核提示，并且只连接你信任的工具。"
     },
     {
-      "id": "native.apple.2033d33228ce52d7",
-      "source": "Where should OpenClaw run?",
-      "translated": "OpenClaw 应在哪里运行？"
+      "id": "native.apple.a5d02aaf6208e924",
+      "source": "Where should your assistant live?",
+      "translated": "你的助手应该运行在哪里？"
     },
     {
-      "id": "native.apple.4791cce2ae762f19",
-      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
-      "translated": "为实现最简单的设置，请在这台 Mac 上运行 Gateway。OpenClaw 会为你安装并保持其运行。"
+      "id": "native.apple.e6acb60b10ef1206",
+      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "大多数人会选择这台 Mac — OpenClaw 会安装所有内容，并在后台保持运行。你随时可以在设置中更改。"
     },
     {
-      "id": "native.apple.300a583f28880928",
-      "source": "This Mac",
-      "translated": "这台 Mac"
+      "id": "native.apple.21f1053c1054db24",
+      "source": "On this Mac",
+      "translated": "在这台 Mac 上"
     },
     {
-      "id": "native.apple.43f381cd291c5e11",
-      "source": "Don’t start the Gateway yet.",
-      "translated": "暂不启动 Gateway。"
+      "id": "native.apple.848c45dfcda2c160",
+      "source": "On another computer",
+      "translated": "在另一台电脑上"
+    },
+    {
+      "id": "native.apple.1921bcc57bcd747d",
+      "source": "Set up later",
+      "translated": "稍后设置"
+    },
+    {
+      "id": "native.apple.3647303a73877ecf",
+      "source": "Skip Gateway setup for now; pick Local or Remote later in Settings → General.",
+      "translated": "暂时跳过 Gateway 设置；稍后可在设置 → 通用中选择本地或远程。"
+    },
+    {
+      "id": "native.apple.d54084b48f40aa0a",
+      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "好的 — OpenClaw 还不会启动任何内容。稍后可在 Settings → General 中选择 Local 或 Remote。"
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -10469,19 +10624,29 @@
       "translated": "（\\(probe.command) pid \\(probe.pid)）"
     },
     {
-      "id": "native.apple.ea066347e0bcb237",
-      "source": "Retry remote discovery (Tailscale DNS-SD + Serve probe).",
-      "translated": "重试远程发现（Tailscale DNS-SD + Serve 探测）。"
+      "id": "native.apple.9ab228a4cb7d4403",
+      "source": "1 gateway found on your network — click to choose it.",
+      "translated": "在你的网络上找到 1 个 gateway — 点击以选择它。"
     },
     {
-      "id": "native.apple.d8b14de6ceb397fb",
-      "source": "Searching for nearby gateways…",
-      "translated": "正在搜索附近的 gateways…"
+      "id": "native.apple.279c63b244b85ece",
+      "source": "\\(count) gateways found on your network — click to choose one.",
+      "translated": "在你的网络上找到 \\(count) 个 gateway — 点击以选择一个。"
     },
     {
-      "id": "native.apple.98436332aec81f9b",
-      "source": "Nearby gateways",
-      "translated": "附近的 gateways"
+      "id": "native.apple.43777eabc068e240",
+      "source": "No gateways found on your network yet.",
+      "translated": "你的网络上尚未找到任何 gateway。"
+    },
+    {
+      "id": "native.apple.b485089ad79067a9",
+      "source": "Look again",
+      "translated": "再次查找"
+    },
+    {
+      "id": "native.apple.e39798604090ef9c",
+      "source": "Retry discovery (Bonjour + Tailscale DNS-SD).",
+      "translated": "重试发现（Bonjour + Tailscale DNS-SD）。"
     },
     {
       "id": "native.apple.94575e6937b47f7b",
@@ -10619,44 +10784,49 @@
       "translated": "这些 macOS 权限可让 OpenClaw 在这台 Mac 上自动化操作应用并捕获上下文。状态会自动更新。"
     },
     {
-      "id": "native.apple.8d7590f1d8f61a1d",
-      "source": "Setting up OpenClaw",
-      "translated": "正在设置 OpenClaw"
+      "id": "native.apple.42af85cdf91d0264",
+      "source": "Getting things ready",
+      "translated": "正在准备"
     },
     {
-      "id": "native.apple.e88512a0fe7fb140",
-      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
-      "translated": "OpenClaw 正在安装本地 Gateway 及其托管运行时。"
+      "id": "native.apple.183aee003b44ede6",
+      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
+      "translated": "OpenClaw 正在此 Mac 上设置其后台服务。这通常不到一分钟 — 无需 Terminal，也无需管理员密码。"
     },
     {
-      "id": "native.apple.0c05ab4b362710de",
-      "source": "Checking existing setup…",
-      "translated": "正在检查现有设置…"
+      "id": "native.apple.d0b8cf59f852b3d0",
+      "source": "Install OpenClaw",
+      "translated": "安装 OpenClaw"
     },
     {
-      "id": "native.apple.56b68eb592ecf449",
-      "source": "Installing the Gateway…",
-      "translated": "正在安装 Gateway…"
+      "id": "native.apple.0112e18fa97e7c0c",
+      "source": "Start the background service",
+      "translated": "启动后台服务"
     },
     {
-      "id": "native.apple.80155398d97fbe63",
-      "source": "Gateway installed",
-      "translated": "Gateway 已安装"
+      "id": "native.apple.d1f9f278b55fe9b0",
+      "source": "Runs quietly and starts again after a restart.",
+      "translated": "静默运行，并会在重启后再次启动。"
     },
     {
-      "id": "native.apple.2d2acbf2e16f8604",
-      "source": "Retry setup",
-      "translated": "重试设置"
+      "id": "native.apple.0357f1eea66db068",
+      "source": "Ready for the next step",
+      "translated": "已准备好进行下一步"
     },
     {
-      "id": "native.apple.4d58294df8d0b1e6",
-      "source": "Check again",
-      "translated": "再次检查"
+      "id": "native.apple.9f58badc863cbf2b",
+      "source": "Once the service answers, you’ll connect your AI.",
+      "translated": "服务响应后，你将连接你的 AI。"
     },
     {
-      "id": "native.apple.15cfa96c75b57b04",
-      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
-      "translated": "使用私有的用户空间安装。无需 Terminal、管理员权限或 Homebrew。"
+      "id": "native.apple.3bcb83316b3d90bb",
+      "source": "The Gateway didn’t start",
+      "translated": "Gateway 未启动"
+    },
+    {
+      "id": "native.apple.f36edc58238aa8ce",
+      "source": "Try again",
+      "translated": "重试"
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10719,14 +10889,19 @@
       "translated": "认识你的智能体"
     },
     {
-      "id": "native.apple.2c5c8568a34d4f0f",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
-      "translated": "这是一个专用的入门引导聊天。你的代理会自我介绍，了解你是谁，并在你需要时帮助你连接 Discord、Slack、Telegram、WhatsApp 或其他渠道。"
+      "id": "native.apple.6c35dc9becd6ca0f",
+      "source": "Your agent introduces itself, picks a name with you, and helps you connect WhatsApp, Telegram, or another channel — just chat.",
+      "translated": "你的 agent 会自我介绍，与你一起取名，并帮助你连接 WhatsApp、Telegram 或其他频道 — 只需聊天即可。"
     },
     {
-      "id": "native.apple.5e1277166b2ad41a",
-      "source": "All set",
-      "translated": "全部完成"
+      "id": "native.apple.25e82538dc9e9aad",
+      "source": "You’re all set!",
+      "translated": "你已全部设置完成！"
+    },
+    {
+      "id": "native.apple.9f73f753266a9fa2",
+      "source": "Finish opens the chat — say hi to your new agent.",
+      "translated": "完成后将打开聊天 — 向你的新 agent 打个招呼。"
     },
     {
       "id": "native.apple.678dee9dedd72ce4",
@@ -11362,6 +11537,11 @@
       "id": "native.apple.f5f4ff67674093ec",
       "source": "Voice & Talk",
       "translated": "语音与通话"
+    },
+    {
+      "id": "native.apple.f5aa19bc071cf585",
+      "source": "Crestodian",
+      "translated": "Crestodian"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",

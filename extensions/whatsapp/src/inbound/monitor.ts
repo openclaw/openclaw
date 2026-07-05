@@ -265,6 +265,12 @@ type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
   admission: AdmittedWebInboundMessage["admission"];
 };
 
+type AppendReplyWindow = {
+  afterMs: number;
+  untilMs: number;
+  maxAgeMs: number;
+};
+
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -280,6 +286,8 @@ type MonitorWebInboxOptions = {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Bounded reconnect window for offline append auto-replies. */
+  appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
@@ -612,6 +620,12 @@ export async function attachWebInboxToSocket(
         ? (result as { message?: proto.IMessage }).message
         : undefined;
     rememberBaileysMessage(remoteJid, messageId, message);
+    // Baileys derives the participant for fromMe quotes from its own userJid.
+    // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
+    cacheInboundMessageMeta(options.accountId, remoteJid, messageId, {
+      fromMe: true,
+      body: extractText(message ?? undefined),
+    });
   };
   const trackLateAcceptedSend = (jid: string, promise: Promise<WAMessage | undefined>) => {
     // The local send has failed terminally, but Baileys may still deliver it.
@@ -992,7 +1006,14 @@ export async function attachWebInboxToSocket(
     const APPEND_RECENT_GRACE_MS = 60_000;
     const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
     const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
-    return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
+    // Reconnect catch-up is temporary; after it expires, preserve steady-state
+    // handling for fresh appends instead of rejecting every later append.
+    const nowMs = Date.now();
+    const appendAfterMs =
+      options.appendReplyWindow && nowMs <= options.appendReplyWindow.untilMs
+        ? Math.max(options.appendReplyWindow.afterMs, nowMs - options.appendReplyWindow.maxAgeMs)
+        : connectedAtMs - APPEND_RECENT_GRACE_MS;
+    return msgTsMs < appendAfterMs;
   };
 
   const processDurableInboundMessage = async (

@@ -2437,6 +2437,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let label: AnyCodable?
+    public let category: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
     public let thinkinglevel: AnyCodable?
@@ -2466,6 +2467,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         agentid: String? = nil,
         label: AnyCodable?,
+        category: AnyCodable?,
         archived: Bool? = nil,
         pinned: Bool? = nil,
         thinkinglevel: AnyCodable?,
@@ -2494,6 +2496,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
+        self.category = category
         self.archived = archived
         self.pinned = pinned
         self.thinkinglevel = thinkinglevel
@@ -2524,6 +2527,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
+        case category
         case archived
         case pinned
         case thinkinglevel = "thinkingLevel"
@@ -3174,6 +3178,94 @@ public struct CrestodianChatResult: Codable, Sendable {
         case reply
         case sensitive
         case action
+    }
+}
+
+public struct CrestodianSetupDetectParams: Codable, Sendable {}
+
+public struct CrestodianSetupDetectResult: Codable, Sendable {
+    public let candidates: [[String: AnyCodable]]
+    public let workspace: String
+    public let configuredmodel: String?
+    public let setupcomplete: Bool
+
+    public init(
+        candidates: [[String: AnyCodable]],
+        workspace: String,
+        configuredmodel: String?,
+        setupcomplete: Bool)
+    {
+        self.candidates = candidates
+        self.workspace = workspace
+        self.configuredmodel = configuredmodel
+        self.setupcomplete = setupcomplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case candidates
+        case workspace
+        case configuredmodel = "configuredModel"
+        case setupcomplete = "setupComplete"
+    }
+}
+
+public struct CrestodianSetupActivateParams: Codable, Sendable {
+    public let kind: AnyCodable
+    public let provider: String?
+    public let apikey: String?
+    public let workspace: String?
+
+    public init(
+        kind: AnyCodable,
+        provider: String?,
+        apikey: String?,
+        workspace: String?)
+    {
+        self.kind = kind
+        self.provider = provider
+        self.apikey = apikey
+        self.workspace = workspace
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case provider
+        case apikey = "apiKey"
+        case workspace
+    }
+}
+
+public struct CrestodianSetupActivateResult: Codable, Sendable {
+    public let ok: Bool
+    public let modelref: String?
+    public let latencyms: Double?
+    public let lines: [String]?
+    public let status: AnyCodable?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        modelref: String?,
+        latencyms: Double?,
+        lines: [String]?,
+        status: AnyCodable?,
+        error: String?)
+    {
+        self.ok = ok
+        self.modelref = modelref
+        self.latencyms = latencyms
+        self.lines = lines
+        self.status = status
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case modelref = "modelRef"
+        case latencyms = "latencyMs"
+        case lines
+        case status
+        case error
     }
 }
 
@@ -7453,6 +7545,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let setupcode: String
     public let qrdataurl: String?
     public let gatewayurl: String
+    public let gatewayurls: [String]?
     public let auth: AnyCodable
     public let urlsource: String
 
@@ -7460,12 +7553,14 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         setupcode: String,
         qrdataurl: String?,
         gatewayurl: String,
+        gatewayurls: [String]? = nil,
         auth: AnyCodable,
         urlsource: String)
     {
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
         self.gatewayurl = gatewayurl
+        self.gatewayurls = gatewayurls
         self.auth = auth
         self.urlsource = urlsource
     }
@@ -7474,6 +7569,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case setupcode = "setupCode"
         case qrdataurl = "qrDataUrl"
         case gatewayurl = "gatewayUrl"
+        case gatewayurls = "gatewayUrls"
         case auth
         case urlsource = "urlSource"
     }
@@ -7986,6 +8082,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
     public let seq: Int
     public let state: String
     public let message: AnyCodable?
+    public let errormessage: String?
     public let stopreason: String?
 
     public init(
@@ -7996,6 +8093,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         seq: Int,
         state: String,
         message: AnyCodable?,
+        errormessage: String? = nil,
         stopreason: String?)
     {
         self.runid = runid
@@ -8005,6 +8103,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         self.seq = seq
         self.state = state
         self.message = message
+        self.errormessage = errormessage
         self.stopreason = stopreason
     }
 
@@ -8016,6 +8115,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         case seq
         case state
         case message
+        case errormessage = "errorMessage"
         case stopreason = "stopReason"
     }
 }

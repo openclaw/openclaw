@@ -93,11 +93,18 @@ function activityAlignmentHtml() {
               <button class="chat-activity-group__summary chat-activity-group__summary--error" type="button">
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
                 <span class="chat-activity-group__label">Activity: 2 tools</span>
-                <span class="chat-activity-group__preview">Bash, Gateway</span>
               </button>
               <div class="chat-activity-group__body">
-                <div class="chat-bubble" data-activity-call-bubble>
-                  <div class="chat-text">Bash searched a deliberately long workspace path with enough detail to occupy the activity row and expose mismatched width constraints.</div>
+                <div class="chat-bubble chat-bubble--tool-shell" data-activity-call-row>
+                  <div class="chat-tools-inline">
+                    <div class="chat-tool-msg-collapse">
+                      <button class="chat-tool-msg-summary" type="button">
+                        <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
+                        <span class="chat-tool-msg-summary__label">Bash</span>
+                        <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div class="chat-bubble chat-bubble--tool-shell">
                   <div class="chat-tool-msg-collapse">
@@ -503,17 +510,66 @@ describeBrowserLayout("chat responsive browser layout", () => {
       );
 
       await expectNoHorizontalOverflow(page);
-      const callBubble = await getRect(page, "[data-activity-call-bubble]");
+      const callRow = await getRect(page, "[data-activity-call-row]");
       const errorSummary = await getRect(page, ".chat-tool-msg-summary--error");
-      expect(Math.abs(callBubble.right - errorSummary.right)).toBeLessThanOrEqual(1);
-      const selectionStyles = await page.evaluate(() => ({
-        activity: getComputedStyle(
-          document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
-        ).userSelect,
-        tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
-          .userSelect,
-      }));
-      expect(selectionStyles).toEqual({ activity: "text", tool: "text" });
+      expect(Math.abs(callRow.right - errorSummary.right)).toBeLessThanOrEqual(1);
+      expect(Math.abs(callRow.height - errorSummary.height)).toBeLessThanOrEqual(1);
+      const styles = await page.evaluate(() => {
+        const call = document.querySelector<HTMLElement>("[data-activity-call-row]")!;
+        return {
+          activity: getComputedStyle(
+            document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
+          ).userSelect,
+          callBackground: getComputedStyle(call).backgroundColor,
+          tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
+            .userSelect,
+        };
+      });
+      expect(styles).toEqual({
+        activity: "text",
+        callBackground: "rgba(0, 0, 0, 0)",
+        tool: "text",
+      });
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("reveals message context on timestamp hover and keeps click-to-open", async () => {
+    if (!realChatServer) {
+      throw new Error("Expected the Control UI server to be ready");
+    }
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await installMockGateway(page, {
+        assistantName: "Claw",
+        historyMessages: [
+          {
+            content: [{ text: "Context hover regression fixture.", type: "text" }],
+            model: "openai/gpt-5.5",
+            role: "assistant",
+            timestamp: Date.UTC(2026, 6, 5, 9, 51),
+            usage: { cacheRead: 2_400, input: 19_600, output: 126 },
+          },
+        ],
+      });
+      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
+
+      const details = page.locator("details.msg-meta");
+      const context = page.locator(".msg-meta__details");
+      expect(await context.isVisible()).toBe(false);
+
+      await page.locator(".msg-meta__summary").hover();
+      expect(await context.isVisible()).toBe(true);
+
+      await page.mouse.move(0, 0);
+      expect(await context.isVisible()).toBe(false);
+
+      await page.locator(".msg-meta__summary").click();
+      await page.mouse.move(0, 0);
+      expect(await details.getAttribute("open")).toBe("");
+      expect(await context.isVisible()).toBe(true);
     } finally {
       await closeBrowserPage(page);
     }

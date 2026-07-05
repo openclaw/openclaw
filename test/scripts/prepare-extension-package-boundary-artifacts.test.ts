@@ -360,24 +360,23 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     const descendantPidPath = path.join(rootDir, "descendant.pid");
     let descendantPid = 0;
     const descendantScript = [
-      "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
       "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
     ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
-      `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      "const fs = require('node:fs');",
+      `const descendant = spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
 
     try {
-      // The timeout clock starts at spawn, so it must leave room for two Node
-      // boots (parent + descendant) under parallel-suite load; otherwise the
-      // group is killed before the descendant ever writes its pid.
-      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 5_000);
+      // The parent records the descendant pid immediately after spawn, so this
+      // needs headroom for only one Node boot under parallel-suite load.
+      const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 2_000);
       const expectedFailure = expect(command).rejects.toThrow(
-        "hung-group-prep timed out after 5000ms",
+        "hung-group-prep timed out after 2000ms",
       );
       descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 4_000), 10);
 
