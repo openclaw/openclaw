@@ -73,6 +73,44 @@ export function renderOverview(props: OverviewProps) {
     : i18n.getLocale();
 
   return html`
+    <section class="ov-feature-hero card">
+      <div class="ov-feature-hero__copy">
+        <div class="ov-feature-hero__eyebrow">OpenClaw home</div>
+        <div class="ov-feature-hero__title">Your agent command center</div>
+        <div class="ov-feature-hero__sub">
+          Watch the gateway, jump into conversations, wire up channels, and automate work from one
+          place.
+        </div>
+      </div>
+      <div class="ov-feature-hero__map" aria-label="Key OpenClaw features">
+        <button class="ov-feature-tile ov-feature-tile--chat" @click=${() => props.onNavigate("chat")}>
+          <span class="ov-feature-tile__orb">${icons.messageSquare}</span>
+          <span class="ov-feature-tile__text"><strong>Chat</strong><em>Live sessions</em></span>
+        </button>
+        <button
+          class="ov-feature-tile ov-feature-tile--channels"
+          @click=${() => props.onNavigate("channels")}
+        >
+          <span class="ov-feature-tile__orb">${icons.link}</span>
+          <span class="ov-feature-tile__text"><strong>Channels</strong><em>Discord, SMS, web</em></span>
+        </button>
+        <button
+          class="ov-feature-tile ov-feature-tile--agents"
+          @click=${() => props.onNavigate("agents")}
+        >
+          <span class="ov-feature-tile__orb">${icons.brain}</span>
+          <span class="ov-feature-tile__text"><strong>Agents</strong><em>Skills + tools</em></span>
+        </button>
+        <button
+          class="ov-feature-tile ov-feature-tile--automation"
+          @click=${() => props.onNavigate("cron")}
+        >
+          <span class="ov-feature-tile__orb">${icons.loader}</span>
+          <span class="ov-feature-tile__text"><strong>Automation</strong><em>Reminders + jobs</em></span>
+        </button>
+      </div>
+    </section>
+
     <section class="grid">
       <div class="card">
         <div class="card-title">${t("overview.access.title")}</div>
