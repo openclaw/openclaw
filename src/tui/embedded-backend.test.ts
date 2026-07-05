@@ -1,6 +1,10 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
+import {
+  clearEmbeddedPluginApprovalBroker,
+  getEmbeddedPluginApprovalBroker,
+} from "../infra/embedded-plugin-approval-broker.js";
 import { defaultRuntime } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -329,6 +333,11 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   afterEach(() => {
+    const broker = getEmbeddedPluginApprovalBroker();
+    broker?.stop();
+    if (broker) {
+      clearEmbeddedPluginApprovalBroker(broker);
+    }
     vi.useRealTimers();
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
@@ -455,6 +464,54 @@ describe("EmbeddedTuiBackend", () => {
     pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
     await flushMicrotasks();
     await backend.stop();
+  });
+
+  it("bridges local plugin approvals without a Gateway", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (event) => {
+      events.push({ event: event.event, payload: event.payload });
+    };
+
+    backend.start();
+    await flushMicrotasks();
+
+    const approvalBroker = getEmbeddedPluginApprovalBroker();
+    if (!approvalBroker) {
+      throw new Error("expected embedded plugin approval broker");
+    }
+    const decision = approvalBroker.request({
+      request: {
+        title: "Apply workspace skill proposal",
+        description: "Apply a pending workspace skill proposal into live workspace skills.",
+        toolName: "skill_workshop",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      timeoutMs: 5_000,
+    });
+    const approvals = await backend.listPluginApprovals();
+    const approval = Array.isArray(approvals) ? approvals[0] : undefined;
+
+    expect(approval).toMatchObject({
+      request: {
+        title: "Apply workspace skill proposal",
+        toolName: "skill_workshop",
+        sessionKey: "agent:main:main",
+      },
+    });
+    expect(events).toContainEqual({
+      event: "plugin.approval.requested",
+      payload: approval,
+    });
+    await expect(backend.resolvePluginApproval(approval?.id, "allow-once")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(decision).resolves.toMatchObject({ decision: "allow-once" });
+
+    await backend.stop();
+    expect(getEmbeddedPluginApprovalBroker()).toBeNull();
   });
 
   it("lists configured replace-mode models without loading the gateway catalog", async () => {

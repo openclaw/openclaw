@@ -8,17 +8,59 @@ title: "Tests"
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 - Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
+## Agent default
+
+Agent sessions run tests and computationally intensive validation remotely
+through Crabbox. Trusted maintainer code defaults to Blacksmith Testbox. The
+configured Testbox workflow hydrates credentials, so untrusted contributor or
+fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+
+When a trusted code task is likely to need tests or heavy proof, pre-warm
+immediately in a background command session, keep working while it hydrates,
+reuse the returned `tbx_...` id, sync the current checkout on every run, and
+stop it before handoff:
+
+```bash
+node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
+```
+
+Local test commands below are for human workflows or an explicit agent fallback
+requested by the user. Remote-provider unavailability must be reported; it is
+not permission to silently run a broad local gate.
+
+For untrusted code, pre-warm with `--provider aws`. Every run must set
+`CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
+a fresh temporary remote `HOME` before installing dependencies or running
+tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
+a trusted or previously hydrated lease. Launch an installed trusted Crabbox
+binary from a clean trusted `main` checkout and fetch only the remote PR with
+`--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+`aws.instanceProfile` is empty. Before any install/test, use trusted
+absolute-path tools to require an IMDSv2 token, prove the IAM credentials
+endpoint returns 404, and verify remote `git rev-parse HEAD` equals the full
+reviewed PR head SHA. Bind the lease to that SHA and stop/rewarm when the head
+changes. Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean
+`main` alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA
+and package-manager pin, isolates `HOME`, installs dependencies, then executes
+the requested test. If the broker cannot prove no role or no remote PR exists,
+use secretless fork CI. Do not use `hydrate-github`, `--no-sync`, or a
+credential-hydrated Testbox workflow.
+Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
+--tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
+report public networking with no Tailscale state before uploading any script.
+
 ## Routine local order
 
 1. `pnpm test:changed` for changed-scope Vitest proof.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
-In a Codex worktree or linked/sparse checkout, avoid direct local `pnpm test*` /
-`pnpm check*` / `pnpm crabbox:run` unless you have verified pnpm will not
-reconcile dependencies:
+In a Codex worktree or linked/sparse checkout, agents avoid direct local
+`pnpm test*` / `pnpm check*` / `pnpm crabbox:run`:
 
-- Tiny explicit-file proof: `node scripts/run-vitest.mjs <path-or-filter>`.
+- Explicit user-requested local fallback for a tiny file:
+  `node scripts/run-vitest.mjs <path-or-filter>`.
 - Changed gates or broad proof: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox.
 - The wrapper's final `exitCode` and timing JSON are the command result. A delegated Blacksmith GitHub Actions run may show `cancelled` after a successful SSH command because the Testbox is stopped from outside the keepalive action; check the wrapper summary and command output before treating that as a failure.
 - `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree <local-heavy-check command>`: keeps heavy-check serialization inside the current worktree instead of the Git common dir for commands such as `pnpm check:changed` and targeted `pnpm test ...`. Use it only on high-capacity local hosts when you intentionally run independent checks across linked worktrees.
@@ -47,7 +89,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 
 ## Control UI, TUI, and extension lanes
 
-- **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. In Codex worktrees, prefer `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` for tiny targeted proof, or Testbox/Crabbox for broader GUI proof.
+- **Control UI mocked E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. Agent runs default to Testbox/Crabbox, including targeted proof; use `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` only for an explicit local fallback.
 - **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - Source files with sibling tests map to that sibling before falling back to wider directory globs. Helper edits under `src/channels/plugins/contracts/test-helpers`, `src/plugin-sdk/test-helpers`, and `src/plugins/contracts` use a local import graph to run importing tests instead of broad-running every shard when the dependency path is precise.

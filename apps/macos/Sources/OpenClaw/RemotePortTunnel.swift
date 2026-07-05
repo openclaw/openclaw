@@ -109,6 +109,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = args
+        process.environment = CommandResolver.sshEnvironment()
 
         let pipe = Pipe()
         process.standardError = pipe

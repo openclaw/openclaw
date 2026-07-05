@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
 type CreateOptions = {
+  parent: HTMLElement;
   terminalOptions?: { fontFamily?: string };
   onData?: (bytes: Uint8Array) => void;
   onResize?: (size: { columns: number; rows: number }) => void;
@@ -69,6 +70,9 @@ describe("OpenClawTerminalPanel", () => {
       });
     });
     expect(createOptions?.terminalOptions?.fontFamily).toContain("MesloLGLDZ Nerd Font Mono");
+    expect(getComputedStyle(createOptions!.parent).caretColor).toBe("rgba(0, 0, 0, 0)");
+    const styles = (OpenClawTerminalPanel.styles as { cssText: string }).cssText;
+    expect(styles).toMatch(/\.tp-new\s*\{[^}]*align-self:\s*center/u);
     await vi.waitFor(() => {
       expect(requests).toContainEqual({
         method: "terminal.resize",

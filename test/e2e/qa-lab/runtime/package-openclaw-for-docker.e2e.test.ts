@@ -186,7 +186,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       {
         command: "node",
-        args: ["scripts/build-all.mjs"],
+        args: ["scripts/build-all.mjs", "ciArtifacts"],
         cwd: "/repo",
         noPnpm: "1",
         skipDts: "0",

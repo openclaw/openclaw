@@ -82,7 +82,7 @@ function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
 }
 
-function activityErrorAlignmentHtml() {
+function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
@@ -94,7 +94,6 @@ function activityErrorAlignmentHtml() {
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
                 <span class="chat-activity-group__label">Activity: 2 tools</span>
                 <span class="chat-activity-group__preview">Bash, Gateway</span>
-                <span class="chat-activity-group__badge">${iconSvg()}<span>Error</span></span>
               </button>
               <div class="chat-activity-group__body">
                 <div class="chat-bubble" data-activity-call-bubble>
@@ -106,7 +105,6 @@ function activityErrorAlignmentHtml() {
                       <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
                       <span class="chat-tool-msg-summary__label">Tool error</span>
                       <span class="chat-tool-msg-summary__names">Bash</span>
-                      <span class="chat-tool-msg-summary__error-badge">${iconSvg()}<span>Error</span></span>
                     </button>
                   </div>
                 </div>
@@ -496,19 +494,25 @@ describeBrowserLayout("chat responsive browser layout", () => {
   it.each([
     [430, 720],
     [1366, 900],
-  ] as const)("right-aligns activity errors with call bubbles at %sx%s", async (width, height) => {
+  ] as const)("right-aligns activity rows with call bubbles at %sx%s", async (width, height) => {
     const page = await openBrowserPage(width, height);
     try {
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityErrorAlignmentHtml()}</body></html>`,
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
       );
 
       await expectNoHorizontalOverflow(page);
       const callBubble = await getRect(page, "[data-activity-call-bubble]");
       const errorSummary = await getRect(page, ".chat-tool-msg-summary--error");
-      const errorBadge = await getRect(page, ".chat-tool-msg-summary__error-badge");
       expect(Math.abs(callBubble.right - errorSummary.right)).toBeLessThanOrEqual(1);
-      expect(Math.abs(errorBadge.right - (errorSummary.right - 8))).toBeLessThanOrEqual(1);
+      const selectionStyles = await page.evaluate(() => ({
+        activity: getComputedStyle(
+          document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
+        ).userSelect,
+        tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
+          .userSelect,
+      }));
+      expect(selectionStyles).toEqual({ activity: "text", tool: "text" });
     } finally {
       await closeBrowserPage(page);
     }

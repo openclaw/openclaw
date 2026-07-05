@@ -1178,6 +1178,62 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("uses the compaction snapshot when non-CLI last-call context is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-unavailable-context";
+      const sessionId = "test-unavailable-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 95_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-fable-5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "anthropic",
+              model: "claude-fable-5",
+              usage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                total: 927_907,
+              },
+              lastCallUsage: {
+                input: 12,
+                output: 15_104,
+                cacheRead: 819_661,
+                cacheWrite: 93_130,
+                contextUsage: { state: "unavailable" },
+                total: 927_907,
+              },
+              compactionTokensAfter: 80_000,
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(80_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+    });
+  });
+
   it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {

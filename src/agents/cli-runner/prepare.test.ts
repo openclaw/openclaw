@@ -2964,6 +2964,65 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("serves only the crestodian MCP server for ring-zero runs", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+      setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              jsonlDialect: "claude-stream-json",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-crestodian-mcp",
+        config: createCliBackendConfig(),
+        crestodianTool: { surface: "cli" },
+      });
+
+      // Ring-zero runs never touch the loopback surface (no message tools).
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      expect(context.mcpDeliveryCapture).toBeUndefined();
+      const args = context.preparedBackend.backend.args ?? [];
+      expect(args).toContain("--strict-mcp-config");
+      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+      const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
+        mcpServers?: Record<string, { env?: Record<string, string> }>;
+      };
+      expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
+      expect(raw.mcpServers?.openclaw?.env).toMatchObject({
+        OPENCLAW_TOOLS_MCP_TOOLS: "crestodian",
+        OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE: "cli",
+      });
+
+      await context.preparedBackend.cleanup?.();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed for native tool-capable CLI backends when tools are disabled", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

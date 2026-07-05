@@ -11,6 +11,7 @@ export * from "./schema/artifacts.js";
 export * from "./schema/channels.js";
 export * from "./schema/commands.js";
 export * from "./schema/config.js";
+export * from "./schema/crestodian.js";
 export * from "./schema/cron.js";
 export * from "./schema/error-codes.js";
 export * from "./schema/environments.js";

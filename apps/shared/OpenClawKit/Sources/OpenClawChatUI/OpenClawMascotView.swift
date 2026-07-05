@@ -3,19 +3,65 @@ import SwiftUI
 /// Animated OpenClaw mascot. Redraws the canonical 120x120 vector from
 /// `ui/public/favicon.svg` so individual parts (claws, antennae, eyes) can
 /// animate like the openclaw.ai hero mark; the bundled PNG asset cannot.
+/// Styling (palette, glow colors, float depth) follows the openclaw.ai hero
+/// (`src/pages/index.astro` + `Layout.astro` theme variables).
 public struct OpenClawMascotView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     public init() {}
 
     public var body: some View {
+        let palette = OpenClawMascotPalette.forScheme(self.colorScheme)
         if self.reduceMotion {
-            OpenClawMascotCanvas(pose: .still)
+            OpenClawMascotCanvas(pose: .still, palette: palette)
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-                OpenClawMascotCanvas(pose: .at(time: timeline.date.timeIntervalSinceReferenceDate))
+                let pose = OpenClawMascotPose.at(time: timeline.date.timeIntervalSinceReferenceDate)
+                // Float translates the whole canvas like the site floats the hero
+                // container; drawing the offset inside the canvas would clip the
+                // antennae (art starts at y~5 of 120) at the -9.6 float peak.
+                GeometryReader { proxy in
+                    OpenClawMascotCanvas(pose: pose, palette: palette)
+                        .offset(y: pose.floatOffset * min(proxy.size.width, proxy.size.height) / 120)
+                }
             }
         }
+    }
+
+    /// openclaw.ai hero drop-shadow color (`--logo-glow` / `--logo-glow-hover`).
+    /// Pair with a shadow radius of ~10% of the mascot size (15% while hovering)
+    /// to match the site's `drop-shadow(0 0 20px)` on a 100px mark.
+    public static func heroGlowColor(for colorScheme: ColorScheme, hovering: Bool = false) -> Color {
+        switch (colorScheme, hovering) {
+        case (.light, false): Color(red: 239 / 255, green: 75 / 255, blue: 88 / 255).opacity(0.2)
+        case (.light, true): Color(red: 0, green: 143 / 255, blue: 135 / 255).opacity(0.35)
+        case (_, false): Color(red: 1, green: 77 / 255, blue: 77 / 255).opacity(0.4)
+        case (_, true): Color(red: 0, green: 229 / 255, blue: 204 / 255).opacity(0.6)
+        }
+    }
+}
+
+/// Body/antenna colors from the openclaw.ai theme variables: `:root` (dark)
+/// and `html[data-theme='light']` in `Layout.astro`. Eye colors are fixed in
+/// the site markup and shared by both themes.
+struct OpenClawMascotPalette: Equatable {
+    let gradientTop: Color
+    let gradientBottom: Color
+    let antenna: Color
+
+    static let dark = OpenClawMascotPalette(
+        gradientTop: Color(red: 1, green: 77 / 255, blue: 77 / 255),
+        gradientBottom: Color(red: 153 / 255, green: 27 / 255, blue: 27 / 255),
+        antenna: Color(red: 1, green: 77 / 255, blue: 77 / 255))
+
+    static let light = OpenClawMascotPalette(
+        gradientTop: Color(red: 255 / 255, green: 112 / 255, blue: 121 / 255),
+        gradientBottom: Color(red: 234 / 255, green: 76 / 255, blue: 89 / 255),
+        antenna: Color(red: 239 / 255, green: 75 / 255, blue: 88 / 255))
+
+    static func forScheme(_ colorScheme: ColorScheme) -> OpenClawMascotPalette {
+        colorScheme == .light ? .light : .dark
     }
 }
 
@@ -32,8 +78,9 @@ struct OpenClawMascotPose: Equatable {
     static let still = OpenClawMascotPose()
 
     static func at(time: TimeInterval) -> OpenClawMascotPose {
+        // Float depth matches the hero: -8px on a 100px mark = 8% of the 120 box.
         OpenClawMascotPose(
-            floatOffset: -2.5 * (1 - cos(2 * .pi * self.cyclePhase(time, period: 4))),
+            floatOffset: -4.8 * (1 - cos(2 * .pi * self.cyclePhase(time, period: 4))),
             antennaDegrees: -3 * sin(2 * .pi * self.cyclePhase(time, period: 2)),
             leftClawDegrees: self.clawSnapDegrees(phase: self.cyclePhase(time, period: 4)),
             rightClawDegrees: self.clawSnapDegrees(phase: self.cyclePhase(time - 0.2, period: 4)),
@@ -73,17 +120,16 @@ struct OpenClawMascotPose: Equatable {
 
 private struct OpenClawMascotCanvas: View {
     let pose: OpenClawMascotPose
+    let palette: OpenClawMascotPalette
 
     var body: some View {
         Canvas { context, size in
-            Self.draw(context: &context, size: size, pose: self.pose)
+            Self.draw(context: &context, size: size, pose: self.pose, palette: self.palette)
         }
         .accessibilityHidden(true)
     }
 
     // Geometry below is the favicon.svg path data in its native 120x120 space.
-    private static let bodyColorTop = Color(red: 255 / 255, green: 77 / 255, blue: 77 / 255)
-    private static let bodyColorBottom = Color(red: 153 / 255, green: 27 / 255, blue: 27 / 255)
     private static let eyeColor = Color(red: 5 / 255, green: 8 / 255, blue: 16 / 255)
     private static let eyeGlowColor = Color(red: 0, green: 229 / 255, blue: 204 / 255)
     // Rotation pivots: claws hinge on their body-facing edge, antennae on their own center.
@@ -144,30 +190,31 @@ private struct OpenClawMascotCanvas: View {
         return path
     }()
 
-    private static func draw(context: inout GraphicsContext, size: CGSize, pose: OpenClawMascotPose) {
+    private static func draw(
+        context: inout GraphicsContext,
+        size: CGSize,
+        pose: OpenClawMascotPose,
+        palette: OpenClawMascotPalette)
+    {
         let scale = min(size.width, size.height) / 120
         context.scaleBy(x: scale, y: scale)
-        context.translateBy(x: 0, y: pose.floatOffset)
 
-        let bodyShading = GraphicsContext.Shading.linearGradient(
-            Gradient(colors: [self.bodyColorTop, self.bodyColorBottom]),
-            startPoint: .zero,
-            endPoint: CGPoint(x: 120, y: 120))
-        let antennaStroke = StrokeStyle(lineWidth: 3, lineCap: .round)
+        // Site antennae: stroke-width 2, `--coral-bright`.
+        let antennaStroke = StrokeStyle(lineWidth: 2, lineCap: .round)
 
         // Same paint order as favicon.svg: body, claws, antennae, eyes.
-        context.fill(self.bodyPath, with: bodyShading)
+        context.fill(self.bodyPath, with: self.gradient(for: self.bodyPath, palette: palette))
         self.drawRotated(context: context, degrees: pose.leftClawDegrees, pivot: self.leftClawPivot) {
-            $0.fill(self.leftClawPath, with: bodyShading)
+            $0.fill(self.leftClawPath, with: self.gradient(for: self.leftClawPath, palette: palette))
         }
         self.drawRotated(context: context, degrees: pose.rightClawDegrees, pivot: self.rightClawPivot) {
-            $0.fill(self.rightClawPath, with: bodyShading)
+            $0.fill(self.rightClawPath, with: self.gradient(for: self.rightClawPath, palette: palette))
         }
         self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: self.leftAntennaPivot) {
-            $0.stroke(self.leftAntennaPath, with: .color(self.bodyColorTop), style: antennaStroke)
+            $0.stroke(self.leftAntennaPath, with: .color(palette.antenna), style: antennaStroke)
         }
         self.drawRotated(context: context, degrees: pose.antennaDegrees, pivot: self.rightAntennaPivot) {
-            $0.stroke(self.rightAntennaPath, with: .color(self.bodyColorTop), style: antennaStroke)
+            $0.stroke(self.rightAntennaPath, with: .color(palette.antenna), style: antennaStroke)
         }
 
         context.fill(Path(ellipseIn: CGRect(x: 39, y: 29, width: 12, height: 12)), with: .color(self.eyeColor))
@@ -175,11 +222,25 @@ private struct OpenClawMascotCanvas: View {
         var glowContext = context
         glowContext.opacity = pose.eyeGlowOpacity
         glowContext.fill(
-            Path(ellipseIn: CGRect(x: 43.5, y: 31.5, width: 5, height: 5)),
+            Path(ellipseIn: CGRect(x: 44, y: 32, width: 4, height: 4)),
             with: .color(self.eyeGlowColor))
         glowContext.fill(
-            Path(ellipseIn: CGRect(x: 73.5, y: 31.5, width: 5, height: 5)),
+            Path(ellipseIn: CGRect(x: 74, y: 32, width: 4, height: 4)),
             with: .color(self.eyeGlowColor))
+    }
+
+    /// SVG gradients default to objectBoundingBox units, so the body and each
+    /// claw span the full top-left -> bottom-right ramp across their own bounds;
+    /// one canvas-wide gradient would leave the claws nearly flat-colored.
+    private static func gradient(
+        for path: Path,
+        palette: OpenClawMascotPalette) -> GraphicsContext.Shading
+    {
+        let box = path.boundingRect
+        return .linearGradient(
+            Gradient(colors: [palette.gradientTop, palette.gradientBottom]),
+            startPoint: box.origin,
+            endPoint: CGPoint(x: box.maxX, y: box.maxY))
     }
 
     private static func drawRotated(

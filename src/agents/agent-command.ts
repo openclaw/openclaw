@@ -103,7 +103,7 @@ import {
   resolveInternalEventTranscriptBody,
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
-import { resolveSession } from "./command/session.js";
+import { clearRotatedSessionMetadata, resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -953,8 +953,12 @@ async function agentCommandInternal(
         const currentStoreEntry = sessionStore[sessionKey];
         const allowCreateRestartRecoveryEntry =
           currentStoreEntry === undefined && sessionEntry === undefined;
-        const entry = currentStoreEntry ??
+        const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+        const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
+        const entry = isSessionRollover
+          ? clearRotatedSessionMetadata(initialEntry)
+          : initialEntry;
         currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
           cfg,
           opts,
@@ -965,6 +969,8 @@ async function agentCommandInternal(
           ...entry,
           sessionId,
           updatedAt: now,
+          sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
+          lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
           restartRecoveryDeliveryContext: currentRunDeliveryContext,
           restartRecoveryDeliveryRunId: currentRunDeliveryContext ? runId : undefined,
         };
@@ -972,15 +978,17 @@ async function agentCommandInternal(
           sessionStore,
           sessionKey,
           storePath,
-          initialEntry: entry,
+          initialEntry,
           entry: next,
           shouldPersist: (current) =>
-            shouldPersistRestartRecoveryContextClaim(
-              current,
-              sessionId,
-              runId,
-              allowCreateRestartRecoveryEntry,
-            ),
+            isSessionRollover
+              ? current?.sessionId === initialEntry.sessionId
+              : shouldPersistRestartRecoveryContextClaim(
+                  current,
+                  sessionId,
+                  runId,
+                  allowCreateRestartRecoveryEntry,
+                ),
         });
         sessionEntry = persisted ?? sessionEntry;
         trackedRestartRecoveryDeliveryContext =
