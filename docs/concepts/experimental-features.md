@@ -85,13 +85,7 @@ For one agent only:
 }
 ```
 
-Restart the Gateway after changing the flag, then confirm the trimmed tool list with:
-
-```bash
-openclaw status --deep
-```
-
-The deep status output lists the active agent tools; `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` should be absent when lean mode is on unless you explicitly preserved them with `tools.allow`.
+Restart the Gateway after changing the flag. `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` are omitted when lean mode is on unless you explicitly preserve them with `tools.allow` or `tools.alsoAllow`.
 
 ## Experimental does not mean hidden
 

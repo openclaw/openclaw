@@ -489,6 +489,34 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("does not treat built-in profile tools as lean-mode overrides", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: {
+          profile: "coding",
+        },
+      },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toEqual(
+      expect.arrayContaining(["image_generate", "video_generate"]),
+    );
+  });
+
   it("preserves forced message through local model lean filtering without runtime allowlist", () => {
     const tools = createOpenClawCodingTools({
       config: {

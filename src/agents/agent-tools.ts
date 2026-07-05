@@ -639,7 +639,7 @@ export function createOpenClawCodingTools(options?: {
     return normalized === "*" || normalized === "message";
   });
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-    toolNames: capabilityProfile.policy.explicitToolAllowlist,
+    toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });

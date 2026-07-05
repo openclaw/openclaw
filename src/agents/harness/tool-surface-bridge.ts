@@ -7,11 +7,7 @@ import {
   createCodeModeTools,
   resolveCodeModeConfig,
 } from "../code-mode.js";
-import {
-  applyLocalModelLeanToolSearchDefaults,
-  filterLocalModelLeanTools,
-  resolveLocalModelLeanPreserveToolNames,
-} from "../local-model-lean.js";
+import { applyLocalModelLeanToolSearchDefaults } from "../local-model-lean.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -110,18 +106,9 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     tools: AnyAgentTool[],
     options: { hookContext?: HookContext } = {},
   ): { tools: AnyAgentTool[] } => {
-    const preserveToolNames = resolveLocalModelLeanPreserveToolNames({
-      toolNames: runtimeToolAllowlist,
-      forceMessageTool: params.forceMessageTool,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    });
-    const projectedUncompactedTools = filterLocalModelLeanTools({
-      tools,
-      config: params.config,
-      agentId: params.agentId,
-      preserveToolNames,
-    });
-    const uncompactedProjection = filterRuntimeCompatibleTools(projectedUncompactedTools);
+    // Tool construction already applies the prepared lean policy. Re-deriving it here can
+    // discard explicit overrides because this compaction boundary has less policy context.
+    const uncompactedProjection = filterRuntimeCompatibleTools(tools);
     let effectiveTools = [...uncompactedProjection.tools];
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
@@ -185,13 +172,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
           });
-    const projectedCompactedTools = filterLocalModelLeanTools({
-      tools: compacted.tools,
-      config: params.config,
-      agentId: params.agentId,
-      preserveToolNames,
-    });
-    effectiveTools = [...filterRuntimeCompatibleTools(projectedCompactedTools).tools];
+    effectiveTools = [...filterRuntimeCompatibleTools(compacted.tools).tools];
     return { tools: effectiveTools };
   };
   return {

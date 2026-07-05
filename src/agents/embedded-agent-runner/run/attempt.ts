@@ -1253,7 +1253,7 @@ export async function runEmbeddedAttempt(
       runtimeToolAllowlist: effectiveToolsAllow,
     });
     const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-      toolNames: runtimeCapabilityProfile.policy.explicitToolAllowlist,
+      toolNames: runtimeCapabilityProfile.policy.explicitToolOverrideAllowlist,
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     });

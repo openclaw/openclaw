@@ -82,6 +82,22 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
   });
 
+  it("keeps built-in profile grants out of explicit overrides", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          allow: ["pdf"],
+        },
+      },
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+    });
+
+    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
+    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
+  });
+
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:
     // the trust check drops them, so scope must stay unknown instead of
