@@ -106,6 +106,7 @@
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
+  "persistExtendedHistory": true,
   "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
@@ -127,6 +128,7 @@
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
+  "persistExtendedHistory": true,
   "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-telegram-heartbeat-codex-tool"
@@ -226,24 +228,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 54450,
-    "roughTokens": 13613
+    "chars": 51462,
+    "roughTokens": 12866
   },
   "openClawDeveloperInstructions": {
-    "chars": 2155,
-    "roughTokens": 539
+    "chars": 1955,
+    "roughTokens": 489
   },
   "totalTextOnly": {
-    "chars": 27195,
-    "roughTokens": 6799
+    "chars": 27021,
+    "roughTokens": 6756
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81647,
-    "roughTokens": 20412
+    "chars": 78485,
+    "roughTokens": 19622
   },
   "userInputText": {
-    "chars": 1271,
-    "roughTokens": 318
+    "chars": 1297,
+    "roughTokens": 325
   }
 }
 ```
@@ -428,7 +430,7 @@ You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for
 
 Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
+Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
 Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.
 
@@ -525,6 +527,7 @@ Conversation info (untrusted metadata):
 {
   "chat_id": "user:1000001",
   "message_id": "heartbeat-0001",
+  "sender_id": "1000001",
   "sender": {
     "id": "1000001",
     "name": "Pash",
