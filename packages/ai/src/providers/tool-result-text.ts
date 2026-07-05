@@ -197,6 +197,60 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
   return undefined;
 }
 
+export function readImageUrlFromBlock(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as Record<string, unknown>;
+
+  // Canonical ImageContent: type="image" with data + mimeType
+  if (record.type === "image") {
+    const data = typeof record.data === "string" ? record.data : undefined;
+    const mimeType = typeof record.mimeType === "string" ? record.mimeType : "image/png";
+    if (data) {
+      return `data:${mimeType};base64,${data}`;
+    }
+    return undefined;
+  }
+
+  // image_url block: {type: "image_url", image_url: {url: string}}
+  if (record.type === "image_url") {
+    const imageUrl = record.image_url;
+    if (imageUrl && typeof imageUrl === "object") {
+      const url = (imageUrl as Record<string, unknown>).url;
+      if (typeof url === "string" && url.length > 0) {
+        return url;
+      }
+    }
+    return undefined;
+  }
+
+  // input_image block: {type: "input_image", image_url: string}
+  if (record.type === "input_image") {
+    const url = record.image_url;
+    if (typeof url === "string" && url.length > 0) {
+      return url;
+    }
+    return undefined;
+  }
+
+  // MIME-only block: no type field, mimeType starts with "image/", has data
+  const mimeType =
+    typeof record.mimeType === "string"
+      ? record.mimeType
+      : typeof record.mime_type === "string"
+        ? record.mime_type
+        : undefined;
+  if (mimeType?.toLowerCase().startsWith("image/")) {
+    const data = typeof record.data === "string" ? record.data : undefined;
+    if (data) {
+      return `data:${mimeType};base64,${data}`;
+    }
+  }
+
+  return undefined;
+}
+
 export function extractToolResultBlockText(block: unknown): string | undefined {
   if (!block || typeof block !== "object") {
     return undefined;

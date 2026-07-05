@@ -43,6 +43,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageBlock,
+  readImageUrlFromBlock,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -1289,26 +1290,45 @@ function convertResponsesMessages(
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => isImageBlock(item));
       const [callId] = msg.toolCallId.split("|");
+
+      let output: string | ResponseFunctionCallOutputItemList;
+      if (hasImages && model.input.includes("image")) {
+        const contentParts: ResponseFunctionCallOutputItemList = [];
+
+        if (hasText) {
+          contentParts.push({ type: "input_text", text: sanitizedTextResult });
+        }
+
+        for (const block of msg.content) {
+          const imageUrl = readImageUrlFromBlock(block);
+          if (imageUrl) {
+            contentParts.push({
+              type: "input_image",
+              detail: "auto",
+              image_url: imageUrl,
+            });
+          }
+        }
+
+        if (contentParts.length === 0) {
+          contentParts.push({
+            type: "input_text",
+            text: mediaPlaceholder ?? "(no output)",
+          });
+        }
+
+        output = contentParts;
+      } else {
+        output = sanitizeNonEmptyTransportPayloadText(
+          textResult,
+          mediaPlaceholder ?? "(no output)",
+        );
+      }
+
       messages.push({
         type: "function_call_output",
         call_id: callId,
-        output:
-          hasImages && model.input.includes("image")
-            ? ([
-                ...(hasText
-                  ? [{ type: "input_text", text: sanitizedTextResult }]
-                  : mediaPlaceholder === "(see attached media)"
-                    ? [{ type: "input_text", text: mediaPlaceholder }]
-                    : []),
-                ...msg.content
-                  .filter((item) => item.type === "image")
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
-              ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
+        output,
       });
     }
     msgIndex += 1;
