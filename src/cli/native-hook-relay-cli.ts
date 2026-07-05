@@ -19,6 +19,7 @@ export type NativeHookRelayCliOptions = {
   generation?: string;
   event?: string;
   preToolUseUnavailable?: string;
+  skillWorkshopApprovalPolicy?: string;
   timeout?: string;
 };
 
@@ -306,6 +307,7 @@ function writeNativeHookRelayUnavailableResponse(params: {
     provider: params.provider,
     event: params.event,
     preToolUseUnavailable: params.opts.preToolUseUnavailable,
+    skillWorkshopApprovalPolicy: params.opts.skillWorkshopApprovalPolicy,
     rawPayload: params.rawPayload,
     message: params.message ?? "Native hook relay unavailable",
   });

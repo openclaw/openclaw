@@ -536,6 +536,10 @@ export function registerHooksCli(program: Command): void {
       "--pre-tool-use-unavailable <mode>",
       "PreToolUse fallback mode when the originating relay is unavailable",
     )
+    .option(
+      "--skill-workshop-approval-policy <policy>",
+      "Skill Workshop approval policy captured when the originating relay was registered",
+    )
     .option("--timeout <ms>", "Gateway timeout in ms", "5000")
     .action(async (opts: NativeHookRelayCliOptions) =>
       runHooksCliAction(async () => {
