@@ -8699,7 +8699,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 215,
+      "line": 222,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -8707,7 +8707,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 236,
+      "line": 243,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset Onboarding?",
       "surface": "apple",
@@ -8715,7 +8715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 240,
+      "line": 247,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset",
       "surface": "apple",
@@ -8723,7 +8723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 244,
+      "line": 251,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -8731,7 +8731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 248,
+      "line": 255,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This disconnects, clears saved gateway credentials, and reopens onboarding.",
       "surface": "apple",
@@ -8739,7 +8739,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 251,
+      "line": 258,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -8747,7 +8747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 258,
+      "line": 265,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -8755,7 +8755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 306,
+      "line": 313,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -8763,7 +8763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 320,
+      "line": 327,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -8771,7 +8771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 328,
+      "line": 335,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",

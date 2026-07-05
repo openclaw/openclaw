@@ -177,6 +177,13 @@ struct SettingsProTab: View {
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
             }
+            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+                guard self.handlesGatewaySetupRequests else { return }
+                // A non-gateway sidebar Settings view is replaced during routing; its replacement
+                // consumes in `.task` so staged state cannot disappear with the old view.
+                guard self.ownsNavigationStack || self.directRoute == .gateway else { return }
+                self.applyPendingGatewaySetupLinkIfNeeded()
+            }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.
                 // Reload cleared credentials before the view can persist stale state.

@@ -1300,8 +1300,6 @@ extension RootTabs {
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
-        // Rebuild the canonical Settings owner before it consumes this request.
-        self.selectedSettingsRouteRequestID &+= 1
         self.selectSidebarDestination(.gateway)
         self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
     }
