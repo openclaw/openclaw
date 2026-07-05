@@ -473,28 +473,39 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord,
     outcome: SubagentRunOutcome,
   ): Promise<boolean> => {
-    const completion = ensureCompletionState(entry);
-    if (completion.resultText !== undefined) {
+    if (ensureCompletionState(entry).resultText !== undefined) {
       return false;
     }
     if (outcome.status === "error") {
+      const completion = ensureCompletionState(entry);
       completion.resultText = null;
       completion.capturedAt = Date.now();
       return true;
     }
+    let resultText: string | null;
     try {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
         sessionFile: entry.execution?.transcriptFile,
       });
-      if (newerGenerationOwnsSession(entry)) {
-        return false;
-      }
-      completion.resultText = captured?.trim() ? capFrozenResultText(captured) : null;
+      resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
-      completion.resultText = null;
+      resultText = null;
     }
+    const liveEntry = params.runs.get(entry.runId);
+    if (
+      entry.pauseReason === "sessions_yield" ||
+      liveEntry?.pauseReason === "sessions_yield" ||
+      newerGenerationOwnsSession(entry)
+    ) {
+      return false;
+    }
+    const completion = ensureCompletionState(entry);
+    if (completion.resultText !== undefined) {
+      return false;
+    }
+    completion.resultText = resultText;
     completion.capturedAt = Date.now();
     return true;
   };

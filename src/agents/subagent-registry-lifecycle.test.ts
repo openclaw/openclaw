@@ -710,50 +710,91 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
-  it("invalidates an in-flight cleanup when an authoritative yield revives the run", async () => {
-    const entry = createRunEntry({
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-    const runs = new Map([[entry.runId, entry]]);
-    let finishAnnounce: ((didAnnounce: boolean) => void) | undefined;
-    const runSubagentAnnounceFlow = vi.fn(
+  it.each(["keep", "delete"] as const)(
+    "invalidates in-flight %s cleanup when an authoritative yield revives the run",
+    async (cleanup) => {
+      const entry = createRunEntry({
+        cleanup,
+        expectsCompletionMessage: true,
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      let finishAnnounce: ((didAnnounce: boolean) => void) | undefined;
+      const runSubagentAnnounceFlow = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finishAnnounce = resolve;
+          }),
+      );
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        runSubagentAnnounceFlow,
+        captureSubagentCompletionReply: vi.fn(async () => "premature terminal reply"),
+      });
+
+      await controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      });
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      expect(entry.cleanupHandled).toBe(true);
+
+      expect(
+        markSubagentRunPausedAfterYield({
+          entry,
+          startedAt: 2_000,
+          endedAt: 4_001,
+        }),
+      ).toBe(true);
+      finishAnnounce?.(true);
+      await vi.waitFor(() => expect(entry.pauseReason).toBe("sessions_yield"));
+
+      expect(runs.get(entry.runId)).toBe(entry);
+      expect(entry.cleanupHandled).toBe(false);
+      expect(entry.cleanupCompletedAt).toBeUndefined();
+      expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+    },
+  );
+
+  it("discards completion capture when an authoritative yield arrives during the await", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    let finishCapture: ((result: string) => void) | undefined;
+    const captureSubagentCompletionReply = vi.fn(
       () =>
-        new Promise<boolean>((resolve) => {
-          finishAnnounce = resolve;
+        new Promise<string>((resolve) => {
+          finishCapture = resolve;
         }),
     );
     const controller = createLifecycleController({
       entry,
-      runs,
-      runSubagentAnnounceFlow,
-      captureSubagentCompletionReply: vi.fn(async () => "premature terminal reply"),
+      captureSubagentCompletionReply,
     });
 
-    await controller.completeSubagentRun({
+    const completion = controller.completeSubagentRun({
       runId: entry.runId,
       endedAt: 4_000,
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       triggerCleanup: true,
     });
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(entry.cleanupHandled).toBe(true);
+    await vi.waitFor(() => expect(captureSubagentCompletionReply).toHaveBeenCalledOnce());
+    expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_001 })).toBe(true);
+    finishCapture?.("stale pre-yield reply");
+    await completion;
 
-    expect(
-      markSubagentRunPausedAfterYield({
-        entry,
-        startedAt: 2_000,
-        endedAt: 4_001,
-      }),
-    ).toBe(true);
-    finishAnnounce?.(true);
-    await vi.waitFor(() => expect(entry.pauseReason).toBe("sessions_yield"));
-
-    expect(runs.get(entry.runId)).toBe(entry);
-    expect(entry.cleanupHandled).toBe(false);
-    expect(entry.cleanupCompletedAt).toBeUndefined();
-    expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
+    expect(entry).toMatchObject({
+      pauseReason: "sessions_yield",
+      completion: { required: true },
+    });
+    expect(entry.completion?.resultText).toBeUndefined();
+    expect(entry.completion?.capturedAt).toBeUndefined();
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
   it("abandons a killed callback tail after success becomes canonical", async () => {

@@ -107,11 +107,10 @@ export function markSubagentRunPausedAfterYield(params: {
   const { entry } = params;
   if (
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
-    entry.suppressAnnounceReason === "killed" ||
-    (entry.cleanup === "delete" && entry.cleanupHandled === true)
+    entry.suppressAnnounceReason === "killed"
   ) {
     // agent.wait and lifecycle events can report the old yield after control
-    // killed the run. Delete-mode cleanup is also irreversible once started.
+    // killed the run. Cleanup rechecks pauseReason before destructive work.
     return false;
   }
   let mutated = false;
