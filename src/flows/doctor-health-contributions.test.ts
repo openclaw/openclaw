@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import "./doctor-tool-result-cap-advice.js";
 import {
   createDoctorHealthContribution,
   resolveDoctorContributionHealthChecks,
@@ -98,6 +99,8 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
+  shouldSuggestMemorySystem: vi.fn(async () => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
@@ -105,7 +108,9 @@ const mocks = vi.hoisted(() => ({
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   collectLegacyCronStoreHealthFindings: vi.fn(async (): Promise<readonly HealthFinding[]> => []),
-  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(async () => undefined),
+  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(
+    async (): Promise<string | undefined> => undefined,
+  ),
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
   scanConfiguredChannelPluginBlockers: vi.fn(
@@ -133,6 +138,10 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  isSystemdUserServiceAvailable: vi.fn(async () => true),
+  readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
+  gatewayServiceIsLoaded: vi.fn(async () => true),
+  resolveGatewayService: vi.fn(),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -187,6 +196,23 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
 }));
+
+vi.mock("../daemon/service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+  return {
+    ...actual,
+    resolveGatewayService: mocks.resolveGatewayService,
+  };
+});
+
+vi.mock("../daemon/systemd.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
+  return {
+    ...actual,
+    isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
+    readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
+  };
+});
 
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
@@ -339,6 +365,16 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
+vi.mock("../commands/doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
+  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("../commands/doctor-workspace.js", () => ({
+  MEMORY_SYSTEM_PROMPT: "Enable memory system for better recall.",
+  shouldSuggestMemorySystem: mocks.shouldSuggestMemorySystem,
+}));
+
 vi.mock("../commands/doctor-disk-space.js", () => ({
   noteDiskSpace: vi.fn(),
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
@@ -431,6 +467,21 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 }
 
 describe("doctor health contributions", () => {
+  async function withProcessPlatform<T>(
+    platform: NodeJS.Platform,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      return await run();
+    } finally {
+      if (original) {
+        Object.defineProperty(process, "platform", original);
+      }
+    }
+  }
+
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
@@ -567,6 +618,10 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.resolveGatewayService.mockReset();
+    mocks.resolveGatewayService.mockReturnValue({ isLoaded: mocks.gatewayServiceIsLoaded });
+    mocks.gatewayServiceIsLoaded.mockReset();
+    mocks.gatewayServiceIsLoaded.mockResolvedValue(true);
     mocks.collectWorkspaceStatusHealthFindings.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
     mocks.collectDiskSpaceHealthFindings.mockReset();
@@ -596,6 +651,10 @@ describe("doctor health contributions", () => {
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
     mocks.collectChannelPreviewWarningHealthFindings.mockReset();
     mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([]);
+    mocks.isSystemdUserServiceAvailable.mockReset();
+    mocks.isSystemdUserServiceAvailable.mockResolvedValue(true);
+    mocks.readSystemdUserLingerStatus.mockReset();
+    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "alice", linger: "no" });
   });
 
   afterEach(() => {
@@ -1414,7 +1473,73 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
+    expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps systemd linger opt-in and reports disabled linger when selected", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toMatchObject({ defaultEnabled: false });
+    expect(systemdLingerCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [systemdLingerCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/systemd-linger"] }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/systemd-linger",
+            fixHint: "Run: sudo loginctl enable-linger alice",
+            target: "systemd.user.alice",
+          }),
+        ],
+      });
+    });
+  });
+
+  it("keeps selected systemd linger quiet when the gateway service is not loaded", async () => {
+    mocks.gatewayServiceIsLoaded.mockResolvedValue(false);
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [systemdLingerCheck!],
+          onlyIds: ["core/doctor/systemd-linger"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [],
+      });
+    });
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 
   it("keeps tool result cap opt-in for default lint selection", async () => {
@@ -1434,12 +1559,22 @@ describe("doctor health contributions", () => {
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
-    const checks = [toolResultCapCheck!];
+    const detect = vi.fn(async () => [
+      {
+        checkId: "core/doctor/tool-result-cap",
+        severity: "warning" as const,
+        message: "Configured tool result cap overrides the model-window default.",
+        path: "agents.defaults.contextLimits.toolResultMaxChars",
+      },
+    ]);
+    // This case owns lint selection; the real cap detector is exercised below.
+    const checks = [{ ...toolResultCapCheck!, detect }];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
     });
+    expect(detect).not.toHaveBeenCalled();
     await expect(
       runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
     ).resolves.toMatchObject({
@@ -1458,6 +1593,7 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
@@ -1617,17 +1753,21 @@ describe("doctor health contributions", () => {
     expect(stateIntegrityCheck).toMatchObject({ defaultEnabled: false });
     expect(stateIntegrityCheck).toBeDefined();
 
+    const detect = vi.fn(async () => []);
+
     const ctx = {
       cfg: {},
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
-    const checks = [stateIntegrityCheck!];
+    // Selection behavior does not need the real state-integrity filesystem scan.
+    const checks = [{ ...stateIntegrityCheck!, detect }];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
       checksRun: 0,
       checksSkipped: 1,
     });
+    expect(detect).not.toHaveBeenCalled();
     await expect(
       runDoctorLintChecks(ctx, { checks, includeAllChecks: true }),
     ).resolves.toMatchObject({
@@ -1640,6 +1780,7 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+    expect(detect).toHaveBeenCalledTimes(2);
   });
 
   it("collects memory-search notes as structured findings", async () => {
@@ -1700,6 +1841,46 @@ describe("doctor health contributions", () => {
     });
 
     expect(findings).toEqual([]);
+  });
+
+  it("keeps workspace suggestions opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const workspaceSuggestionsCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/workspace-suggestions",
+    );
+    expect(workspaceSuggestionsCheck).toMatchObject({ defaultEnabled: false });
+    expect(workspaceSuggestionsCheck).toBeDefined();
+    mocks.collectWorkspaceBackupTip.mockReturnValueOnce(
+      "Back up your workspace before major repair work.",
+    );
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [workspaceSuggestionsCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectWorkspaceBackupTip).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/workspace-suggestions"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/workspace-suggestions",
+          severity: "info",
+          message: "Back up your workspace before major repair work.",
+        }),
+      ],
+    });
+    expect(mocks.collectWorkspaceBackupTip).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
   it("keeps disk space opt-in for default lint selection", async () => {
@@ -1938,6 +2119,46 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" })],
     });
     expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
+  });
+
+  it("keeps legacy WhatsApp crontab opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const crontabCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/legacy-whatsapp-crontab",
+    );
+    expect(crontabCheck).toMatchObject({ defaultEnabled: false });
+    expect(crontabCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [crontabCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectLegacyWhatsAppCrontabHealthWarning).not.toHaveBeenCalled();
+
+    mocks.collectLegacyWhatsAppCrontabHealthWarning.mockResolvedValueOnce(
+      "Legacy WhatsApp crontab health check detected.\nRemove the stale crontab entry.",
+    );
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/legacy-whatsapp-crontab"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-whatsapp-crontab",
+          severity: "warning",
+        }),
+      ],
+    });
+    expect(mocks.collectLegacyWhatsAppCrontabHealthWarning).toHaveBeenCalledTimes(1);
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {

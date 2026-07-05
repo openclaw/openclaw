@@ -1728,20 +1728,6 @@ describe("plugin sdk alias helpers", () => {
     });
     writeWorkspacePackageEntry({
       root: fixture.root,
-      packageDir: "media-core",
-      srcFile: "read-response-with-limit.ts",
-      distFile: "read-response-with-limit.mjs",
-    });
-    const mediaCoreRootDistFile = path.join(
-      fixture.root,
-      "dist",
-      "media-core",
-      "read-response-with-limit.js",
-    );
-    mkdirSafeDir(path.dirname(mediaCoreRootDistFile));
-    fs.writeFileSync(mediaCoreRootDistFile, "export {};\n", "utf-8");
-    writeWorkspacePackageEntry({
-      root: fixture.root,
       packageDir: "acp-core",
       srcFile: "normalize-text.ts",
       distFile: "normalize-text.mjs",
@@ -1811,9 +1797,6 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.distFile),
-    );
-    expect(fs.realpathSync(aliases["@openclaw/media-core/read-response-with-limit"] ?? "")).toBe(
-      fs.realpathSync(mediaCoreRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/acp-core/normalize-text"] ?? "")).toBe(
       fs.realpathSync(acpCoreRootDistFile),

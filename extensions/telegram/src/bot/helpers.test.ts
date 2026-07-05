@@ -538,7 +538,7 @@ describe("describeReplyTarget", () => {
           blocks: [
             {
               type: "paragraph",
-              text: [{ type: "plain", text: "Forwarded reply text" }],
+              text: "Forwarded reply text",
             },
           ],
         },

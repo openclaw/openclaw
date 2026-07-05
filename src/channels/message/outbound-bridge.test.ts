@@ -138,6 +138,68 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     ).resolves.toEqual({ messageId: "legacy-id", receipt });
   });
 
+  it.each([
+    {
+      name: "portable presentation with fallback text",
+      payload: {
+        text: "Fallback",
+        presentation: { blocks: [{ type: "divider" }] },
+      },
+      expected: "card",
+    },
+    {
+      name: "title-only presentation",
+      payload: {
+        text: "Fallback",
+        presentation: { title: "Heading", blocks: [] },
+      },
+      expected: "card",
+    },
+    {
+      name: "rendered presentation blocks",
+      payload: {
+        text: "Fallback",
+        channelData: { slack: { presentationBlocks: [{ type: "divider" }] } },
+      },
+      expected: "card",
+    },
+    {
+      name: "empty rendered presentation blocks",
+      payload: {
+        text: "Fallback",
+        channelData: { slack: { presentationBlocks: [] } },
+      },
+      expected: "text",
+    },
+    {
+      name: "unrelated channel metadata",
+      payload: {
+        text: "Fallback",
+        channelData: { slack: { unfurl: false } },
+      },
+      expected: "text",
+    },
+  ] satisfies Array<{
+    name: string;
+    payload: ChannelMessageSendPayloadContext["payload"];
+    expected: "card" | "text";
+  }>)("classifies $name payloads as $expected", async ({ payload, expected }) => {
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendPayload: vi.fn(async () => ({ channel: "demo", messageId: "msg-1" })),
+      },
+    });
+
+    const result = await adapter.send?.payload?.({
+      cfg,
+      to: "room-1",
+      text: payload.text ?? "",
+      payload,
+    });
+
+    expect(result?.receipt.parts[0]?.kind).toBe(expected);
+  });
+
   it("wraps rich payload sends and infers the receipt part kind", async () => {
     const sendPayload = vi.fn(async (_request: ChannelMessageSendPayloadContext) => ({
       channel: "demo",

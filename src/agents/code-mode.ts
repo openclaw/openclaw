@@ -15,6 +15,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -186,10 +187,6 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function clampInteger(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 function readLanguages(value: unknown): CodeModeLanguage[] {
   if (!Array.isArray(value)) {
     return ["javascript", "typescript"];
@@ -203,7 +200,7 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
 /** Resolves Code Mode runtime limits and language support from config. */
 export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId);
-  const maxSearchLimit = clampInteger(
+  const maxSearchLimit = clampNumber(
     readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
     1,
     DEFAULT_MAX_SEARCH_LIMIT,
@@ -213,33 +210,33 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),
-    timeoutMs: clampInteger(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
-    memoryLimitBytes: clampInteger(
+    timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
+    memoryLimitBytes: clampNumber(
       readPositiveInteger(raw.memoryLimitBytes, DEFAULT_MEMORY_LIMIT_BYTES),
       1024 * 1024,
       1024 * 1024 * 1024,
     ),
-    maxOutputBytes: clampInteger(
+    maxOutputBytes: clampNumber(
       readPositiveInteger(raw.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
       1024,
       10 * 1024 * 1024,
     ),
-    maxSnapshotBytes: clampInteger(
+    maxSnapshotBytes: clampNumber(
       readPositiveInteger(raw.maxSnapshotBytes, DEFAULT_MAX_SNAPSHOT_BYTES),
       1024,
       256 * 1024 * 1024,
     ),
-    maxPendingToolCalls: clampInteger(
+    maxPendingToolCalls: clampNumber(
       readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
       1,
       128,
     ),
-    snapshotTtlSeconds: clampInteger(
+    snapshotTtlSeconds: clampNumber(
       readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),
       1,
       24 * 60 * 60,
     ),
-    searchDefaultLimit: clampInteger(
+    searchDefaultLimit: clampNumber(
       readPositiveInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
       1,
       maxSearchLimit,

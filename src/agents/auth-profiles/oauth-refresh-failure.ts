@@ -1,11 +1,12 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 /**
  * OAuth refresh failure classification and operator hints.
  * Parses provider/reason codes from refresh failures and formats safe login
  * commands without trusting raw provider text.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { formatCliCommand } from "../../cli/command-format.js";
+import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -73,12 +74,7 @@ function quoteShellArg(value: string): string {
 
 /** Wrap a rendered login command in a Markdown code span that survives embedded backticks. */
 export function formatOAuthRefreshFailureLoginCommandMarkdown(command: string): string {
-  let fence = "`";
-  while (command.includes(fence)) {
-    fence += "`";
-  }
-  const padding = command.startsWith("`") || command.endsWith("`") ? " " : "";
-  return `${fence}${padding}${command}${padding}${fence}`;
+  return formatInlineCodeSpan(command);
 }
 
 /** Classify a raw OAuth refresh failure message into a stable reason code. */

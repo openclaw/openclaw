@@ -1,5 +1,4 @@
 // Audits installed plugins for trust, provenance, and filesystem risks.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
@@ -17,7 +16,7 @@ import {
 } from "../plugins/plugin-registry.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
-import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
+import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
 type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
 
@@ -125,30 +124,6 @@ async function isChannelPluginConfigured(
     }
   }
   return false;
-}
-
-async function listInstalledPluginDirs(params: {
-  stateDir: string;
-  onReadError?: (error: unknown) => void;
-}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return null;
-  });
-  if (!st?.isDirectory()) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return [];
-  });
-  const pluginDirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
-  return { extensionsDir, pluginDirs };
 }
 
 function resolveToolPolicies(params: {

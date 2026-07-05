@@ -299,6 +299,9 @@ describe("runPreparedReply media-only handling", () => {
       await import("./inbound-meta.js"));
     ({ testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
+
+    // Load deferred reply dependencies before per-case timing starts.
+    await runPreparedReply(baseParams());
   });
 
   beforeEach(async () => {
@@ -3120,12 +3123,12 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingReplyToId).toBe("reply-24680");
   });
 
-  it("captures the effective reply policy for queued Slack runs", async () => {
+  it("captures the prepared reply policy for queued Slack runs", async () => {
     await runPreparedReply(
       baseParams({
         cfg: {
           session: {},
-          channels: { slack: { replyToMode: "off" } },
+          channels: { slack: { replyToMode: "all" } },
           agents: { defaults: {} },
         },
         ctx: {
@@ -3137,6 +3140,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: undefined,
           OriginatingTo: "C123",
           ChatType: "group",
+          ReplyToMode: "off",
         },
         sessionCtx: {
           Body: "",
@@ -3148,6 +3152,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "slack",
           OriginatingTo: "C123",
           ReplyToId: "101.001",
+          ReplyToMode: "off",
         },
       }),
     );
