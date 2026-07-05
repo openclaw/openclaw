@@ -2783,8 +2783,28 @@ describe("doctor health contributions", () => {
       });
     });
 
-    it("reports an unwritable config directory when the config file is missing", async () => {
-      vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    it("skips a missing config directory when an existing ancestor is writable", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [],
+      });
+      expect(accessSpy).toHaveBeenCalledWith("/tmp", fs.constants.W_OK);
+    });
+
+    it("reports an unwritable existing parent when the config file is missing", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((path) => path === "/tmp");
       vi.spyOn(fs, "accessSync").mockImplementation(() => {
         throw new Error("EACCES");
       });
@@ -2803,7 +2823,8 @@ describe("doctor health contributions", () => {
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
-            path: "/tmp/openclaw-home",
+            path: "/tmp",
+            target: "/tmp/openclaw-home",
             requirement: "writable-config-directory",
           }),
         ],

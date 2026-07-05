@@ -1331,18 +1331,6 @@ async function collectWriteConfigHealthFindings(
   }
   if (fs.existsSync(configPath)) {
     try {
-      fs.accessSync(configPath, fs.constants.R_OK);
-    } catch {
-      findings.push({
-        checkId: "core/doctor/write-config",
-        severity: "warning",
-        message: "Doctor cannot safely write config because the current config file is unreadable.",
-        path: configPath,
-        requirement: "readable-config-before-write",
-        fixHint: "Restore read access to the config file before running doctor --fix.",
-      });
-    }
-    try {
       fs.accessSync(configPath, fs.constants.W_OK);
     } catch {
       findings.push({
@@ -1356,19 +1344,35 @@ async function collectWriteConfigHealthFindings(
     }
     return findings;
   }
+  const configDirectory = nodePath.dirname(configPath);
+  const existingParent = findNearestExistingParent(configDirectory);
   try {
-    fs.accessSync(nodePath.dirname(configPath), fs.constants.W_OK);
+    fs.accessSync(existingParent, fs.constants.W_OK);
   } catch {
     findings.push({
       checkId: "core/doctor/write-config",
       severity: "warning",
-      message: "Doctor cannot create the config file because its parent directory is not writable.",
-      path: nodePath.dirname(configPath),
+      message:
+        "Doctor cannot create the config directory because the nearest existing parent is not writable.",
+      path: existingParent,
+      target: configDirectory,
       requirement: "writable-config-directory",
-      fixHint: "Create or make the config directory writable before running doctor --fix.",
+      fixHint: "Make the existing parent directory writable before running doctor --fix.",
     });
   }
   return findings;
+}
+
+function findNearestExistingParent(path: string): string {
+  let candidate = path;
+  while (!fs.existsSync(candidate)) {
+    const parent = nodePath.dirname(candidate);
+    if (parent === candidate) {
+      return candidate;
+    }
+    candidate = parent;
+  }
+  return candidate;
 }
 
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
