@@ -112,6 +112,31 @@ describe("ClickClack account resolution", () => {
     });
   });
 
+  it("does not mark missing env SecretRefs as configured", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            service: {
+              token: { source: "env", provider: "default", id: "CLICKCLACK_SERVICE_TOKEN" },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const account = resolveClickClackAccount({
+      cfg,
+      accountId: "service",
+      env: {},
+    });
+    expect(account.configured).toBe(false);
+    expect(account.token).toBe("");
+  });
+
   it("resolves model-mode bot account policy", () => {
     const cfg = {
       channels: {
@@ -227,8 +252,16 @@ describe("ClickClack account resolution", () => {
           workspace: "wsp_1",
           token: {
             source: "file",
-            provider: "default",
-            id: "/etc/openclaw/clickclack.token",
+            provider: "mounted_secret",
+            id: "/clickclack/token",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          mounted_secret: {
+            source: "file",
+            path: "/etc/openclaw/secrets.json",
           },
         },
       },
@@ -236,6 +269,62 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).configured).toBe(true);
     expect(resolveClickClackAccount({ cfg }).token).toBe("");
+  });
+
+  it("rejects SecretRefs whose provider source cannot resolve the requested source", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: {
+            source: "file",
+            provider: "example_exec",
+            id: "/clickclack/token",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          example_exec: {
+            source: "exec",
+            command: "/path/to/resolver",
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(() => resolveClickClackAccount({ cfg })).toThrow(
+      'Secret provider "example_exec" has source "exec" but ref requests "file".',
+    );
+  });
+
+  it("does not validate inactive SecretRefs for disabled accounts", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            stale: {
+              enabled: false,
+              token: {
+                source: "exec",
+                provider: "missing_exec",
+                id: "clickclack/token",
+              },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const account = resolveClickClackAccount({ cfg, accountId: "stale" });
+    expect(account.enabled).toBe(false);
+    expect(account.configured).toBe(false);
+    expect(account.token).toBe("");
   });
 
   it("resolveClickClackRuntimeToken resolves configured SecretRefs via the SDK runtime resolver", async () => {
