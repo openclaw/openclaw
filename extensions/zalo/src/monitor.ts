@@ -1,6 +1,7 @@
 // Zalo plugin module implements monitor behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -154,6 +155,7 @@ function registerSharedHostedMediaRoute(params: {
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
   message: ZaloMessage;
   text?: string;
+  agentBody?: string;
   mediaPath?: string;
   mediaType?: string;
   authorization?: ZaloMessageAuthorizationResult;
@@ -363,7 +365,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
     ...params,
     text: caption,
     // Use a sentinel so auth sees this as an inbound image before the download happens.
-    mediaPath: photo_url ? "__pending_media__" : undefined,
+    mediaPath: "__pending_media__",
     mediaType: undefined,
   });
   if (!authorization) {
@@ -384,9 +386,18 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
     }
   }
 
+  const agentBody = mediaPath
+    ? authorization.rawBody
+    : formatInboundMediaUnavailableText({
+        body: caption,
+        mediaPlaceholder: "<media:image>",
+        notice: "[zalo image attachment unavailable]",
+      });
+
   await processMessageWithPipeline({
     ...params,
     authorization,
+    agentBody,
     text: caption,
     mediaPath,
     mediaType,
@@ -531,6 +542,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     mediaType,
     statusSink,
     fetcher,
+    agentBody: agentBodyOverride,
     authorization: authorizationOverride,
   } = params;
   const { message_id, date } = message;
@@ -545,6 +557,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     return;
   }
   const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } = authorization;
+  const agentBody = agentBodyOverride ?? rawBody;
 
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
@@ -573,7 +586,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     channel: "Zalo",
     from: fromLabel,
     timestamp,
-    body: rawBody,
+    body: agentBody,
   });
 
   const ctxPayload = core.channel.inbound.buildContext({
@@ -601,7 +614,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
     message: {
       body,
-      bodyForAgent: rawBody,
+      bodyForAgent: agentBody,
       rawBody,
       commandBody: rawBody,
     },

@@ -393,7 +393,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
         #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
-        #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 6)
+        #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 7)
         #expect(!source.contains("directRoute: .agents"))
         #expect(!source.contains("Image(systemName: \"gearshape\")"))
         #expect(!source.contains("self.metric(label:"))
@@ -682,7 +682,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
         #expect(rootSource.matches(of: /openVoiceSettings: \{ openSettingsRoute\(\.voice\) \}/).count == 1)
         #expect(rootSource.matches(of: /openVoiceSettings: \{ self\.selectSettingsRoute\(\.voice\) \}/).count == 1)
-        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 1)
+        #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 2)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))
@@ -834,6 +834,36 @@ struct RootTabsSourceGuardTests {
         #expect(trustSource.contains("Trust and connect"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
+    }
+
+    @Test func `setup route probes yield to newer manual actions`() throws {
+        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+
+        let welcomeStep = try Self.extract(
+            onboardingSource,
+            from: "private var welcomeStep: some View",
+            to: "@ViewBuilder\n    private var modeStep")
+        #expect(welcomeStep.contains("self.openQRScannerFromOnboarding()"))
+        #expect(welcomeStep.contains("self.invalidateSetupAttempt()"))
+
+        let onboardingManualConnect = try Self.extract(
+            onboardingSource,
+            from: "private func connectManual(setupAttemptID: UUID? = nil) async",
+            to: "private func connectCurrentManualGateway")
+        #expect(onboardingManualConnect.contains("guard self.setupAttemptID == setupAttemptID else { return }"))
+        #expect(onboardingManualConnect.contains("self.invalidateSetupAttempt()"))
+        #expect(onboardingSource.contains("await self.connectManual(setupAttemptID: attemptID)"))
+
+        let settingsManualConnect = try Self.extract(
+            actionsSource,
+            from: "func connectManual(setupAttemptID: UUID? = nil) async",
+            to: "func preflightGateway")
+        #expect(settingsManualConnect.contains("guard self.setupAttemptID == setupAttemptID else { return }"))
+        #expect(settingsManualConnect.contains("self.invalidateGatewaySetupAttempt()"))
+        #expect(actionsSource.contains("await self.connectManual(setupAttemptID: attemptID)"))
+        #expect(sectionsSource.contains(".disabled(self.setupAttemptID != nil)"))
     }
 
     @Test func `local network access is requested from visible gateway flows`() throws {

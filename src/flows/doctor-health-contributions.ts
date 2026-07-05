@@ -1,18 +1,20 @@
 // Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
+import nodePath from "node:path";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
@@ -979,6 +981,45 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   });
 }
 
+async function detectSystemdLingerFindings(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
+    return [];
+  }
+  const { resolveGatewayService } = await import("../daemon/service.js");
+  const service = resolveGatewayService();
+  let loaded;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
+  if (!loaded) {
+    return [];
+  }
+  const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
+    await import("../daemon/systemd.js");
+  if (!(await isSystemdUserServiceAvailable(process.env))) {
+    return [];
+  }
+  const status = await readSystemdUserLingerStatus(process.env);
+  if (!status || status.linger === "yes") {
+    return [];
+  }
+  return [
+    {
+      checkId: "core/doctor/systemd-linger",
+      severity: "warning",
+      source: "doctor",
+      message: `Systemd lingering is disabled for ${status.user}.`,
+      target: `systemd.user.${status.user}`,
+      requirement: "systemd user lingering enabled",
+      fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
+    },
+  ];
+}
+
 async function hasActiveGatewayExecCredential(
   ctx: Pick<DoctorHealthFlowContext, "cfg">,
   mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
@@ -1266,6 +1307,93 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   if (!ctx.prompter.shouldRepair) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
+  }
+}
+
+async function collectWriteConfigHealthFindings(
+  ctx: Parameters<HealthCheck["detect"]>[0],
+): Promise<readonly HealthFinding[]> {
+  const findings: HealthFinding[] = [];
+  const configPath = ctx.configPath;
+  if (resolveIsNixMode(process.env)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      ...(configPath ? { path: configPath } : {}),
+      requirement: "mutable-config-write-path",
+      fixHint:
+        "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file.",
+    });
+  }
+  if (!configPath) {
+    return findings;
+  }
+  const configDirectory = nodePath.dirname(configPath);
+  const configPathExists = fs.existsSync(configPath);
+  const existingParent = configPathExists
+    ? configDirectory
+    : findNearestExistingParent(configDirectory);
+  if (!isDirectoryPath(existingParent)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor cannot create the config directory because a path component is a file.",
+      path: existingParent,
+      target: configDirectory,
+      requirement: "config-directory-path",
+      fixHint: "Move the file blocking the config directory path before running doctor --fix.",
+    });
+    return findings;
+  }
+  try {
+    fs.accessSync(existingParent, fs.constants.W_OK | fs.constants.X_OK);
+  } catch {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: configPathExists
+        ? "Doctor cannot write config because the config directory is not writable."
+        : "Doctor cannot create the config directory because the nearest existing parent is not writable.",
+      path: existingParent,
+      target: configPathExists ? configPath : configDirectory,
+      requirement: "writable-config-directory",
+      fixHint:
+        "Make the existing config directory or parent directory writable before running doctor --fix.",
+    });
+  }
+  return findings;
+}
+
+function findNearestExistingParent(path: string): string {
+  let candidate = path;
+  while (!pathEntryExists(candidate)) {
+    const parent = nodePath.dirname(candidate);
+    if (parent === candidate) {
+      return candidate;
+    }
+    candidate = parent;
+  }
+  return candidate;
+}
+
+function pathEntryExists(path: string): boolean {
+  if (fs.existsSync(path)) {
+    return true;
+  }
+  try {
+    fs.lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDirectoryPath(path: string): boolean {
+  try {
+    return fs.statSync(path).isDirectory();
+  } catch {
+    return false;
   }
 }
 
@@ -1868,6 +1996,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
+      healthChecks: {
+        id: "core/doctor/systemd-linger",
+        description: "Disabled systemd user lingering is reported as a finding.",
+        defaultEnabled: false,
+        detect: detectSystemdLingerFindings,
+      },
       run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({
@@ -1997,6 +2131,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:write-config",
       label: "Write config",
+      healthChecks: {
+        id: "core/doctor/write-config",
+        description: "Config write blockers are findings before doctor repair writes.",
+        defaultEnabled: false,
+        detect: collectWriteConfigHealthFindings,
+      },
       run: runWriteConfigHealth,
     }),
     createDoctorHealthContribution({

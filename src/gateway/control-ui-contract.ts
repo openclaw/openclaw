@@ -3,6 +3,9 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Marks whether the served document CSP permits the terminal WASM runtime. */
+export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
+
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
 

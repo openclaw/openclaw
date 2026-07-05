@@ -2416,6 +2416,224 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send terminalizes the client run when a followup is queued", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const broadcast = vi.fn((_event: string, _payload: unknown) => undefined);
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatQueuedTurns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast,
+        broadcastToConnIds: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      const dispatchRelease = createDeferred();
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        queuedLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.queuedFollowupLifecycle;
+        queuedLifecycle?.onEnqueued?.();
+        await dispatchRelease.promise;
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "queued-followup",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "queued prompt",
+            idempotencyKey: "idem-queued-followup",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "queued prompt",
+          idempotencyKey: "idem-queued-followup",
+        },
+        client: {
+          connId: "conn-tui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: vi.fn() as RespondFn,
+        context,
+      });
+
+      await vi.waitFor(() => expect(queuedLifecycle).toBeDefined(), FAST_WAIT_OPTS);
+      expect(queuedLifecycle?.ownerKey).toBe("connection:conn-tui");
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
+      );
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({
+            runId: "idem-queued-followup",
+            sessionKey: "agent:main:main",
+            state: "final",
+          }),
+        );
+      }, FAST_WAIT_OPTS);
+      const finalEvents = broadcast.mock.calls.filter(
+        ([event, payload]) =>
+          event === "chat" &&
+          (payload as { runId?: string; state?: string }).runId === "idem-queued-followup" &&
+          (payload as { state?: string }).state === "final",
+      );
+      expect(finalEvents).toHaveLength(1);
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
+
+      context.dedupe.delete("chat:idem-queued-followup");
+      const replayRespond = vi.fn() as RespondFn;
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "queued-followup-replay",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "queued prompt",
+            idempotencyKey: "idem-queued-followup",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "queued prompt",
+          idempotencyKey: "idem-queued-followup",
+        },
+        client: {
+          connId: "conn-tui",
+          connect: {
+            client: { id: GATEWAY_CLIENT_NAMES.TUI, mode: GATEWAY_CLIENT_MODES.UI },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: replayRespond,
+        context,
+      });
+      expect(replayRespond).toHaveBeenCalledWith(
+        true,
+        { runId: "idem-queued-followup", status: "in_flight" },
+        undefined,
+        { cached: true, runId: "idem-queued-followup" },
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      queuedLifecycle?.onComplete?.();
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+
+      let failedDispatchLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        failedDispatchLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.queuedFollowupLifecycle;
+        failedDispatchLifecycle?.onEnqueued?.();
+        throw new Error("post-enqueue bookkeeping failed");
+      });
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "queued-followup-post-error",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "accepted before dispatch error",
+            idempotencyKey: "idem-queued-followup-post-error",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "accepted before dispatch error",
+          idempotencyKey: "idem-queued-followup-post-error",
+        },
+        client: {
+          connId: "conn-tui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: vi.fn() as RespondFn,
+        context,
+      });
+
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(2),
+        FAST_WAIT_OPTS,
+      );
+      const acceptedErrorEvents = broadcast.mock.calls.filter(
+        ([event, payload]) =>
+          event === "chat" &&
+          (payload as { runId?: string }).runId === "idem-queued-followup-post-error",
+      );
+      expect(acceptedErrorEvents).toHaveLength(1);
+      expect(acceptedErrorEvents[0]?.[1]).toMatchObject({ state: "final" });
+      expect(context.dedupe.get("chat:idem-queued-followup-post-error")).toMatchObject({
+        ok: true,
+        payload: { status: "ok" },
+      });
+      expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
+      failedDispatchLifecycle?.onComplete?.();
+      expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.send emits operator-only post-ACK server timing milestones", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -3398,8 +3616,13 @@ describe("gateway server chat", () => {
             role: "assistant",
             timestamp: Date.now(),
             content: [{ type: "text", text: "hello" }],
-            usage: { input: 12, output: 5, totalTokens: 17 },
-            cost: { total: 0.0123 },
+            usage: {
+              input: 12,
+              output: 5,
+              totalTokens: 17,
+              cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
+            },
+            cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
             details: { debug: true },
           },
         }),
@@ -3409,13 +3632,32 @@ describe("gateway server chat", () => {
       expect(messages).toHaveLength(1);
       const message = messages[0] as {
         role?: string;
-        usage?: { input?: number; output?: number; totalTokens?: number };
-        cost?: { total?: number };
+        usage?: {
+          input?: number;
+          output?: number;
+          totalTokens?: number;
+          cost?: Record<string, number>;
+        };
+        cost?: Record<string, number>;
       };
       expect(message.role).toBe("assistant");
       expect(message.usage?.input).toBe(12);
       expect(message.usage?.output).toBe(5);
       expect(message.usage?.totalTokens).toBe(17);
+      expect(message.usage?.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
+      expect(message.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
       expect(message.cost?.total).toBe(0.0123);
       expect(messages[0]).not.toHaveProperty("details");
     });

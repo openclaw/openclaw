@@ -118,6 +118,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -746,6 +747,18 @@ describe("validateChatEvent", () => {
         seq: 1,
         state: "delta",
         deltaText: "hello",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts an argument-free diagnostic on aborted chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "aborted",
+        errorMessage: "edit tool validation failed: path: must be string",
       }),
     ).toBe(true);
   });

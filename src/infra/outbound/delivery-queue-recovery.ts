@@ -140,6 +140,10 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
     channel: entry.channel,
     to: entry.to,
     accountId: entry.accountId,
+    ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
+    ...(entry.requireUnknownSendReconciliation === true
+      ? { requireUnknownSendReconciliation: true }
+      : {}),
     payloads: entry.payloads,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
@@ -191,6 +195,9 @@ async function reconcileUnknownQueuedDelivery(opts: {
       retryCount: entry.retryCount,
       ...(entry.platformSendStartedAt !== undefined
         ? { platformSendStartedAt: entry.platformSendStartedAt }
+        : {}),
+      ...(entry.effectiveReplyToId !== undefined
+        ? { effectiveReplyToId: entry.effectiveReplyToId }
         : {}),
       payloads: entry.payloads,
       ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
@@ -250,7 +257,10 @@ function buildReconciledCommitContext(params: {
     cfg: params.cfg,
     to: params.entry.to,
     accountId: params.entry.accountId,
-    replyToId: params.entry.replyToId,
+    replyToId:
+      params.entry.effectiveReplyToId !== undefined
+        ? params.entry.effectiveReplyToId
+        : params.entry.replyToId,
     replyToMode: params.entry.replyToMode,
     threadId: params.entry.threadId,
     silent: params.entry.silent,

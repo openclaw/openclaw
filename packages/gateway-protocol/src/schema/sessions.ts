@@ -303,6 +303,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    /** User-defined organization bucket ("category", not chat-group); null clears it. */
+    category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     archived: Type.Optional(Type.Boolean()),
     pinned: Type.Optional(Type.Boolean()),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

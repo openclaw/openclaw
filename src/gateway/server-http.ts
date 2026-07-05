@@ -452,6 +452,7 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
+  isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -747,6 +748,8 @@ export function createGatewayHttpServer(opts: {
             (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
               basePath: controlUiBasePath,
               config: configSnapshot,
+              terminalEnabled:
+                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
               auth: resolvedAuthValue,

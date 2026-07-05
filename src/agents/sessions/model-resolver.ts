@@ -2,9 +2,9 @@
  * Model resolution, scoping, and initial selection
  */
 
+import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { modelsAreEqual } from "../../llm/model-utils.js";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ThinkingLevel } from "../runtime/index.js";

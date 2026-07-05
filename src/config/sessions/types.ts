@@ -423,6 +423,8 @@ export type SessionEntry = {
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
+  /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
+  category?: string;
   displayName?: string;
   channel?: string;
   groupId?: string;

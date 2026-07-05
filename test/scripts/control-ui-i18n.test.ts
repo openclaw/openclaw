@@ -1,6 +1,6 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -50,6 +50,21 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("ships no recorded English fallbacks", () => {
+    const metaDir = path.resolve("ui/src/i18n/.i18n");
+    const fallbacks = readdirSync(metaDir)
+      .filter((fileName) => fileName.endsWith(".meta.json"))
+      .flatMap((fileName) => {
+        const meta = JSON.parse(readFileSync(path.join(metaDir, fileName), "utf8")) as {
+          fallbackKeys?: string[];
+          locale?: string;
+        };
+        return (meta.fallbackKeys ?? []).map((key) => `${meta.locale ?? fileName}:${key}`);
+      });
+
+    expect(fallbacks).toEqual([]);
+  });
+
   it("refreshes recorded fallback copy when sync is forced without a provider", () => {
     expect(
       shouldReuseExistingTranslation({

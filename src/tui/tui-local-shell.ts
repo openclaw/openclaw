@@ -1,6 +1,6 @@
 // Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
-import type { Component, SelectItem } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -10,8 +10,8 @@ type LocalShellDeps = {
   tui: {
     requestRender: () => void;
   };
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   createSelector?: (
     items: SelectItem[],
     maxVisible: number,
@@ -57,7 +57,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         2,
       );
       selector.onSelect = (item) => {
-        deps.closeOverlay();
+        deps.closeOverlay(overlayHandle);
         if (item.value === "yes") {
           localExecAllowed = true;
           deps.chatLog.addSystem("local shell: enabled for this session");
@@ -69,12 +69,12 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         deps.tui.requestRender();
       };
       selector.onCancel = () => {
-        deps.closeOverlay();
+        deps.closeOverlay(overlayHandle);
         deps.chatLog.addSystem("local shell: cancelled");
         deps.tui.requestRender();
         resolve(false);
       };
-      deps.openOverlay(selector);
+      const overlayHandle: OverlayHandle = deps.openOverlay(selector);
       deps.tui.requestRender();
     });
   };

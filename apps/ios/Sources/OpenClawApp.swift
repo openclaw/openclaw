@@ -11,6 +11,7 @@ private struct PendingWatchPromptAction {
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
 }
 
 private typealias PendingExecApprovalPrompt = ExecApprovalNotificationPrompt
@@ -63,7 +64,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                             promptId: action.promptId,
                             actionId: action.actionId,
                             actionLabel: action.actionLabel,
-                            sessionKey: action.sessionKey)
+                            sessionKey: action.sessionKey,
+                            gatewayStableID: action.gatewayStableID)
                     }
                 }
             }
@@ -276,6 +278,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
         let promptId = userInfo[WatchPromptNotificationBridge.promptIDKey] as? String
         let sessionKey = userInfo[WatchPromptNotificationBridge.sessionKeyKey] as? String
+        let gatewayStableID = userInfo[WatchPromptNotificationBridge.gatewayStableIDKey] as? String
 
         switch response.actionIdentifier {
         case WatchPromptNotificationBridge.actionPrimaryIdentifier:
@@ -287,7 +290,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 promptId: promptId,
                 actionId: actionId,
                 actionLabel: actionLabel,
-                sessionKey: sessionKey)
+                sessionKey: sessionKey,
+                gatewayStableID: gatewayStableID)
         case WatchPromptNotificationBridge.actionSecondaryIdentifier:
             let actionId = (userInfo[WatchPromptNotificationBridge.actionSecondaryIDKey] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -297,7 +301,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 promptId: promptId,
                 actionId: actionId,
                 actionLabel: actionLabel,
-                sessionKey: sessionKey)
+                sessionKey: sessionKey,
+                gatewayStableID: gatewayStableID)
         default:
             break
         }
@@ -322,7 +327,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             promptId: promptId,
             actionId: actionId,
             actionLabel: actionLabel,
-            sessionKey: sessionKey)
+            sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID)
     }
 
     private static func parseExecApprovalPrompt(
@@ -342,7 +348,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             promptId: action.promptId,
             actionId: action.actionId,
             actionLabel: action.actionLabel,
-            sessionKey: action.sessionKey)
+            sessionKey: action.sessionKey,
+            gatewayStableID: action.gatewayStableID)
         _ = await appModel.handleBackgroundRefreshWake(trigger: "watch_prompt_action")
     }
 
@@ -407,6 +414,7 @@ enum WatchPromptNotificationBridge {
     static let typeValue = "watch.prompt"
     static let promptIDKey = "openclaw.watch.promptId"
     static let sessionKeyKey = "openclaw.watch.sessionKey"
+    static let gatewayStableIDKey = "openclaw.watch.gatewayStableID"
     static let actionPrimaryIDKey = "openclaw.watch.action.primary.id"
     static let actionPrimaryLabelKey = "openclaw.watch.action.primary.label"
     static let actionSecondaryIDKey = "openclaw.watch.action.secondary.id"
@@ -422,6 +430,7 @@ enum WatchPromptNotificationBridge {
     static func scheduleMirroredWatchPromptNotificationIfNeeded(
         invokeID: String,
         params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?,
         sendResult: WatchNotificationSendResult) async
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
@@ -460,6 +469,11 @@ enum WatchPromptNotificationBridge {
         }
         if let sessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines), !sessionKey.isEmpty {
             userInfo[self.sessionKeyKey] = sessionKey
+        }
+        if let gatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            userInfo[self.gatewayStableIDKey] = gatewayStableID
         }
         for (index, action) in displayedActions.enumerated() {
             userInfo[self.actionIDKey(index: index)] = action.id
@@ -594,13 +608,15 @@ extension NodeAppModel {
         promptId: String?,
         actionId: String,
         actionLabel: String?,
-        sessionKey: String?) async
+        sessionKey: String?,
+        gatewayStableID: String?) async
     {
         let normalizedActionID = actionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedActionID.isEmpty else { return }
 
         let normalizedPromptID = promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedSessionKey = sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedGatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedActionLabel = actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let event = WatchQuickReplyEvent(
@@ -609,6 +625,7 @@ extension NodeAppModel {
             actionId: normalizedActionID,
             actionLabel: (normalizedActionLabel?.isEmpty == false) ? normalizedActionLabel : nil,
             sessionKey: (normalizedSessionKey?.isEmpty == false) ? normalizedSessionKey : nil,
+            gatewayStableID: (normalizedGatewayStableID?.isEmpty == false) ? normalizedGatewayStableID : nil,
             note: "source=ios.notification",
             sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
             transport: "ios.notification")

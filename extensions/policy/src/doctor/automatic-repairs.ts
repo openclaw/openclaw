@@ -1,0 +1,257 @@
+// Policy automatic repairs apply only deterministic narrowing config changes.
+import type {
+  HealthFinding,
+  HealthRepairContext,
+  HealthRepairResult,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/health";
+import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { CHECK_IDS, type POLICY_CHECK_IDS } from "./metadata.js";
+
+type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
+type ConfigRecord = Record<string, unknown>;
+type RepairPatch = {
+  readonly config: OpenClawConfig;
+  readonly changes: readonly string[];
+  readonly warnings?: readonly string[];
+};
+
+const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
+  CHECK_IDS.policyToolsElevatedEnabled,
+  CHECK_IDS.policyGatewayControlUiInsecure,
+  CHECK_IDS.policyGatewayRemoteEnabled,
+  CHECK_IDS.policyDataHandlingRedactionDisabled,
+  CHECK_IDS.policyDataHandlingTelemetryContentCapture,
+]);
+
+export function repairPolicyAutomaticNarrower(
+  ctx: HealthRepairContext,
+  findings: readonly HealthFinding[],
+  checkId: PolicyCheckId,
+): Promise<HealthRepairResult> {
+  if (!workspaceRepairsEnabled(ctx)) {
+    return Promise.resolve(workspaceRepairsDisabledResult());
+  }
+  if (!AUTOMATIC_REPAIR_CHECK_IDS.has(checkId)) {
+    return Promise.resolve({
+      status: "skipped",
+      reason: "policy finding is not an automatic narrowing repair",
+      changes: [],
+    });
+  }
+  if (
+    findings.length === 0 ||
+    findings.some(
+      (finding) =>
+        finding.checkId !== checkId ||
+        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "automatic",
+    )
+  ) {
+    return Promise.resolve({
+      status: "skipped",
+      reason: "policy finding is not classified as automatic",
+      changes: [],
+    });
+  }
+
+  const patch = applyAutomaticPatch(ctx.cfg, findings, checkId);
+  if (patch.changes.length === 0) {
+    return Promise.resolve({
+      status: "skipped",
+      reason: "policy automatic repair had no config changes to apply",
+      changes: [],
+      ...(patch.warnings !== undefined ? { warnings: patch.warnings } : {}),
+    });
+  }
+  return Promise.resolve({
+    status: "repaired",
+    config: patch.config,
+    changes: patch.changes,
+    ...(patch.warnings !== undefined ? { warnings: patch.warnings } : {}),
+  });
+}
+
+function applyAutomaticPatch(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+  checkId: PolicyCheckId,
+): RepairPatch {
+  switch (checkId) {
+    case CHECK_IDS.policyToolsElevatedEnabled:
+      if (hasScopedPolicyRequirement(findings)) {
+        return skippedUnsafeScopedRepair(
+          cfg,
+          "Skipped scoped tools repair. Scoped elevated-tools policy findings are detect-only because automatic repair cannot safely choose between shared and agent-local config targets.",
+        );
+      }
+      return disableElevatedTools(cfg, findings);
+    case CHECK_IDS.policyGatewayControlUiInsecure:
+      return disableInsecureControlUi(cfg, findings);
+    case CHECK_IDS.policyGatewayRemoteEnabled:
+      return disableRemoteGatewayMode(cfg, findings);
+    case CHECK_IDS.policyDataHandlingRedactionDisabled:
+      if (hasScopedPolicyRequirement(findings)) {
+        return skippedUnsafeScopedRepair(
+          cfg,
+          "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
+        );
+      }
+      return enableSensitiveLoggingRedaction(cfg);
+    case CHECK_IDS.policyDataHandlingTelemetryContentCapture:
+      if (hasScopedPolicyRequirement(findings)) {
+        return skippedUnsafeScopedRepair(
+          cfg,
+          "Skipped scoped data-handling repair. The finding reports shared telemetry config, so changing it would affect more than the scoped policy target.",
+        );
+      }
+      return disableTelemetryContentCapture(cfg);
+    default:
+      return { config: cfg, changes: [] };
+  }
+}
+
+function disableElevatedTools(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+): RepairPatch {
+  if (
+    !findings.some((finding) => finding.ocPath === "oc://openclaw.config/tools/elevated/enabled")
+  ) {
+    return { config: cfg, changes: [] };
+  }
+  const next = cloneConfig(cfg);
+  const tools = ensureRecord(next, "tools");
+  const elevated = ensureRecord(tools, "elevated");
+  if (elevated.enabled === false) {
+    return { config: cfg, changes: [] };
+  }
+  elevated.enabled = false;
+  return {
+    config: next as OpenClawConfig,
+    changes: ["Set tools.elevated.enabled=false for policy conformance."],
+  };
+}
+
+function disableInsecureControlUi(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+): RepairPatch {
+  const next = cloneConfig(cfg);
+  const gateway = ensureRecord(next, "gateway");
+  const controlUi = ensureRecord(gateway, "controlUi");
+  const changes: string[] = [];
+  const fields = [
+    ["allowInsecureAuth", "oc://openclaw.config/gateway/controlUi/allowInsecureAuth"],
+    [
+      "dangerouslyDisableDeviceAuth",
+      "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
+    ],
+    [
+      "dangerouslyAllowHostHeaderOriginFallback",
+      "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
+    ],
+  ] as const;
+  const findingPaths = new Set(findings.map((finding) => finding.ocPath));
+  for (const [field, ocPath] of fields) {
+    if (findingPaths.has(ocPath) && controlUi[field] !== false) {
+      controlUi[field] = false;
+      changes.push(`Set gateway.controlUi.${field}=false for policy conformance.`);
+    }
+  }
+  return changes.length > 0
+    ? { config: next as OpenClawConfig, changes }
+    : { config: cfg, changes };
+}
+
+function disableRemoteGatewayMode(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+): RepairPatch {
+  if (!findings.some((finding) => finding.ocPath === "oc://openclaw.config/gateway/mode")) {
+    return { config: cfg, changes: [] };
+  }
+  const next = cloneConfig(cfg);
+  const gateway = ensureRecord(next, "gateway");
+  const changes: string[] = [];
+  if (gateway.mode === "remote") {
+    gateway.mode = "local";
+    changes.push("Set gateway.mode=local for policy conformance.");
+  }
+  return changes.length > 0
+    ? { config: next as OpenClawConfig, changes }
+    : { config: cfg, changes };
+}
+
+function enableSensitiveLoggingRedaction(cfg: OpenClawConfig): RepairPatch {
+  const next = cloneConfig(cfg);
+  const logging = ensureRecord(next, "logging");
+  if (logging.redactSensitive !== "off") {
+    return { config: cfg, changes: [] };
+  }
+  logging.redactSensitive = "tools";
+  return {
+    config: next as OpenClawConfig,
+    changes: ["Set logging.redactSensitive=tools for policy conformance."],
+  };
+}
+
+function disableTelemetryContentCapture(cfg: OpenClawConfig): RepairPatch {
+  const next = cloneConfig(cfg);
+  const diagnostics = ensureRecord(next, "diagnostics");
+  const otel = ensureRecord(diagnostics, "otel");
+  if (otel.captureContent === false) {
+    return { config: cfg, changes: [] };
+  }
+  otel.captureContent = false;
+  return {
+    config: next as OpenClawConfig,
+    changes: ["Set diagnostics.otel.captureContent=false for policy conformance."],
+  };
+}
+
+function cloneConfig(cfg: OpenClawConfig): ConfigRecord {
+  return structuredClone(cfg) as ConfigRecord;
+}
+
+function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
+  const plugins = isRecord(ctx.cfg.plugins) ? ctx.cfg.plugins : {};
+  const entries = isRecord(plugins.entries) ? plugins.entries : {};
+  const policy = isRecord(entries.policy) ? entries.policy : {};
+  const config = isRecord(policy.config) ? policy.config : {};
+  return config.workspaceRepairs === true;
+}
+
+function workspaceRepairsDisabledResult(): HealthRepairResult {
+  const warning =
+    "Skipped policy config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace policy config.";
+  return {
+    status: "skipped",
+    reason: "workspace repairs are disabled",
+    changes: [],
+    warnings: [warning],
+  };
+}
+
+function hasScopedPolicyRequirement(findings: readonly HealthFinding[]): boolean {
+  return findings.some((finding) => finding.requirement?.includes("/scopes/") === true);
+}
+
+function skippedUnsafeScopedRepair(cfg: OpenClawConfig, warning: string): RepairPatch {
+  return { config: cfg, changes: [], warnings: [warning] };
+}
+
+function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
+  const current = parent[key];
+  if (isRecord(current)) {
+    const copy = { ...current };
+    parent[key] = copy;
+    return copy;
+  }
+  const next: ConfigRecord = {};
+  parent[key] = next;
+  return next;
+}
+
+function isRecord(value: unknown): value is ConfigRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

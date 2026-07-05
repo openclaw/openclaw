@@ -42,8 +42,6 @@ type WebchatAudioEmbeddingOptions = {
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 
-type WebchatAssistantMediaOptions = WebchatAudioEmbeddingOptions;
-
 type LocalAudioContentBlock = {
   path: string;
   block: Record<string, unknown>;
@@ -253,7 +251,7 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
 
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
-  options?: WebchatAssistantMediaOptions,
+  options?: WebchatAudioEmbeddingOptions,
 ): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
   const content: Array<Record<string, unknown>> = [];
   const transcriptTextParts: string[] = [];

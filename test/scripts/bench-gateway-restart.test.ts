@@ -34,11 +34,45 @@ function readRestartIntentRow(env: NodeJS.ProcessEnv) {
 
 describe("gateway restart benchmark script", () => {
   let helpResult: ReturnType<typeof spawnSync>;
+  let unknownArgsResult: ReturnType<typeof spawnSync>;
+  let duplicateCaseResult: ReturnType<typeof spawnSync>;
 
   beforeAll(() => {
     helpResult = spawnSync(
       process.execPath,
       ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+    unknownArgsResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+    duplicateCaseResult = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-gateway-restart.ts",
+        "--case",
+        "skipChannels",
+        "--case",
+        "skipChannels",
+      ],
       {
         cwd: process.cwd(),
         encoding: "utf8",
@@ -104,51 +138,17 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: "1",
-        },
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-    expect(result.stderr).not.toContain("\n    at ");
+    expect(unknownArgsResult.status).toBe(1);
+    expect(unknownArgsResult.stdout).toBe("");
+    expect(unknownArgsResult.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(unknownArgsResult.stderr).not.toContain("\n    at ");
   });
 
   it("reports duplicate benchmark cases without a stack trace", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-gateway-restart.ts",
-        "--case",
-        "skipChannels",
-        "--case",
-        "skipChannels",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_NO_WARNINGS: "1",
-        },
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe('Duplicate --case "skipChannels"');
-    expect(result.stderr).not.toContain("\n    at ");
+    expect(duplicateCaseResult.status).toBe(1);
+    expect(duplicateCaseResult.stdout).toBe("");
+    expect(duplicateCaseResult.stderr.trim()).toBe('Duplicate --case "skipChannels"');
+    expect(duplicateCaseResult.stderr).not.toContain("\n    at ");
   });
 
   it("guards the SIGUSR1 restart benchmark on Windows", () => {

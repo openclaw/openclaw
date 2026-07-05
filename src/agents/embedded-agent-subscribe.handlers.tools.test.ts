@@ -888,6 +888,76 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 
+  it("emits a prepared validation diagnostic without model arguments", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const error =
+      'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{"path":"secret.txt","contents":"PTY_PLANTED_SECRET"}';
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-validation",
+        args: { path: "secret.txt" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-validation",
+        isError: true,
+        executionStarted: false,
+        errorKind: "argument-validation",
+        result: { details: { status: "error", error } },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      }),
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("PTY_PLANTED_SECRET");
+  });
+
+  it("does not export a validation-lookalike error from an executed tool", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const error =
+      'Validation failed for tool "edit":\n  - secret tool output\n\nReceived arguments:\n{}';
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-spoof",
+        args: {},
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-spoof",
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error } },
+      } as never,
+    );
+
+    const resultEvent = onAgentEvent.mock.calls.find(
+      ([event]) => event.stream === "tool" && event.data.phase === "result",
+    )?.[0];
+    expect(resultEvent?.data).not.toHaveProperty("toolErrorSummary");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("secret tool output");
+  });
+
   it("marks successful mutating tool results as replay-invalid for terminal lifecycle truth", async () => {
     const { ctx } = createTestContext();
 

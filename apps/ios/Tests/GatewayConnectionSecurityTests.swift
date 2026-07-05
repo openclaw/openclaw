@@ -1,8 +1,8 @@
 import Foundation
 import Network
 import OpenClawKit
-import Testing
 import os
+import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
@@ -37,7 +37,7 @@ import os
         GatewayTLSStore.clearFingerprint(stableID: stableID)
     }
 
-    @Test @MainActor func discoveredTLSParams_prefersStoredPinOverAdvertisedTXT() async {
+    @Test @MainActor func `discovered TLS params prefers stored pin over advertised TXT`() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
@@ -57,7 +57,7 @@ import os
         #expect(params?.allowTOFU == false)
     }
 
-    @Test @MainActor func discoveredTLSParams_doesNotTrustAdvertisedFingerprint() async {
+    @Test @MainActor func `discovered TLS params does not trust advertised fingerprint`() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
@@ -75,7 +75,7 @@ import os
         #expect(params?.allowTOFU == false)
     }
 
-    @Test @MainActor func autoconnectRequiresStoredPinForDiscoveredGateways() async {
+    @Test @MainActor func `autoconnect requires stored pin for discovered gateways`() {
         let stableID = "test|\(UUID().uuidString)"
         defer { clearTLSFingerprint(stableID: stableID) }
         self.clearTLSFingerprint(stableID: stableID)
@@ -104,7 +104,7 @@ import os
         #expect(controller._test_didAutoConnect() == false)
     }
 
-    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() async {
+    @Test @MainActor func `manual connections force TLS for non loopback hosts`() {
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
@@ -120,7 +120,7 @@ import os
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
     }
 
-    @Test @MainActor func manualConnectionsAllowPrivateLanPlaintext() async {
+    @Test @MainActor func `manual connections allow private lan plaintext`() {
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
@@ -131,7 +131,7 @@ import os
         #expect(controller._test_resolveManualUseTLS(host: "fd00::1", useTLS: false) == false)
     }
 
-    @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() async {
+    @Test @MainActor func `manual default port uses 443 only for tailnet TLS hosts`() {
         let controller = self.makeController()
 
         #expect(controller._test_resolveManualPort(host: "gateway.example.com", port: 0, useTLS: true) == 18789)
@@ -140,7 +140,55 @@ import os
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
     }
 
-    @Test @MainActor func manualFirstUseTLSProbeShowsTrustPromptAfterFingerprintCapture() async {
+    @Test @MainActor func `setup route selection falls back to reachable tailnet endpoint`() async {
+        let probes = OSAllocatedUnfairLock(initialState: [(String, Int)]())
+        let controller = GatewayConnectionController(
+            appModel: NodeAppModel(),
+            startDiscovery: false,
+            tcpReachabilityProbe: { host, port, _, _ in
+                probes.withLock { $0.append((host, port)) }
+                return host.hasSuffix(".ts.net")
+            })
+        let link = GatewayConnectDeepLink(
+            host: "192.168.139.3",
+            port: 18789,
+            tls: false,
+            bootstrapToken: "boot",
+            token: nil,
+            password: nil,
+            fallbackEndpoints: [
+                .init(host: "clawmac.tail.ts.net", port: 8443, tls: true),
+            ])
+
+        let selected = await controller.selectReachableSetupLink(link)
+
+        #expect(selected.host == "clawmac.tail.ts.net")
+        #expect(selected.port == 8443)
+        #expect(selected.tls)
+        #expect(selected.bootstrapToken == "boot")
+        #expect(probes.withLock { $0.map(\.0) } == ["192.168.139.3", "clawmac.tail.ts.net"])
+    }
+
+    @Test @MainActor func `setup route selection keeps legacy endpoint when every probe fails`() async {
+        let controller = GatewayConnectionController(
+            appModel: NodeAppModel(),
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in false })
+        let link = GatewayConnectDeepLink(
+            host: "192.168.139.3",
+            port: 18789,
+            tls: false,
+            bootstrapToken: "boot",
+            token: nil,
+            password: nil,
+            fallbackEndpoints: [
+                .init(host: "clawmac.tail.ts.net", port: 8443, tls: true),
+            ])
+
+        #expect(await controller.selectReachableSetupLink(link) == link)
+    }
+
+    @Test @MainActor func `manual first use TLS probe shows trust prompt after fingerprint capture`() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
         let stableID = "manual|\(host.lowercased())|\(port)"
@@ -162,7 +210,7 @@ import os
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
     }
 
-    @Test @MainActor func manualFirstUseTLSProbeSkipsTLSWhenTCPIsUnreachable() async {
+    @Test @MainActor func `manual first use TLS probe skips TLS when TCP is unreachable`() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
         let stableID = "manual|\(host.lowercased())|\(port)"
@@ -187,7 +235,7 @@ import os
         #expect(appModel.gatewayStatusText == "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
     }
 
-    @Test @MainActor func manualFirstUseTLSProbeReportsHandshakeTimeoutWithoutTrustPrompt() async {
+    @Test @MainActor func `manual first use TLS probe reports handshake timeout without trust prompt`() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
         let stableID = "manual|\(host.lowercased())|\(port)"
@@ -218,7 +266,7 @@ import os
         #expect(appModel.gatewayStatusText.contains("\(host):\(port)"))
     }
 
-    @Test @MainActor func discoveredFirstUseTLSProbeFailureClearsStaleTrustPrompt() async {
+    @Test @MainActor func `discovered first use TLS probe failure clears stale trust prompt`() async {
         let staleHost = "stale-\(UUID().uuidString).example.com"
         let stalePort = 18789
         let staleStableID = "manual|\(staleHost.lowercased())|\(stalePort)"
@@ -261,7 +309,7 @@ import os
         #expect(appModel.gatewayStatusText == message)
     }
 
-    @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
+    @Test @MainActor func `clear all TLS fingerprints removes stored pins`() {
         let stableID1 = "test|\(UUID().uuidString)"
         let stableID2 = "test|\(UUID().uuidString)"
         defer { GatewayTLSStore.clearAllFingerprints() }
@@ -278,7 +326,7 @@ import os
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
 
-    @Test func trustedPinMismatchCanBeRecoveredByReplacingStoredPin() {
+    @Test func `trusted pin mismatch can be recovered by replacing stored pin`() {
         let stableID = "test|\(UUID().uuidString)"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
         GatewayTLSStore.saveFingerprint("old", stableID: stableID)
@@ -305,7 +353,7 @@ import os
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "new")
     }
 
-    @Test func untrustedPinMismatchCannotBeRecoveredInApp() {
+    @Test func `untrusted pin mismatch cannot be recovered in app`() {
         let error = GatewayTLSValidationError(
             failure: GatewayTLSValidationFailure(
                 kind: .pinMismatch,

@@ -15,6 +15,9 @@ const iosSourceRoots = [
 
 const sharedSwiftFiles = [
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatCodeHighlighter.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockSegmenter.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownPreprocessor.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
@@ -28,6 +31,7 @@ const sharedSwiftFiles = [
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionKeys.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
   "../shared/OpenClawKit/Sources/OpenClawKit/AnyCodable.swift",
   "../shared/OpenClawKit/Sources/OpenClawKit/BonjourEscapes.swift",
   "../shared/OpenClawKit/Sources/OpenClawKit/BonjourTypes.swift",

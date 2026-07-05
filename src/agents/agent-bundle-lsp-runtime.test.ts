@@ -122,6 +122,22 @@ describe("bundle LSP runtime", () => {
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
   });
 
+  it("fails LSP startup immediately when the child process cannot spawn", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess();
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => child.emit("error", new Error("spawn ENOENT")));
+      return child;
+    });
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+
+    expect(runtime.sessions).toEqual([]);
+    expect(runtime.tools).toEqual([]);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+  });
+
   it("keeps LSP framing aligned after multibyte messages in the same chunk", async () => {
     configureSingleLspServer();
     const prefix = encodeLspMessage({

@@ -174,6 +174,10 @@ struct RootTabsPhoneControlHub: View {
                 directRoute: .cron,
                 headerTitle: "Cron Jobs",
                 openSettings: { self.openGatewayDetail() })
+        case .terminal:
+            TerminalHubScreen(
+                usesNativeNavigationChrome: true,
+                gatewayAction: { self.openGatewayDetail() })
         case .docs:
             OpenClawDocsScreen(
                 usesNativeNavigationChrome: true,

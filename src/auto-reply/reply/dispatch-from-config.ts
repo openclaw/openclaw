@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
@@ -62,11 +63,11 @@ import {
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import {
   logMessageDispatchCompleted,
@@ -96,7 +97,6 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
@@ -1452,6 +1452,16 @@ export async function dispatchReplyFromConfig(
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
+    const allowGatewayQueueResolution =
+      phase === "dispatch" &&
+      replyTurnKind === "visible" &&
+      params.replyOptions?.queuedFollowupLifecycle !== undefined &&
+      replyRunRegistry.get(dispatchOperationSessionKey) !== undefined;
+    if (allowGatewayQueueResolution) {
+      // Gateway turns need to reach getReplyFromConfig while the owner is active;
+      // that layer applies the session's steer/followup/collect/drop policy.
+      return { status: "ready" };
+    }
     const allowSlackRoutedThreadBypass =
       phase === "dispatch" &&
       shouldLetSlackRoutedThreadBypassBusyReplyOperation({
