@@ -5473,6 +5473,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .catch(async (err: unknown) => {
           const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
+          const abortMarkerPresentAtDispatchReject = context.chatAbortedRuns.has(clientRunId);
           const abortStopReasonAtDispatchReject = activeRunAbort.entry?.abortStopReason ?? "rpc";
           const persistErrorTranscript = async () => {
             const emitAfterError =
@@ -5485,10 +5486,11 @@ export const chatHandlers: GatewayRequestHandlers = {
               );
             });
           };
-          if (abortedAtDispatchReject) {
+          if (abortedAtDispatchReject && abortMarkerPresentAtDispatchReject) {
             await persistErrorTranscript();
-            // Dispatch rejected after chat.abort already broadcast the terminal
-            // abort. Preserve that outcome instead of resurrecting the run as an error.
+            // Dispatch rejected after chat.abort already recorded/broadcast the
+            // terminal abort. Lifecycle interrupts abort the same signal without
+            // that marker, so they still need the error branch to emit a terminal event.
             const stopReason = abortStopReasonAtDispatchReject;
             const endedAt = Date.now();
             const payload = buildAbortedChatSendPayload({

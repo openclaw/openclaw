@@ -11,7 +11,10 @@ import { clearConfigCache } from "../config/config.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  interruptSessionWorkAdmissions,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -1348,6 +1351,105 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send lifecycle-interrupted dispatch rejection emits a terminal chat event", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchEntered = createDeferred();
+    const runId = "idem-lifecycle-interrupt-after-start";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            status: "running",
+            startedAt: 900,
+          },
+        },
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        dispatchEntered.resolve();
+        const signal = (args as { replyOptions?: GetReplyOptions }).replyOptions?.abortSignal;
+        expect(signal).toBeDefined();
+        await new Promise<never>((_resolve, reject) => {
+          const finish = () => {
+            reject(
+              signal?.reason instanceof Error ? signal.reason : new Error("lifecycle interrupted"),
+            );
+          };
+          if (signal?.aborted) {
+            finish();
+            return;
+          }
+          signal?.addEventListener("abort", finish, { once: true });
+        });
+      });
+
+      const params = {
+        sessionKey: "main",
+        message: "interrupt after dispatch starts",
+        idempotencyKey: runId,
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const send = Promise.resolve(
+        chatHandlers["chat.send"]({
+          req: { type: "req", id: "send", method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            ok: true,
+            payload: { runId, status: "started" },
+            error: undefined,
+          },
+        ]);
+      }, FAST_WAIT_OPTS);
+      await dispatchEntered.promise;
+
+      await interruptSessionWorkAdmissions({
+        scope: testState.sessionStorePath,
+        identities: ["main", "agent:main:main", "sess-main"],
+        timeoutMs: 1_000,
+      });
+      await send;
+
+      await vi.waitFor(() => {
+        const chatBroadcasts = context.broadcast.mock.calls
+          .filter(([event]) => event === "chat")
+          .map(([, payload]) => payload as { runId?: string; state?: string });
+        expect(chatBroadcasts).toEqual(
+          expect.arrayContaining([expect.objectContaining({ runId, state: "error" })]),
+        );
+      }, FAST_WAIT_OPTS);
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "error",
+          summary: "AbortError: agent run aborted for restart",
+        }),
+      );
+      expect(context.chatAbortedRuns.has(runId)).toBe(false);
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+    } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
