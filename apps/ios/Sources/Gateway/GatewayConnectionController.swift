@@ -33,11 +33,6 @@ typealias GatewayTLSFingerprintProbeFunction = @Sendable (URL) async -> GatewayT
 typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
 typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
 typealias GatewayTLSFingerprintPersist = @Sendable (_ fingerprint: String, _ stableID: String) -> Bool
-typealias GatewayDeviceAuthTokenRebind = @Sendable (
-    _ deviceID: String,
-    _ sourceGatewayID: String,
-    _ destinationGatewayID: String,
-    _ profile: GatewayDeviceIdentityProfile) -> Bool
 
 private enum GatewayTLSFingerprintProbeBudget {
     static let tcpConnectTimeoutSeconds = 3.0
@@ -117,7 +112,6 @@ final class GatewayConnectionController {
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
     private let forceReconnectReset: GatewayForceReconnectReset
     private let persistTLSFingerprint: GatewayTLSFingerprintPersist
-    private let rebindDeviceAuthTokens: GatewayDeviceAuthTokenRebind
 
     private struct SavedManualEndpoint: Equatable {
         let host: String
@@ -137,13 +131,6 @@ final class GatewayConnectionController {
         },
         persistTLSFingerprint: @escaping GatewayTLSFingerprintPersist = { fingerprint, stableID in
             GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID)
-        },
-        rebindDeviceAuthTokens: @escaping GatewayDeviceAuthTokenRebind = { deviceID, source, destination, profile in
-            DeviceAuthStore.rebindGatewayTokens(
-                deviceId: deviceID,
-                fromGatewayID: source,
-                toGatewayID: destination,
-                profile: profile)
         })
     {
         self.discoveryEnabled = startDiscovery
@@ -154,7 +141,6 @@ final class GatewayConnectionController {
         self.serviceEndpointResolver = serviceEndpointResolver
         self.forceReconnectReset = forceReconnectReset
         self.persistTLSFingerprint = persistTLSFingerprint
-        self.rebindDeviceAuthTokens = rebindDeviceAuthTokens
 
         GatewaySettingsStore.bootstrapPersistence()
         Self.migrateLegacyDeviceAuth()
@@ -503,18 +489,6 @@ final class GatewayConnectionController {
         }
 
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        let authenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(
-            routeStableID: pending.stableID,
-            tlsFingerprint: prompt.fingerprintSha256)
-        guard GatewaySettingsStore.rebindGatewayCredentials(
-            instanceId: instanceId,
-            fromGatewayStableID: pending.stableID,
-            toAuthenticationOwnerID: authenticationOwnerID)
-        else {
-            GatewayTLSStore.clearFingerprint(stableID: pending.stableID)
-            self.appModel?.gatewayStatusText = "Could not secure gateway credentials"
-            return
-        }
         self.clearPendingTrustPrompt()
         if pending.isManual {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
@@ -570,86 +544,9 @@ final class GatewayConnectionController {
             return false
         }
 
-        let oldAuthenticationOwnerID = self.appModel?.activeGatewayConnectConfig?
-            .nodeOptions.deviceAuthGatewayID
-            ?? GatewaySettingsStore.authenticationOwnerID(
-                routeStableID: stableID,
-                tlsFingerprint: problem.tlsExpectedFingerprint)
-        let newAuthenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(
-            routeStableID: stableID,
-            tlsFingerprint: fingerprint)
-        let instanceID = GatewaySettingsStore.currentInstanceID()
-        guard GatewaySettingsStore.rebindGatewayCredentials(
-            instanceId: instanceID,
-            fromGatewayStableID: oldAuthenticationOwnerID,
-            toAuthenticationOwnerID: newAuthenticationOwnerID)
-        else {
-            self.appModel?.gatewayStatusText = "Could not secure gateway credentials"
-            return false
-        }
-
-        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
-        guard self.rebindDeviceAuthTokens(
-            primaryIdentity.deviceId,
-            oldAuthenticationOwnerID,
-            newAuthenticationOwnerID,
-            .primary)
-        else {
-            _ = GatewaySettingsStore.rebindGatewayCredentials(
-                instanceId: instanceID,
-                fromGatewayStableID: newAuthenticationOwnerID,
-                toAuthenticationOwnerID: oldAuthenticationOwnerID)
-            self.appModel?.gatewayStatusText = "Could not secure gateway device tokens"
-            return false
-        }
-        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
-        guard self.rebindDeviceAuthTokens(
-            shareIdentity.deviceId,
-            oldAuthenticationOwnerID,
-            newAuthenticationOwnerID,
-            .shareExtension)
-        else {
-            _ = self.rebindDeviceAuthTokens(
-                primaryIdentity.deviceId,
-                newAuthenticationOwnerID,
-                oldAuthenticationOwnerID,
-                .primary)
-            _ = GatewaySettingsStore.rebindGatewayCredentials(
-                instanceId: instanceID,
-                fromGatewayStableID: newAuthenticationOwnerID,
-                toAuthenticationOwnerID: oldAuthenticationOwnerID)
-            self.appModel?.gatewayStatusText = "Could not secure share extension device tokens"
-            return false
-        }
         guard self.persistTLSFingerprint(fingerprint, stableID) else {
-            _ = self.rebindDeviceAuthTokens(
-                shareIdentity.deviceId,
-                newAuthenticationOwnerID,
-                oldAuthenticationOwnerID,
-                .shareExtension)
-            _ = self.rebindDeviceAuthTokens(
-                primaryIdentity.deviceId,
-                newAuthenticationOwnerID,
-                oldAuthenticationOwnerID,
-                .primary)
-            _ = GatewaySettingsStore.rebindGatewayCredentials(
-                instanceId: instanceID,
-                fromGatewayStableID: newAuthenticationOwnerID,
-                toAuthenticationOwnerID: oldAuthenticationOwnerID)
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
-        }
-        if let relay = ShareGatewayRelaySettings.loadConfig(),
-           relay.gatewayStableID == oldAuthenticationOwnerID
-        {
-            ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
-                gatewayURLString: relay.gatewayURLString,
-                gatewayStableID: newAuthenticationOwnerID,
-                token: relay.token,
-                password: relay.password,
-                sessionKey: relay.sessionKey,
-                deliveryChannel: relay.deliveryChannel,
-                deliveryTo: relay.deliveryTo))
         }
 
         GatewayDiagnostics.log(
@@ -663,8 +560,6 @@ final class GatewayConnectionController {
                 expectedFingerprint: fingerprint,
                 allowTOFU: currentTLS?.allowTOFU ?? false,
                 storeKey: currentTLS?.storeKey ?? stableID)
-            var refreshedOptions = cfg.nodeOptions
-            refreshedOptions.deviceAuthGatewayID = newAuthenticationOwnerID
             let refreshedConfig = GatewayConnectConfig(
                 url: cfg.url,
                 stableID: cfg.stableID,
@@ -672,7 +567,7 @@ final class GatewayConnectionController {
                 token: cfg.token,
                 bootstrapToken: cfg.bootstrapToken,
                 password: cfg.password,
-                nodeOptions: refreshedOptions)
+                nodeOptions: cfg.nodeOptions)
             appModel.applyGatewayConnectConfig(refreshedConfig)
         } else {
             await self.connectLastKnown()
@@ -949,9 +844,7 @@ final class GatewayConnectionController {
             }
             let nodeOptions = await self.makeConnectOptions(
                 stableID: gatewayStableID,
-                deviceAuthGatewayID: GatewaySettingsStore.authenticationOwnerID(
-                    routeStableID: gatewayStableID,
-                    tlsFingerprint: tls?.expectedFingerprint),
+                deviceAuthGatewayID: GatewaySettingsStore.authenticationOwnerID(routeStableID: gatewayStableID),
                 allowStoredDeviceAuth: allowStoredDeviceAuth)
             // Permission reads above can suspend long enough for a model-owned reconnect reset
             // to start, so close the reset barrier again immediately before the synchronous apply.

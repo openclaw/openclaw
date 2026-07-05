@@ -125,7 +125,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: secondGatewayID) == .empty)
     }
 
-    @Test func `trusted tls owner unifies discovered and manual routes`() {
+    @Test func `shared tls certificate does not alias distinct routes`() {
         let instanceID = "tls-owner-\(UUID().uuidString)"
         let discoveredID = "bonjour|_openclaw._tcp|local|gateway-\(UUID().uuidString)"
         let manualID = "manual|gateway-\(UUID().uuidString).local|443"
@@ -145,21 +145,15 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             instanceId: instanceID)
         GatewayTLSStore.saveFingerprint(fingerprint, stableID: discoveredID)
         GatewayTLSStore.saveFingerprint(fingerprint, stableID: manualID)
-        let ownerID = GatewaySettingsStore.authenticationOwnerID(
-            routeStableID: discoveredID,
-            tlsFingerprint: fingerprint)
-        #expect(GatewaySettingsStore.rebindGatewayCredentials(
-            instanceId: instanceID,
-            fromGatewayStableID: discoveredID,
-            toAuthenticationOwnerID: ownerID))
 
         let manualCredentials = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceID,
             gatewayStableID: manualID)
-        #expect(manualCredentials.token == "shared-token")
-        #expect(manualCredentials.password == "shared-password")
+        #expect(manualCredentials == .empty)
+        #expect(GatewaySettingsStore.authenticationOwnerID(routeStableID: discoveredID) == discoveredID)
+        #expect(GatewaySettingsStore.authenticationOwnerID(routeStableID: manualID) == manualID)
         #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID)?.gatewayStableID ==
-            "tls-sha256|aa:bb:cc:dd")
+            discoveredID)
     }
 
     @Test func `ambiguous legacy credentials are discarded`() {

@@ -2609,7 +2609,7 @@ private actor WatchSnapshotSendGate {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
         let stableID = "manual|gateway.example.com|443"
-        let authenticationOwnerID = "tls-sha256|gateway-certificate"
+        let authenticationOwnerID = stableID
         let config = try GatewayConnectConfig(
             url: #require(URL(string: "wss://127.0.0.1:1")),
             stableID: stableID,

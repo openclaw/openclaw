@@ -127,42 +127,6 @@ public enum DeviceAuthStore {
         return self.writeStore(store, profile: profile) ? legacyKeys.count : 0
     }
 
-    /// Moves every role issued by one trusted gateway owner to its replacement owner.
-    /// Call only after the user explicitly accepts a TLS certificate rotation.
-    @discardableResult
-    public static func rebindGatewayTokens(
-        deviceId: String,
-        fromGatewayID: String,
-        toGatewayID: String,
-        profile: GatewayDeviceIdentityProfile = .primary) -> Bool
-    {
-        guard let source = self.normalizeGatewayID(fromGatewayID),
-              let destination = self.normalizeGatewayID(toGatewayID)
-        else { return false }
-        guard source != destination else { return true }
-        guard var store = self.readStore(profile: profile) else {
-            return !FileManager.default.fileExists(atPath: self.fileURL(profile: profile).path)
-        }
-        guard store.deviceId == deviceId else { return false }
-
-        let sourceEntries = store.tokens.filter { $0.value.gatewayID == source }
-        guard !sourceEntries.isEmpty else { return true }
-        // Reverse rebinding is the certificate-rotation rollback. It is lossless only when the
-        // destination contains no independently issued roles that a reverse move could consume.
-        guard !store.tokens.values.contains(where: { $0.gatewayID == destination }) else { return false }
-        for (sourceKey, entry) in sourceEntries {
-            let destinationKey = self.tokenKey(role: entry.role, gatewayID: destination)
-            store.tokens[destinationKey] = DeviceAuthEntry(
-                token: entry.token,
-                role: entry.role,
-                scopes: entry.scopes,
-                updatedAtMs: entry.updatedAtMs,
-                gatewayID: destination)
-            store.tokens.removeValue(forKey: sourceKey)
-        }
-        return self.writeStore(store, profile: profile)
-    }
-
     private static func normalizeRole(_ role: String) -> String {
         role.trimmingCharacters(in: .whitespacesAndNewlines)
     }

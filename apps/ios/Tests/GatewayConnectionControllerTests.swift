@@ -1178,7 +1178,7 @@ import UIKit
         #expect(appModel.activeGatewayConnectConfig?.stableID != duringResolutionConfig.stableID)
     }
 
-    @Test @MainActor func `trusted certificate owns device auth across route names`() async throws {
+    @Test @MainActor func `trusted certificate keeps device auth route scoped`() async throws {
         let host = "127.0.0.1"
         let stableID = "manual|\(host)|1"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
@@ -1198,8 +1198,7 @@ import UIKit
         }
 
         #expect(appModel.activeGatewayConnectConfig?.stableID == stableID)
-        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID ==
-            "tls-sha256|route-independent-fingerprint")
+        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)
     }
 
     @Test @MainActor func `first trust aborts when certificate pin is not durable`() async {
@@ -1225,9 +1224,8 @@ import UIKit
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
     }
 
-    @Test @MainActor func `certificate rotation rolls back when device tokens cannot move`() async throws {
+    @Test @MainActor func `certificate rotation preserves route scoped device auth`() async throws {
         let stableID = "manual|rotation-\(UUID().uuidString)|443"
-        let oldOwnerID = "tls-sha256|old-certificate"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
         #expect(GatewayTLSStore.replaceFingerprint("old-certificate", stableID: stableID))
         let appModel = NodeAppModel()
@@ -1241,7 +1239,7 @@ import UIKit
             clientId: "openclaw-ios",
             clientMode: "node",
             clientDisplayName: nil,
-            deviceAuthGatewayID: oldOwnerID)
+            deviceAuthGatewayID: stableID)
         options.allowStoredDeviceAuth = true
         let config = try GatewayConnectConfig(
             url: #require(URL(string: "wss://127.0.0.1:1")),
@@ -1256,10 +1254,7 @@ import UIKit
             password: nil,
             nodeOptions: options)
         appModel.applyGatewayConnectConfig(config)
-        let controller = GatewayConnectionController(
-            appModel: appModel,
-            startDiscovery: false,
-            rebindDeviceAuthTokens: { _, _, _, _ in false })
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
         let error = GatewayTLSValidationError(
             failure: GatewayTLSValidationFailure(
                 kind: .pinMismatch,
@@ -1272,10 +1267,10 @@ import UIKit
         let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
 
         let didTrust = await controller.trustRotatedGatewayCertificate(from: problem)
-        #expect(!didTrust)
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "old-certificate")
-        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == oldOwnerID)
-        #expect(appModel.gatewayStatusText == "Could not secure gateway device tokens")
+        #expect(didTrust)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "new-certificate")
+        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)
+        #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == "new-certificate")
     }
 
     @Test @MainActor func `cancel during forced reset restores current gateway`() async throws {

@@ -7,8 +7,8 @@ import OpenClawKit
 /// - a `role=node` session for device capabilities (`node.invoke.*`)
 /// - a `role=operator` session for chat/talk/config (`chat.*`, `talk.*`, etc.)
 ///
-/// Both sessions derive routing from `stableID` and authentication ownership from
-/// `nodeOptions.deviceAuthGatewayID`; Bonjour and manual routes may reach one gateway.
+/// Both sessions derive routing and authentication ownership from the route's
+/// `stableID`. TLS certificate pins prove transport trust but are not gateway identity.
 struct GatewayConnectConfig {
     let url: URL
     let stableID: String

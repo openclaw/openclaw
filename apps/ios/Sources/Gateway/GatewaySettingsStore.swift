@@ -148,17 +148,7 @@ enum GatewaySettingsStore {
     }
 
     static func loadGatewayCredentials(instanceId: String, gatewayStableID: String) -> GatewayCredentials {
-        let routeStableID = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let stableID = self.authenticationOwnerID(routeStableID: routeStableID)
-        if routeStableID != stableID,
-           self.loadGatewayCredentialBundle(instanceId: instanceId)?.gatewayStableID == routeStableID,
-           !self.rebindGatewayCredentials(
-               instanceId: instanceId,
-               fromGatewayStableID: routeStableID,
-               toAuthenticationOwnerID: stableID)
-        {
-            return .empty
-        }
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty,
               let bundle = self.loadGatewayCredentialBundle(instanceId: instanceId),
               bundle.gatewayStableID == stableID
@@ -257,39 +247,10 @@ enum GatewaySettingsStore {
         self.deleteLegacyGatewayCredentials(instanceId: instanceId)
     }
 
-    /// TLS certificate ownership lets Bonjour and manual routes reuse the same credentials
-    /// without allowing an unauthenticated endpoint string to claim another gateway's secrets.
-    static func authenticationOwnerID(
-        routeStableID: String,
-        tlsFingerprint: String? = nil) -> String
-    {
-        let route = routeStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !route.hasPrefix("tls-sha256|") else { return route }
-        let fingerprint = (tlsFingerprint ?? GatewayTLSStore.loadFingerprint(stableID: route))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
-        return fingerprint.isEmpty ? route : "tls-sha256|\(fingerprint)"
-    }
-
-    @discardableResult
-    static func rebindGatewayCredentials(
-        instanceId: String,
-        fromGatewayStableID: String,
-        toAuthenticationOwnerID: String) -> Bool
-    {
-        let source = fromGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let destination = toAuthenticationOwnerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !source.isEmpty, !destination.isEmpty else { return false }
-        guard source != destination else { return true }
-        guard let bundle = self.loadGatewayCredentialBundle(instanceId: instanceId) else { return true }
-        guard bundle.gatewayStableID == source else { return true }
-        return self.saveGatewayCredentials(
-            token: bundle.token,
-            bootstrapToken: bundle.bootstrapToken,
-            password: bundle.password,
-            gatewayStableID: destination,
-            suppressStoredDeviceAuth: bundle.suppressStoredDeviceAuth,
-            instanceId: instanceId)
+    /// Certificate pins prove transport trust for one route; they are not gateway identities.
+    /// Wildcard certificates and reverse proxies may legitimately reuse a leaf certificate.
+    static func authenticationOwnerID(routeStableID: String) -> String {
+        routeStableID.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @discardableResult

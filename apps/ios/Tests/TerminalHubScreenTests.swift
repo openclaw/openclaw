@@ -7,7 +7,8 @@ struct TerminalHubScreenTests {
     private static func makeConfig(
         url: URL,
         token: String? = nil,
-        password: String? = nil) -> GatewayConnectConfig
+        password: String? = nil,
+        deviceAuthGatewayID: String? = nil) -> GatewayConnectConfig
     {
         GatewayConnectConfig(
             url: url,
@@ -24,7 +25,8 @@ struct TerminalHubScreenTests {
                 permissions: [:],
                 clientId: "ios",
                 clientMode: "node",
-                clientDisplayName: "Phone"))
+                clientDisplayName: "Phone",
+                deviceAuthGatewayID: deviceAuthGatewayID))
     }
 
     @Test func `terminal URL flips scheme and carries only view parameter`() throws {
@@ -75,6 +77,29 @@ struct TerminalHubScreenTests {
             storedOperatorToken: " stored-token ")
 
         #expect(script?.contains("\"token\":\"stored-token\"") == true)
+    }
+
+    @Test func `auth user script loads the active gateway scoped operator token`() throws {
+        let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer {
+            DeviceAuthStore.clearToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)
+        }
+        #expect(DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "scoped-terminal-token",
+            gatewayID: gatewayID) != nil)
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            deviceAuthGatewayID: gatewayID)
+
+        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+
+        #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
     }
 
     @Test func `web content identity changes with stored operator token`() throws {
