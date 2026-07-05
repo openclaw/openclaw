@@ -956,6 +956,9 @@ export class OpenClawTerminalPanel extends LitElement {
       position: absolute;
       inset: 0;
       padding: 6px 8px;
+      /* ghostty-web focuses this contenteditable host while drawing its own
+         cursor on canvas; hide the otherwise duplicated browser caret. */
+      caret-color: transparent;
     }
     .tp-empty,
     .tp-error {
