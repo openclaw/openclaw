@@ -2318,6 +2318,46 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
+  it("cancels a pending timeout grace timer when the run is explicitly killed", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
+      request.method === "agent.wait" ? { status: "pending" } : {},
+    );
+    const runId = "run-killed-after-pending-timeout";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey: "agent:main:subagent:killed-after-pending-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stop during timeout grace",
+      cleanup: "keep",
+    });
+
+    const lifecycleHandler = (
+      mocks.onAgentEvent.mock.calls.at(-1) as unknown as
+        | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+        | undefined
+    )?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 111, endedAt: 222, aborted: true },
+    });
+    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === runId);
+    expect(run).toMatchObject({
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "manual kill" },
+    });
+    expect(run?.outcome?.status).not.toBe("timeout");
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("cancels a pending grace timer when agent.wait observes the yield after an aborted terminal (#92448)", async () => {
     let resolveWait: (value: {
       status: "ok";

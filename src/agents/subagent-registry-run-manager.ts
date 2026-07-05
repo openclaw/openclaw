@@ -905,6 +905,7 @@ export function createSubagentRunManager(params: {
     };
     for (const runId of runIds) {
       params.clearPendingLifecycleError(runId);
+      params.clearPendingLifecycleTimeout(runId);
       const entry = params.runs.get(runId);
       if (!entry) {
         continue;
