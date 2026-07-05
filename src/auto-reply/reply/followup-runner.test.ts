@@ -4958,6 +4958,39 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["fails", { ok: false, error: "forced route failure" }],
+    ["is hook-suppressed", { ok: true, suppressed: true }],
+  ])("routes the fallback when a compaction notice %s", async (_label, noticeResult) => {
+    routeReplyMock.mockResolvedValueOnce(noticeResult).mockResolvedValue({ ok: true });
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams: unknown) => {
+      const onAgentEvent = requireRecord(runParams, "embedded run params").onAgentEvent;
+      if (typeof onAgentEvent !== "function") {
+        throw new Error("expected embedded run onAgentEvent callback");
+      }
+      await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
+      return { payloads: [], meta: {} };
+    });
+    const queued = baseQueuedRun("discord");
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner({
+      ...queued,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      run: {
+        ...queued.run,
+        config: { agents: { defaults: { compaction: { notifyUser: true } } } },
+      },
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+  });
+
   it("honors sendPolicy deny for queued origin delivery", async () => {
     const onItemEvent = vi.fn();
     const staleSessionEntry: SessionEntry = {
