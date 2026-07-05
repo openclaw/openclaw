@@ -1378,7 +1378,7 @@ class NodeRuntime(
         refreshExecApprovalsFromGateway()
       }
     } else {
-      stopVoiceCaptureForBackground()
+      setVoiceCaptureMode(VoiceCaptureMode.Off)
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
     }
   }
@@ -1872,11 +1872,6 @@ class NodeRuntime(
 
   private fun stopManualVoiceSession() {
     if (_voiceCaptureMode.value != VoiceCaptureMode.ManualMic) return
-    setVoiceCaptureMode(VoiceCaptureMode.Off)
-  }
-
-  private fun stopVoiceCaptureForBackground() {
-    if (_voiceCaptureMode.value == VoiceCaptureMode.Off) return
     setVoiceCaptureMode(VoiceCaptureMode.Off)
   }
 
