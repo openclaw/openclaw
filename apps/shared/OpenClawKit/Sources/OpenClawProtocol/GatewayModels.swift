@@ -7549,7 +7549,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         setupcode: String,
         qrdataurl: String?,
         gatewayurl: String,
-        gatewayurls: [String]?,
+        gatewayurls: [String]? = nil,
         auth: AnyCodable,
         urlsource: String)
     {

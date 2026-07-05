@@ -18,6 +18,17 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
 }
 
 @Suite struct DeepLinksSecurityTests {
+    @Test func setupResultInitializerKeepsLegacySignature() {
+        let result = DevicePairSetupCodeResult(
+            setupcode: "code",
+            qrdataurl: nil,
+            gatewayurl: "wss://gateway.example.com",
+            auth: AnyCodable("token"),
+            urlsource: "config")
+
+        #expect(result.gatewayurls == nil)
+    }
+
     @Test func dashboardDeepLinkParses() {
         let url = URL(string: "openclaw://dashboard")!
         #expect(DeepLinkParser.parse(url) == .dashboard)
