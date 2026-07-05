@@ -23,6 +23,7 @@ import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
+  createSafeUndiciConnector,
 } from "./undici-runtime.js";
 
 type LookupCallback = (
@@ -592,8 +593,9 @@ export async function resolvePinnedHostname(
 function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
-): Record<string, unknown> {
-  return connect ? { ...connect, lookup } : { lookup };
+): import("undici").buildConnector.connector {
+  const options = connect ? { ...connect, lookup } : { lookup };
+  return createSafeUndiciConnector(options);
 }
 
 function resolvePinnedDispatcherLookup(
