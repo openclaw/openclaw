@@ -262,6 +262,10 @@ openclaw-chat-page {
   margin: 10px 0 0;
 }
 
+.context-usage__stats--cost {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .context-usage__stats div {
   min-width: 0;
   padding: 9px 10px;
@@ -292,6 +296,10 @@ openclaw-chat-page {
   margin-top: 12px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.context-usage__model + .context-usage__model {
+  margin-top: 6px;
 }
 
 .context-usage__model strong {

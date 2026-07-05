@@ -398,13 +398,19 @@ function toFiniteNumber(x: unknown): number | undefined {
   return asFiniteNumber(x);
 }
 
-function sanitizeCost(raw: unknown): { total?: number } | undefined {
+function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
   const c = raw as Record<string, unknown>;
-  const total = toFiniteNumber(c.total);
-  return total !== undefined ? { total } : undefined;
+  const out: Record<string, number> = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+    const value = toFiniteNumber(c[key]);
+    if (value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
