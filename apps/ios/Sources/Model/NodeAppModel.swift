@@ -261,7 +261,11 @@ final class NodeAppModel {
     #if DEBUG
     @ObservationIgnored private var testAgentRequestHandler: ((AgentDeepLink) async throws -> Void)?
     #endif
-    private var pttVoiceWakeSuspended = false
+    private var pttVoiceWakeLeaseCount = 0
+    private var pttVoiceWakeWasSuspended = false
+    private var pttSessionOwnsVoiceWakeLease = false
+    private var talkInvokeInFlight = false
+    private var talkInvokeWaiters: [CheckedContinuation<Void, Never>] = []
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
@@ -1803,31 +1807,50 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        if req.command == OpenClawTalkCommand.pttOnce.rawValue {
+            self.acquirePttVoiceWakeLease()
+            defer { self.releasePttVoiceWakeLease() }
+            let payload = try await talkMode.runPushToTalkOnce()
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        }
+
+        await self.acquireTalkInvoke()
+        defer { self.releaseTalkInvoke() }
+
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
-            self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            let payload = try await talkMode.beginPushToTalk()
+            let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
+            if acquiredLease {
+                self.acquirePttVoiceWakeLease()
+                self.pttSessionOwnsVoiceWakeLease = true
+            }
+            let payload: OpenClawTalkPTTStartPayload
+            do {
+                payload = try await self.talkMode.beginPushToTalk()
+            } catch {
+                if acquiredLease {
+                    self.pttSessionOwnsVoiceWakeLease = false
+                    self.releasePttVoiceWakeLease()
+                }
+                throw error
+            }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttStop.rawValue:
             let payload = await talkMode.endPushToTalk()
-            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
-            self.pttVoiceWakeSuspended = false
+            if self.pttSessionOwnsVoiceWakeLease {
+                self.pttSessionOwnsVoiceWakeLease = false
+                self.releasePttVoiceWakeLease()
+            }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
             let payload = await talkMode.cancelPushToTalk()
-            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
-            self.pttVoiceWakeSuspended = false
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawTalkCommand.pttOnce.rawValue:
-            self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            defer {
-                self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
-                self.pttVoiceWakeSuspended = false
+            if self.pttSessionOwnsVoiceWakeLease {
+                self.pttSessionOwnsVoiceWakeLease = false
+                self.releasePttVoiceWakeLease()
             }
-            let payload = try await talkMode.runPushToTalkOnce()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
@@ -1836,6 +1859,41 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    private func acquirePttVoiceWakeLease() {
+        if self.pttVoiceWakeLeaseCount == 0 {
+            self.pttVoiceWakeWasSuspended = self.voiceWake.suspendForExternalAudioCapture()
+        }
+        self.pttVoiceWakeLeaseCount += 1
+    }
+
+    private func releasePttVoiceWakeLease() {
+        guard self.pttVoiceWakeLeaseCount > 0 else { return }
+        self.pttVoiceWakeLeaseCount -= 1
+        guard self.pttVoiceWakeLeaseCount == 0 else { return }
+        // Overlapping one-shot and session PTT captures share one Voice Wake suspension.
+        // Resume only after the final owner releases it or microphone capture can overlap.
+        self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeWasSuspended)
+        self.pttVoiceWakeWasSuspended = false
+    }
+
+    private func acquireTalkInvoke() async {
+        if !self.talkInvokeInFlight {
+            self.talkInvokeInFlight = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.talkInvokeWaiters.append(continuation)
+        }
+    }
+
+    private func releaseTalkInvoke() {
+        guard !self.talkInvokeWaiters.isEmpty else {
+            self.talkInvokeInFlight = false
+            return
+        }
+        self.talkInvokeWaiters.removeFirst().resume()
     }
 }
 
@@ -6673,6 +6731,14 @@ extension NodeAppModel {
         gatewayStableID: String? = nil) async -> BridgeInvokeResponse
     {
         await self.handleInvoke(req, gatewayStableID: gatewayStableID)
+    }
+
+    func _test_acquirePttVoiceWakeLease() {
+        self.acquirePttVoiceWakeLease()
+    }
+
+    func _test_releasePttVoiceWakeLease() {
+        self.releasePttVoiceWakeLease()
     }
 
     static func _test_decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {

@@ -688,6 +688,42 @@ private actor WatchSnapshotSendGate {
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == [push.approvalId])
     }
 
+    @Test @MainActor func `failed PTT start restores voice wake suspension`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        appModel.voiceWake.isEnabled = true
+        appModel.voiceWake.isListening = true
+        appModel.voiceWake.statusText = "Listening"
+
+        let request = BridgeInvokeRequest(
+            id: "ptt-start",
+            command: OpenClawTalkCommand.pttStart.rawValue)
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("Gateway not connected") == true)
+        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        appModel.voiceWake.isEnabled = true
+        appModel.voiceWake.isListening = true
+        appModel.voiceWake.statusText = "Listening"
+
+        appModel._test_acquirePttVoiceWakeLease()
+        appModel._test_acquirePttVoiceWakeLease()
+        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
+
+        appModel._test_releasePttVoiceWakeLease()
+        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
+
+        appModel._test_releasePttVoiceWakeLease()
+        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        appModel.voiceWake.stop()
+    }
+
     @Test @MainActor func `late watch snapshot is repaired after gateway switch`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
