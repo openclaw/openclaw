@@ -597,19 +597,6 @@ function renderSecurityCard(props: QuickSettingsProps) {
   `;
 }
 
-function formatSystemPlatform(platform: string): string {
-  switch (platform) {
-    case "darwin":
-      return "macOS";
-    case "win32":
-      return "Windows";
-    case "linux":
-      return "Linux";
-    default:
-      return platform;
-  }
-}
-
 function renderSystemRow(label: string, value: string, title?: string) {
   return html`
     <div class="qs-row">
@@ -629,9 +616,7 @@ function renderSystemCard(props: QuickSettingsProps) {
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
     : placeholder;
-  const osLabel = info
-    ? `${formatSystemPlatform(info.platform)} ${info.release} · ${info.arch}`
-    : placeholder;
+  const osLabel = info ? `${info.osLabel} · ${info.arch}` : placeholder;
   const runtime = info ? `Node ${info.nodeVersion} · PID ${info.pid}` : placeholder;
   const cpu = info
     ? `${info.cpuCount} cores${info.loadAverage ? ` · load ${info.loadAverage[0].toFixed(1)}` : ""}`

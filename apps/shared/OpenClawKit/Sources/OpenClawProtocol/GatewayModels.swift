@@ -517,6 +517,7 @@ public struct SystemInfoResult: Codable, Sendable {
     public let platform: String
     public let release: String
     public let arch: String
+    public let oslabel: String
     public let lanaddress: String?
     public let port: Int?
     public let nodeversion: String
@@ -537,6 +538,7 @@ public struct SystemInfoResult: Codable, Sendable {
         platform: String,
         release: String,
         arch: String,
+        oslabel: String,
         lanaddress: String?,
         port: Int?,
         nodeversion: String,
@@ -556,6 +558,7 @@ public struct SystemInfoResult: Codable, Sendable {
         self.platform = platform
         self.release = release
         self.arch = arch
+        self.oslabel = oslabel
         self.lanaddress = lanaddress
         self.port = port
         self.nodeversion = nodeversion
@@ -577,6 +580,7 @@ public struct SystemInfoResult: Codable, Sendable {
         case platform
         case release
         case arch
+        case oslabel = "osLabel"
         case lanaddress = "lanAddress"
         case port
         case nodeversion = "nodeVersion"

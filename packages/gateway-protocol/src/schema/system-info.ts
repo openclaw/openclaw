@@ -12,6 +12,7 @@ export const SystemInfoResultSchema = Type.Object(
     platform: Type.String(),
     release: Type.String(),
     arch: Type.String(),
+    osLabel: Type.String(),
     lanAddress: Type.Optional(Type.String()),
     port: Type.Optional(Type.Integer()),
     nodeVersion: Type.String(),

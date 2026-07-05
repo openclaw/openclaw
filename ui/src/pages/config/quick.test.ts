@@ -146,6 +146,7 @@ describe("renderQuickSettings", () => {
             platform: "darwin",
             release: "25.5.0",
             arch: "arm64",
+            osLabel: "macOS 26.5.0",
             lanAddress: "192.168.1.20",
             port: 18789,
             nodeVersion: "v24.1.0",
@@ -169,7 +170,7 @@ describe("renderQuickSettings", () => {
     expect(hostRow.querySelector(".qs-row__value")?.textContent).toBe("Gateway Mac");
     expect(hostRow.querySelector(".qs-row__value")?.getAttribute("title")).toBe("gateway.local");
     expect(expectRowByLabel(container, "Address").textContent).toContain("192.168.1.20:18789");
-    expect(expectRowByLabel(container, "OS").textContent).toContain("macOS 25.5.0 · arm64");
+    expect(expectRowByLabel(container, "OS").textContent).toContain("macOS 26.5.0 · arm64");
     expect(expectRowByLabel(container, "Uptime").textContent).toContain("1h");
     expect(expectRowByLabel(container, "CPU").textContent).toContain("10 cores · load 1.2");
     expect(expectRowByLabel(container, "Memory").textContent).toContain("16 GB free of 32 GB");

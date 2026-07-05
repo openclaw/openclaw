@@ -9,6 +9,7 @@ const validSystemInfo = {
   platform: "darwin",
   release: "25.5.0",
   arch: "arm64",
+  osLabel: "macOS 26.5.0",
   lanAddress: "192.168.1.20",
   port: 18789,
   nodeVersion: "v24.1.0",

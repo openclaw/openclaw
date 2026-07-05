@@ -115,6 +115,10 @@ function isUnknownSystemInfoMethodError(error: unknown): boolean {
   );
 }
 
+export function supportsSystemInfo(hello: ApplicationGatewaySnapshot["hello"]): boolean {
+  return hello?.features?.methods?.includes("system.info") === true;
+}
+
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
     case "communications":
@@ -325,7 +329,6 @@ export class ConfigPage extends LitElement {
   private customThemeImportSelectOnSuccess = false;
   private readonly configViewState: ConfigViewState = createConfigViewState();
   private systemInfoClient: GatewayBrowserClient | null = null;
-  private systemInfoConnected = false;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
   private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
@@ -371,7 +374,6 @@ export class ConfigPage extends LitElement {
     this.stopSystemInfoPolling();
     this.invalidateSystemInfoRequest();
     this.systemInfoClient = null;
-    this.systemInfoConnected = false;
     for (const stop of this.stops) {
       stop();
     }
@@ -394,17 +396,21 @@ export class ConfigPage extends LitElement {
 
   private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.systemInfoClient;
-    const becameConnected = snapshot.connected && !this.systemInfoConnected;
+    const hasSystemInfo = supportsSystemInfo(snapshot.hello);
     this.systemInfoClient = snapshot.client;
-    this.systemInfoConnected = snapshot.connected;
     if (clientChanged) {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
     } else if (!snapshot.connected) {
       this.invalidateSystemInfoRequest();
-    } else if (becameConnected) {
-      this.systemInfoUnavailable = false;
+    }
+    if (snapshot.connected && snapshot.hello) {
+      this.systemInfoUnavailable = !hasSystemInfo;
+      if (!hasSystemInfo) {
+        this.invalidateSystemInfoRequest();
+        this.systemInfo = null;
+      }
     }
     this.syncSystemInfoPolling();
   }
@@ -416,6 +422,7 @@ export class ConfigPage extends LitElement {
       this.isSystemInfoVisible() &&
       !this.systemInfoUnavailable &&
       gateway.connected &&
+      supportsSystemInfo(gateway.hello) &&
       gateway.client != null;
     if (!shouldPoll) {
       this.stopSystemInfoPolling();

@@ -20,15 +20,19 @@ describe("system.info", () => {
   it("returns a schema-valid host resource snapshot", async () => {
     const respond = vi.fn();
 
-    await systemHandlers["system.info"]({
+    const request = {
       params: {},
       respond,
       context: {
         getRuntimeConfig: () => ({ gateway: { port: 18789 } }),
       },
-    } as unknown as GatewayRequestHandlerOptions);
+    } as unknown as GatewayRequestHandlerOptions;
 
-    expect(respond).toHaveBeenCalledTimes(1);
+    await systemHandlers["system.info"](request);
+    await systemHandlers["system.info"](request);
+
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(mocks.resolveAdvertisedLanHost).toHaveBeenCalledTimes(1);
     const [ok, payload, error] = respond.mock.calls[0] ?? [];
     expect(ok).toBe(true);
     expect(error).toBeUndefined();

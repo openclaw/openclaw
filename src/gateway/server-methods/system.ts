@@ -23,11 +23,21 @@ import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+let advertisedLanHostPromise: Promise<string | null> | null = null;
+
+function resolveCachedAdvertisedLanHost(): Promise<string | null> {
+  // Route discovery may spawn a platform command. Keep the result process-stable
+  // so each visible Settings page does not repeat that work every ten seconds.
+  advertisedLanHostPromise ??= resolveAdvertisedLanHost().catch(() => null);
+  return advertisedLanHostPromise;
+}
 
 async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
   const cpus = os.cpus();
@@ -37,12 +47,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const stateDir = resolveStateDir();
   const disk = tryReadDiskSpace(stateDir);
   const port = resolveGatewayPort(context.getRuntimeConfig());
-  let lanAddress: string | undefined;
-  try {
-    lanAddress = (await resolveAdvertisedLanHost()) ?? undefined;
-  } catch {
-    lanAddress = undefined;
-  }
+  const lanAddress = (await resolveCachedAdvertisedLanHost()) ?? undefined;
 
   return {
     machineName: await getMachineDisplayName(),
@@ -50,6 +55,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     platform: os.platform(),
     release: os.release(),
     arch: os.arch(),
+    osLabel: resolveRuntimeOsLabel(),
     ...(lanAddress ? { lanAddress } : {}),
     port,
     nodeVersion: process.version,
