@@ -33,7 +33,9 @@ async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
       sockets.delete(socket);
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("expected loopback IRC server to bind a TCP port");
