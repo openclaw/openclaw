@@ -251,7 +251,7 @@ export function formatSkillInfo(
   lines.push(theme.heading("Details:"));
   lines.push(`${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`);
   if (skill.shadows && skill.shadows.length > 0) {
-    lines.push(`${theme.muted("  Shadows:")}`);
+    lines.push(theme.muted("  Shadows:"));
     for (const shadow of skill.shadows) {
       lines.push(
         `    ${sanitizeForLog(shadow.source)} ${theme.muted(shortenHomePath(shadow.filePath))}`,
