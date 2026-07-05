@@ -210,7 +210,7 @@ try {
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      212,
+      211,
     ),
   };
   publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
