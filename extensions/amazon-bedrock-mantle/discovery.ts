@@ -318,6 +318,7 @@ export async function discoverMantleModels(params: {
     });
 
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       log.debug?.("Mantle model discovery failed", {
         status: response.status,
         statusText: response.statusText,

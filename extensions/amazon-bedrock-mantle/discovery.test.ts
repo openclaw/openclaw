@@ -332,11 +332,11 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("returns empty array on permission error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 403,
-      statusText: "Forbidden",
-    });
+    const response = modelDiscoveryResponse(
+      { error: "forbidden" },
+      { status: 403, statusText: "Forbidden" },
+    );
+    const mockFetch = vi.fn().mockResolvedValue(response);
 
     const models = await discoverMantleModels({
       region: "us-east-1",
@@ -345,6 +345,7 @@ describe("bedrock mantle discovery", () => {
     });
 
     expect(models).toStrictEqual([]);
+    expect(response.bodyUsed).toBe(true);
   });
 
   it("returns empty array on network error", async () => {
