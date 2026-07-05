@@ -866,6 +866,63 @@ export async function prepareSlackMessage(params: {
     resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
     return resolvedSenderName;
   };
+  const recordDroppedHistory = async (
+    reason: "slack-no-mention" | "slack-other-mention",
+  ): Promise<void> => {
+    const pendingText = (message.text ?? "").trim();
+    const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
+    const fallbackFile = message.files?.length
+      ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
+      : "";
+    const fallbackSharedMedia =
+      !fallbackFile && historyMediaCandidate ? "[Slack media attachment]" : "";
+    const pendingBody = pendingText || fallbackFile || fallbackSharedMedia;
+    const skippedThreadStarter =
+      historyMediaCandidate && isThreadReply && threadTs
+        ? await resolveSlackThreadStarter({
+            channelId: message.channel,
+            threadTs,
+            client: ctx.app.client,
+          })
+        : null;
+    const senderName = pendingBody ? await resolveSenderName() : undefined;
+    await recordDroppedChannelInboundHistory({
+      input: {
+        id: message.ts ?? `${message.channel}:${Date.now()}`,
+        timestamp: resolveSlackTimestampMs(message.ts),
+        rawText: pendingBody,
+        textForAgent: pendingBody,
+        raw: message,
+      },
+      admission: { kind: "drop", reason, recordHistory: true },
+      preflight: {
+        message: pendingBody
+          ? {
+              rawBody: pendingBody,
+              body: pendingBody,
+              bodyForAgent: pendingBody,
+              senderLabel: senderName,
+              envelopeFrom: senderName,
+            }
+          : undefined,
+        history: {
+          key: historyKey,
+          historyMap: ctx.channelHistories,
+          limit: ctx.historyLimit,
+          recordOnDrop: true,
+          mediaLimit: SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS,
+        },
+        media: () =>
+          resolveSlackHistoryMediaForPendingRecord({
+            ctx,
+            message,
+            isThreadReply,
+            threadStarter: skippedThreadStarter,
+            isBotMessage,
+          }),
+      },
+    });
+  };
   const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
 
   const allowTextCommands = shouldHandleTextCommands({
@@ -978,62 +1035,23 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
+  // Thread participation is broad on Slack; only an explicit bot mention escapes this gate.
+  // Native bot identity distinguishes bot pings from other Slack mentions.
+  const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
+  if (isRoom && ignoreOtherMentions && Boolean(ctx.botUserId) && hasAnyMention && !wasMentioned) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "slack",
+      reason: "other-mention",
+      target: senderId,
+    });
+    await recordDroppedHistory("slack-other-mention");
+    return null;
+  }
+
   if (isRoom && shouldRequireMention && messageIngress.activationAccess.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
-    const pendingText = (message.text ?? "").trim();
-    const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
-    const fallbackFile = message.files?.length
-      ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
-      : "";
-    const fallbackSharedMedia =
-      !fallbackFile && historyMediaCandidate ? "[Slack media attachment]" : "";
-    const pendingBody = pendingText || fallbackFile || fallbackSharedMedia;
-    const skippedThreadStarter =
-      historyMediaCandidate && isThreadReply && threadTs
-        ? await resolveSlackThreadStarter({
-            channelId: message.channel,
-            threadTs,
-            client: ctx.app.client,
-          })
-        : null;
-    const timestamp = resolveSlackTimestampMs(message.ts);
-    const senderName = pendingBody ? await resolveSenderName() : undefined;
-    await recordDroppedChannelInboundHistory({
-      input: {
-        id: message.ts ?? `${message.channel}:${Date.now()}`,
-        timestamp,
-        rawText: pendingBody,
-        textForAgent: pendingBody,
-        raw: message,
-      },
-      admission: { kind: "drop", reason: "slack-no-mention", recordHistory: true },
-      preflight: {
-        message: pendingBody
-          ? {
-              rawBody: pendingBody,
-              body: pendingBody,
-              bodyForAgent: pendingBody,
-              senderLabel: senderName,
-              envelopeFrom: senderName,
-            }
-          : undefined,
-        history: {
-          key: historyKey,
-          historyMap: ctx.channelHistories,
-          limit: ctx.historyLimit,
-          recordOnDrop: true,
-          mediaLimit: SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS,
-        },
-        media: () =>
-          resolveSlackHistoryMediaForPendingRecord({
-            ctx,
-            message,
-            isThreadReply,
-            threadStarter: skippedThreadStarter,
-            isBotMessage,
-          }),
-      },
-    });
+    await recordDroppedHistory("slack-no-mention");
     return null;
   }
 

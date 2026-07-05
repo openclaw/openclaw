@@ -2198,6 +2198,48 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it("lets Gateway-owned turns reach queue resolution while a reply operation is active", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "webchat",
+          Surface: "webchat",
+          SessionKey: sessionKey,
+          BodyForAgent: "queue this turn",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: {
+          queuedFollowupLifecycle: {
+            onEnqueued: vi.fn(),
+            onComplete: vi.fn(),
+          },
+        },
+        replyResolver,
+      });
+
+      expect(result).toMatchObject({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      });
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+    } finally {
+      activeOperation.complete();
+    }
+  });
+
   it("clears stale active reply operations for terminal sessions and retries admission", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691294";

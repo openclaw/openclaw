@@ -13,6 +13,7 @@ import {
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   buildGoogleMeetCalendarDayWindow,
@@ -346,13 +347,6 @@ function asParamRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
     ? (params as Record<string, unknown>)
     : {};
-}
-
-function json(payload: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
 }
 
 function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {

@@ -252,6 +252,10 @@ import {
   LogsTailResultSchema,
   type TerminalAckResult,
   TerminalAckResultSchema,
+  type TerminalAttachParams,
+  TerminalAttachParamsSchema,
+  type TerminalAttachResult,
+  TerminalAttachResultSchema,
   type TerminalCloseParams,
   TerminalCloseParamsSchema,
   type TerminalDataEvent,
@@ -262,12 +266,20 @@ import {
   TerminalExitEventSchema,
   type TerminalInputParams,
   TerminalInputParamsSchema,
+  type TerminalListResult,
+  TerminalListResultSchema,
   type TerminalOpenParams,
   TerminalOpenParamsSchema,
   type TerminalOpenResult,
   TerminalOpenResultSchema,
   type TerminalResizeParams,
   TerminalResizeParamsSchema,
+  type TerminalSessionInfo,
+  TerminalSessionInfoSchema,
+  type TerminalTextParams,
+  TerminalTextParamsSchema,
+  type TerminalTextResult,
+  TerminalTextResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -938,6 +950,10 @@ export const validateTerminalResizeParams = lazyCompile<TerminalResizeParams>(
 );
 export const validateTerminalCloseParams =
   lazyCompile<TerminalCloseParams>(TerminalCloseParamsSchema);
+export const validateTerminalAttachParams = lazyCompile<TerminalAttachParams>(
+  TerminalAttachParamsSchema,
+);
+export const validateTerminalTextParams = lazyCompile<TerminalTextParams>(TerminalTextParamsSchema);
 export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
@@ -1226,6 +1242,12 @@ export {
   TerminalInputParamsSchema,
   TerminalResizeParamsSchema,
   TerminalCloseParamsSchema,
+  TerminalAttachParamsSchema,
+  TerminalAttachResultSchema,
+  TerminalSessionInfoSchema,
+  TerminalListResultSchema,
+  TerminalTextParamsSchema,
+  TerminalTextResultSchema,
   TerminalAckResultSchema,
   TerminalDataEventSchema,
   TerminalExitEventSchema,
@@ -1459,6 +1481,12 @@ export type {
   TerminalInputParams,
   TerminalResizeParams,
   TerminalCloseParams,
+  TerminalAttachParams,
+  TerminalAttachResult,
+  TerminalSessionInfo,
+  TerminalListResult,
+  TerminalTextParams,
+  TerminalTextResult,
   TerminalAckResult,
   TerminalDataEvent,
   TerminalExitEvent,

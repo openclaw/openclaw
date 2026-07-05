@@ -21,6 +21,9 @@ import type {
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import { textResult } from "./tool-results.js";
+
+export { jsonResult, textResult } from "./tool-results.js";
 
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
@@ -391,18 +394,6 @@ export function stringifyToolPayload(payload: unknown): string {
   return String(payload);
 }
 
-export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
-  return {
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-    details,
-  };
-}
-
 export function failedTextResult<TDetails extends { status: "failed" }>(
   text: string,
   details: TDetails,
@@ -412,10 +403,6 @@ export function failedTextResult<TDetails extends { status: "failed" }>(
 
 export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
   return textResult(stringifyToolPayload(payload), payload);
-}
-
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
-  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;

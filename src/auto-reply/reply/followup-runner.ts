@@ -534,6 +534,7 @@ export function createFollowupRunner(params: {
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
     let replyOperation: ReplyOperation | undefined;
     let deferred = false;
+    let failed = false;
 
     try {
       queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
@@ -639,6 +640,9 @@ export function createFollowupRunner(params: {
         return;
       }
       replyOperation = admission.operation;
+      // Multi-source collected turns become atomic at reply-lane admission.
+      // Their queue owner uses this boundary to retire source cancellation ids.
+      effectiveQueued.queuedLifecycle?.onAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -697,6 +701,7 @@ export function createFollowupRunner(params: {
           originatingChatType: queued.originatingChatType,
           originatingReplyToMode: queued.originatingReplyToMode,
           originatingTo: queued.originatingTo,
+          reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
         });
         if (noticePayloads.length === 0) {
           return;
@@ -1766,6 +1771,7 @@ export function createFollowupRunner(params: {
         originatingReplyToMode: queued.originatingReplyToMode,
         originatingTo: queued.originatingTo,
         originatingThreadId: queued.originatingThreadId,
+        reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
         sentMediaUrls: runResult.messagingToolSentMediaUrls,
         sentTargets: runResult.messagingToolSentTargets,
         sentTexts: runResult.messagingToolSentTexts,
@@ -1885,6 +1891,9 @@ export function createFollowupRunner(params: {
         },
         { runId },
       );
+    } catch (err) {
+      failed = true;
+      throw err;
     } finally {
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
@@ -1895,7 +1904,9 @@ export function createFollowupRunner(params: {
           );
         }
       }
-      if (!deferred) {
+      // A thrown attempt stays in the drain queue for retry. Its lifecycle
+      // identity remains live until the drain later consumes or drops it.
+      if (!deferred && !failed) {
         completeFollowupRunLifecycle(queued);
       }
       replyOperation?.complete();

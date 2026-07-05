@@ -624,7 +624,12 @@ class OpenClawShell extends LitElement {
               isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>
         </div>
-        <main class="content ${activeRoute === "chat" ? "content--chat" : ""}">
+        <main
+          class="content ${activeRoute === "chat" ? "content--chat" : ""} ${activeRoute ===
+          "workboard"
+            ? "content--workboard"
+            : ""}"
+        >
           <openclaw-update-banner
             .props=${{
               statusBanner: this.overlaySnapshot.updateStatusBanner,

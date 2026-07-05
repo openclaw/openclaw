@@ -479,9 +479,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
-      // Kill any PTY shells this connection owned; an operator's terminals must
-      // not outlive the socket that opened them.
-      context.terminalSessions?.closeForConn(connId);
+      // Detach (or, with a zero grace period, kill) any PTY shells this
+      // connection owned; detached sessions stay reattachable via
+      // terminal.attach until their reaper fires.
+      context.terminalSessions?.handleDisconnect(connId);
       let currentDisconnectedNodeId: string | null = null;
       if (client?.connect?.role === "node") {
         currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);

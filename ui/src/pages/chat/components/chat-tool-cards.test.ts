@@ -6,13 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: (display: { detail?: string }) => display.detail,
-  resolveToolDisplay: ({
-    name,
-    args,
-  }: {
-    name: string;
-    args?: unknown;
-  }) => {
+  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
     const labels: Record<string, string> = {
       sessions_spawn: "Sub-agent",
       skill_workshop: "Skill Workshop",
@@ -39,7 +33,7 @@ import {
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard, renderToolCardSidebar } from "./chat-tool-cards.ts";
+import { renderToolCard } from "./chat-tool-cards.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -106,7 +100,6 @@ describe("tool-cards", () => {
     expect(blocks[0]?.querySelector("code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
     );
-    expect(container.querySelector(".chat-tool-card__block-empty")).toBeNull();
   });
 
   it("labels collapsed tool calls with the display summary", () => {
@@ -461,7 +454,7 @@ describe("tool-cards", () => {
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
     expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
-    const expandedCard = container.querySelector(".chat-tool-card--expanded");
+    const expandedCard = container.querySelector(".chat-tool-card");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(container.querySelector(".chat-tool-card__status-badge")).not.toBeNull();
   });
@@ -549,71 +542,6 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toContain("Tool error");
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
-  });
-
-  it("does not render View with a checkmark for sidebar cards whose output is an error JSON", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCardSidebar(
-        {
-          id: "msg:err:sidebar",
-          name: "web_search",
-          outputText: JSON.stringify({
-            error: "missing_brave_api_key",
-            message: "BRAVE_API_KEY is not configured",
-          }),
-        },
-        vi.fn(),
-      ),
-      container,
-    );
-
-    const card = container.querySelector(".chat-tool-card");
-    const action = container.querySelector(".chat-tool-card__action");
-    expect(card?.classList.contains("chat-tool-card--error")).toBe(true);
-    expect(action?.classList.contains("chat-tool-card__action--error")).toBe(true);
-    expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).not.toContain("✓");
-  });
-
-  it("marks Tool not found sidebar output as an error instead of View with a checkmark", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCardSidebar(
-        {
-          id: "msg:err:sidebar-tool-not-found",
-          name: "Unknown",
-          outputText: "Tool not found",
-        },
-        vi.fn(),
-      ),
-      container,
-    );
-
-    const action = container.querySelector(".chat-tool-card__action");
-    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
-    expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).not.toContain("✓");
-  });
-
-  it("marks status-only sidebar output as an error instead of View with a checkmark", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCardSidebar(
-        {
-          id: "msg:err:sidebar-status",
-          name: "sessions_wait",
-          outputText: JSON.stringify({ status: "timeout" }),
-        },
-        vi.fn(),
-      ),
-      container,
-    );
-
-    const action = container.querySelector(".chat-tool-card__action");
-    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
-    expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).not.toContain("✓");
   });
 
   it("keeps Tool output labelling for successful results", () => {

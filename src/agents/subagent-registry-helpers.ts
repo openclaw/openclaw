@@ -11,6 +11,7 @@ import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessio
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
@@ -55,7 +56,7 @@ export function capFrozenResultText(resultText: string): string {
     0,
     FROZEN_RESULT_TEXT_MAX_BYTES - Buffer.byteLength(notice, "utf8"),
   );
-  const payload = Buffer.from(trimmed, "utf8").subarray(0, maxPayloadBytes).toString("utf8");
+  const payload = truncateUtf8Prefix(trimmed, maxPayloadBytes);
   return `${payload}${notice}`;
 }
 

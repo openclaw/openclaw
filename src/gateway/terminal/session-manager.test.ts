@@ -135,7 +135,7 @@ describe("TerminalSessionManager", () => {
     expect(manager.size).toBe(2);
     emit.mockClear();
 
-    manager.closeForConn("conn-1");
+    manager.handleDisconnect("conn-1");
     expect(manager.size).toBe(0);
     expect(ptys[0].killed).toBe(true);
     expect(ptys[1].killed).toBe(true);
@@ -232,7 +232,7 @@ describe("TerminalSessionManager", () => {
     });
     const openPromise = manager.open(baseRequest({ connId: "conn-x" }));
     // Connection drops while the shell is still spawning.
-    manager.closeForConn("conn-x");
+    manager.handleDisconnect("conn-x");
     release?.();
     const outcome = await openPromise;
     expect(outcome.ok).toBe(false);
@@ -278,6 +278,237 @@ describe("TerminalSessionManager", () => {
     if (!outcome.ok) {
       expect(outcome.code).toBe("spawn_failed");
       expect(outcome.message).toContain("node-pty missing");
+    }
+  });
+});
+
+describe("TerminalSessionManager output ring", () => {
+  it("bounds buffered output by evicting whole head chunks", async () => {
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => fake,
+      scrollbackChars: 8,
+    });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    fake.emitData("abcd");
+    fake.emitData("efgh");
+    expect(manager.snapshot(outcome.sessionId)).toBe("abcdefgh");
+    fake.emitData("ijkl");
+    // Cap exceeded: the oldest whole chunk goes; boundaries stay intact.
+    expect(manager.snapshot(outcome.sessionId)).toBe("efghijkl");
+  });
+
+  it("keeps only the tail of a single oversized chunk", async () => {
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => fake,
+      scrollbackChars: 8,
+    });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    fake.emitData("0123456789AB");
+    expect(manager.snapshot(outcome.sessionId)).toBe("456789AB");
+  });
+
+  it("returns undefined for unknown sessions", () => {
+    const manager = new TerminalSessionManager({ emit: vi.fn() });
+    expect(manager.snapshot("nope")).toBeUndefined();
+  });
+});
+
+describe("TerminalSessionManager detach/reattach", () => {
+  async function openDetachable(options?: {
+    detachGraceMs?: number;
+    maxDetachedSessions?: number;
+  }) {
+    const emit = vi.fn();
+    const fake = makeFakePty();
+    const manager = new TerminalSessionManager({
+      emit,
+      spawn: async () => fake,
+      detachGraceMs: options?.detachGraceMs ?? 60_000,
+      maxDetachedSessions: options?.maxDetachedSessions,
+    });
+    const outcome = await manager.open(baseRequest());
+    if (!outcome.ok) {
+      throw new Error("expected open");
+    }
+    return { manager, fake, emit, sessionId: outcome.sessionId };
+  }
+
+  it("detaches sessions on disconnect and reaps them after the grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, fake, emit } = await openDetachable();
+      manager.handleDisconnect("conn-1");
+      expect(manager.size).toBe(1);
+      expect(fake.killed).toBe(false);
+      // Output while detached is buffered, never emitted to a dead conn.
+      emit.mockClear();
+      fake.emitData("while away");
+      expect(emit).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(59_999);
+      expect(fake.killed).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(fake.killed).toBe(true);
+      expect(manager.size).toBe(0);
+      expect(emit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("attach rebinds a detached session, replays the buffer, and resumes streaming", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, fake, emit, sessionId } = await openDetachable();
+      fake.emitData("before ");
+      manager.handleDisconnect("conn-1");
+      fake.emitData("away ");
+      emit.mockClear();
+
+      const attached = manager.attach("conn-2", sessionId);
+      expect(attached?.buffer).toBe("before away ");
+      expect(attached?.agentId).toBe("main");
+      // The reaper is cancelled: the session survives past the grace deadline.
+      vi.advanceTimersByTime(120_000);
+      expect(fake.killed).toBe(false);
+
+      fake.emitData("live");
+      expect(emit).toHaveBeenCalledWith("conn-2", TERMINAL_EVENT_DATA, {
+        sessionId,
+        seq: 1,
+        data: "live",
+      });
+      expect(manager.write("conn-2", sessionId, "ls\n")).toBe(true);
+      expect(manager.write("conn-1", sessionId, "ls\n")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("attach takes over a live session and notifies the previous owner", async () => {
+    const { manager, fake, emit, sessionId } = await openDetachable();
+    emit.mockClear();
+    const attached = manager.attach("conn-2", sessionId);
+    expect(attached?.sessionId).toBe(sessionId);
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_EXIT, {
+      sessionId,
+      exitCode: null,
+      signal: null,
+      reason: "detached",
+    });
+    emit.mockClear();
+    fake.emitData("output");
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0]).toBe("conn-2");
+    // The old owner's disconnect later must not tear down the stolen session.
+    manager.handleDisconnect("conn-1");
+    expect(manager.size).toBe(1);
+    expect(manager.write("conn-2", sessionId, "x")).toBe(true);
+  });
+
+  it("attach returns undefined for unknown or reaped sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, sessionId } = await openDetachable();
+      expect(manager.attach("conn-2", "nope")).toBeUndefined();
+      manager.handleDisconnect("conn-1");
+      vi.advanceTimersByTime(60_000);
+      expect(manager.attach("conn-2", sessionId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-detaches with a fresh grace period when the adopting connection drops", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, fake, sessionId } = await openDetachable();
+      manager.handleDisconnect("conn-1");
+      vi.advanceTimersByTime(30_000);
+      expect(manager.attach("conn-2", sessionId)).toBeDefined();
+      manager.handleDisconnect("conn-2");
+      // The second detach restarts the clock; the original deadline is void.
+      vi.advanceTimersByTime(59_999);
+      expect(fake.killed).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(fake.killed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps detached sessions by killing the oldest", async () => {
+    vi.useFakeTimers();
+    try {
+      const ptys = [makeFakePty(), makeFakePty()];
+      let idx = 0;
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async () => ptys[idx++],
+        detachGraceMs: 60_000,
+        maxDetachedSessions: 1,
+      });
+      await manager.open(baseRequest({ connId: "conn-1" }));
+      await manager.open(baseRequest({ connId: "conn-2" }));
+      manager.handleDisconnect("conn-1");
+      vi.advanceTimersByTime(1);
+      manager.handleDisconnect("conn-2");
+      expect(ptys[0].killed).toBe(true);
+      expect(ptys[1].killed).toBe(false);
+      expect(manager.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lists sessions with attachment state, oldest first", async () => {
+    vi.useFakeTimers();
+    try {
+      const ptys = [makeFakePty(), makeFakePty()];
+      let idx = 0;
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async () => ptys[idx++],
+        detachGraceMs: 60_000,
+      });
+      const first = await manager.open(baseRequest({ connId: "conn-1" }));
+      vi.advanceTimersByTime(5);
+      const second = await manager.open(baseRequest({ connId: "conn-2" }));
+      if (!first.ok || !second.ok) {
+        throw new Error("expected opens");
+      }
+      manager.handleDisconnect("conn-2");
+      const listed = manager.list();
+      expect(listed.map((s) => s.sessionId)).toEqual([first.sessionId, second.sessionId]);
+      expect(listed[0]).toMatchObject({ attached: true, agentId: "main", shell: "/bin/zsh" });
+      expect(listed[1]).toMatchObject({ attached: false });
+      expect(listed[1].createdAtMs).toBeGreaterThan(listed[0].createdAtMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shutdown hard-kills detached sessions and clears their reapers", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, fake } = await openDetachable();
+      manager.handleDisconnect("conn-1");
+      manager.disposeAll();
+      expect(fake.killed).toBe(true);
+      expect(manager.size).toBe(0);
+      // No reaper left behind to fire against the disposed session.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

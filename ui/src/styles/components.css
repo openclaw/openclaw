@@ -3956,62 +3956,6 @@ td.data-table-key-col {
   }
 }
 
-/* Tool cards: canonical card/title/detail styles live in chat/tool-cards.css;
-   the details/summary/output rules below have no counterpart there. */
-.chat-tool-card__details {
-  margin-top: 6px;
-}
-
-.chat-tool-card__summary {
-  font-family: var(--mono);
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
-  cursor: pointer;
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.chat-tool-card__summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-tool-card__summary-meta {
-  color: var(--muted);
-  opacity: 0.7;
-}
-
-.chat-tool-card__details[open] .chat-tool-card__summary {
-  color: var(--text);
-}
-
-.chat-tool-card__output {
-  margin-top: 8px;
-  font-family: var(--mono);
-  font-size: 12px; /* was 11px */
-  line-height: 1.5;
-  white-space: pre-wrap;
-  color: var(--chat-text);
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--card);
-}
-
-:root[data-theme-mode="light"] .chat-tool-card__output {
-  background: var(--bg);
-}
-
-.chat-stamp {
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
-}
-
-.chat-line.user .chat-stamp {
-  text-align: right;
-}
-
 /* ===========================================
    QR Code
    =========================================== */
