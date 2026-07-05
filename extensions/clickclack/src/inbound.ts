@@ -9,7 +9,12 @@ import { createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
-import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type {
+  ClickClackMessage,
+  ClickClackMessageProvenance,
+  CoreConfig,
+  ResolvedClickClackAccount,
+} from "./types.js";
 
 const CHANNEL_ID = "clickclack" as const;
 
@@ -131,6 +136,9 @@ export async function handleClickClackInbound(params: {
   // per-account opt-in: they need a ClickClack bot token carrying the
   // agent_activity:write scope. Publishing is best-effort and must never
   // break final text delivery.
+  // Resolved model/thinking for this turn (from onModelSelected); stamped as
+  // attribution metadata onto activity rows and the final reply message.
+  let turnProvenance: ClickClackMessageProvenance | undefined;
   let activity: ClickClackActivityPublisher | undefined;
   if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
     activity = createClickClackActivityPublisher({
@@ -209,16 +217,25 @@ export async function handleClickClackInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     toolsAllow: params.account.toolsAllow,
-    replyOptions: activity
-      ? {
-          onItemEvent: activity.onItemEvent,
-          commentaryProgressEnabled: true,
-          // The durable activity rows are ClickClack's own progress
-          // rendering, so item events must flow even when session verbose
-          // mode is off and the default tool-progress texts stay suppressed.
-          suppressDefaultToolProgressMessages: true,
-        }
-      : undefined,
+    replyOptions: {
+      onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
+        turnProvenance = {
+          model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
+          thinking: ctx.thinkLevel,
+        };
+        activity?.setProvenance(turnProvenance);
+      },
+      ...(activity
+        ? {
+            onItemEvent: activity.onItemEvent,
+            commentaryProgressEnabled: true,
+            // The durable activity rows are ClickClack's own progress
+            // rendering, so item events must flow even when session verbose
+            // mode is off and the default tool-progress texts stay suppressed.
+            suppressDefaultToolProgressMessages: true,
+          }
+        : {}),
+    },
     delivery: {
       deliver: async (payload) => {
         const text =
@@ -235,6 +252,7 @@ export async function handleClickClackInbound(params: {
           text,
           threadId: message.parent_message_id ? message.thread_root_id : undefined,
           replyToId: message.id,
+          provenance: turnProvenance,
         });
       },
       onError: (error) => {

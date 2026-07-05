@@ -117,6 +117,18 @@ export type ClickClackEvent = {
   payload: Record<string, unknown>;
 };
 
+/**
+ * Optional attribution metadata stamped onto agent-authored posts
+ * (author_model / author_thinking / author_runtime). Servers that do not
+ * define these columns ignore the unknown JSON fields, so sending them is
+ * always safe; servers that do define them persist per-message provenance.
+ */
+export type ClickClackMessageProvenance = {
+  model?: string;
+  thinking?: string;
+  runtime?: string;
+};
+
 /** Parsed outbound destination for ClickClack delivery. */
 export type ClickClackTarget =
   | { chatType: "group"; kind: "channel"; id: string }

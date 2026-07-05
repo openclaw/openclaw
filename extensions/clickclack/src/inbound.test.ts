@@ -277,15 +277,21 @@ describe("handleClickClackInbound", () => {
 
     const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
     expect(dispatchReply).toHaveBeenCalledTimes(2);
-    const withoutOptIn = dispatchReply.mock.calls[0]?.[0] as { replyOptions?: unknown };
+    const withoutOptIn = dispatchReply.mock.calls[0]?.[0] as {
+      replyOptions?: { onItemEvent?: unknown; onModelSelected?: unknown };
+    };
     const withOptIn = dispatchReply.mock.calls[1]?.[0] as {
       replyOptions?: {
         onItemEvent?: unknown;
+        onModelSelected?: unknown;
         commentaryProgressEnabled?: unknown;
         suppressDefaultToolProgressMessages?: unknown;
       };
     };
-    expect(withoutOptIn.replyOptions).toBeUndefined();
+    // Model provenance capture applies to every account (it stamps the final
+    // reply), but durable activity item events wire up only on opt-in.
+    expect(typeof withoutOptIn.replyOptions?.onModelSelected).toBe("function");
+    expect(withoutOptIn.replyOptions?.onItemEvent).toBeUndefined();
     expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
     // Channel-owned progress rendering: item events must flow even when
     // session verbose mode is off.

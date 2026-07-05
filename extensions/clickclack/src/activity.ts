@@ -16,7 +16,7 @@
  *   frame, and PATCH it when a later frame carries a strictly longer body.
  */
 import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
-import type { ClickClackMessage } from "./types.js";
+import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
 
 /** Debounce window for PATCHing streaming commentary snapshots. */
 export const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
@@ -49,6 +49,7 @@ export type ClickClackActivityClient = {
     body: string;
     kind: "agent_commentary" | "agent_tool";
     turnId?: string;
+    provenance?: ClickClackMessageProvenance;
   }): Promise<ClickClackMessage>;
   updateMessageBody(messageId: string, body: string): Promise<ClickClackMessage>;
 };
@@ -110,6 +111,11 @@ type ToolRow = {
 /** Publisher wired into one agent turn via `replyOptions.onItemEvent`. */
 export type ClickClackActivityPublisher = {
   onItemEvent: (payload: ClickClackItemEventPayload) => void;
+  /**
+   * Records the resolved model/thinking for this turn (from
+   * `replyOptions.onModelSelected`); stamped onto subsequent activity rows.
+   */
+  setProvenance: (provenance: ClickClackMessageProvenance) => void;
   /** Flushes pending commentary and awaits all outstanding POST/PATCH work. */
   finalize: () => Promise<void>;
 };
@@ -128,6 +134,7 @@ export function createClickClackActivityPublisher(params: {
   const flushMs = params.flushMs ?? CLICKCLACK_COMMENTARY_FLUSH_MS;
   const commentaryByItem = new Map<string, CommentarySegment>();
   const toolRows = new Map<string, ToolRow>();
+  let provenance: ClickClackMessageProvenance | undefined;
   // Single promise chain so POST/PATCH ordering matches frame arrival order.
   let chain: Promise<void> = Promise.resolve();
 
@@ -145,6 +152,7 @@ export function createClickClackActivityPublisher(params: {
       body,
       kind,
       turnId: params.turnId,
+      provenance,
     });
 
   const flushCommentary = (segmentKey: string): Promise<void> => {
@@ -268,6 +276,9 @@ export function createClickClackActivityPublisher(params: {
         return;
       }
       handleDiscreteItem(payload);
+    },
+    setProvenance: (next) => {
+      provenance = next;
     },
     finalize: async () => {
       await flushAllCommentary();

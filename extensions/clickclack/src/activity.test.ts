@@ -208,4 +208,26 @@ describe("createClickClackActivityPublisher", () => {
     await expect(publisher.finalize()).resolves.toBeUndefined();
     expect(onError).toHaveBeenCalledTimes(1);
   });
+
+  it("stamps resolved provenance onto rows posted after setProvenance", async () => {
+    const { client, createActivityMessage } = createClientMock();
+    const publisher = createClickClackActivityPublisher({
+      client,
+      target: { channelId: "chn_1" },
+      turnId: "msg_turn",
+    });
+
+    publisher.setProvenance({ model: "anthropic/claude-opus-4-8", thinking: "low" });
+    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "working on it" });
+    await publisher.finalize();
+
+    expect(createActivityMessage).toHaveBeenCalledTimes(1);
+    expect(createActivityMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "working on it",
+        kind: "agent_commentary",
+        provenance: { model: "anthropic/claude-opus-4-8", thinking: "low" },
+      }),
+    );
+  });
 });
