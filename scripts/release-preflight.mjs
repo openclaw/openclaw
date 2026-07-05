@@ -95,8 +95,7 @@ function printFailures(title, failures) {
 function parseArgs(argv) {
   let check = false;
   let wantsFix = false;
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (const arg of argv) {
     if (arg === "--help") {
       printUsage(console.log);
       process.exit(0);
