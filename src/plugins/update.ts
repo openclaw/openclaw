@@ -2316,7 +2316,7 @@ export async function updateNpmInstalledPlugins(params: {
               (params.syncOfficialPluginInstalls &&
                 trustedSourceLinkedOfficialInstall &&
                 !preserveNpmRecordIntent) ||
-              (usedOfficialNpmFallback && params.updateChannel !== "extended-stable"),
+              (usedOfficialNpmFallback && officialSyncUpdateChannel !== "extended-stable"),
           }),
           installPath: result.targetDir,
           version: nextVersion,

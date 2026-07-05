@@ -3896,7 +3896,8 @@ describe("updateNpmInstalledPlugins", () => {
         spec: "clawhub:@openclaw/discord",
       }),
       pluginIds: ["discord"],
-      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      officialPluginUpdateChannel: "extended-stable",
       coreVersion: "2026.7.33",
     });
 
