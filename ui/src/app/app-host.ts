@@ -19,6 +19,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
+import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
@@ -74,6 +75,15 @@ function resolveOnboardingMode(): boolean {
   return raw !== null && /^(?:1|true|yes|on)$/iu.test(raw.trim());
 }
 
+/**
+ * Terminal-only document mode (`?view=terminal`): the mobile apps embed the
+ * terminal as a full-screen WebView page instead of the whole Control UI.
+ * Fixed per document load — the apps construct the URL, users never toggle it.
+ */
+function isTerminalOnlyView(): boolean {
+  return new URLSearchParams(globalThis.location?.search ?? "").get("view") === "terminal";
+}
+
 function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
@@ -102,13 +112,17 @@ export class OpenClawApp extends LitElement {
   @state() private loginShowGatewayPassword = false;
   @state() private pendingGatewayUrl: string | null = null;
   @state() private onboarding = resolveOnboardingMode();
+  @state() private terminalAvailable = false;
+  @state() private terminalClient: GatewayBrowserClient | null = null;
 
+  private readonly terminalOnly = isTerminalOnlyView();
   private runtime: ApplicationRuntime | undefined;
   private context: ApplicationContext<RouteId> | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
   });
   private stopGatewaySubscription: (() => void) | undefined;
+  private stopConfigSubscription: (() => void) | undefined;
 
   override createRenderRoot() {
     return this;
@@ -129,7 +143,16 @@ export class OpenClawApp extends LitElement {
         this.syncLoginConnection();
       }
       this.updateGatewayStatus(snapshot);
+      this.updateTerminalSurface();
     });
+    if (this.terminalOnly) {
+      // Terminal availability also depends on config.terminalEnabled, which
+      // can arrive after the gateway snapshot; track it for this document mode.
+      this.updateTerminalSurface();
+      this.stopConfigSubscription = this.context.config.subscribe(() => {
+        this.updateTerminalSurface();
+      });
+    }
     void this.runtime.start().catch((error: unknown) => {
       console.error("[openclaw] application start failed", error);
     });
@@ -138,6 +161,8 @@ export class OpenClawApp extends LitElement {
   override disconnectedCallback() {
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    this.stopConfigSubscription?.();
+    this.stopConfigSubscription = undefined;
     this.runtime?.stop();
     this.runtime = undefined;
     this.context = undefined;
@@ -164,6 +189,18 @@ export class OpenClawApp extends LitElement {
     this.gatewayLastError = snapshot.lastError;
     this.gatewayLastErrorCode = snapshot.lastErrorCode;
   };
+
+  private updateTerminalSurface() {
+    if (!this.terminalOnly || !this.context) {
+      return;
+    }
+    const snapshot = this.context.gateway.snapshot;
+    this.terminalClient = snapshot.connected ? snapshot.client : null;
+    this.terminalAvailable = isTerminalAvailable(
+      snapshot,
+      this.context.config.current.terminalEnabled ?? false,
+    );
+  }
 
   override render() {
     const context = this.context;
@@ -230,6 +267,21 @@ export class OpenClawApp extends LitElement {
           ></openclaw-login-gate>
           ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
+      `;
+    }
+    // Terminal-only document (`?view=terminal`): the mobile apps embed this as
+    // a full-screen WebView page, so render just the terminal — no shell chrome.
+    if (this.terminalOnly) {
+      return html`
+        <openclaw-terminal-panel
+          .client=${this.terminalClient}
+          .available=${this.terminalAvailable}
+          .themeMode=${resolveTerminalThemeMode()}
+          fullscreen
+        ></openclaw-terminal-panel>
+        ${this.terminalAvailable
+          ? nothing
+          : html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`}
       `;
     }
     return html`

@@ -59,6 +59,7 @@ import {
 } from "./agent-lifecycle-terminal.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -1061,6 +1062,10 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onReasoningText: createCliReasoningStreamBridge(opts?.onReasoningStream),
+                  onReasoningProgress: async (payload) => {
+                    await opts?.onReasoningProgress?.(payload);
+                  },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {

@@ -1074,6 +1074,11 @@
       "translated": "به OpenClaw خوش آمدید"
     },
     {
+      "id": "native.android.f941909a3fa51055",
+      "source": "OpenClaw logo",
+      "translated": "نشان‌واره OpenClaw"
+    },
+    {
       "id": "native.android.cc878f72a6b70b23",
       "source": "Connect to your Gateway",
       "translated": "اتصال به Gateway"
@@ -2862,6 +2867,26 @@
       "id": "native.android.14d7845e9790eaab",
       "source": "Skill",
       "translated": "Skill"
+    },
+    {
+      "id": "native.android.efc938b5cc23e079",
+      "source": "Back",
+      "translated": "بازگشت"
+    },
+    {
+      "id": "native.android.3e0f25545a6ccfb4",
+      "source": "Terminal",
+      "translated": "ترمینال"
+    },
+    {
+      "id": "native.android.a196c4c819426137",
+      "source": "Terminal needs a connected gateway",
+      "translated": "ترمینال به یک Gateway متصل نیاز دارد"
+    },
+    {
+      "id": "native.android.9f3ceb93047671b5",
+      "source": "Connect to your gateway to open a shell in the agent workspace.",
+      "translated": "برای باز کردن یک shell در فضای کاری عامل، به Gateway خود متصل شوید."
     },
     {
       "id": "native.android.5e0524a5d86e673a",
@@ -7424,6 +7449,11 @@
       "translated": "وظایف Cron"
     },
     {
+      "id": "native.apple.b3b5114b91a8db8f",
+      "source": "Terminal",
+      "translated": "ترمینال"
+    },
+    {
       "id": "native.apple.584dfce592c64899",
       "source": "Docs",
       "translated": "اسناد"
@@ -7562,6 +7592,31 @@
       "id": "native.apple.994760420a194561",
       "source": "Voice Wake triggered",
       "translated": "بیدارباش صوتی فعال شد"
+    },
+    {
+      "id": "native.apple.8ba33bf5712e3af2",
+      "source": "Terminal",
+      "translated": "ترمینال"
+    },
+    {
+      "id": "native.apple.2f67b32536f24e9d",
+      "source": "Gateway settings",
+      "translated": "تنظیمات Gateway"
+    },
+    {
+      "id": "native.apple.25e3befd890f1a73",
+      "source": "Terminal needs a connected gateway",
+      "translated": "ترمینال به یک Gateway متصل نیاز دارد"
+    },
+    {
+      "id": "native.apple.197411362978db2d",
+      "source": "Connect to your gateway to open a shell in the agent workspace.",
+      "translated": "برای باز کردن یک shell در فضای کاری عامل، به Gateway خود متصل شوید."
+    },
+    {
+      "id": "native.apple.0a687ce373931085",
+      "source": "Open Gateway Settings",
+      "translated": "باز کردن تنظیمات Gateway"
     },
     {
       "id": "native.apple.3b21081fb5ce84ba",

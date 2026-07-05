@@ -36,6 +36,7 @@ import {
   type CliOutput,
   type CliStreamingDelta,
   type CliThinkingDelta,
+  type CliThinkingProgress,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
@@ -1035,11 +1036,7 @@ export async function executePreparedCliRun(
         // presentation. Text stays raw here to match the thinking-stream contract
         // shared with embedded-agent-subscribe, which archives untransformed
         // reasoning regardless of source.
-        const emitCliThinkingDelta = ({
-          text,
-          delta,
-          isReasoningSnapshot,
-        }: CliThinkingDelta) => {
+        const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
           if (text || delta) {
             observedCliActivity = true;
           }
@@ -1050,6 +1047,17 @@ export async function executePreparedCliRun(
             runId: params.runId,
             stream: "thinking",
             data: { text, delta, ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}) },
+          });
+        };
+        const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: { progressTokens },
           });
         };
         if (shouldUseClaudeLiveSession(context)) {
@@ -1073,6 +1081,7 @@ export async function executePreparedCliRun(
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,
             onThinkingDelta: emitCliThinkingDelta,
+            onThinkingProgress: emitCliThinkingProgress,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1101,6 +1110,7 @@ export async function executePreparedCliRun(
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
                 onThinkingDelta: emitCliThinkingDelta,
+                onThinkingProgress: emitCliThinkingProgress,
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:

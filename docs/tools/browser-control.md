@@ -20,19 +20,24 @@ and restart the gateway before the HTTP endpoints become available. Without
 this variable the browser control runtime still works through the CLI and
 agent tools, but nothing listens on the loopback control port.
 
-- Status/start/stop: `GET /`, `POST /start`, `POST /stop`
-- Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`
+- Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
+- Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
+- Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
 - Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
 - Permissions: `POST /permissions/grant`
 - Debugging: `GET /console`, `POST /pdf`
-- Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- Debugging: `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
 - State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
 - State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
+
+`POST /tabs/action` is the batched form the CLI uses internally for
+`browser tab` subcommands (`{"action":"new"|"label"|"select"|"close"|"list", ...}`);
+prefer the single-purpose tab routes above when scripting directly.
 
 All endpoints accept `?profile=<name>`. `POST /start?headless=true` requests a
 one-shot headless launch for local managed profiles without changing persisted
@@ -146,17 +151,33 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 
 ```bash
 openclaw browser status
+openclaw browser doctor
+openclaw browser doctor --deep    # add a live snapshot probe
 openclaw browser start
 openclaw browser start --headless # one-shot local managed headless launch
 openclaw browser stop            # also clears emulation on attach-only/remote CDP
+openclaw browser reset-profile   # moves the profile's browser data to Trash
 openclaw browser tabs
 openclaw browser tab             # shortcut for current tab
 openclaw browser tab new
+openclaw browser tab new --label research
+openclaw browser tab label abcd1234 research
 openclaw browser tab select 2
 openclaw browser tab close 2
 openclaw browser open https://example.com
 openclaw browser focus abcd1234
 openclaw browser close abcd1234
+```
+
+</Accordion>
+
+<Accordion title="Profiles: list, create, delete">
+
+```bash
+openclaw browser profiles
+openclaw browser create-profile --name research --color "#0066CC"
+openclaw browser create-profile --name attach --driver existing-session --cdp-url http://127.0.0.1:9222
+openclaw browser delete-profile --name research
 ```
 
 </Accordion>
@@ -176,6 +197,7 @@ openclaw browser snapshot --labels
 openclaw browser snapshot --urls
 openclaw browser snapshot --selector "#main" --interactive
 openclaw browser snapshot --frame "iframe#main" --interactive
+openclaw browser snapshot --out snapshot.txt
 openclaw browser console --level error
 openclaw browser errors --clear
 openclaw browser requests --filter api --clear
@@ -322,7 +344,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
-  - Supported on managed `openclaw` and raw/remote CDP profiles. The `user` and `existing-session` profiles reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
+  - Supported on managed `openclaw` and raw/remote CDP profiles. Profiles using the `existing-session` driver (including the default `user` profile) reject `networkidle`; use `--url`, `--text`, a selector, or `--fn` waits there.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
@@ -375,10 +397,10 @@ These are useful for "make the site behave like X" workflows:
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
 - Offline: `set offline on|off`
-- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (legacy `set headers --json '{"X-Debug":"1"}'` remains supported)
+- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (or the positional form `set headers '{"X-Debug":"1"}'`)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
-- Media: `set media dark|light|no-preference|none`
+- Media: `set media dark|light|none` (the underlying `/set/media` route also accepts `no-preference`)
 - Timezone / locale: `set timezone ...`, `set locale ...`
 - Device / viewport:
   - `set device "iPhone 14"` (Playwright device presets)
