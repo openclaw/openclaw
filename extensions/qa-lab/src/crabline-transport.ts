@@ -250,7 +250,9 @@ function createCrablineState(params: {
         }
         throw error;
       }
-      const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+      const rawLines = raw.split("\n");
+      const completeLines = raw.endsWith("\n") ? rawLines : rawLines.slice(0, -1);
+      const lines = completeLines.filter((line) => line.trim().length > 0);
       const unreadLines = lines.slice(recorderLineCursor);
       recorderLineCursor = lines.length;
       for (const line of unreadLines) {

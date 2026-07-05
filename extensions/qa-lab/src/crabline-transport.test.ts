@@ -162,6 +162,61 @@ describe("crabline transport", () => {
     });
   });
 
+  it("waits for complete recorder JSONL lines before parsing events", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+
+      try {
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          recorderPath: string;
+        };
+        const event = JSON.stringify({
+          body: {
+            chat_id: "100001",
+            text: "complete recorder marker",
+          },
+          path: "/sendMessage",
+          type: "api",
+        });
+        expect(transport.waitForOutboundSequence).toBeTypeOf("function");
+        const waitForOutboundSequence = transport.waitForOutboundSequence!;
+        await fs.writeFile(manifest.recorderPath, event.slice(0, -2), "utf8");
+
+        await expect(
+          waitForOutboundSequence({
+            conversationId: "100001",
+            finalSettleMs: 0,
+            finalTextIncludes: "complete recorder marker",
+            minimumPreviewEvents: 0,
+            timeoutMs: 50,
+          }),
+        ).rejects.not.toThrow(/JSON|Unterminated/u);
+
+        await fs.writeFile(manifest.recorderPath, `${event}\n`, "utf8");
+
+        await expect(
+          waitForOutboundSequence({
+            conversationId: "100001",
+            finalSettleMs: 0,
+            finalTextIncludes: "complete recorder marker",
+            minimumPreviewEvents: 0,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          final: { text: "complete recorder marker" },
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
