@@ -476,7 +476,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   });
   warnGroupAllowlistMisconfigOnce({
     groupPolicy,
-    groups: imessageCfg.groups,
     hasGroupAllowFrom: effectiveGroupAllowFrom.length > 0,
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),

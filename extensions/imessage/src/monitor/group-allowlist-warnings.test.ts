@@ -11,11 +11,10 @@ beforeEach(() => {
 });
 
 describe("warnGroupAllowlistMisconfigOnce", () => {
-  it("fires when groupPolicy=allowlist with no groups and no groupAllowFrom", () => {
+  it("fires when groupPolicy=allowlist has no effective groupAllowFrom", () => {
     const messages: string[] = [];
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
-      groups: undefined,
       hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
@@ -23,55 +22,14 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     expect(fired).toBe(true);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain('groupPolicy="allowlist"');
-    expect(messages[0]).toContain("channels.imessage.groups is empty");
     expect(messages[0]).toContain("channels.imessage.groupAllowFrom");
     expect(messages[0]).toContain("default");
-  });
-
-  it("fires when groupPolicy=allowlist and groups is empty object", () => {
-    const messages: string[] = [];
-    const fired = warnGroupAllowlistMisconfigOnce({
-      groupPolicy: "allowlist",
-      groups: {},
-      hasGroupAllowFrom: false,
-      accountId: "default",
-      log: (m) => messages.push(m),
-    });
-    expect(fired).toBe(true);
-    expect(messages).toHaveLength(1);
   });
 
   it("does not fire when groupPolicy is not allowlist", () => {
     const messages: string[] = [];
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "open",
-      groups: undefined,
-      hasGroupAllowFrom: false,
-      accountId: "default",
-      log: (m) => messages.push(m),
-    });
-    expect(fired).toBe(false);
-    expect(messages).toHaveLength(0);
-  });
-
-  it("does not fire when groups has a wildcard entry", () => {
-    const messages: string[] = [];
-    const fired = warnGroupAllowlistMisconfigOnce({
-      groupPolicy: "allowlist",
-      groups: { "*": { requireMention: true } },
-      hasGroupAllowFrom: false,
-      accountId: "default",
-      log: (m) => messages.push(m),
-    });
-    expect(fired).toBe(false);
-    expect(messages).toHaveLength(0);
-  });
-
-  it("does not fire when groups has explicit chat_id entries", () => {
-    const messages: string[] = [];
-    const fired = warnGroupAllowlistMisconfigOnce({
-      groupPolicy: "allowlist",
-      groups: { "12345": {} },
       hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
@@ -86,7 +44,6 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     expect(
       warnGroupAllowlistMisconfigOnce({
         groupPolicy: "allowlist",
-        groups: undefined,
         hasGroupAllowFrom: true,
         accountId: "default",
         log,
@@ -95,7 +52,6 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     expect(
       warnGroupAllowlistMisconfigOnce({
         groupPolicy: "allowlist",
-        groups: {},
         hasGroupAllowFrom: true,
         accountId: "default",
         log,
@@ -110,7 +66,6 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     expect(
       warnGroupAllowlistMisconfigOnce({
         groupPolicy: "allowlist",
-        groups: undefined,
         hasGroupAllowFrom: false,
         accountId: "default",
         log,
@@ -119,7 +74,6 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     expect(
       warnGroupAllowlistMisconfigOnce({
         groupPolicy: "allowlist",
-        groups: undefined,
         hasGroupAllowFrom: false,
         accountId: "default",
         log,
@@ -133,14 +87,12 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     const log = (m: string) => messages.push(m);
     warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
-      groups: undefined,
       hasGroupAllowFrom: false,
       accountId: "primary",
       log,
     });
     warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
-      groups: undefined,
       hasGroupAllowFrom: false,
       accountId: "secondary",
       log,

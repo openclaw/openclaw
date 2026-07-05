@@ -127,7 +127,7 @@ The migration trap: BlueBubbles keyed `groups` entries by chat GUID / chat ident
 
 Both drop paths are visible at the default log level via `warn` lines:
 
-- Once per account at startup, when `groupPolicy: "allowlist"` is set and both `groups` and the effective group sender allowlist are empty: `imessage: groupPolicy="allowlist" for account "<id>" but channels.imessage.groups is empty and no group sender allowlist is configured ...`. Set `groupAllowFrom` (or `allowFrom`) to admit senders; adding `groups` alone does not satisfy the sender gate.
+- Once per account at startup, when `groupPolicy: "allowlist"` is set and the effective group sender allowlist is empty: `imessage: groupPolicy="allowlist" for account "<id>" but no group sender allowlist is configured ...`. Set `groupAllowFrom` (or `allowFrom`) to admit senders; adding `groups` alone does not satisfy the sender gate.
 - Once per `chat_id` at runtime, when the registry drops a group: `imessage: dropping group message from chat_id=<id> ... not in channels.imessage.groups allowlist`, naming the exact key to add.
 
 DMs keep working either way — they take a different code path, so DM success does not prove group routing.
