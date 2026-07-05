@@ -173,8 +173,9 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini && \
-    update-ca-certificates
+      ca-certificates curl git hostname lsof openssh-client openssl procps python3 tini && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN chown node:node /app
 
