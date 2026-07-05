@@ -421,7 +421,10 @@ export function loadSessionStore(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       const isPermanentReadError = code === "ENOENT" || code === "EACCES" || code === "EPERM";
-      if (!isPermanentReadError && attempt < maxReadAttempts - 1) {
+      if (isPermanentReadError) {
+        break;
+      }
+      if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }
