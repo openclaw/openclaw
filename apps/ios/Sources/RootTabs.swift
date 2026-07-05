@@ -51,7 +51,7 @@ struct RootTabs: View {
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
-    @State private var handledGatewaySetupRequestID: Int = 0
+    @State private var gatewaySetupRequest: GatewaySetupRequest?
     @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
 
     private static var initialTab: AppTab {
@@ -202,7 +202,9 @@ struct RootTabs: View {
 
             SettingsProTab(
                 initialRoute: self.selectedSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                onRouteChange: self.handleSettingsRouteChange,
+                gatewaySetupRequest: self.gatewaySetupRequest,
+                onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
                 .id(self.settingsTabViewID)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
@@ -511,13 +513,17 @@ struct RootTabs: View {
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
                     navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    onRouteChange: self.handleSettingsRouteChange,
+                    gatewaySetupRequest: self.gatewaySetupRequest,
+                    onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
                     navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    onRouteChange: self.handleSettingsRouteChange,
+                    gatewaySetupRequest: self.gatewaySetupRequest,
+                    onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
             }
         case .gateway:
             SettingsProTab(
@@ -525,7 +531,9 @@ struct RootTabs: View {
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
                 navigateToRoute: self.pushSidebarSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                onRouteChange: self.handleSettingsRouteChange,
+                gatewaySetupRequest: self.gatewaySetupRequest,
+                onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
         }
     }
 
@@ -1291,13 +1299,20 @@ extension RootTabs {
 
     private func maybeOpenSettingsForGatewaySetup() {
         let requestID = self.appModel.gatewaySetupRequestID
-        guard requestID != 0, requestID != self.handledGatewaySetupRequestID else { return }
-        self.handledGatewaySetupRequestID = requestID
+        guard requestID != 0, requestID != self.gatewaySetupRequest?.id else { return }
+        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
         self.selectSidebarDestination(.gateway)
+        // Root owns delivery so embedded Settings views cannot consume the one-shot link.
+        self.gatewaySetupRequest = GatewaySetupRequest(id: requestID, link: link)
         self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
+    }
+
+    private func handleGatewaySetupRequest(_ requestID: Int) {
+        guard self.gatewaySetupRequest?.id == requestID else { return }
+        self.gatewaySetupRequest = nil
     }
 
     private func maybeRequestLocalNetworkAccess(reason: String) {

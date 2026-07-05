@@ -681,6 +681,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 recoveryStartRequested.delete(rKey);
                 return;
               }
+              if (getRuntime(channelId, id).terminalDisconnect) {
+                // Authentication/session termination wins over pending recovery.
+                // Leaving recovery state behind would restart a channel that needs user action.
+                recoveryStopTimedOut.delete(rKey);
+                recoveryStartRequested.delete(rKey);
+                restartAttempts.delete(rKey);
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  restartPending: false,
+                  reconnectAttempts: 0,
+                });
+                log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
+                return;
+              }
               if (recoveryStopTimedOut.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 if (!recoveryStartRequested.delete(rKey)) {

@@ -1,6 +1,6 @@
 // Verifies pruning-related config defaults and migrations.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { resetBundledPluginPublicArtifactLoaderForTest } from "../plugins/public-surface-loader.js";
 import type { OpenClawConfig } from "./config.js";
@@ -17,6 +17,12 @@ function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
 }
 
 describe("config pruning defaults", () => {
+  beforeAll(() => {
+    setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
+    // Provider public artifacts are process-stable. Keep their one-time load out of assertions.
+    applyAnthropicDefaultsForTest({ agents: { defaults: {} } });
+  });
+
   beforeEach(() => {
     setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
     resetBundledPluginPublicArtifactLoaderForTest();

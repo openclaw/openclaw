@@ -17,7 +17,7 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
-const NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
@@ -25,7 +25,7 @@ const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ]);
-const ACTIVE_NODE_STEP_KILLERS = new Set();
+const ACTIVE_NODE_STEP_KILLERS = new Map();
 let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
 let parentSignalExitCode = 1;
@@ -475,9 +475,15 @@ export function signalNodeStep(
 }
 
 function signalActiveNodeSteps(signal) {
-  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS) {
+  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS.keys()) {
     killNodeStep(signal);
   }
+}
+
+function activeNodeStepKillGraceMs() {
+  return ACTIVE_NODE_STEP_KILLERS.size > 0
+    ? Math.max(...ACTIVE_NODE_STEP_KILLERS.values())
+    : DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS;
 }
 
 function installNodeStepParentSignalForwarders() {
@@ -497,7 +503,7 @@ function installNodeStepParentSignalForwarders() {
       signalActiveNodeSteps(signal);
       parentSignalExitTimer ??= setTimeout(
         () => process.exit(parentSignalExitCode),
-        NODE_STEP_ABORT_KILL_GRACE_MS,
+        activeNodeStepKillGraceMs(),
       );
     });
   }
@@ -519,6 +525,10 @@ function resolveNodeStepTimerTimeoutMs(valueMs) {
  */
 export function runNodeStep(label, args, timeoutMs, params = {}) {
   const resolvedTimeoutMs = resolveNodeStepTimerTimeoutMs(timeoutMs);
+  const abortKillGraceMs = Math.max(
+    0,
+    Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
+  );
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
   installNodeStepParentSignalForwarders();
@@ -571,18 +581,18 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
         await waitForProcessGroupExit(100);
       }
     };
-    ACTIVE_NODE_STEP_KILLERS.add(killNodeStep);
+    ACTIVE_NODE_STEP_KILLERS.set(killNodeStep, abortKillGraceMs);
     const abortStep = () => {
       if (settled || canceled) {
         return;
       }
       canceled = true;
       killNodeStep("SIGTERM");
-      killDeadlineAt = Date.now() + NODE_STEP_ABORT_KILL_GRACE_MS;
+      killDeadlineAt = Date.now() + abortKillGraceMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         killNodeStep("SIGKILL");
-      }, NODE_STEP_ABORT_KILL_GRACE_MS);
+      }, abortKillGraceMs);
       killTimer.unref?.();
     };
     function cleanup() {
@@ -667,7 +677,11 @@ export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
     steps.map((step) =>
-      runNodeStep(step.label, step.args, step.timeoutMs, { abortController, env: step.env }),
+      runNodeStep(step.label, step.args, step.timeoutMs, {
+        abortController,
+        abortKillGraceMs: step.abortKillGraceMs,
+        env: step.env,
+      }),
     ),
   );
   const firstFailure = results.find((result) => result.status === "rejected");
