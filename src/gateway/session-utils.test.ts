@@ -228,12 +228,14 @@ describe("gateway session utils", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const store = {
       "agent:main:telegram:direct:42": {
+        sessionId: "sess-telegram-direct-42",
         chatType: "direct",
         channel: "telegram",
         origin: { label: "openclaw-tui" },
         updatedAt: 2,
       } as SessionEntry,
       "agent:main:telegram:direct:99": {
+        sessionId: "sess-telegram-direct-99",
         chatType: "direct",
         channel: "telegram",
         origin: { label: "other-direct" },
@@ -774,13 +776,15 @@ describe("gateway session utils", () => {
     expect(classifySessionKey("unknown")).toBe("unknown");
     expect(classifySessionKey("discord:group:dev")).toBe("group");
     expect(classifySessionKey("main")).toBe("direct");
-    const entry = { chatType: "group" } as SessionEntry;
+    const entry = { sessionId: "sess-group", updatedAt: 1, chatType: "group" } as SessionEntry;
     expect(classifySessionKey("main", entry)).toBe("group");
   });
 
   test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
+      sessionId: "sess-display-direct",
+      updatedAt: 1,
       chatType: "direct",
       channel: "telegram",
       origin: { label: "openclaw-tui" },
@@ -798,6 +802,8 @@ describe("gateway session utils", () => {
   test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
+      sessionId: "sess-display-group",
+      updatedAt: 1,
       chatType: "group",
       channel: "telegram",
       subject: "Engineering",
@@ -817,6 +823,8 @@ describe("gateway session utils", () => {
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
+      sessionId: "sess-display-label",
+      updatedAt: 1,
       chatType: "direct",
       channel: "telegram",
       label: "Alice",
@@ -957,6 +965,8 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     const acpEntry = (agent: string, runtimeSessionName: string) =>
       ({
+        sessionId: runtimeSessionName,
+        updatedAt: 1,
         acp: {
           backend: "acpx",
           agent,
