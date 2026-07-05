@@ -1372,36 +1372,38 @@ describe("runCodexAppServerSideQuestion", () => {
         return {};
       }
       if (method === "turn/start") {
-        setTimeout(async () => {
-          const first = client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              callId: "tool-1",
-              tool: "wiki_status",
-              arguments: { topic: "AGENTS.md", mode: "full" },
-            },
-          });
-          await vi.waitFor(() => expect(toolExecuteMock).toHaveBeenCalledTimes(1));
-          const second = client.handleRequest({
-            id: 43,
-            method: "item/tool/call",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              callId: "tool-2",
-              tool: "wiki_status",
-              arguments: { mode: "full", topic: "AGENTS.md" },
-            },
-          });
-          expect(toolExecuteMock).toHaveBeenCalledTimes(1);
-          resolveTool?.();
-          firstResponse = await first;
-          secondResponse = await second;
-          client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
-          client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+        setTimeout(() => {
+          void (async () => {
+            const first = client.handleRequest({
+              id: 42,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-1",
+                tool: "wiki_status",
+                arguments: { topic: "AGENTS.md", mode: "full" },
+              },
+            });
+            await vi.waitFor(() => expect(toolExecuteMock).toHaveBeenCalledTimes(1));
+            const second = client.handleRequest({
+              id: 43,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-2",
+                tool: "wiki_status",
+                arguments: { mode: "full", topic: "AGENTS.md" },
+              },
+            });
+            expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+            resolveTool?.();
+            firstResponse = await first;
+            secondResponse = await second;
+            client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }
