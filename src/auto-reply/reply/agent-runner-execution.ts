@@ -2142,6 +2142,8 @@ async function runAgentTurnWithFallbackInternal(
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
+            reasoningPayloadsEnabled: params.opts?.reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled: params.opts?.commentaryPayloadsEnabled,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,

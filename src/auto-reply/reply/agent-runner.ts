@@ -2171,8 +2171,12 @@ export async function runReplyAgent(params: {
       didLogHeartbeatStrip = terminalPayloadResult.didLogHeartbeatStrip;
     }
 
-    const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
-      (payload) => !isReplyPayloadStatusNotice(payload),
+    const hasVisibleReplyPayload = replyPayloads.some(
+      (payload) =>
+        !isReplyPayloadStatusNotice(payload) &&
+        (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+        (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
     );
     const hasDeliveredBlockStream = Boolean(
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
@@ -2181,7 +2185,7 @@ export async function runReplyAgent(params: {
       hasDeliveredBlockStream || successfulSideEffectDelivery;
     if (
       replyPayloads.length === 0 ||
-      (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
+      (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
     ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
