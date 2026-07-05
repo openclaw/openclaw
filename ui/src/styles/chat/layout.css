@@ -2867,6 +2867,12 @@ openclaw-chat-page {
     height: 44px;
   }
 
+  /* Preserve the phone touch target despite the narrower desktop split caret. */
+  .agent-chat__talk-group .agent-chat__talk-caret {
+    width: 44px;
+    min-width: 44px;
+  }
+
   .agent-chat__input {
     margin: 0 8px calc(14px + var(--safe-area-bottom));
   }
@@ -2914,6 +2920,12 @@ openclaw-chat-page {
     width: auto;
     max-height: min(480px, calc(100vh - var(--shell-topbar-height) - 116px));
     overflow: visible;
+  }
+
+  /* The model trigger owns the left mobile grid column; grow its menu rightward. */
+  .chat-controls__inline-select-menu--combined {
+    left: 0;
+    right: auto;
   }
 
   .chat-controls__reasoning-panel {
