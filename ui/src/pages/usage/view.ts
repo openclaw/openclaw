@@ -323,6 +323,10 @@ export function renderUsage(props: UsageProps) {
   const insightAggregates = insightsUseVisiblePage
     ? buildAggregatesFromSessions(aggregateSessions)
     : activeAggregates;
+  // Cost windows use range-wide daily totals; filtered pages need exact scoped data.
+  const costWindowComparison = hasAggregateFilters
+    ? nothing
+    : renderCostWindowComparison(data.costDaily, filters.startDate, filters.endDate);
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -810,7 +814,7 @@ export function renderUsage(props: UsageProps) {
             <div class="usage-grid">
               <div class="usage-grid-column">
                 <div class="card usage-left-card">
-                  ${renderCostWindowComparison(data.costDaily, filters.startDate, filters.endDate)}
+                  ${costWindowComparison}
                   ${renderDailyChartCompact(
                     filteredDaily,
                     filters.selectedDays,
