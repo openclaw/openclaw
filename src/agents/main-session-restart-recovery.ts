@@ -53,6 +53,9 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
+const DEFAULT_PENDING_FINAL_DELIVERY_MAX_RECOVERY_ATTEMPTS = 10;
+const PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_BASE_MS = 30_000;
+const PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_MAX_MS = 30 * 60_000;
 const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
@@ -82,6 +85,34 @@ function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
 
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeAttemptCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount: number): number {
+  if (attemptCount <= 0) {
+    return 0;
+  }
+  const exponent = Math.max(0, Math.min(attemptCount - 1, 20));
+  return Math.min(
+    PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_BASE_MS * 2 ** exponent,
+    PENDING_FINAL_DELIVERY_RECOVERY_BACKOFF_MAX_MS,
+  );
+}
+
+function isPendingFinalDeliveryRecoveryBackoffActive(params: {
+  entry: SessionEntry;
+  nowMs: number;
+}): boolean {
+  const attemptCount = normalizeAttemptCount(params.entry.pendingFinalDeliveryAttemptCount);
+  const lastAttemptAt = normalizeFiniteTimestamp(params.entry.pendingFinalDeliveryLastAttemptAt);
+  if (attemptCount <= 0 || lastAttemptAt === undefined) {
+    return false;
+  }
+  const backoffMs = resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount);
+  return params.nowMs - lastAttemptAt < backoffMs;
 }
 
 function hasCurrentProcessOwner(params: {
@@ -472,6 +503,46 @@ async function markSessionFailed(params: {
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
+async function deadLetterPendingFinalDelivery(params: {
+  attemptCount: number;
+  maxAttempts: number;
+  storePath: string;
+  sessionKey: string;
+}): Promise<boolean> {
+  const cleared = await applySessionEntryReplacements({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry || (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText)) {
+        return { result: false };
+      }
+      entry.abortedLastRun = false;
+      entry.updatedAt = Date.now();
+      entry.pendingFinalDelivery = undefined;
+      entry.pendingFinalDeliveryText = undefined;
+      entry.pendingFinalDeliveryCreatedAt = undefined;
+      entry.pendingFinalDeliveryLastAttemptAt = undefined;
+      entry.pendingFinalDeliveryAttemptCount = undefined;
+      entry.pendingFinalDeliveryLastError = undefined;
+      entry.pendingFinalDeliveryContext = undefined;
+      entry.pendingFinalDeliveryIntentId = undefined;
+      entry.restartRecoveryDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryRunId = undefined;
+      return {
+        result: true,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  if (cleared) {
+    log.warn(
+      `dead-lettered pending final delivery for ${params.sessionKey} after ${params.attemptCount}/${params.maxAttempts} restart recovery attempts`,
+    );
+  }
+  return cleared;
+}
+
 async function sendUnresumableSessionNotice(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -725,8 +796,11 @@ async function recoverStore(params: {
   resumedSessionKeys: Set<string>;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
+  maxPendingFinalDeliveryAttempts?: number;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
+  const maxPendingFinalDeliveryAttempts =
+    params.maxPendingFinalDeliveryAttempts ?? DEFAULT_PENDING_FINAL_DELIVERY_MAX_RECOVERY_ATTEMPTS;
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -784,6 +858,23 @@ async function recoverStore(params: {
     }
 
     if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      const pendingFinalDeliveryAttemptCount = normalizeAttemptCount(
+        entry.pendingFinalDeliveryAttemptCount,
+      );
+      if (pendingFinalDeliveryAttemptCount >= maxPendingFinalDeliveryAttempts) {
+        await deadLetterPendingFinalDelivery({
+          attemptCount: pendingFinalDeliveryAttemptCount,
+          maxAttempts: maxPendingFinalDeliveryAttempts,
+          storePath: params.storePath,
+          sessionKey,
+        });
+        result.skipped++;
+        continue;
+      }
+      if (isPendingFinalDeliveryRecoveryBackoffActive({ entry, nowMs: Date.now() })) {
+        result.skipped++;
+        continue;
+      }
       const resumed = await resumeMainSession({
         cfg: params.cfg,
         entry,
@@ -882,6 +973,7 @@ export async function recoverRestartAbortedMainSessions(
     resumedSessionKeys?: Set<string>;
     activeSessionIds?: Iterable<string>;
     activeSessionKeys?: Iterable<string>;
+    maxPendingFinalDeliveryAttempts?: number;
   } = {},
 ): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
@@ -894,6 +986,7 @@ export async function recoverRestartAbortedMainSessions(
       resumedSessionKeys,
       activeSessionIds: params.activeSessionIds,
       activeSessionKeys: params.activeSessionKeys,
+      maxPendingFinalDeliveryAttempts: params.maxPendingFinalDeliveryAttempts,
     });
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
@@ -916,6 +1009,7 @@ export async function recoverStartupOrphanedMainSessions(
     activeSessionKeys?: Iterable<string>;
     updatedBeforeMs?: number;
     resumedSessionKeys?: Set<string>;
+    maxPendingFinalDeliveryAttempts?: number;
   } = {},
 ): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
@@ -932,6 +1026,7 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys: params.resumedSessionKeys,
     activeSessionIds: params.activeSessionIds,
     activeSessionKeys: params.activeSessionKeys,
+    maxPendingFinalDeliveryAttempts: params.maxPendingFinalDeliveryAttempts,
   });
   return {
     marked: marked.marked,
@@ -947,6 +1042,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
     delayMs?: number;
     maxRetries?: number;
     stateDir?: string;
+    maxPendingFinalDeliveryAttempts?: number;
   } = {},
 ): void {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
@@ -966,6 +1062,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
           stateDir: params.stateDir,
           resumedSessionKeys,
           updatedBeforeMs: startupRecoveryCutoffMs,
+          maxPendingFinalDeliveryAttempts: params.maxPendingFinalDeliveryAttempts,
         }),
     )
       .then((result) => {

@@ -980,6 +980,92 @@ describe("main-session-restart-recovery", () => {
     );
   });
 
+  it("dead-letters pending final delivery after the restart recovery attempt cap", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "stale final",
+        pendingFinalDeliveryCreatedAt: Date.now() - 60_000,
+        pendingFinalDeliveryLastAttemptAt: Date.now() - 60_000,
+        pendingFinalDeliveryAttemptCount: 10,
+        pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:final",
+          accountId: "main",
+        },
+        pendingFinalDeliveryIntentId: "intent-stale-final",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:final",
+          accountId: "main",
+        },
+        restartRecoveryDeliveryRunId: "run-stale-final",
+      },
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:main:main"];
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryIntentId).toBeUndefined();
+    expect(entry?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("backs off recent pending final delivery restart recovery attempts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lastAttemptAt = Date.now();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: lastAttemptAt - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "retry me later",
+        pendingFinalDeliveryCreatedAt: lastAttemptAt - 60_000,
+        pendingFinalDeliveryLastAttemptAt: lastAttemptAt,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:final",
+          accountId: "main",
+        },
+      },
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:main:main"];
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.pendingFinalDelivery).toBe(true);
+    expect(entry?.pendingFinalDeliveryText).toBe("retry me later");
+    expect(entry?.pendingFinalDeliveryAttemptCount).toBe(2);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBe(lastAttemptAt);
+  });
+
   it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
     const sessionsDir = await makeSessionsDir();
     const pendingPayload = [
