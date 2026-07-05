@@ -96,12 +96,25 @@ type WhamUsageWindow = {
   reset_after_seconds?: number;
 };
 
+type WhamRateLimit = {
+  limit_reached?: boolean;
+  primary_window?: WhamUsageWindow;
+  secondary_window?: WhamUsageWindow;
+};
+
+// Codex models (e.g. Spark) report a distinct server-side bucket under
+// `additional_rate_limits[]`, keyed by `limit_name`/`metered_feature`, separate
+// from the default GPT `rate_limit` bucket. Without this a codex model would be
+// cooled off a sibling model's exhausted window.
+type WhamAdditionalRateLimit = {
+  limit_name?: string;
+  metered_feature?: string;
+  rate_limit?: WhamRateLimit;
+};
+
 type WhamUsageResponse = {
-  rate_limit?: {
-    limit_reached?: boolean;
-    primary_window?: WhamUsageWindow;
-    secondary_window?: WhamUsageWindow;
-  };
+  rate_limit?: WhamRateLimit;
+  additional_rate_limits?: WhamAdditionalRateLimit[];
 };
 
 type WhamCooldownProbeResult = {
@@ -259,9 +272,41 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
   }
 }
 
+// Pick the WHAM bucket matching the model being probed. Codex models expose
+// their own `additional_rate_limits[]` entry; everything else uses the default
+// `rate_limit`. Matching keeps a model from being blocked off a sibling's
+// exhausted window.
+function resolveWhamRateLimitForModel(
+  data: WhamUsageResponse,
+  modelId: string | undefined,
+): WhamRateLimit | undefined {
+  const base = data.rate_limit;
+  if (!modelId) {
+    return base;
+  }
+  const normalize = (value: string | undefined): string =>
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+  const target = normalize(modelId);
+  if (!target) {
+    return base;
+  }
+  for (const entry of data.additional_rate_limits ?? []) {
+    if (!entry?.rate_limit) {
+      continue;
+    }
+    if (normalize(entry.limit_name) === target || normalize(entry.metered_feature) === target) {
+      return entry.rate_limit;
+    }
+  }
+  return base;
+}
+
 async function probeWhamForCooldown(
   store: AuthProfileStore,
   profileId: string,
+  modelId?: string,
 ): Promise<WhamCooldownProbeResult | null> {
   const profile = store.profiles[profileId];
   if (profile?.type !== "oauth" || !profile.access) {
@@ -309,19 +354,20 @@ async function probeWhamForCooldown(
     }
 
     const data = await readProviderJsonResponse<WhamUsageResponse>(res, "WHAM usage probe");
-    if (!data.rate_limit) {
+    const rateLimit = resolveWhamRateLimitForModel(data, modelId);
+    if (!rateLimit) {
       return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
     }
 
-    if (data.rate_limit.limit_reached === false) {
+    if (rateLimit.limit_reached === false) {
       return { cooldownMs: WHAM_BURST_COOLDOWN_MS, reason: "wham_burst_contention" };
     }
 
     const now = Date.now();
-    const primaryResetMs = resolveWhamResetMs(data.rate_limit.primary_window, now);
-    const secondaryResetMs = resolveWhamResetMs(data.rate_limit.secondary_window, now);
+    const primaryResetMs = resolveWhamResetMs(rateLimit.primary_window, now);
+    const secondaryResetMs = resolveWhamResetMs(rateLimit.secondary_window, now);
 
-    if (!data.rate_limit.secondary_window) {
+    if (!rateLimit.secondary_window) {
       if (primaryResetMs === null) {
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
       }
@@ -333,7 +379,7 @@ async function probeWhamForCooldown(
       };
     }
 
-    if (isWhamWindowExhausted(data.rate_limit.secondary_window)) {
+    if (isWhamWindowExhausted(rateLimit.secondary_window)) {
       if (secondaryResetMs === null) {
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
       }
@@ -345,7 +391,7 @@ async function probeWhamForCooldown(
       };
     }
 
-    if (isWhamWindowExhausted(data.rate_limit.primary_window)) {
+    if (isWhamWindowExhausted(rateLimit.primary_window)) {
       if (primaryResetMs === null) {
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
       }
@@ -784,7 +830,7 @@ export async function markAuthProfileFailure(params: {
     return;
   }
 
-  const whamResult = shouldProbeWham ? await probeWhamForCooldown(store, profileId) : null;
+  const whamResult = shouldProbeWham ? await probeWhamForCooldown(store, profileId, modelId) : null;
 
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;

@@ -1363,6 +1363,41 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
   });
 
+  it("reads the codex model's own additional_rate_limits bucket instead of the exhausted default GPT bucket", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    // Default GPT bucket is fully exhausted, but the Codex Spark lane has its
+    // own healthy server-side bucket under additional_rate_limits[].
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+        secondary_window: { used_percent: 100, reset_after_seconds: 28_800 },
+      },
+      additional_rate_limits: [
+        {
+          limit_name: "GPT-5.3-Codex-Spark",
+          rate_limit: {
+            limit_reached: false,
+            primary_window: { used_percent: 5, reset_after_seconds: 9_000 },
+            secondary_window: { used_percent: 16, reset_after_seconds: 201_600 },
+          },
+        },
+      ],
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.3-codex-spark" });
+
+    const stats = store.usageStats?.["openai:default"];
+    // Spark's own bucket is healthy, so no subscription_limit block is written;
+    // it degrades to a short burst cooldown rather than being blocked off the
+    // sibling GPT window.
+    expect(stats?.blockedReason).not.toBe("subscription_limit");
+    expect(stats?.blockedUntil).toBeUndefined();
+    expect(stats?.cooldownUntil).toBe(now + 15_000);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
+  });
+
   it("widens to profile-wide when a new model-scoped block lands on top of an already-active unscoped block", async () => {
     const now = 1_700_000_000_000;
     const existingBlockedUntil = now + 3 * 60 * 60 * 1000;
