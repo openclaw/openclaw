@@ -227,41 +227,6 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("serializes socket sendMessage calls", async () => {
-    const started: string[] = [];
-    const resolves: Array<(value: WAMessage) => void> = [];
-    const deferSend = async (jid: string, content: AnyMessageContent): Promise<WAMessage> =>
-      await new Promise((resolve) => {
-        const text = requireRecord(content, "send content").text;
-        started.push(`${jid}:${String(text)}`);
-        resolves.push(resolve);
-      });
-    sendMessage
-      .mockImplementationOnce(
-        async (jid, content): Promise<WAMessage | undefined> => await deferSend(jid, content),
-      )
-      .mockImplementationOnce(
-        async (jid, content): Promise<WAMessage | undefined> => await deferSend(jid, content),
-      );
-
-    const first = api.sendMessage("+1555", "first");
-    await vi.waitFor(() => expect(started).toEqual(["1555@s.whatsapp.net:first"]));
-
-    const second = api.sendMessage("+1666", "second");
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(started).toEqual(["1555@s.whatsapp.net:first"]);
-
-    resolves[0]?.({ key: { id: "msg-1" } } as WAMessage);
-    await expect(first).resolves.toMatchObject({ messageId: "msg-1" });
-    await vi.waitFor(() =>
-      expect(started).toEqual(["1555@s.whatsapp.net:first", "1666@s.whatsapp.net:second"]),
-    );
-
-    resolves[1]?.({ key: { id: "msg-2" } } as WAMessage);
-    await expect(second).resolves.toMatchObject({ messageId: "msg-2" });
-  });
-
   it("sends structured contact messages through the canonical send path", async () => {
     const res = await api.sendContact("+1555", {
       displayName: "QA Contact",

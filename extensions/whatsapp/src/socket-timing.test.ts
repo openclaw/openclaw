@@ -119,6 +119,10 @@ describe("withWhatsAppSocketOperationTimeout", () => {
 });
 
 describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("serializes sendMessage calls across adapter instances for the same socket", async () => {
     const started: string[] = [];
     const resolves: Array<(value: WAMessage) => void> = [];
@@ -157,5 +161,41 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
 
     resolves[1]?.({ key: { id: "msg-2" } } as WAMessage);
     await expect(second).resolves.toMatchObject({ key: { id: "msg-2" } });
+  });
+
+  it("releases the send queue after a socket operation timeout", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi
+      .fn<(jid: string, content: AnyMessageContent) => Promise<WAMessage | undefined>>()
+      .mockImplementationOnce(async () => await new Promise(() => {}))
+      .mockResolvedValueOnce({ key: { id: "msg-2" } } as WAMessage);
+    const sock = {
+      sendMessage,
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+
+    const first = createWhatsAppSocketOperationTimeoutAdapter(sock, 1_000).sendMessage(
+      "111@s.whatsapp.net",
+      { text: "first" },
+    );
+    const firstRejection = expect(first).rejects.toMatchObject({
+      name: "WhatsAppSocketOperationTimeoutError",
+      operation: "sendMessage",
+    });
+    await Promise.resolve();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    const second = createWhatsAppSocketOperationTimeoutAdapter(sock, 1_000).sendMessage(
+      "222@s.whatsapp.net",
+      { text: "second" },
+    );
+    await Promise.resolve();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await firstRejection;
+    await expect(second).resolves.toMatchObject({ key: { id: "msg-2" } });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

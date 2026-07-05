@@ -87,20 +87,20 @@ async function runSerializedSocketSendMessage<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const previous = socketSendMessageQueueTails.get(sock) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  socketSendMessageQueueTails.set(sock, current);
-  await previous;
-  try {
-    return await run();
-  } finally {
-    release();
-    if (socketSendMessageQueueTails.get(sock) === current) {
+  // Adapter instances are short-lived, so key the FIFO by the raw socket. A
+  // bounded send releases the queue after timeout to avoid wedging later work.
+  const result = previous.then(run);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  socketSendMessageQueueTails.set(sock, tail);
+  void tail.then(() => {
+    if (socketSendMessageQueueTails.get(sock) === tail) {
       socketSendMessageQueueTails.delete(sock);
     }
-  }
+  });
+  return await result;
 }
 
 export async function withWhatsAppSocketOperationTimeout<T>(
