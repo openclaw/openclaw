@@ -67,6 +67,11 @@ import {
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import {
+  clearEmbeddedPluginApprovalBroker,
+  EmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -75,6 +80,7 @@ import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
+  TuiApprovalDecision,
   TuiBackend,
   TuiChatSendResult,
   TuiEvent,
@@ -306,6 +312,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
+  private unsubscribePluginApprovals?: () => void;
   // Resolves once the one-time session-key migration has run; store methods await it.
   private ready: Promise<void> = Promise.resolve();
 
@@ -323,6 +331,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     defaultRuntime.error = silentRuntime.error;
     // Keep this synchronous so the shared event bus can isolate listener failures.
     this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
+    setEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
+    this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
+      this.emit(event.event, event.payload);
+    });
     // Local mode never runs gateway startup; canonicalize orphaned keys once here.
     this.ready = (async () => {
       const { runSessionStartupMigration } =
@@ -339,6 +351,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async stop() {
+    clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
+    this.unsubscribePluginApprovals?.();
+    this.unsubscribePluginApprovals = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const [runId, run] of this.runs) {
       if (run.finishing || run.lifecycleEnded) {
@@ -350,6 +365,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       run.controller.abort();
     }
+    this.pluginApprovalBroker.stop();
     const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
     if (!maintenanceCompleted) {
       for (const run of this.runs.values()) {
@@ -716,6 +732,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async getGatewayStatus() {
     return `local embedded mode${this.runs.size > 0 ? ` (${String(this.runs.size)} active run${this.runs.size === 1 ? "" : "s"})` : ""}`;
+  }
+
+  async listPluginApprovals(): Promise<unknown> {
+    return this.pluginApprovalBroker.listPending();
+  }
+
+  async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
+    return { ok: this.pluginApprovalBroker.resolve(id, decision) };
   }
 
   async listModels(): Promise<TuiModelChoice[]> {

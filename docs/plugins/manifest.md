@@ -940,6 +940,12 @@ Provider fields:
 
 Use `providerEndpoints` for endpoint classification that generic request policy must know before provider runtime loads. Core still owns the meaning of each `endpointClass`; plugin manifests own the host and base URL metadata.
 
+Officially externalized provider plugins are excluded from the core dist, so
+their manifests are invisible until installed. Their `providerEndpoints` must
+also be mirrored in `scripts/lib/official-external-provider-catalog.json` so
+endpoint classification keeps working without the plugin; a contract test
+enforces the mirror.
+
 Endpoint fields:
 
 | Field                          | Type       | What it means                                                                                  |

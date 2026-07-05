@@ -1,6 +1,6 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
@@ -52,8 +52,8 @@ type CommandHandlerContext = {
   opts: TuiOptions;
   state: TuiStateAccess;
   deliverDefault: boolean;
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
@@ -157,8 +157,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
-  const closeOverlayAndRender = () => {
-    closeOverlay();
+  const closeOverlayAndRender = (handle: OverlayHandle) => {
+    closeOverlay(handle);
     tui.requestRender();
   };
 
@@ -180,11 +180,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     selector.onSelect = (item) => {
       void (async () => {
         await onSelect(item.value);
-        closeOverlayAndRender();
+        closeOverlayAndRender(overlayHandle);
       })();
     };
-    selector.onCancel = closeOverlayAndRender;
-    openOverlay(selector as Component);
+    selector.onCancel = () => closeOverlayAndRender(overlayHandle);
+    const overlayHandle: OverlayHandle = openOverlay(selector as Component);
     tui.requestRender();
   };
 
@@ -346,11 +346,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
       },
       () => {
-        closeOverlay();
+        closeOverlay(overlayHandle);
         tui.requestRender();
       },
     );
-    openOverlay(settings);
+    const overlayHandle: OverlayHandle = openOverlay(settings);
     tui.requestRender();
   };
 
