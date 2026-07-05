@@ -2915,6 +2915,68 @@
   gap: 6px;
 }
 
+.session-groupby {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.session-groupby__label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-groupby__select {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.session-group-row td {
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.session-group-row__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.session-group-row__icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-group-row__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-group-row__count {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.sessions-table tr[draggable="true"] {
+  cursor: grab;
+}
+
+.session-drop-target--active td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .session-status-badge {
   display: inline-flex;
   align-items: center;

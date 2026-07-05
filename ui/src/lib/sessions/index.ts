@@ -68,6 +68,7 @@ export type SessionRefreshOptions = SessionListOptions & {
 
 export type SessionPatch = {
   label?: string | null;
+  category?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
