@@ -27,6 +27,7 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
+  describeCodexNotificationCorrelation,
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
@@ -200,6 +201,9 @@ export class CodexAppServerEventProjector {
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
+  private readonly warnedUnknownNotificationMethods = new Set<string>();
+  private readonly warnedIgnoredNotificationCorrelations = new Set<string>();
+  private readonly warnedUnknownItemStatuses = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -307,9 +311,11 @@ export class CodexAppServerEventProjector {
     }
     if (isHookNotificationMethod(notification.method)) {
       if (!this.isHookNotificationForCurrentThread(params)) {
+        this.warnIgnoredNotification(notification, "thread-mismatch");
         return;
       }
     } else if (!this.isNotificationForTurn(params)) {
+      this.warnIgnoredNotification(notification, "turn-mismatch");
       return;
     }
 
@@ -364,6 +370,7 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = "prompt";
         break;
       default:
+        this.warnUnknownNotificationMethod(notification);
         break;
     }
   }
@@ -968,7 +975,7 @@ export class CodexAppServerEventProjector {
       !shouldSynthesizeToolProgressForItem(item) ||
       !this.isCurrentTurnSnapshotItem(item) ||
       this.completedItemIds.has(item.id) ||
-      itemStatus(item) === "running"
+      this.resolveItemStatus(item) === "running"
     ) {
       return;
     }
@@ -1329,7 +1336,7 @@ export class CodexAppServerEventProjector {
         phase: params.phase,
         kind,
         title: itemTitle(item),
-        status: params.phase === "start" ? "running" : itemStatus(item),
+        status: params.phase === "start" ? "running" : this.resolveItemStatus(item),
         ...(itemName(item) ? { name: itemName(item) } : {}),
         ...(meta ? { meta } : {}),
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
@@ -1349,7 +1356,7 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
-    const status = params.phase === "result" ? itemStatus(item) : "running";
+    const status = params.phase === "result" ? this.resolveItemStatus(item) : "running";
     const args = itemToolArgs(item);
     const meta = itemMeta(item, this.toolProgressDetailMode());
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
@@ -1536,7 +1543,7 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
-    const status = itemStatus(item);
+    const status = this.resolveItemStatus(item);
     if (status === "running") {
       return;
     }
@@ -1620,7 +1627,7 @@ export class CodexAppServerEventProjector {
       itemId,
       text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
       finalOutput: true,
-      isError: isNonSuccessItemStatus(itemStatus(item)),
+      isError: isNonSuccessItemStatus(this.resolveItemStatus(item)),
     });
   }
 
@@ -1717,7 +1724,7 @@ export class CodexAppServerEventProjector {
       id: item.id,
       name,
       text: itemTranscriptResultText(item, this.toolResultOutputTextByItem),
-      isError: isNonSuccessItemStatus(itemStatus(item)),
+      isError: isNonSuccessItemStatus(this.resolveItemStatus(item)),
     });
   }
 
@@ -2124,6 +2131,64 @@ export class CodexAppServerEventProjector {
     const turnId = params.turnId;
     return threadId === this.threadId && (turnId === this.turnId || turnId === null);
   }
+
+  private warnUnknownNotificationMethod(notification: CodexServerNotification): void {
+    if (this.warnedUnknownNotificationMethods.has(notification.method)) {
+      return;
+    }
+    this.warnedUnknownNotificationMethods.add(notification.method);
+    embeddedAgentLog.warn("codex app-server ignored unknown notification method", {
+      ...describeCodexNotificationCorrelation(notification, {
+        threadId: this.threadId,
+        turnId: this.turnId,
+      }),
+    });
+  }
+
+  private warnIgnoredNotification(
+    notification: CodexServerNotification,
+    reason: "thread-mismatch" | "turn-mismatch",
+  ): void {
+    const correlation = describeCodexNotificationCorrelation(notification, {
+      threadId: this.threadId,
+      turnId: this.turnId,
+    });
+    const dedupeKey = [
+      reason,
+      notification.method,
+      correlation.threadId ?? "",
+      correlation.turnId ?? "",
+      correlation.nestedTurnThreadId ?? "",
+      correlation.nestedTurnId ?? "",
+    ].join("|");
+    if (this.warnedIgnoredNotificationCorrelations.has(dedupeKey)) {
+      return;
+    }
+    this.warnedIgnoredNotificationCorrelations.add(dedupeKey);
+    embeddedAgentLog.warn("codex app-server ignored mismatched notification", {
+      reason,
+      ...correlation,
+    });
+  }
+
+  private resolveItemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
+    return itemStatus(item, (status) => this.warnUnknownItemStatus(status, item));
+  }
+
+  private warnUnknownItemStatus(status: string, item: CodexThreadItem): void {
+    const key = `${item.type}:${status}`;
+    if (this.warnedUnknownItemStatuses.has(key)) {
+      return;
+    }
+    this.warnedUnknownItemStatuses.add(key);
+    embeddedAgentLog.warn("codex app-server projected unknown item status as failed", {
+      itemId: item.id,
+      itemType: item.type,
+      rawStatus: status,
+      threadId: this.threadId,
+      turnId: this.turnId,
+    });
+  }
 }
 
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
@@ -2408,8 +2473,14 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
-function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
+function itemStatus(
+  item: CodexThreadItem,
+  onUnknownStatus?: (status: string) => void,
+): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
+  if (status === undefined || status === "completed") {
+    return "completed";
+  }
   if (status === "failed") {
     return "failed";
   }
@@ -2419,7 +2490,8 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   if (status === "inProgress" || status === "running") {
     return "running";
   }
-  return "completed";
+  onUnknownStatus?.(status);
+  return "failed";
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {

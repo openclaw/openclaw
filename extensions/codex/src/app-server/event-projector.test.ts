@@ -1566,6 +1566,112 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("warns once for mismatched notifications it ignores", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+
+    const notification = {
+      method: "item/agentMessage/delta",
+      params: { threadId: THREAD_ID, turnId: "turn-2", itemId: "msg-1", delta: "wrong" },
+    } satisfies ProjectorNotification;
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server ignored mismatched notification",
+      expect.objectContaining({
+        reason: "turn-mismatch",
+        method: "item/agentMessage/delta",
+        activeThreadId: THREAD_ID,
+        activeTurnId: TURN_ID,
+        threadId: THREAD_ID,
+        turnId: "turn-2",
+        matchesActiveThread: true,
+        matchesActiveTurn: false,
+      }),
+    );
+  });
+
+  it("warns once for unknown notification methods instead of dropping them silently", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+
+    const notification = forCurrentTurn("turn/progress" as ProjectorNotification["method"], {
+      phase: "streaming",
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server ignored unknown notification method",
+      expect.objectContaining({
+        method: "turn/progress",
+        activeThreadId: THREAD_ID,
+        activeTurnId: TURN_ID,
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        matchesActiveThread: true,
+        matchesActiveTurn: true,
+      }),
+    );
+  });
+
+  it("fails closed for unknown item statuses and logs a warning", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "tool-unknown-status",
+          command: "echo hi",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "cancelled",
+          commandActions: [],
+          aggregatedOutput: "Cancelled before completion",
+          exitCode: null,
+          durationMs: 12,
+        },
+      }),
+    );
+
+    const toolEvents = onAgentEvent.mock.calls
+      .map(([event]) => requireRecord(event, "agent event"))
+      .filter((event) => event.stream === "tool");
+    expect(toolEvents).toHaveLength(1);
+    expect(toolEvents[0]).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "result",
+          itemId: "tool-unknown-status",
+          status: "failed",
+        }),
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server projected unknown item status as failed",
+      expect.objectContaining({
+        itemId: "tool-unknown-status",
+        itemType: "commandExecution",
+        rawStatus: "cancelled",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+      }),
+    );
+  });
+
   it("preserves sessions_yield detection in attempt results", () => {
     const projector = new CodexAppServerEventProjector(
       {
