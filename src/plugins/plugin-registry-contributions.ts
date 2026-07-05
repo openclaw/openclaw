@@ -2,11 +2,11 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig, resolveEnableState } from "./config-state.js";
 import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
+import { normalizePluginsConfig, resolveEnableState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
@@ -260,12 +260,13 @@ function listContributionManifestPlugins(
     index: PluginRegistrySnapshot;
   },
 ): readonly PluginManifestRecord[] {
-  const plugins = params.lookUpTable?.plugins;
+  const lookUpTable = params.lookUpTable;
+  const plugins = lookUpTable?.plugins;
   if (plugins) {
     const enabledPluginIds = new Set(
       resolveContributionScopePluginIds({
         index: params.index,
-        manifestRegistry: params.lookUpTable.manifestRegistry,
+        manifestRegistry: lookUpTable.manifestRegistry,
         includeDisabled: params.includeDisabled,
         config: params.config,
       }),
