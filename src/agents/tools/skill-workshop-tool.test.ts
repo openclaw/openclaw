@@ -272,6 +272,45 @@ describe("skill_workshop tool", () => {
     );
   });
 
+  it("rejects whitespace-only proposal content while preserving raw valid markdown", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    await expect(
+      tool.execute("call-blank", {
+        action: "create",
+        name: "Blank Proposal",
+        description: "Rejected blank content",
+        proposal_content: " \n\t\n ",
+      }),
+    ).rejects.toThrow("proposal_content required");
+
+    const result = await tool.execute("call-valid", {
+      action: "create",
+      name: "Raw Markdown",
+      description: "Valid content keeps trailing newline",
+      proposal_content: "# Raw Markdown\n\nKeep this terminal newline.\n",
+    });
+
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "PROPOSAL.md",
+          ),
+        )
+        .then((buffer) => buffer.at(-1)),
+    ).resolves.toBe(0x0a);
+  });
+
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
