@@ -1,6 +1,11 @@
 import OpenClawKit
 import SwiftUI
 
+struct GatewaySetupRequest {
+    let id: Int
+    let link: GatewayConnectDeepLink
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
@@ -69,7 +74,8 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
-    let gatewaySetupRequestID: Int
+    let gatewaySetupRequest: GatewaySetupRequest?
+    let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
@@ -78,7 +84,8 @@ struct SettingsProTab: View {
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
-        gatewaySetupRequestID: Int = 0)
+        gatewaySetupRequest: GatewaySetupRequest? = nil,
+        onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
@@ -86,7 +93,8 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
-        self.gatewaySetupRequestID = gatewaySetupRequestID
+        self.gatewaySetupRequest = gatewaySetupRequest
+        self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
 
     var body: some View {
@@ -135,15 +143,16 @@ struct SettingsProTab: View {
 
     private func settingsLifecycle(_ content: some View) -> some View {
         content
-            .task(id: self.gatewaySetupRequestID) {
+            .task {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                if self.gatewaySetupRequestID != 0 {
-                    self.applyPendingGatewaySetupLinkIfNeeded()
-                }
+                self.applyGatewaySetupRequestIfNeeded()
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
+            }
+            .onChange(of: self.gatewaySetupRequest?.id) { _, _ in
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -262,6 +271,12 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
+    }
+
+    private func applyGatewaySetupRequestIfNeeded() {
+        guard let gatewaySetupRequest else { return }
+        self.applyGatewaySetupLink(gatewaySetupRequest.link)
+        self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
     func openNotificationsRouteFromApprovals() {
