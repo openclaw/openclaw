@@ -838,6 +838,10 @@ class GatewayConfigResolverTest {
     )
     assertEquals(
       "443",
+      resolveManualPortPlaceholder("device.sample.ts.net/", tls = true),
+    )
+    assertEquals(
+      "443",
       resolveManualPortPlaceholder("wss://gateway.example", tls = true),
     )
   }

@@ -336,7 +336,7 @@ internal fun resolveDefaultManualGatewayPort(
   hostInput: String,
   tls: Boolean,
 ): Int {
-  val host = hostInput.trim().removeSuffix(".").lowercase(Locale.US)
+  val host = hostInput.trim().trimEnd('/').removeSuffix(".").lowercase(Locale.US)
   return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
 }
 
