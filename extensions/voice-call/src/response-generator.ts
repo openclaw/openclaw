@@ -241,117 +241,126 @@ export async function generateVoiceResponse(
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
-  const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
-  const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
+  try {
+    return await agentRuntime.session.runWithWorkAdmission(
+      { storePath, sessionKey: resolvedSessionKey },
+      async (abortSignal) => {
+        const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
+        const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
-  // Ensure workspace exists
-  await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
+        // Ensure workspace exists
+        await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
-  // Load or create session entry
-  const now = Date.now();
-  const existingSessionEntry = agentRuntime.session.getSessionEntry({
-    storePath,
-    sessionKey: resolvedSessionKey,
-  });
+        // Load or create session entry
+        const now = Date.now();
+        const existingSessionEntry = agentRuntime.session.getSessionEntry({
+          storePath,
+          sessionKey: resolvedSessionKey,
+        });
 
-  // Resolve model from config
-  const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        // Resolve model from config
+        const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
-  let sessionEntry = existingSessionEntry;
-  if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
-    sessionEntry =
-      (await agentRuntime.session.patchSessionEntry({
-        storePath,
-        sessionKey: resolvedSessionKey,
-        replaceEntry: true,
-        fallbackEntry: sessionEntry ?? {
-          sessionId: crypto.randomUUID(),
-          updatedAt: now,
-        },
-        update: (entry) => {
-          const next = entry.sessionId
-            ? { ...entry }
-            : {
-                ...entry,
+        let sessionEntry = existingSessionEntry;
+        if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
+          sessionEntry =
+            (await agentRuntime.session.patchSessionEntry({
+              storePath,
+              sessionKey: resolvedSessionKey,
+              replaceEntry: true,
+              fallbackEntry: sessionEntry ?? {
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
-              };
-          if (voiceConfig.responseModel) {
-            applyModelOverrideToSessionEntry({
-              entry: next,
-              selection: { provider, model },
-              selectionSource: "auto",
-            });
-          }
-          return next;
-        },
-      })) ?? undefined;
-  }
-  if (!sessionEntry?.sessionId) {
-    return { text: null, error: "Voice response session could not be initialized" };
-  }
-  const sessionId = sessionEntry.sessionId;
+              },
+              update: (entry) => {
+                const next = entry.sessionId
+                  ? { ...entry }
+                  : {
+                      ...entry,
+                      sessionId: crypto.randomUUID(),
+                      updatedAt: now,
+                    };
+                if (voiceConfig.responseModel) {
+                  applyModelOverrideToSessionEntry({
+                    entry: next,
+                    selection: { provider, model },
+                    selectionSource: "auto",
+                  });
+                }
+                return next;
+              },
+            })) ?? undefined;
+        }
+        if (!sessionEntry?.sessionId) {
+          return { text: null, error: "Voice response session could not be initialized" };
+        }
+        const sessionId = sessionEntry.sessionId;
 
-  // Resolve thinking level
-  const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
+        // Resolve thinking level
+        const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
-  // Resolve agent identity for personalized prompt
-  const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
-  const agentName = identity?.name?.trim() || "assistant";
+        // Resolve agent identity for personalized prompt
+        const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
+        const agentName = identity?.name?.trim() || "assistant";
 
-  // Build system prompt with conversation history
-  const basePrompt =
-    voiceConfig.responseSystemPrompt ??
-    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
+        // Build system prompt with conversation history
+        const basePrompt =
+          voiceConfig.responseSystemPrompt ??
+          `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
 
-  let extraSystemPrompt = basePrompt;
-  if (transcript.length > 0) {
-    const history = transcript
-      .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
-      .join("\n");
-    extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
-  }
-  extraSystemPrompt = `${extraSystemPrompt}\n\n${VOICE_SPOKEN_OUTPUT_CONTRACT}`;
+        let extraSystemPrompt = basePrompt;
+        if (transcript.length > 0) {
+          const history = transcript
+            .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
+            .join("\n");
+          extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
+        }
+        extraSystemPrompt = `${extraSystemPrompt}\n\n${VOICE_SPOKEN_OUTPUT_CONTRACT}`;
 
-  // Resolve timeout
-  const timeoutMs = voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
-  const runId = `voice:${callId}:${Date.now()}`;
+        // Resolve timeout
+        const timeoutMs =
+          voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
+        const runId = `voice:${callId}:${Date.now()}`;
 
-  try {
-    const result = await agentRuntime.runEmbeddedAgent({
-      sessionId,
-      sessionKey: resolvedSessionKey,
-      sessionTarget: {
-        agentId,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        storePath,
+        const result = await agentRuntime.runEmbeddedAgent({
+          sessionId,
+          sessionKey: resolvedSessionKey,
+          sessionTarget: {
+            agentId,
+            sessionId,
+            sessionKey: resolvedSessionKey,
+            storePath,
+          },
+          sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
+          agentId,
+          messageProvider: "voice",
+          workspaceDir,
+          config: cfg,
+          prompt: userMessage,
+          provider,
+          model,
+          thinkLevel,
+          verboseLevel: "off",
+          timeoutMs,
+          runId,
+          lane: "voice",
+          extraSystemPrompt,
+          agentDir,
+          toolsAllow,
+          abortSignal,
+        });
+
+        const text = extractSpokenTextFromPayloads(
+          (result.payloads ?? []) as VoiceResponsePayload[],
+        );
+
+        if (!text && result.meta?.aborted) {
+          return { text: null, error: "Response generation was aborted" };
+        }
+
+        return { text };
       },
-      sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
-      agentId,
-      messageProvider: "voice",
-      workspaceDir,
-      config: cfg,
-      prompt: userMessage,
-      provider,
-      model,
-      thinkLevel,
-      verboseLevel: "off",
-      timeoutMs,
-      runId,
-      lane: "voice",
-      extraSystemPrompt,
-      agentDir,
-      toolsAllow,
-    });
-
-    const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
-
-    if (!text && result.meta?.aborted) {
-      return { text: null, error: "Response generation was aborted" };
-    }
-
-    return { text };
+    );
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, error: String(err) };

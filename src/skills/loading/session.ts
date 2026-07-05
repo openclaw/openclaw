@@ -1,6 +1,4 @@
-// Session skill helpers resolve skills attached to a session and its transcript state.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
@@ -9,6 +7,8 @@ import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/session
 import { parseFrontmatter } from "../../agents/utils/frontmatter.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+// Session skill helpers resolve skills attached to a session and its transcript state.
+import { expandTildePath } from "../../shared/tilde-path.js";
 import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
@@ -306,22 +306,8 @@ export interface LoadSkillsOptions {
   includeDefaults: boolean;
 }
 
-function normalizePath(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed === "~") {
-    return homedir();
-  }
-  if (trimmed.startsWith("~/")) {
-    return join(homedir(), trimmed.slice(2));
-  }
-  if (trimmed.startsWith("~")) {
-    return join(homedir(), trimmed.slice(1));
-  }
-  return trimmed;
-}
-
 function resolveSkillPath(p: string, cwd: string): string {
-  const normalized = normalizePath(p);
+  const normalized = expandTildePath(p);
   return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 

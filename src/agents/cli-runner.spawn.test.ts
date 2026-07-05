@@ -210,7 +210,7 @@ function buildPreparedCliRunContext(params: {
       env: params.preparedEnv ?? {},
       ...(params.mcpConfigHash ? { mcpConfigHash: params.mcpConfigHash } : {}),
     },
-    reusableCliSession: {},
+    reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
     modelId: params.model,
@@ -328,7 +328,7 @@ describe("runCliAgent spawn path", () => {
       useResume: true,
       cliSessionId: "claude-session-secret",
       resolvedSessionId: "claude-session-secret",
-      reusableSessionId: "claude-session-secret",
+      reusableSession: { mode: "reuse", sessionId: "claude-session-secret" },
       hasHistoryPrompt: false,
     });
 
@@ -337,6 +337,27 @@ describe("runCliAgent spawn path", () => {
     expect(logLine).toContain("session=present");
     expect(logLine).toContain("reuse=reusable");
     expect(logLine).toContain("historyPrompt=none");
+    expect(logLine).not.toContain("claude-session-secret");
+  });
+
+  it("formats soft-resume drift in CLI resume diagnostics", () => {
+    const logLine = buildCliExecLogLine({
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      promptChars: 42,
+      trigger: "user",
+      useResume: true,
+      cliSessionId: "claude-session-secret",
+      resolvedSessionId: "claude-session-secret",
+      reusableSession: {
+        mode: "reuse-with-drift",
+        sessionId: "claude-session-secret",
+        drift: { reasons: ["system-prompt"] },
+      },
+      hasHistoryPrompt: false,
+    });
+
+    expect(logLine).toContain("reuse=reusable-drift:system-prompt");
     expect(logLine).not.toContain("claude-session-secret");
   });
 
@@ -389,7 +410,7 @@ describe("runCliAgent spawn path", () => {
         backend: backendConfig,
         env: {},
       },
-      reusableCliSession: {},
+      reusableCliSession: { mode: "none" },
       hadSessionFile: false,
       contextEngineConfig: {},
       modelId: "sonnet",
@@ -490,6 +511,49 @@ describe("runCliAgent spawn path", () => {
     );
 
     await expectPathMissing(systemPromptPath);
+  });
+
+  it("resends system prompts through a file for soft-resumed prompt-tool drift", async () => {
+    const writeSoftResumeSystemPromptFile = vi.fn(async () => ({
+      filePath: "/tmp/openclaw-soft-resume-system-prompt.md",
+      cleanup: async () => {},
+    }));
+    setCliRunnerExecuteTestDeps({
+      writeCliSystemPromptFile: writeSoftResumeSystemPromptFile,
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      expect(input.argv).toContain("resume");
+      expect(input.argv).toContain("soft-cli-session");
+      expect(input.argv?.join(" ")).toContain("/tmp/openclaw-soft-resume-system-prompt.md");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      runId: "run-soft-resume-system-prompt-file",
+    });
+    context.reusableCliSession = {
+      mode: "reuse-with-drift",
+      sessionId: "soft-cli-session",
+      drift: { reasons: ["prompt-tools"] },
+    };
+
+    await executePreparedCliRun(context, "soft-cli-session");
+
+    expect(writeSoftResumeSystemPromptFile).toHaveBeenCalledWith({
+      backend: context.preparedBackend.backend,
+      systemPrompt: "You are a helpful assistant.",
+    });
   });
 
   it("passes --session-id for new Claude sessions", async () => {
@@ -742,7 +806,7 @@ describe("runCliAgent spawn path", () => {
       model: "gpt-5.4",
       runId: "run-1",
     });
-    context.reusableCliSession = { sessionId: "thread-123" };
+    context.reusableCliSession = { mode: "reuse", sessionId: "thread-123" };
 
     try {
       const result = await executePreparedCliRun(context, "thread-123");
@@ -3936,7 +4000,7 @@ ${JSON.stringify({
       model: "gpt-5.4",
       runId: "run-warning",
     });
-    context.reusableCliSession = { sessionId: "thread-123" };
+    context.reusableCliSession = { mode: "reuse", sessionId: "thread-123" };
     context.bootstrapPromptWarningLines = [
       "[Bootstrap truncation warning]",
       "- AGENTS.md: 200 raw -> 20 injected",

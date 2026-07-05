@@ -3,12 +3,20 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+const pluginSdkSurfaceBudgetEnvPattern = /^OPENCLAW_PLUGIN_SDK_MAX_/u;
+
+function baseSurfaceReportEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !pluginSdkSurfaceBudgetEnvPattern.test(key)),
+  );
+}
+
 function runSurfaceReport(env: Record<string, string>) {
   return spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--check"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...baseSurfaceReportEnv(),
       ...env,
     },
   });
@@ -134,6 +142,23 @@ describe("plugin SDK surface report", () => {
 
   it("keeps default public surface budgets pinned to current source counts", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
+  });
+
+  it("ignores ambient CI budget overrides when checking default source counts", () => {
+    const original = process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
+    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = "1";
+    try {
+      const result = runSurfaceReport({});
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS;
+      } else {
+        process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS = original;
+      }
+    }
   });
 
   it("keeps generated package declarations out of source surface counts", () => {

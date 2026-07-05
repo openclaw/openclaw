@@ -22,16 +22,6 @@
     <string name="password">Wachtwoord</string>
     <string name="run_onboarding_again">Onboarding opnieuw uitvoeren</string>
     <string name="resolved_endpoint">Opgelost endpoint</string>
-    <string name="gateway_setup">Gateway instellen</string>
-    <string name="connect_to_gateway">Verbinden met je Gateway</string>
-    <string name="scan_setup_code">Setupcode scannen</string>
-    <string name="use_gateway_qr">Gebruik je Gateway-QR-code of setupcode</string>
-    <string name="nearby_gateway">Gateway in de buurt</string>
-    <string name="enter_gateway_url">Gateway-URL invoeren</string>
-    <string name="connect_manual_url">Verbinden met een handmatige URL</string>
-    <string name="permissions">Machtigingen</string>
-    <string name="done">Gereed</string>
     <string name="gateway_trust_first_seen">Controleer de certificaatvingerafdruk voordat je deze gateway vertrouwt.\n\n%1$s</string>
     <string name="gateway_trust_changed">Het gatewaycertificaat is gewijzigd. Ga alleen door als je deze wijziging verwachtte.\n\nOude SHA-256:\n%1$s\n\nNieuwe SHA-256:\n%2$s</string>
-    <string name="gateway_recovery">Gatewayherstel</string>
 </resources>

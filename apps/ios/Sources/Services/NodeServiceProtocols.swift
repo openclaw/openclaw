@@ -31,7 +31,11 @@ protocol LocationServicing: Sendable {
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
+    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool)
+    func setAuthorizationChangeHandler(
+        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
+    func stopMonitoringSignificantLocationChanges()
 }
 
 @MainActor

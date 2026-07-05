@@ -2,6 +2,7 @@
 import process from "node:process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
+import { isAbortError } from "./abort-signal.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -234,26 +235,6 @@ function extractErrorCodeWithCause(err: unknown): string | undefined {
     return direct;
   }
   return extractErrorCode(getErrorCause(err));
-}
-
-/**
- * Checks if an error is an AbortError.
- * These are typically intentional cancellations (e.g., during shutdown) and shouldn't crash.
- */
-export function isAbortError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const name = "name" in err ? String(err.name) : "";
-  if (name === "AbortError") {
-    return true;
-  }
-  // Check for "This operation was aborted" message from Node's undici
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  if (message === "This operation was aborted") {
-    return true;
-  }
-  return false;
 }
 
 function isFatalError(err: unknown): boolean {

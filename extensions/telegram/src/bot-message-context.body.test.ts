@@ -109,7 +109,7 @@ describe("resolveTelegramInboundBody", () => {
           blocks: [
             {
               type: "paragraph",
-              text: [{ type: "plain", text: "Forwarded rich text" }],
+              text: "Forwarded rich text",
             },
           ],
         },
@@ -131,10 +131,7 @@ describe("resolveTelegramInboundBody", () => {
           blocks: [
             {
               type: "paragraph",
-              text: [
-                { type: "plain", text: "Forwarded " },
-                { type: "bold", text: "rich text" },
-              ],
+              text: ["Forwarded ", { type: "bold", text: "rich text" }],
             },
           ],
         },
@@ -213,7 +210,7 @@ describe("resolveTelegramInboundBody", () => {
           blocks: [
             {
               type: "paragraph",
-              text: [{ type: "plain", text: "telegram please read this" }],
+              text: "telegram please read this",
             },
           ],
         },
@@ -246,7 +243,7 @@ describe("resolveTelegramInboundBody", () => {
           blocks: [
             {
               type: "paragraph",
-              text: [{ type: "plain", text: "@bot please read this" }],
+              text: "@bot please read this",
             },
           ],
         },

@@ -15,9 +15,10 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # Use a non-interactive API probe so wrapper auth behaves the same in
-  # terminal sessions and redirected/scripted runs.
-  if gh api user >/dev/null 2>&1; then
+  # gh auth status fetches token scopes through REST and misreports quota
+  # failures as invalid credentials. GraphQL verifies the active local token
+  # without sending maintainers through a login that cannot restore quota.
+  if gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login >/dev/null 2>&1; then
     return 0
   fi
 

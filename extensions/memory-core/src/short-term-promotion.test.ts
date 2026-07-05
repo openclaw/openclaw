@@ -1756,6 +1756,124 @@ describe("short-term promotion", () => {
       expect(testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
       expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
     });
+
+    // Marker lines themselves carry managed-block content. A relocated range
+    // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
+    // build its snippet from raw lines that contain that marker text, leaking
+    // it into MEMORY.md alongside any adjacent fenced content captured by the
+    // same window. The guard treats marker lines as inside-fence so those
+    // ranges are rejected. (#80613)
+    it("returns true when the range ends on a Light Sleep start marker", () => {
+      const lines = [
+        "## Plan",
+        "- Plan switches use exRule, not abConfig",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: staged dream",
+        "<!-- openclaw:dreaming:light:end -->",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 5)).toBe(true);
+    });
+
+    it("returns true when the range begins on a Light Sleep end marker", () => {
+      const lines = [
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: staged dream",
+        "<!-- openclaw:dreaming:light:end -->",
+        "- normal durable bullet",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 4)).toBe(true);
+    });
+
+    it("returns true when the range covers only a marker line", () => {
+      const lines = [
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: staged dream",
+        "<!-- openclaw:dreaming:light:end -->",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 1, 1)).toBe(true);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 3)).toBe(true);
+    });
+
+    it("returns true for REM marker single-line ranges even with no body between markers", () => {
+      const lines = [
+        "real line 1",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "<!-- openclaw:dreaming:rem:end -->",
+        "real line 4",
+      ];
+      // No content between the markers, but the marker text itself must not
+      // ride along into a promoted snippet.
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(true);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 3, 3)).toBe(true);
+      // Real-content single lines remain unflagged.
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 1, 1)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
+    });
+  });
+
+  it("does not promote rehydrated candidates whose relocated range covers a managed dreaming fence marker line (#80613)", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      // Daily note: human content + a managed Light Sleep block. The relevant
+      // surface is the marker lines (5 and 8), not the fenced content between
+      // them. The existing fence-overlap guard already blocks ranges between
+      // the markers; this test exercises the residual edge case where the
+      // relocated range covers a marker line itself.
+      await writeDailyMemoryNote(workspaceDir, "2026-05-18", [
+        "## Plan", // 1
+        "- Plan switches use exRule, not abConfig", // 2
+        "", // 3
+        "## Light Sleep", // 4
+        "<!-- openclaw:dreaming:light:start -->", // 5
+        "- Candidate: staged dream", // 6
+        "  - confidence: 0.95", // 7
+        "<!-- openclaw:dreaming:light:end -->", // 8
+      ]);
+
+      // Stored recall snippet equals the marker text exactly, so relocate's
+      // exact-match path resolves to (5, 5) with the marker as its snippet.
+      // The contamination predicate does not flag bare marker text (no
+      // Candidate/Reflections + confidence + evidence + status: staged +
+      // recalls signature), so the only line of defense is the fence-overlap
+      // guard. Pre-patch the guard returns false for a marker-only range and
+      // the marker text leaks into MEMORY.md; post-patch the range is rejected.
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "marker-line edge case",
+        results: [
+          {
+            path: "memory/2026-05-18.md",
+            startLine: 5,
+            endLine: 5,
+            score: 0.94,
+            snippet: "<!-- openclaw:dreaming:light:start -->",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(0);
+      const memoryText = await fs
+        .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+        .catch(() => "");
+      expect(memoryText).not.toContain("Promoted From Short-Term Memory");
+      expect(memoryText).not.toMatch(/openclaw:dreaming/i);
+    });
   });
 
   it("refuses to promote rehydrated candidates that land inside a managed dreaming fence", async () => {

@@ -1,32 +1,39 @@
 // Telegram tests cover bot message context.reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 
-type InboundBodyMock = (arg: unknown) => Promise<{
-  bodyText: string;
-  rawBody: string;
-  historyKey: undefined;
-  commandAuthorized: boolean;
-  effectiveWasMentioned: boolean;
-  canDetectMention: boolean;
-  shouldBypassMention: boolean;
-  stickerCacheHit: boolean;
-  locationData: undefined;
-}>;
+type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 
-const inboundBodyMock = vi.hoisted(() =>
-  vi.fn<InboundBodyMock>(async () => ({
+const { createInboundBodyResult, inboundBodyMock } = vi.hoisted(() => {
+  const buildInboundBodyResult = (
+    inboundEventKind: TelegramInboundBodyResult["inboundEventKind"] = "user_request",
+  ): TelegramInboundBodyResult => ({
     bodyText: "hello",
     rawBody: "hello",
     historyKey: undefined,
     commandAuthorized: false,
     effectiveWasMentioned: false,
+    inboundEventKind,
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: false,
+      effectiveWasMentioned: false,
+      requireMention: false,
+      shouldSkip: false,
+    },
     canDetectMention: true,
     shouldBypassMention: false,
+    hasControlCommand: false,
     stickerCacheHit: false,
     locationData: undefined,
-  })),
-);
+  });
+
+  return {
+    createInboundBodyResult: buildInboundBodyResult,
+    inboundBodyMock: vi.fn<InboundBodyMock>(async () => buildInboundBodyResult()),
+  };
+});
 
 vi.mock("./bot-message-context.body.js", () => ({
   resolveTelegramInboundBody: (arg: unknown) => inboundBodyMock(arg),
@@ -66,6 +73,7 @@ describe("buildTelegramMessageContext reactions", () => {
   it("does not create ack or status reactions for room events", async () => {
     const setMessageReaction = vi.fn(async () => undefined);
     const { createStatusReactionController } = createStatusReactionControllerStub();
+    inboundBodyMock.mockResolvedValueOnce(createInboundBodyResult("room_event"));
 
     const ctx = await buildTelegramMessageContextForTest({
       message: {

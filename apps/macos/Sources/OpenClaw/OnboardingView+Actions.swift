@@ -6,6 +6,7 @@ import SwiftUI
 
 extension OnboardingView {
     func selectLocalGateway() {
+        self.defaultsToLocalGateway = false
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
@@ -13,7 +14,7 @@ extension OnboardingView {
     }
 
     func selectUnconfiguredGateway() {
-        Task { await self.onboardingWizard.cancelIfRunning() }
+        self.defaultsToLocalGateway = false
         self.state.connectionMode = .unconfigured
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
@@ -21,7 +22,7 @@ extension OnboardingView {
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        Task { await self.onboardingWizard.cancelIfRunning() }
+        self.defaultsToLocalGateway = false
         self.preferredGatewayID = gateway.stableID
         GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
@@ -41,11 +42,22 @@ extension OnboardingView {
     }
 
     func handleNext() {
-        if self.isWizardBlocking { return }
+        // All callers (Next button, chat handoff) honor the same page gates.
+        guard self.canAdvance else { return }
+        self.commitRecommendedConnectionIfNeeded(for: self.activePageIndex)
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {
             self.finish()
+        }
+    }
+
+    func commitRecommendedConnectionIfNeeded(for pageIndex: Int) {
+        if pageIndex == self.connectionPageIndex,
+           self.defaultsToLocalGateway,
+           self.state.connectionMode == .unconfigured
+        {
+            self.selectLocalGateway()
         }
     }
 

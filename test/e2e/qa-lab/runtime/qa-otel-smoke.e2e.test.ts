@@ -200,6 +200,27 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
+  it("passes a repo-relative output dir to the child QA suite", () => {
+    const repoRoot = path.join(path.sep, "repo");
+    const options = testing.parseArgs([
+      "--output-dir",
+      path.join(repoRoot, ".artifacts", "qa-e2e", "otel-smoke"),
+    ]);
+
+    expect(testing.buildQaArgs(options, repoRoot)).toContain(".artifacts/qa-e2e/otel-smoke");
+    const repoRootArgs = testing.buildQaArgs(
+      testing.parseArgs(["--output-dir", repoRoot]),
+      repoRoot,
+    );
+    expect(repoRootArgs[repoRootArgs.indexOf("--output-dir") + 1]).toBe(".");
+    expect(() =>
+      testing.buildQaArgs(
+        testing.parseArgs(["--output-dir", path.join(path.sep, "outside", "otel-smoke")]),
+        repoRoot,
+      ),
+    ).toThrow("--output-dir must stay within the repo root");
+  });
+
   it("parses body-size limit env values as strict positive integers", () => {
     expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
     expect(

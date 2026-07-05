@@ -1,6 +1,7 @@
 // Process-wide models.json coordination state. Dynamic imports can load this
 // module multiple times, so Symbol.for keeps write locks and ready-cache shared.
 import path from "node:path";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 
 const MODELS_JSON_STATE_KEY = Symbol.for("openclaw.modelsJsonState");
 
@@ -15,7 +16,7 @@ export type ModelsJsonReadyState = {
 };
 
 type ModelsJsonState = {
-  writeLocks: Map<string, Promise<void>>;
+  writeQueue: KeyedAsyncQueue;
   readyCache: Map<string, Promise<ModelsJsonReadyState>>;
 };
 
@@ -25,7 +26,7 @@ export const MODELS_JSON_STATE = (() => {
   };
   if (!globalState[MODELS_JSON_STATE_KEY]) {
     globalState[MODELS_JSON_STATE_KEY] = {
-      writeLocks: new Map<string, Promise<void>>(),
+      writeQueue: new KeyedAsyncQueue(),
       readyCache: new Map<string, Promise<ModelsJsonReadyState>>(),
     };
   }
@@ -37,26 +38,11 @@ export async function withModelsJsonFileAccessLock<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const lockKey = path.resolve(targetPath);
-  const prior = MODELS_JSON_STATE.writeLocks.get(lockKey) ?? Promise.resolve();
-  let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const pending = prior.then(() => gate);
-  MODELS_JSON_STATE.writeLocks.set(lockKey, pending);
-  try {
-    await prior;
-    return await run();
-  } finally {
-    release();
-    if (MODELS_JSON_STATE.writeLocks.get(lockKey) === pending) {
-      MODELS_JSON_STATE.writeLocks.delete(lockKey);
-    }
-  }
+  return await MODELS_JSON_STATE.writeQueue.enqueue(lockKey, run);
 }
 
 /** Clear models.json write/ready caches for tests. */
 export function resetModelsJsonReadyCacheForTest(): void {
-  MODELS_JSON_STATE.writeLocks.clear();
+  MODELS_JSON_STATE.writeQueue = new KeyedAsyncQueue();
   MODELS_JSON_STATE.readyCache.clear();
 }

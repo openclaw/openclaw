@@ -143,6 +143,7 @@ let drainFormattedSystemEvents: typeof import("./session-system-events.js").drai
 let applySessionHints: typeof import("./body.js").applySessionHints;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
+let buildGroupIntro: typeof import("./groups.js").buildGroupIntro;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
@@ -292,7 +293,8 @@ describe("runPreparedReply media-only handling", () => {
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ applySessionHints } = await import("./body.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
+    ({ buildDirectChatContext, buildGroupIntro, buildGroupChatContext } =
+      await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
       await import("./inbound-meta.js"));
     ({ testing: replyRunTesting, getActiveReplyRunCount } =
@@ -304,6 +306,11 @@ describe("runPreparedReply media-only handling", () => {
     updateSessionStore.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
+    vi.mocked(buildDirectChatContext).mockReturnValue("");
+    vi.mocked(buildGroupIntro).mockReturnValue("");
+    vi.mocked(buildGroupChatContext).mockReturnValue("");
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValue("");
+    vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     replyRunTesting.resetReplyRunRegistry();
   });
 
@@ -384,6 +391,39 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+  });
+
+  it("reports unsupported explicit one-turn thinking overrides", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "xhigh",
+        opts: { thinkingLevelOverride: "xhigh" },
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog: async () => [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              reasoning: false,
+            },
+          ],
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(Array.isArray(result) ? undefined : result?.text).toContain(
+      'Thinking level "xhigh" is not supported',
+    );
+    expect(runReplyAgent).not.toHaveBeenCalled();
   });
 
   it("does not persist turn-local thinking fallback over a stored session override", async () => {
@@ -2492,7 +2532,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
-    vi.mocked(buildGroupChatContext).mockImplementationOnce(({ sessionCtx }) =>
+    vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx }) =>
       [`group`, sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
     );
 
@@ -2552,6 +2592,335 @@ describe("runPreparedReply media-only handling", () => {
     expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
     expect(call?.followupRun.run.chatType).toBe("channel");
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
+  });
+
+  it.each([
+    {
+      name: "automatic config",
+      stableMode: "automatic",
+      expectedPrompt: "group:telegram:group:automatic",
+    },
+    {
+      name: "message-tool config",
+      stableMode: "message_tool_only",
+      expectedPrompt: "group:telegram:group:message_tool_only",
+    },
+  ] as const)(
+    "keeps CLI binding facts stable across room-event, primary, and heartbeat assembly for $name",
+    async ({ stableMode, expectedPrompt }) => {
+      vi.mocked(buildGroupChatContext).mockImplementation(
+        ({ sessionCtx, sourceReplyDeliveryMode }) =>
+          [
+            "group",
+            sessionCtx.Provider,
+            sessionCtx.ChatType,
+            sourceReplyDeliveryMode ?? "automatic",
+          ].join(":"),
+      );
+      const sessionEntry: SessionEntry = {
+        sessionId: "session-telegram-group",
+        updatedAt: 1,
+        systemSent: true,
+        chatType: "group",
+        channel: "telegram",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        origin: {
+          provider: "telegram",
+          surface: "telegram",
+          chatType: "group",
+          to: "-100123",
+        },
+      };
+
+      await runPreparedReply(
+        baseParams({
+          opts: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            sessionPromptSourceReplyDeliveryMode: stableMode,
+          },
+          isNewSession: false,
+          systemSent: true,
+          sessionEntry,
+          ctx: {
+            Body: "@bot check this",
+            RawBody: "@bot check this",
+            CommandBody: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            MessageSid: "msg-1",
+          },
+          sessionCtx: {
+            Body: "@bot check this",
+            BodyStripped: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            InboundEventKind: "room_event",
+            MessageSid: "msg-1",
+          },
+        }),
+      );
+      await runPreparedReply(
+        baseParams({
+          opts: {
+            sourceReplyDeliveryMode: stableMode,
+            sessionPromptSourceReplyDeliveryMode: stableMode,
+          },
+          isNewSession: false,
+          systemSent: true,
+          sessionEntry,
+          ctx: {
+            Body: "@bot check this",
+            RawBody: "@bot check this",
+            CommandBody: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            MessageSid: "msg-2",
+          },
+          sessionCtx: {
+            Body: "@bot check this",
+            BodyStripped: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            MessageSid: "msg-2",
+          },
+        }),
+      );
+      await runPreparedReply(
+        baseParams({
+          opts: {
+            isHeartbeat: true,
+            sourceReplyDeliveryMode: stableMode,
+            sessionPromptSourceReplyDeliveryMode: stableMode,
+          },
+          isNewSession: false,
+          systemSent: true,
+          sessionEntry,
+          ctx: {
+            Body: "scheduled wake",
+            RawBody: "scheduled wake",
+            CommandBody: "scheduled wake",
+            Provider: "cron-event",
+            SessionKey: "agent:main:telegram:-100123",
+          },
+          sessionCtx: {
+            Body: "scheduled wake",
+            BodyStripped: "scheduled wake",
+            Provider: "cron-event",
+          },
+        }),
+      );
+
+      const roomEventRun = requireRunReplyAgentCall(0).followupRun.run;
+      const primaryRun = requireRunReplyAgentCall(1).followupRun.run;
+      const heartbeatRun = requireRunReplyAgentCall(2).followupRun.run;
+      expect(roomEventRun.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(primaryRun.sourceReplyDeliveryMode).toBe(stableMode);
+      expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
+      expect(roomEventRun.extraSystemPrompt).toBe(expectedPrompt);
+      expect(requireRunReplyAgentCall(0).followupRun.currentInboundContext?.text).toContain(
+        "your final text here stays private either way",
+      );
+      expect(roomEventRun.extraSystemPromptStatic).toBe(expectedPrompt);
+      expect(primaryRun.extraSystemPromptStatic).toBe(roomEventRun.extraSystemPromptStatic);
+      expect(heartbeatRun.extraSystemPromptStatic).toBe(roomEventRun.extraSystemPromptStatic);
+      expect(roomEventRun.cliSessionBindingFacts).toEqual({
+        extraSystemPromptStatic: expectedPrompt,
+        sourceReplyDeliveryMode: stableMode,
+      });
+      expect(primaryRun.cliSessionBindingFacts).toEqual(roomEventRun.cliSessionBindingFacts);
+      expect(heartbeatRun.cliSessionBindingFacts).toEqual(roomEventRun.cliSessionBindingFacts);
+    },
+  );
+
+  it("keeps per-message room-event metadata out of CLI binding facts", async () => {
+    vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx, sourceReplyDeliveryMode }) =>
+      [
+        "group",
+        sessionCtx.Provider,
+        sessionCtx.ChatType,
+        sourceReplyDeliveryMode ?? "automatic",
+      ].join(":"),
+    );
+    const baseRoomEvent = {
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        sessionPromptSourceReplyDeliveryMode: "automatic" as const,
+      },
+      isNewSession: false,
+      systemSent: true,
+      ctx: {
+        Body: "@bot check this",
+        RawBody: "@bot check this",
+        CommandBody: "@bot check this",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      },
+      sessionCtx: {
+        Body: "@bot check this",
+        BodyStripped: "@bot check this",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        InboundEventKind: "room_event" as const,
+      },
+    };
+
+    await runPreparedReply(
+      baseParams({
+        ...baseRoomEvent,
+        ctx: { ...baseRoomEvent.ctx, MessageSid: "msg-1", Timestamp: 1_710_000_000_000 },
+        sessionCtx: { ...baseRoomEvent.sessionCtx, MessageSid: "msg-1" },
+      }),
+    );
+    await runPreparedReply(
+      baseParams({
+        ...baseRoomEvent,
+        ctx: { ...baseRoomEvent.ctx, MessageSid: "msg-2", Timestamp: 1_710_000_005_000 },
+        sessionCtx: { ...baseRoomEvent.sessionCtx, MessageSid: "msg-2" },
+      }),
+    );
+
+    const firstRun = requireRunReplyAgentCall(0).followupRun.run;
+    const secondRun = requireRunReplyAgentCall(1).followupRun.run;
+    expect(firstRun.cliSessionBindingFacts).toEqual({
+      extraSystemPromptStatic: "group:telegram:group:automatic",
+      sourceReplyDeliveryMode: "automatic",
+    });
+    expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
+  });
+
+  it("keeps explicit mention state in user context and out of CLI binding facts", async () => {
+    vi.mocked(buildGroupChatContext).mockReturnValue("group:telegram:group:automatic");
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "automatic",
+          sessionPromptSourceReplyDeliveryMode: "automatic",
+        },
+        isNewSession: false,
+        systemSent: true,
+        ctx: {
+          Body: "@SirPinchALotBot check this",
+          RawBody: "@SirPinchALotBot check this",
+          CommandBody: "@SirPinchALotBot check this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          BotUsername: "SirPinchALotBot",
+          ExplicitlyMentionedBot: true,
+        },
+        sessionCtx: {
+          Body: "@SirPinchALotBot check this",
+          BodyStripped: "@SirPinchALotBot check this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          BotUsername: "SirPinchALotBot",
+          ExplicitlyMentionedBot: true,
+        },
+      }),
+    );
+
+    const run = requireRunReplyAgentCall(0).followupRun.run;
+    const inboundCtx = requireMockCallArg(
+      vi.mocked(buildInboundUserContextPrefix),
+      "inbound user context",
+    ) as { ExplicitlyMentionedBot?: boolean; BotUsername?: string };
+    expect(inboundCtx.ExplicitlyMentionedBot).toBe(true);
+    expect(inboundCtx.BotUsername).toBe("SirPinchALotBot");
+    expect(run.extraSystemPromptStatic).toBe("group:telegram:group:automatic");
+    expect(run.cliSessionBindingFacts).toEqual({
+      extraSystemPromptStatic: "group:telegram:group:automatic",
+      sourceReplyDeliveryMode: "automatic",
+    });
+  });
+
+  it("keeps group intro in the session-stable CLI prompt after turn one", async () => {
+    vi.mocked(buildGroupChatContext).mockReturnValue("group:telegram:group:automatic");
+    vi.mocked(buildGroupIntro).mockReturnValue("intro:mention");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-telegram-group",
+      updatedAt: 1,
+      systemSent: true,
+      chatType: "group",
+      channel: "telegram",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      origin: {
+        provider: "telegram",
+        surface: "telegram",
+        chatType: "group",
+        to: "-100123",
+      },
+    };
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "automatic",
+          sessionPromptSourceReplyDeliveryMode: "automatic",
+        },
+        isNewSession: true,
+        systemSent: false,
+        sessionEntry,
+        ctx: {
+          Body: "@bot first",
+          RawBody: "@bot first",
+          CommandBody: "@bot first",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "@bot first",
+          BodyStripped: "@bot first",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+      }),
+    );
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "automatic",
+          sessionPromptSourceReplyDeliveryMode: "automatic",
+        },
+        isNewSession: false,
+        systemSent: true,
+        sessionEntry,
+        ctx: {
+          Body: "second",
+          RawBody: "second",
+          CommandBody: "second",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "second",
+          BodyStripped: "second",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+      }),
+    );
+
+    const firstRun = requireRunReplyAgentCall(0).followupRun.run;
+    const secondRun = requireRunReplyAgentCall(1).followupRun.run;
+    expect(firstRun.extraSystemPromptStatic).toBe(
+      "group:telegram:group:automatic\n\nintro:mention",
+    );
+    expect(secondRun.extraSystemPromptStatic).toBe(firstRun.extraSystemPromptStatic);
+    expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
   });
 
   it.each([
@@ -2751,12 +3120,12 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingReplyToId).toBe("reply-24680");
   });
 
-  it("captures the effective reply policy for queued Slack runs", async () => {
+  it("captures the prepared reply policy for queued Slack runs", async () => {
     await runPreparedReply(
       baseParams({
         cfg: {
           session: {},
-          channels: { slack: { replyToMode: "off" } },
+          channels: { slack: { replyToMode: "all" } },
           agents: { defaults: {} },
         },
         ctx: {
@@ -2768,6 +3137,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: undefined,
           OriginatingTo: "C123",
           ChatType: "group",
+          ReplyToMode: "off",
         },
         sessionCtx: {
           Body: "",
@@ -2779,6 +3149,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "slack",
           OriginatingTo: "C123",
           ReplyToId: "101.001",
+          ReplyToMode: "off",
         },
       }),
     );

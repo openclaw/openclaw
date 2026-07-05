@@ -22,16 +22,6 @@
     <string name="password">Senha</string>
     <string name="run_onboarding_again">Executar integração novamente</string>
     <string name="resolved_endpoint">Endpoint resolvido</string>
-    <string name="gateway_setup">Configuração do Gateway</string>
-    <string name="connect_to_gateway">Conecte-se ao seu Gateway</string>
-    <string name="scan_setup_code">Escanear código de configuração</string>
-    <string name="use_gateway_qr">Use o QR do seu Gateway ou o código de configuração</string>
-    <string name="nearby_gateway">Gateway próximo</string>
-    <string name="enter_gateway_url">Inserir URL do gateway</string>
-    <string name="connect_manual_url">Conectar usando uma URL manual</string>
-    <string name="permissions">Permissões</string>
-    <string name="done">Concluído</string>
     <string name="gateway_trust_first_seen">Verifique a impressão digital do certificado antes de confiar neste gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">O certificado do gateway foi alterado. Continue somente se você esperava essa alteração.\n\nSHA-256 antigo:\n%1$s\n\nSHA-256 novo:\n%2$s</string>
-    <string name="gateway_recovery">Recuperação do gateway</string>
 </resources>
