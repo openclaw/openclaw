@@ -343,6 +343,25 @@ describe("promosClaimCommand", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("rechecks the window after authentication before updating model config", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    mocks.fetchClawHubPromotion.mockResolvedValue(
+      makePromotion({ active: true, endsAt: now + 60_000 }),
+    );
+    mocks.hasAvailableAuthForProvider.mockImplementation(async () => {
+      vi.setSystemTime(now + 120_000);
+      return true;
+    });
+
+    try {
+      await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(/ended/);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the install path when the auth choice is not installed, even with existing auth", async () => {
     // Existing env credentials must not shortcut past a required plugin install.
     mocks.resolveManifestProviderAuthChoice.mockReturnValue(undefined);

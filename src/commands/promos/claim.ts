@@ -291,6 +291,8 @@ export async function promosClaimCommand(
     makeDefault = await promptYesNo(`Set ${suggested.modelRef} as your default model?`, false);
   }
 
+  requireLiveWindow(promotion);
+
   const registered: string[] = [];
   const skippedAliases: string[] = [];
   const invalidAliases: string[] = [];
