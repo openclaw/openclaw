@@ -848,7 +848,14 @@ function decodeMulawSample(value: number): number {
 async function createGoogleRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
-  const config = normalizeProviderConfig(req.providerConfig);
+  const providerConfig = normalizeProviderConfig(req.providerConfig);
+  const prefixPaddingMs = asNonNegativeInteger(req.prefixPaddingMs);
+  const silenceDurationMs = asNonNegativeInteger(req.silenceDurationMs);
+  const config = {
+    ...providerConfig,
+    ...(prefixPaddingMs !== undefined ? { prefixPaddingMs } : {}),
+    ...(silenceDurationMs !== undefined ? { silenceDurationMs } : {}),
+  };
   const apiKey = config.apiKey || resolveEnvApiKey();
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");

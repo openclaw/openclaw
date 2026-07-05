@@ -7,6 +7,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -83,7 +84,7 @@ type ChatRouteData = {
 type ChatPageContext = ApplicationContext;
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open]";
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -615,6 +616,9 @@ export class ChatPage extends LitElement {
       : selectedSessionArchived
         ? t("chat.archivedSessionDisabled")
         : null;
+    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
+      this.context.gateway.snapshot.hello?.auth ?? null,
+    );
     const props: ChatProps = {
       sessionKey: state.sessionKey,
       onSessionKeyChange: (next) => {
@@ -647,8 +651,8 @@ export class ChatPage extends LitElement {
       realtimeTalkTranscript: state.realtimeTalkTranscript,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
-      realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
       realtimeTalkOptions: state.realtimeTalkOptions,
+      canOpenRealtimeTalkSettings,
       connected: state.connected,
       canSend: state.connected && !selectedSessionArchived,
       disabledReason,
@@ -728,12 +732,16 @@ export class ChatPage extends LitElement {
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeTalkOptions: () => {
         state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
-        if (state.realtimeTalkOptionsOpen) {
-          void state.fetchRealtimeTalkCatalog();
-        }
         state.requestUpdate?.();
       },
       onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
+      onOpenRealtimeTalkSettings: () => {
+        if (!canOpenRealtimeTalkSettings) {
+          return;
+        }
+        state.realtimeTalkOptionsOpen = false;
+        this.context.navigate("communications", { search: "?section=talk" });
+      },
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

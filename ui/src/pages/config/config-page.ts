@@ -40,7 +40,7 @@ export type ConfigPageId =
   | "ai-agents";
 
 type ConfigFormMode = "form" | "raw";
-type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+export type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -149,6 +149,14 @@ function normalizeConfigSelection(
     return defaultConfigSelection(pageId);
   }
   return { activeSection, activeSubsection };
+}
+
+export function configSelectionFromSearch(pageId: ConfigPageId, search: string): ConfigSelection {
+  const section = new URLSearchParams(search).get("section");
+  if (!section) {
+    return defaultConfigSelection(pageId);
+  }
+  return normalizeConfigSelection(pageId, section, null);
 }
 
 function configPageTitle(pageId: ConfigPageId): string {
@@ -307,6 +315,11 @@ export class ConfigPage extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
+    const linkedSelection = configSelectionFromSearch(
+      this.pageId,
+      globalThis.location?.search ?? "",
+    );
+    this.selections = { ...this.selections, [this.pageId]: linkedSelection };
     this.stops = [
       this.context.runtimeConfig.subscribe(() => this.requestUpdate()),
       this.context.overlays.subscribe(() => this.requestUpdate()),

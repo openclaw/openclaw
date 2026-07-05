@@ -28,7 +28,6 @@ import {
 } from "../attachment-payload-store.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
-import type { RealtimeTalkCatalogProvider } from "../realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -84,8 +83,8 @@ export type ChatComposerProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
+  canOpenRealtimeTalkSettings?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -97,6 +96,7 @@ export type ChatComposerProps = {
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeTalkOptions?: () => void;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  onOpenRealtimeTalkSettings?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;

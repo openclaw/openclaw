@@ -374,9 +374,13 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       providerConfig: {
         apiKey: "gemini-key",
         model: "gemini-live-2.5-flash-preview",
+        prefixPaddingMs: 100,
+        silenceDurationMs: 300,
         voice: "Puck",
         temperature: 0.4,
       },
+      prefixPaddingMs: 250,
+      silenceDurationMs: 650,
       instructions: "Speak briefly.",
       tools: [
         {
@@ -399,6 +403,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       config?: {
         liveConnectConstraints?: {
           config?: {
+            realtimeInputConfig?: {
+              automaticActivityDetection?: {
+                prefixPaddingMs?: number;
+                silenceDurationMs?: number;
+              };
+            };
             responseModalities?: string[];
             speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
             systemInstruction?: string;
@@ -423,6 +433,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(liveConstraints?.config?.responseModalities).toEqual(["AUDIO"]);
     expect(liveConstraints?.config?.temperature).toBe(0.4);
     expect(liveConstraints?.config?.systemInstruction).toBe("Speak briefly.");
+    expect(
+      liveConstraints?.config?.realtimeInputConfig?.automaticActivityDetection?.prefixPaddingMs,
+    ).toBe(250);
+    expect(
+      liveConstraints?.config?.realtimeInputConfig?.automaticActivityDetection?.silenceDurationMs,
+    ).toBe(650);
     expect(liveConstraints?.config?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe(
       "Puck",
     );

@@ -1159,9 +1159,9 @@ openclaw-chat-page {
 
 .agent-chat__talk-options {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 10px;
-  padding: 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
 }
@@ -1172,13 +1172,6 @@ openclaw-chat-page {
   gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.agent-chat__talk-options-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: 8px;
-  margin-top: 8px;
 }
 
 .agent-chat__talk-field {
@@ -1218,6 +1211,33 @@ openclaw-chat-page {
 .agent-chat__talk-options select:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+.agent-chat__talk-settings-link {
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.agent-chat__talk-settings-link:hover,
+.agent-chat__talk-settings-link:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.agent-chat__talk-settings-link:disabled {
+  background: transparent;
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.75;
 }
 
 .agent-chat__talk-select {
@@ -1345,50 +1365,6 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-.agent-chat__talk-options-advanced {
-  flex: 0 1 420px;
-  min-width: 220px;
-  color: var(--muted);
-}
-
-.agent-chat__talk-options-advanced summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 500;
-  list-style: none;
-  user-select: none;
-}
-
-.agent-chat__talk-options-advanced summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-chat__talk-options-advanced summary::after {
-  content: "";
-  width: 7px;
-  height: 7px;
-  margin-left: 8px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(45deg) translateY(-1px);
-  transition: transform var(--duration-fast) ease;
-}
-
-.agent-chat__talk-options-advanced[open] summary {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.agent-chat__talk-options-advanced[open] summary::after {
-  transform: rotate(225deg) translate(-1px, -1px);
-}
-
 .agent-chat__input-divider {
   width: 1px;
   height: 16px;
@@ -1489,15 +1465,13 @@ openclaw-chat-page {
     flex-direction: column;
   }
 
-  .agent-chat__talk-options-primary,
-  .agent-chat__talk-options-grid {
+  .agent-chat__talk-options-primary {
     width: 100%;
     grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   }
 
-  .agent-chat__talk-options-advanced {
-    flex-basis: auto;
-    width: 100%;
+  .agent-chat__talk-settings-link {
+    align-self: flex-end;
   }
 
   .agent-chat__input-btn,
