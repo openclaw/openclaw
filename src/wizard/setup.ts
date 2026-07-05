@@ -78,6 +78,46 @@ function resolveQuickstartGatewayAuthMode(config: OpenClawConfig): GatewayAuthMo
   return "token";
 }
 
+function resolveQuickstartGatewayDefaults(config: OpenClawConfig): QuickstartGatewayDefaults {
+  const hasExisting =
+    typeof config.gateway?.port === "number" ||
+    config.gateway?.bind !== undefined ||
+    config.gateway?.auth !== undefined ||
+    config.gateway?.customBindHost !== undefined ||
+    config.gateway?.tailscale?.mode !== undefined;
+
+  const tailscaleRaw = config.gateway?.tailscale?.mode;
+  const tailscaleMode =
+    tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
+      ? tailscaleRaw
+      : "off";
+
+  const authMode = resolveQuickstartGatewayAuthMode(config);
+  const bindRaw = config.gateway?.bind;
+  const bind =
+    bindRaw === "loopback" ||
+    bindRaw === "lan" ||
+    bindRaw === "auto" ||
+    bindRaw === "custom" ||
+    bindRaw === "tailnet"
+      ? bindRaw
+      : authMode === "none"
+        ? "loopback"
+        : defaultGatewayBindMode(tailscaleMode);
+
+  return {
+    hasExisting,
+    port: resolveGatewayPort(config),
+    bind,
+    authMode,
+    tailscaleMode,
+    token: config.gateway?.auth?.token,
+    password: config.gateway?.auth?.password,
+    customBindHost: config.gateway?.customBindHost,
+    tailscaleResetOnExit: config.gateway?.tailscale?.resetOnExit ?? false,
+  };
+}
+
 async function canUseAgentAssistedGatewayPolicy(
   config: OpenClawConfig,
   resolveGatewayProbeUrl: () => string,
@@ -528,46 +568,7 @@ async function runSetupWizardOnce(
   }
   const wizardFlow: WizardFlow = flow;
 
-  const quickstartGateway: QuickstartGatewayDefaults = (() => {
-    const hasExisting =
-      typeof baseConfig.gateway?.port === "number" ||
-      baseConfig.gateway?.bind !== undefined ||
-      baseConfig.gateway?.auth !== undefined ||
-      baseConfig.gateway?.customBindHost !== undefined ||
-      baseConfig.gateway?.tailscale?.mode !== undefined;
-
-    const tailscaleRaw = baseConfig.gateway?.tailscale?.mode;
-    const tailscaleMode =
-      tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
-        ? tailscaleRaw
-        : "off";
-
-    const authMode = resolveQuickstartGatewayAuthMode(baseConfig);
-
-    const bindRaw = baseConfig.gateway?.bind;
-    const bind =
-      bindRaw === "loopback" ||
-      bindRaw === "lan" ||
-      bindRaw === "auto" ||
-      bindRaw === "custom" ||
-      bindRaw === "tailnet"
-        ? bindRaw
-        : authMode === "none"
-          ? "loopback"
-          : defaultGatewayBindMode(tailscaleMode);
-
-    return {
-      hasExisting,
-      port: resolveGatewayPort(baseConfig),
-      bind,
-      authMode,
-      tailscaleMode,
-      token: baseConfig.gateway?.auth?.token,
-      password: baseConfig.gateway?.auth?.password,
-      customBindHost: baseConfig.gateway?.customBindHost,
-      tailscaleResetOnExit: baseConfig.gateway?.tailscale?.resetOnExit ?? false,
-    };
-  })();
+  let quickstartGateway = resolveQuickstartGatewayDefaults(baseConfig);
 
   if (flow === "quickstart" && !useAgentAssistedSetup) {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
@@ -634,7 +635,7 @@ async function runSetupWizardOnce(
     await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
-  const localPort = resolveGatewayPort(baseConfig);
+  let localPort = resolveGatewayPort(baseConfig);
   const localUrl = `ws://127.0.0.1:${localPort}`;
   let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
   try {
@@ -895,6 +896,8 @@ async function runSetupWizardOnce(
         }
         baseConfig = migratedSnapshot.sourceConfig ?? migratedSnapshot.config;
         pendingPluginInstallMigrationBaseConfig = baseConfig;
+        quickstartGateway = resolveQuickstartGatewayDefaults(baseConfig);
+        localPort = resolveGatewayPort(baseConfig);
         if (!opts.agentId && baseConfig.agents?.list?.length) {
           setupAgentId = resolveDefaultAgentId(baseConfig);
         }

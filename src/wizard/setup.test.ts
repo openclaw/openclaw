@@ -1257,6 +1257,87 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("uses Gateway defaults imported by a selected migration", async () => {
+    const migratedConfig = {
+      gateway: {
+        port: 24680,
+        bind: "custom" as const,
+        customBindHost: "127.0.0.2",
+        auth: {
+          mode: "token" as const,
+          token: "migration-token", // pragma: allowlist secret
+        },
+        tailscale: {
+          mode: "serve" as const,
+          resetOnExit: true,
+        },
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: false,
+        raw: null,
+        parsed: {},
+        resolved: {},
+        valid: true,
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      })
+      .mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: migratedConfig,
+        resolved: migratedConfig,
+        valid: true,
+        config: migratedConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      });
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      {
+        providerId: "codex",
+        label: "Codex",
+        hint: "/tmp/codex-home",
+      },
+    ]);
+    hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    configureGatewayForSetup.mockClear();
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?" ? "codex" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({ select }));
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseConfig: migratedConfig,
+        localPort: 24680,
+        quickstartGateway: {
+          hasExisting: true,
+          port: 24680,
+          bind: "custom",
+          authMode: "token",
+          tailscaleMode: "serve",
+          token: "migration-token", // pragma: allowlist secret
+          password: undefined,
+          customBindHost: "127.0.0.2",
+          tailscaleResetOnExit: true,
+        },
+      }),
+    );
+  });
+
   it("routes explicit migration flags directly into migration import", async () => {
     runSetupMigrationImport.mockClear();
     listSetupMigrationOptions.mockClear();
