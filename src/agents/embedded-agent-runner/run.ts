@@ -141,7 +141,7 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -2509,7 +2509,9 @@ async function runEmbeddedAgentInternal(
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
-            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const lastTurnPromptTokens = deriveContextPromptTokens({
+              lastCallUsage: lastRunPromptUsage,
+            });
             const tokenUsedRatio =
               lastTurnPromptTokens != null && ctxInfo.tokens > 0
                 ? lastTurnPromptTokens / ctxInfo.tokens

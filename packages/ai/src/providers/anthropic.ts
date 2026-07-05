@@ -72,6 +72,12 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicToolProjection,
 } from "./anthropic-tool-projection.js";
+import {
+  readAnthropicPromptUsageSnapshot,
+  readAnthropicUsageTokenCount,
+  readLastAnthropicIterationUsage,
+  type AnthropicPromptUsageSnapshot,
+} from "./anthropic-usage.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -516,6 +522,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
     // Fallback-served turns bill at the serving model's rates; a boundary
     // swaps this to the fallback model's cost table.
     let costModel = model;
+    let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
 
     try {
       let client: Anthropic;
@@ -590,15 +597,45 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
-          output.usage.input = event.message.usage.input_tokens || 0;
-          output.usage.output = event.message.usage.output_tokens || 0;
-          output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
-          output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
+          const promptUsage = readAnthropicPromptUsageSnapshot(event.message.usage);
+          const messageStartPromptTokens = promptUsage
+            ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
+            : 0;
+          messageStartPromptUsage = messageStartPromptTokens > 0 ? promptUsage : undefined;
+          const inputTokens = readAnthropicUsageTokenCount(event.message.usage.input_tokens);
+          if (inputTokens !== undefined) {
+            output.usage.input = inputTokens;
+          }
+          const outputTokens = readAnthropicUsageTokenCount(event.message.usage.output_tokens);
+          if (outputTokens !== undefined) {
+            output.usage.output = outputTokens;
+          }
+          const cacheReadTokens =
+            event.message.usage.cache_read_input_tokens == null
+              ? 0
+              : readAnthropicUsageTokenCount(event.message.usage.cache_read_input_tokens);
+          if (cacheReadTokens !== undefined) {
+            output.usage.cacheRead = cacheReadTokens;
+          }
+          const cacheWriteTokens =
+            event.message.usage.cache_creation_input_tokens == null
+              ? 0
+              : readAnthropicUsageTokenCount(event.message.usage.cache_creation_input_tokens);
+          if (cacheWriteTokens !== undefined) {
+            output.usage.cacheWrite = cacheWriteTokens;
+          }
           output.usage.totalTokens =
             output.usage.input +
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
+          if (messageStartPromptUsage && outputTokens !== undefined) {
+            output.usage.contextUsage = {
+              state: "available",
+              promptTokens: messageStartPromptTokens,
+              totalTokens: messageStartPromptTokens + output.usage.output,
+            };
+          }
           calculateCost(costModel, output.usage);
           // Defer start until after message_start so that pre-stream SSE errors
           // (e.g. invalid thinking signatures) arrive before any non-error event
@@ -799,24 +836,56 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           }
           // Only update usage fields if present (not null).
           // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          if (event.usage.input_tokens != null) {
-            output.usage.input = event.usage.input_tokens;
+          const inputTokens = readAnthropicUsageTokenCount(event.usage.input_tokens);
+          if (inputTokens !== undefined) {
+            output.usage.input = inputTokens;
           }
-          if (event.usage.output_tokens != null) {
-            output.usage.output = event.usage.output_tokens;
+          const outputTokens = readAnthropicUsageTokenCount(event.usage.output_tokens);
+          if (outputTokens !== undefined) {
+            output.usage.output = outputTokens;
           }
-          if (event.usage.cache_read_input_tokens != null) {
-            output.usage.cacheRead = event.usage.cache_read_input_tokens;
+          // Match the SDK stream accumulator: null means no update, not a zero counter.
+          const cacheReadTokens = readAnthropicUsageTokenCount(event.usage.cache_read_input_tokens);
+          if (cacheReadTokens !== undefined) {
+            output.usage.cacheRead = cacheReadTokens;
           }
-          if (event.usage.cache_creation_input_tokens != null) {
-            output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
+          const cacheWriteTokens = readAnthropicUsageTokenCount(
+            event.usage.cache_creation_input_tokens,
+          );
+          if (cacheWriteTokens !== undefined) {
+            output.usage.cacheWrite = cacheWriteTokens;
           }
-          // Anthropic doesn't provide total_tokens, compute from components
           output.usage.totalTokens =
             output.usage.input +
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
+          const iterationUsage = readLastAnthropicIterationUsage(event.usage);
+          if (iterationUsage.state === "valid") {
+            output.usage.contextUsage = {
+              state: "available",
+              promptTokens: iterationUsage.usage.contextPromptTokens,
+              totalTokens: iterationUsage.usage.totalTokens,
+            };
+          } else if (iterationUsage.state === "invalid") {
+            output.usage.contextUsage = { state: "unavailable" };
+          } else if (
+            outputTokens !== undefined &&
+            (messageStartPromptUsage !== undefined ||
+              (inputTokens !== undefined &&
+                cacheReadTokens !== undefined &&
+                cacheWriteTokens !== undefined))
+          ) {
+            const promptTokens =
+              output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+            output.usage.contextUsage = {
+              state: "available",
+              promptTokens,
+              totalTokens: promptTokens + output.usage.output,
+            };
+          } else {
+            output.usage.contextUsage = { state: "unavailable" };
+          }
           calculateCost(costModel, output.usage);
         }
       }
