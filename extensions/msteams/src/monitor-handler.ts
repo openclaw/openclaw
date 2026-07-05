@@ -279,14 +279,16 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         });
 
         // Build the session key for this user's DM conversations.
-        // Session key shape follows the routing pattern: msteams:direct:<userId>
-        const baseSessionKey = `msteams:direct:${userId}`;
+        // Session key shape follows the routing pattern used by inbound messages:
+        // agent:<agentId>:msteams:direct:<userId> where agentId defaults to "main"
+        const agentId = "main"; // Match DEFAULT_AGENT_ID used by routing
+        const baseSessionKey = `agent:${agentId}:msteams:direct:${userId}`;
 
         // Mark all sessions for this user as stale by setting updatedAt to 0.
         // This preserves the transcript records but signals that new sessions
         // should be created on the next message.
         try {
-          const storePath = resolveStorePath(deps.cfg.session?.store, { agentId: "default" });
+          const storePath = resolveStorePath(deps.cfg.session?.store, { agentId });
           let resetCount = 0;
 
           // Iterate through all session entries and mark those matching this user as stale.
@@ -371,27 +373,31 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       conversationType,
     });
 
-    // Handle app uninstallation in personal DM conversations.
-    if (action === "uninstall" && conversationType === "personal") {
-      // When app is uninstalled, mark the user's sessions as stale.
+    // Handle app removal/uninstallation in personal DM conversations.
+    // Teams installationUpdate uses action values: remove, remove-upgrade
+    const isRemovalAction = action === "remove" || action === "remove-upgrade";
+    if (isRemovalAction && conversationType === "personal") {
+      // When app is removed/uninstalled, mark the user's sessions as stale.
       const userId = activityFrom?.aadObjectId ?? activityFrom?.id;
       if (!userId) {
-        deps.log.debug?.("cannot mark session stale on uninstall: missing user id");
+        deps.log.debug?.("cannot mark session stale on removal: missing user id");
         await next();
         return;
       }
 
-      deps.log.info("app uninstalled from personal DM, marking session as stale", {
+      deps.log.info("app removed from personal DM, marking session as stale", {
         conversationId,
         userId,
       });
 
       // Build the session key for this user's DM conversations.
-      // Session key shape follows the routing pattern: msteams:direct:<userId>
-      const baseSessionKey = `msteams:direct:${userId}`;
+      // Session key shape follows the routing pattern used by inbound messages:
+      // agent:<agentId>:msteams:direct:<userId> where agentId defaults to "main"
+      const agentId = "main"; // Match DEFAULT_AGENT_ID used by routing
+      const baseSessionKey = `agent:${agentId}:msteams:direct:${userId}`;
 
       try {
-        const storePath = resolveStorePath(deps.cfg.session?.store, { agentId: "default" });
+        const storePath = resolveStorePath(deps.cfg.session?.store, { agentId });
         let resetCount = 0;
 
         const sessionKeyPrefix = `${baseSessionKey}:`;
