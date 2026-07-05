@@ -285,9 +285,7 @@ function resolveWhamRateLimitForModel(
     return base;
   }
   const normalize = (value: string | undefined): string =>
-    String(value ?? "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
+    (value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const target = normalize(modelId);
   if (!target) {
     return base;
