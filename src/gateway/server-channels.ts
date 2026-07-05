@@ -846,18 +846,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         abort?.abort();
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
+        let stopError: unknown;
         if (plugin?.gateway?.stopAccount) {
-          const account = plugin.config.resolveAccount(cfg, id);
-          await plugin.gateway.stopAccount({
-            cfg,
-            accountId: id,
-            account,
-            runtime,
-            abortSignal: abort?.signal ?? new AbortController().signal,
-            log,
-            getStatus: () => getRuntime(channelId, id),
-            setStatus: (next) => setRuntime(channelId, id, next),
-          });
+          try {
+            const account = plugin.config.resolveAccount(cfg, id);
+            await plugin.gateway.stopAccount({
+              cfg,
+              accountId: id,
+              account,
+              runtime,
+              abortSignal: abort?.signal ?? new AbortController().signal,
+              log,
+              getStatus: () => getRuntime(channelId, id),
+              setStatus: (next) => setRuntime(channelId, id, next),
+            });
+          } catch (err) {
+            stopError = err;
+          }
         }
         const stoppedCleanly = await waitForChannelStopGracefully(
           task,
@@ -893,6 +898,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           restartPending: false,
           lastStopAt: Date.now(),
         });
+        if (stopError) {
+          throw stopError;
+        }
       }),
     );
   };
