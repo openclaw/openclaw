@@ -82,8 +82,8 @@ function command(
   });
 }
 
-function ghJson<T>(args: string[]): T {
-  return JSON.parse(String(command("gh", args))) as T;
+function ghJson(args: string[]): unknown {
+  return JSON.parse(String(command("gh", args))) as unknown;
 }
 
 async function dispatchWorkflow(
@@ -97,7 +97,7 @@ async function dispatchWorkflow(
   command("gh", ["workflow", "run", "--repo", repository, workflow, "--ref", ref, ...inputs]);
   const deadline = Date.now() + 2 * 60 * 1000;
   while (Date.now() < deadline) {
-    const response = ghJson<{ workflow_runs: Run[] }>([
+    const response = ghJson([
       "api",
       "--method",
       "GET",
@@ -108,7 +108,7 @@ async function dispatchWorkflow(
       `branch=${ref}`,
       "-f",
       "per_page=100",
-    ]);
+    ]) as { workflow_runs: Run[] };
     const matches = response.workflow_runs.filter((run) => {
       const createdAt = Date.parse(run.created_at);
       return (
@@ -138,12 +138,13 @@ async function approvePendingDeployments(repository: string, runId: number): Pro
     environment: { id: number; name: string };
   }>;
   try {
-    deployments = ghJson<
-      Array<{
-        current_user_can_approve: boolean;
-        environment: { id: number; name: string };
-      }>
-    >(["api", `repos/${repository}/actions/runs/${runId}/pending_deployments`]);
+    deployments = ghJson([
+      "api",
+      `repos/${repository}/actions/runs/${runId}/pending_deployments`,
+    ]) as Array<{
+      current_user_can_approve: boolean;
+      environment: { id: number; name: string };
+    }>;
   } catch {
     // A child without an environment gate can reject this endpoint while it starts.
     return;
@@ -171,7 +172,7 @@ async function approvePendingDeployments(repository: string, runId: number): Pro
 async function waitForRun(repository: string, runId: number): Promise<Run> {
   const deadline = Date.now() + 2 * 60 * 60 * 1000;
   while (Date.now() < deadline) {
-    const run = ghJson<Run>(["api", `repos/${repository}/actions/runs/${runId}`]);
+    const run = ghJson(["api", `repos/${repository}/actions/runs/${runId}`]) as Run;
     if (run.status === "completed") {
       if (run.conclusion !== "success") {
         throw new Error(`Actions run ${run.html_url} completed with ${run.conclusion}.`);
@@ -185,10 +186,10 @@ async function waitForRun(repository: string, runId: number): Promise<Run> {
 }
 
 function artifactForRun(repository: string, runId: number, expectedName: string): Artifact {
-  const response = ghJson<{ artifacts: Artifact[] }>([
+  const response = ghJson([
     "api",
     `repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`,
-  ]);
+  ]) as { artifacts: Artifact[] };
   const matches = response.artifacts.filter(
     (artifact) => artifact.name === expectedName && !artifact.expired,
   );

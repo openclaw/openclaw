@@ -306,8 +306,8 @@ function assertClosedObject(value, expectedKeys, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be a JSON object.`);
   }
-  const actualKeys = Object.keys(value).toSorted();
-  const sortedExpectedKeys = [...expectedKeys].toSorted();
+  const actualKeys = Object.keys(value).toSorted((left, right) => left.localeCompare(right));
+  const sortedExpectedKeys = [...expectedKeys].toSorted((left, right) => left.localeCompare(right));
   if (JSON.stringify(actualKeys) !== JSON.stringify(sortedExpectedKeys)) {
     throw new Error(`${label} has an unexpected field set.`);
   }
