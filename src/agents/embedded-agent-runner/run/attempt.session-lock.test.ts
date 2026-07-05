@@ -3952,6 +3952,10 @@ describe("embedded attempt session lock lifecycle", () => {
     const sessionFile = await createTempSessionFile();
     const events: string[] = [];
     let releaseActiveWrite!: () => void;
+    let markActiveWriteEntered!: () => void;
+    const activeWriteEntered = new Promise<void>((resolve) => {
+      markActiveWriteEntered = resolve;
+    });
     const activeWriteStarted = new Promise<void>((resolve) => {
       releaseActiveWrite = () => {
         events.push("active-finish");
@@ -3973,11 +3977,10 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.reacquireAfterPrompt();
     const activeWrite = controller.withSessionWriteLock(async () => {
       events.push("active-start");
+      markActiveWriteEntered();
       await activeWriteStarted;
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await activeWriteEntered;
     await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
 
     let takeoverSettled = false;
