@@ -69,6 +69,7 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let handlesGatewaySetupRequests: Bool
 
     init(
         initialRoute: SettingsRoute? = nil,
@@ -76,7 +77,8 @@ struct SettingsProTab: View {
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
-        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        handlesGatewaySetupRequests: Bool = false)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
@@ -84,6 +86,7 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.handlesGatewaySetupRequests = handlesGatewaySetupRequests
     }
 
     var body: some View {
@@ -136,7 +139,9 @@ struct SettingsProTab: View {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                self.applyPendingGatewaySetupLinkIfNeeded()
+                if self.handlesGatewaySetupRequests {
+                    self.applyPendingGatewaySetupLinkIfNeeded()
+                }
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
             }
@@ -171,9 +176,6 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
-            }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.

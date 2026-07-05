@@ -202,7 +202,8 @@ struct RootTabs: View {
 
             SettingsProTab(
                 initialRoute: self.selectedSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                onRouteChange: self.handleSettingsRouteChange,
+                handlesGatewaySetupRequests: true)
                 .id(self.settingsTabViewID)
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
@@ -511,13 +512,15 @@ struct RootTabs: View {
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
                     navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    onRouteChange: self.handleSettingsRouteChange,
+                    handlesGatewaySetupRequests: true)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
                     navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange)
+                    onRouteChange: self.handleSettingsRouteChange,
+                    handlesGatewaySetupRequests: true)
             }
         case .gateway:
             SettingsProTab(
@@ -525,7 +528,8 @@ struct RootTabs: View {
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
                 navigateToRoute: self.pushSidebarSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange)
+                onRouteChange: self.handleSettingsRouteChange,
+                handlesGatewaySetupRequests: true)
         }
     }
 
@@ -1296,6 +1300,8 @@ extension RootTabs {
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true
+        // Rebuild the canonical Settings owner before it consumes this request.
+        self.selectedSettingsRouteRequestID &+= 1
         self.selectSidebarDestination(.gateway)
         self.requestLocalNetworkAccess(reason: "gateway_setup_deeplink")
     }
