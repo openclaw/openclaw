@@ -1305,7 +1305,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setActivityStatus,
     clearLocalRunIds,
     rememberSessionKey: rememberCurrentSessionKey,
-    emptySessionInfoDefaults,
   });
   const {
     refreshAgents,
@@ -1314,7 +1313,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     applySessionMutationResult,
     loadHistory,
     setSession,
-    setEmptySession,
     abortActive,
   } = sessionActions;
 
@@ -1411,7 +1409,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       applySessionMutationResult,
       loadHistory,
       setSession,
-      setEmptySession,
       refreshAgents,
       abortActive,
       setActivityStatus,

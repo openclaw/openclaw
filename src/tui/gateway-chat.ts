@@ -39,6 +39,7 @@ import type {
   TuiModelChoice,
   TuiApprovalDecision,
   TuiSessionList,
+  TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
 } from "./tui-backend.js";
@@ -281,6 +282,13 @@ export class GatewayChatClient implements TuiBackend {
 
   async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
+  }
+
+  async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
+    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+      ...opts,
+      emitCommandHooks: Boolean(opts.parentSessionKey),
+    });
   }
 
   async resetSession(

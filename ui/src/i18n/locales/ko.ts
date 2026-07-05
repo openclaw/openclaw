@@ -1426,6 +1426,13 @@ export const ko: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "컨텍스트 사용량 세부 정보",
+        open: "컨텍스트 사용량 세부 정보 열기",
+        summary: "세션 컨텍스트 사용량: {limit} 중 {used} ({pct}%)",
+        contextWindow: "컨텍스트 창",
+        latestRunTokens: "최근 실행 토큰",
+      },
       dismissTalkError: "Talk 오류 닫기",
       startTalk: "Start Talk",
       stillListening: "계속 듣는 중",

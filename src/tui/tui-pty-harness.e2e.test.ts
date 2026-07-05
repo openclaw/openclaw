@@ -318,6 +318,12 @@ async function writeTuiPtyFixtureScript(dir: string) {
           };
         }
 
+        async createSession(opts: Parameters<TuiBackend["createSession"]>[0]) {
+          record("createSession", opts);
+          const key = "agent:main:" + opts.key;
+          return { ok: true, key, entry: { ...sessionEntry(key), sessionId: "created-session" } };
+        }
+
         async resetSession(key: string, reason?: "new" | "reset") {
           record("resetSession", { key, reason });
           return {};
@@ -641,6 +647,24 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "creates a backend session from /new and adopts its canonical key",
+    async () => {
+      await fixture.run.write("/new\r", { delay: false });
+      await fixture.run.waitForOutput("new session: agent:main:tui-");
+      const created = await fixture.waitForLogEntry((entry) => entry.method === "createSession");
+      expect(created.payload).toMatchObject({ agentId: "main" });
+      expect(created.payload).not.toHaveProperty("parentSessionKey");
+
+      await fixture.run.write("after new\r", { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
+      );
+      expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "resets the current session from /reset",
     async () => {
       await fixture.run.write("/reset\r", { delay: false });
@@ -654,7 +678,7 @@ describe.sequential("TUI PTY harness", () => {
           return false;
         }
         const key = (entry.payload as Record<string, unknown>).key;
-        return key === "main" || key === "agent:main:main";
+        return typeof key === "string" && (key === "main" || key.startsWith("agent:main:"));
       });
     },
     TEST_TIMEOUT_MS,
