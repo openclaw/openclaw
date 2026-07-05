@@ -1963,6 +1963,67 @@ export async function runReplyAgent(params: {
     ) {
       await opts.onObservedReplyDelivery?.();
     }
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    // A terminal fallback is built separately after normal payload filtering.
+    // Share this state across deliverable lanes so replyToMode=first still threads
+    // at most one visible payload without hidden reasoning/commentary consuming it.
+    const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
+      replyToMode,
+      replyToChannel,
+    );
+    const applyFinalReplyToMode = (payload: ReplyPayload) => {
+      const isDisabledReasoningLane =
+        payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
+      const isDisabledCommentaryLane =
+        payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+      const isFilteredPayload =
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
+      return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
+        ? payload
+        : applyDeliveredReplyToMode(payload);
+    };
+    const buildFinalPayloads = (payloads: ReplyPayload[]) =>
+      buildReplyPayloads({
+        config: cfg,
+        payloads,
+        isHeartbeat,
+        didLogHeartbeatStrip,
+        silentExpected: followupRun.run.silentExpected,
+        blockStreamingEnabled,
+        blockReplyPipeline,
+        directlySentBlockKeys,
+        directlySentBlockPayloads,
+        replyToMode,
+        replyToChannel,
+        currentMessageId,
+        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+        applyReplyToMode: applyFinalReplyToMode,
+        messageProvider: followupRun.run.messageProvider,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        originatingChannel: sessionCtx.OriginatingChannel,
+        originatingChatType: sessionCtx.ChatType,
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+        originatingThreadId: replyRouteThreadId,
+        accountId: sessionCtx.AccountId,
+        normalizeMediaPaths: replyMediaContext.normalizePayload,
+      });
+    const returnPreparedFallbackPayload = async (
+      payload: ReplyPayload,
+    ): Promise<ReplyPayload | undefined> => {
+      const result = await buildFinalPayloads([payload]);
+      didLogHeartbeatStrip = result.didLogHeartbeatStrip;
+      const preparedPayload = result.replyPayloads[0];
+      if (!preparedPayload) {
+        return undefined;
+      }
+      await signalTypingIfNeeded([preparedPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(preparedPayload);
+    };
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
@@ -1982,8 +2043,7 @@ export async function runReplyAgent(params: {
           `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
         ),
       );
-      await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
-      return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+      return returnPreparedFallbackPayload(silentFallbackFailurePayload);
     };
     const returnEmptyInteractiveReplyIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const emptyInteractiveReplyPayload = buildEmptyInteractiveReplyFallbackPayload({
@@ -2001,8 +2061,7 @@ export async function runReplyAgent(params: {
         "run_failed",
         new Error("empty interactive reply produced no visible payload"),
       );
-      await signalTypingIfNeeded([emptyInteractiveReplyPayload], typingSignals);
-      return returnWithQueuedFollowupDrain(emptyInteractiveReplyPayload);
+      return returnPreparedFallbackPayload(emptyInteractiveReplyPayload);
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
@@ -2092,55 +2151,6 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(undefined);
     }
 
-    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-    // A terminal fallback is built separately after normal payload filtering.
-    // Share this state across deliverable lanes so replyToMode=first still threads
-    // at most one visible payload without hidden reasoning/commentary consuming it.
-    const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
-      replyToMode,
-      replyToChannel,
-    );
-    const applyFinalReplyToMode = (payload: ReplyPayload) => {
-      const isDisabledReasoningLane =
-        payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
-      const isDisabledCommentaryLane =
-        payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
-      const isFilteredPayload =
-        normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
-      return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
-        ? payload
-        : applyDeliveredReplyToMode(payload);
-    };
-    const buildFinalPayloads = (payloads: ReplyPayload[]) =>
-      buildReplyPayloads({
-        config: cfg,
-        payloads,
-        isHeartbeat,
-        didLogHeartbeatStrip,
-        silentExpected: followupRun.run.silentExpected,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        directlySentBlockKeys,
-        directlySentBlockPayloads,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        applyReplyToMode: applyFinalReplyToMode,
-        messageProvider: followupRun.run.messageProvider,
-        messagingToolSentTexts: runResult.messagingToolSentTexts,
-        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingChatType: sessionCtx.ChatType,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
-        }),
-        originatingThreadId: replyRouteThreadId,
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
     const payloadCandidates =
       fallbackNoticePayloads.length > 0
         ? [...fallbackNoticePayloads, ...payloadArray]

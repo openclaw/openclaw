@@ -584,6 +584,16 @@ describe("runReplyAgent auto-compaction token update", () => {
     },
   );
 
+  it("threads the empty interactive direct fallback through normal final preparation", async () => {
+    const result = await runEmptyDirectReply(
+      { meta: { agentMeta: {} } },
+      { config: { channels: { whatsapp: { replyToMode: "first" } } } },
+    );
+
+    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(payload.replyToId).toBe("msg");
+  });
+
   it("keeps spawn-only empty direct replies silent", async () => {
     expect(
       await runEmptyDirectReply({
