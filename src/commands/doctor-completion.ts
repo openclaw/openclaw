@@ -287,7 +287,7 @@ export async function doctorShellCompletion(
 
 /** Ensures the shell completion cache exists without prompting during setup/update flows. */
 export async function ensureCompletionCacheExists(
-  binName = "openclaw",
+  binName: string,
   options: CompletionCacheGenerationOptions,
 ): Promise<boolean> {
   const shell = options.shell ?? resolveShellFromEnv();
