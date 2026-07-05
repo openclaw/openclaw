@@ -1038,9 +1038,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await waitForChatScrollIdle(page);
-      await scrollChatThreadToTop(page);
       await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .poll(
+          async () => {
+            await scrollChatThreadToTop(page);
+            return chatThreadDistanceFromBottom(page);
+          },
+          { timeout: 10_000 },
+        )
         .toBeGreaterThan(200);
 
       await gateway.deferNext("chat.send");
