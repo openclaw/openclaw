@@ -479,7 +479,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   },
 };
 
-export const __testing = {
+export const testing = {
   resolveCallbackHost,
   redirectUri: REDIRECT_URI,
 };
