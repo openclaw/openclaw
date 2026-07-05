@@ -284,8 +284,6 @@ export type MsgContext = {
   CanDetectMention?: boolean;
   /** True when provider mention metadata or mention-pattern text was present. */
   HasAnyMention?: boolean;
-  /** True when the current channel policy requires a mention before replying. */
-  RequireMention?: boolean;
   /** Final mention decision after native/text detection and policy fallback. */
   EffectiveWasMentioned?: boolean;
   /** True when require-mention policy skipped this group turn. */

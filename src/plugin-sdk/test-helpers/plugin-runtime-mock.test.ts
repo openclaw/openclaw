@@ -128,8 +128,9 @@ describe("createPluginRuntimeMock", () => {
     expect(ctx.MentionedUserIds).toEqual(["bot-1"]);
     expect(ctx.MentionedSubteamIds).toEqual(["team-1"]);
     expect(ctx.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
-    expect(ctx.RequireMention).toBe(true);
+    expect(ctx.GroupRequireMention).toBe(true);
     expect(ctx.EffectiveWasMentioned).toBe(true);
+    expect(ctx.MentionShouldSkip).toBe(false);
     expect(ctx.MentionSource).toBe("mention_pattern");
   });
 

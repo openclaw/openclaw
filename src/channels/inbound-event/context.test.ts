@@ -180,7 +180,6 @@ describe("buildChannelInboundEventContext", () => {
       ExplicitlyMentionedBot: true,
       MentionedUserIds: ["bot-1"],
       ImplicitMentionKinds: ["reply_to_bot"],
-      RequireMention: true,
       EffectiveWasMentioned: true,
       MentionShouldSkip: false,
       MentionSource: "explicit_bot",

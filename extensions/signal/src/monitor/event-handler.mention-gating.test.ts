@@ -10,7 +10,7 @@ type SignalMsgContext = Pick<
   | "CanDetectMention"
   | "WasMentioned"
   | "HasAnyMention"
-  | "RequireMention"
+  | "GroupRequireMention"
   | "EffectiveWasMentioned"
   | "MentionShouldSkip"
   | "MentionSource"
@@ -19,7 +19,7 @@ type SignalMsgContext = Pick<
   CanDetectMention?: boolean;
   WasMentioned?: boolean;
   HasAnyMention?: boolean;
-  RequireMention?: boolean;
+  GroupRequireMention?: boolean;
   EffectiveWasMentioned?: boolean;
   MentionShouldSkip?: boolean;
   MentionSource?: string;
@@ -161,7 +161,7 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().WasMentioned).toBe(true);
     expect(getCapturedCtx().HasAnyMention).toBe(true);
     expect(getCapturedCtx().MentionSource).toBe("mention_pattern");
-    expect(getCapturedCtx().RequireMention).toBe(true);
+    expect(getCapturedCtx().GroupRequireMention).toBe(true);
     expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
   });
 
@@ -341,7 +341,7 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx().CanDetectMention).toBe(true);
     expect(getCapturedCtx().WasMentioned).toBe(true);
     expect(getCapturedCtx().HasAnyMention).toBe(true);
-    expect(getCapturedCtx().RequireMention).toBe(true);
+    expect(getCapturedCtx().GroupRequireMention).toBe(true);
     expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
     expect(getCapturedCtx().MentionShouldSkip).toBe(false);
     expect(getCapturedCtx().MentionSource).toBe("native");

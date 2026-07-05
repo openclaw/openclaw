@@ -516,7 +516,6 @@ export function buildChannelInboundEventContext(
     MentionedUserIds: params.access?.mentions?.mentionedUserIds,
     MentionedSubteamIds: params.access?.mentions?.mentionedSubteamIds,
     ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
-    RequireMention: params.access?.mentions?.requireMention,
     EffectiveWasMentioned: params.access?.mentions?.effectiveWasMentioned,
     MentionShouldSkip: params.access?.mentions?.shouldSkip,
     MentionSource: params.access?.mentions?.mentionSource,
