@@ -605,6 +605,47 @@ describe("update-startup", () => {
     },
   );
 
+  it("bypasses a recent empty prior-channel check on extended-stable", async () => {
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+    });
+    mockPackageUpdateStatus("extended-stable", "2.0.0");
+
+    await runExtendedStableUpdateCheck();
+
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+      channel: "extended-stable",
+      timeoutMs: 2500,
+    });
+    expect(getUpdateAvailable()).toEqual({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "extended-stable",
+    });
+  });
+
+  it("bypasses a recent non-newer extended-stable cache entry", async () => {
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+      lastAvailableVersion: "1.0.0",
+      lastAvailableTag: "extended-stable",
+    });
+    mockPackageUpdateStatus("extended-stable", "2.0.0");
+
+    await runExtendedStableUpdateCheck();
+
+    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+      channel: "extended-stable",
+      timeoutMs: 2500,
+    });
+    expect(getUpdateAvailable()).toEqual({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "extended-stable",
+    });
+  });
+
   it("emits update change callback when update state clears", async () => {
     mockPackageInstallStatus();
     vi.mocked(resolveNpmChannelTag)
