@@ -326,7 +326,7 @@ export function isSilentReplyPrefixText(
   // from the token. Otherwise, a pure-letter prefix like "HE" for "HELP-QUIET"
   // would suppress natural language that happens to share that prefix (#100007).
   if (/[^A-Z_]/.test(tokenUpper)) {
-    return [...tokenUpper].some((ch) => /[^A-Z_]/.test(ch) && normalized.includes(ch));
+    return /[^A-Z_]/.test(normalized);
   }
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }
