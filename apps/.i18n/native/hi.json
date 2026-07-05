@@ -10354,6 +10354,36 @@
       "translated": "अगला"
     },
     {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian काम कर रहा है…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "Restart"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "सीक्रेट दर्ज करें…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Crestodian को जवाब दें… (yes सब कुछ सेट कर देता है)"
+    },
+    {
+      "id": "native.apple.a63c9bf74cc6fa3e",
+      "source": "Talk to Crestodian",
+      "translated": "Crestodian से बात करें"
+    },
+    {
+      "id": "native.apple.c29bee62e4f63d1c",
+      "source": "Crestodian is OpenClaw's setup custodian. It finds AI access you already have — a Claude Code or Codex login, or API keys — and sets everything up when you say yes. Just tell it what you want.",
+      "translated": "Crestodian, OpenClaw का सेटअप कस्टोडियन है। यह आपके पास पहले से मौजूद AI access ढूँढता है — Claude Code या Codex login, या API keys — और जब आप yes कहते हैं तो सब कुछ सेट कर देता है। बस इसे बताएं कि आप क्या चाहते हैं।"
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "वापस"
@@ -10584,14 +10614,9 @@
       "translated": "अनुमतियाँ दें"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "ये macOS अनुमतियाँ OpenClaw को इस Mac पर ऐप्स को ऑटोमेट करने और संदर्भ कैप्चर करने देती हैं।"
-    },
-    {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "स्थिति रीफ़्रेश करें"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "ये macOS permissions OpenClaw को इस Mac पर apps को automate करने और context capture करने देती हैं। Status अपने-आप update होता है।"
     },
     {
       "id": "native.apple.8d7590f1d8f61a1d",
@@ -10694,9 +10719,9 @@
       "translated": "अपने एजेंट से मिलें"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "यह एक समर्पित ऑनबोर्डिंग चैट है। आपका एजेंट अपना परिचय देगा, जानेगा कि आप कौन हैं, और यदि आप चाहें तो WhatsApp या Telegram कनेक्ट करने में मदद करेगा।"
+      "id": "native.apple.2c5c8568a34d4f0f",
+      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, or another channel if you want.",
+      "translated": "यह एक dedicated onboarding chat है। आपका agent अपना परिचय देगा, जानेगा कि आप कौन हैं, और यदि आप चाहें तो Discord, Slack, Telegram, WhatsApp, या कोई दूसरा channel connect करने में आपकी मदद करेगा।"
     },
     {
       "id": "native.apple.5e1277166b2ad41a",
@@ -10734,9 +10759,9 @@
       "translated": "त्वरित चैट और स्थिति के लिए OpenClaw मेनू बार आइकन पर क्लिक करें।"
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "WhatsApp या Telegram कनेक्ट करें"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Discord, Slack, Telegram, WhatsApp, … connect करें"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +10842,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "अभी तक कोई Skills रिपोर्ट नहीं की गई हैं।"
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "सेटअप विज़ार्ड"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Gateway से निर्देशित सेटअप का पालन करें। इससे ऑनबोर्डिंग CLI के साथ सिंक में रहती है।"
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "विज़ार्ड त्रुटि"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "पुनः प्रयास करें"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "सेटअप रोका गया है"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "स्थानीय Gateway शुरू करने और सेटअप जारी रखने के लिए OpenClaw फिर से शुरू करें।"
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "सेटअप फिर से शुरू करें"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "विज़ार्ड शुरू हो रहा है…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "विज़ार्ड पूरा हुआ। अगले चरण पर जारी रखें।"
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "विज़ार्ड की प्रतीक्षा हो रही है…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "असमर्थित चरण प्रकार"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "जारी रखें"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "चलाएँ"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

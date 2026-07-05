@@ -219,9 +219,43 @@ export function resetChatComposerState() {
   Object.assign(composerState, createChatComposerState());
 }
 
+const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
+
+function updateTextareaOverflow(el: HTMLTextAreaElement) {
+  el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
+  // Hide the browser's scrollbar while measuring; restore it only when the
+  // final CSS-constrained height actually clips the draft.
+  el.style.overflowY = "hidden";
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+  updateTextareaOverflow(el);
+}
+
+function observeTextareaOverflow(el: HTMLTextAreaElement) {
+  if (typeof ResizeObserver !== "function" || composerTextareaResizeObservers.has(el)) {
+    return;
+  }
+  const observer = new ResizeObserver(() => updateTextareaOverflow(el));
+  observer.observe(el);
+  composerTextareaResizeObservers.set(el, observer);
+}
+
+function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
+  composerTextareaResizeObservers.get(el)?.disconnect();
+  composerTextareaResizeObservers.delete(el);
+}
+
+function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
+  // Lit invokes ref callbacks before the textarea is connected and before its
+  // controlled value is committed, so measure once the render has settled.
+  queueMicrotask(() => {
+    if (el.isConnected) {
+      adjustTextareaHeight(el);
+    }
+  });
 }
 
 function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
@@ -1730,9 +1764,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       <div class="agent-chat__composer-combobox">
         <textarea
           ${ref((element) => {
-            composerTextarea = element instanceof HTMLTextAreaElement ? element : null;
+            const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+            if (composerTextarea && composerTextarea !== nextTextarea) {
+              disconnectTextareaOverflowObserver(composerTextarea);
+            }
+            composerTextarea = nextTextarea;
             if (composerTextarea) {
-              adjustTextareaHeight(composerTextarea);
+              observeTextareaOverflow(composerTextarea);
+              scheduleTextareaHeightAdjustment(composerTextarea);
             }
           })}
           .value=${visibleDraft}
