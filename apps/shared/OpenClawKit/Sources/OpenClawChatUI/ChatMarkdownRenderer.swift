@@ -41,16 +41,16 @@ struct ChatMarkdownRenderer: View {
     @ViewBuilder
     private func blockView(_ block: ChatMarkdownBlock) -> some View {
         switch block {
-        case .prose(let markdown):
+        case let .prose(markdown):
             Text(self.markdownText(ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: markdown)))
                 .font(self.font)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
                 .lineSpacing(self.variant == .compact ? 2 : 4)
-        case .code(let code):
+        case let .code(code):
             ChatCodeBlockView(block: code, textColor: self.textColor)
-        case .table(let table):
+        case let .table(table):
             ChatMarkdownTableView(table: table, textColor: self.textColor)
         }
     }
@@ -98,28 +98,14 @@ enum ChatMarkdownDisplayPreprocessor {
         let nextTrimmed = nextLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !nextTrimmed.isEmpty else { return false }
         guard !self.hasMarkdownHardBreak(line) else { return false }
-        guard !self.isBlockMarkdownLine(line), !self.isBlockMarkdownLine(nextLine) else { return false }
+        guard !ChatMarkdownBlockSyntax.startsBlock(line), !ChatMarkdownBlockSyntax.startsBlock(nextLine) else {
+            return false
+        }
         return true
     }
 
     private static func hasMarkdownHardBreak(_ line: String) -> Bool {
         line.hasSuffix("\\") || line.hasSuffix("  ")
-    }
-
-    private static func isBlockMarkdownLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-
-        return self.matches(line, #"^\s{0,3}#{1,6}(\s|$)"#)
-            || self.matches(line, #"^\s{0,3}>"#)
-            || self.matches(line, #"^\s{0,3}([-+*])\s+"#)
-            || self.matches(line, #"^\s{0,3}\d{1,9}[.)]\s+"#)
-            || self.matches(line, #"^( {4}|\t)"#)
-            || self.matches(line, #"^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,}|={3,})$"#)
-    }
-
-    private static func matches(_ line: String, _ pattern: String) -> Bool {
-        line.range(of: pattern, options: .regularExpression) != nil
     }
 }
 

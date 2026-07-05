@@ -50,8 +50,8 @@ struct ChatMarkdownTableView: View {
             Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 7) {
                 GridRow {
                     ForEach(self.table.header.indices, id: \.self) { column in
+                        // One cell per column carries the GFM alignment.
                         self.cell(self.table.header[column], column: column, isHeader: true)
-                            // One cell per column carries the GFM alignment.
                             .gridColumnAlignment(self.columnAlignment(column))
                     }
                 }

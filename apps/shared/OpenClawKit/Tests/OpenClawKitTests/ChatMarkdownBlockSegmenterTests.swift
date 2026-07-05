@@ -204,6 +204,26 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    @Test func `one cell body row without pipes is padded`() {
+        let blocks = self.segments("| a | b |\n| - | - |\nonly one cell")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["only one cell", ""]])),
+        ])
+    }
+
+    @Test func `setext underline and link definition text remain body rows`() {
+        let blocks = self.segments("| a | b |\n| - | - |\n===\n[foo]: /url\n[foo]")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["===", ""], ["[foo]: /url", ""], ["[foo]", ""]])),
+        ])
+    }
+
     @Test func `table body stops at blank line`() {
         let blocks = self.segments("| a |b|\n| - |-|\n| 1 |2|\n\nprose | not a row")
         #expect(blocks == [
@@ -212,6 +232,52 @@ struct ChatMarkdownBlockSegmenterTests {
                 alignments: [.leading, .leading],
                 rows: [["1", "2"]])),
             .prose("prose | not a row"),
+        ])
+    }
+
+    @Test func `table body stops at another block`() {
+        let blocks = self.segments("| a | b |\n| - | - |\n| 1 | 2 |\n> quote")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["1", "2"]])),
+            .prose("> quote"),
+        ])
+    }
+
+    @Test func `table body stops at empty list markers`() {
+        for marker in ["-", "1."] {
+            let blocks = self.segments("| a | b |\n| - | - |\n| 1 | 2 |\n\(marker)")
+            #expect(blocks == [
+                .table(ChatMarkdownTable(
+                    header: ["a", "b"],
+                    alignments: [.leading, .leading],
+                    rows: [["1", "2"]])),
+                .prose(marker),
+            ])
+        }
+    }
+
+    @Test func `table body stops at fenced code`() {
+        let blocks = self.segments("| a | b |\n| - | - |\n| 1 | 2 |\n```swift\nlet x = 1\n```")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["1", "2"]])),
+            .code(ChatCodeBlock(language: "swift", code: "let x = 1", isComplete: true)),
+        ])
+    }
+
+    @Test func `table body stops at html block`() {
+        let blocks = self.segments("| a | b |\n| - | - |\n| 1 | 2 |\n<x-status when=\"count > 0\">\nhtml\n</x-status>")
+        #expect(blocks == [
+            .table(ChatMarkdownTable(
+                header: ["a", "b"],
+                alignments: [.leading, .leading],
+                rows: [["1", "2"]])),
+            .prose("<x-status when=\"count > 0\">\nhtml\n</x-status>"),
         ])
     }
 

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed startup aborts caused by inactive Voice Wake initializing the simulator audio pipeline.
+- Added syntax-highlighted fenced code and native GFM tables to chat.
 - Debug builds now use separate app, extension, widget, and Watch identifiers plus a distinct debug icon, so they can remain installed beside release builds.
 - Animated the OpenClaw mascot (float, blink, antenna wiggle, claw snaps) across onboarding, sidebar, and command center, matching openclaw.ai.
 

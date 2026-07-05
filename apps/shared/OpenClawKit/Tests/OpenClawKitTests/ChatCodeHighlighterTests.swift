@@ -34,7 +34,7 @@ struct ChatCodeHighlighterTests {
     }
 
     @Test func `python hash comment and single quotes`() {
-        let tokens = self.kinds("def f():\n    return 'x'  # done", language: "python")
+        let tokens = self.kinds("def f():\n    return 'x'# done", language: "python")
         #expect(tokens.contains(where: { $0.0 == .keyword && $0.1 == "def" }))
         #expect(tokens.contains(where: { $0.0 == .string && $0.1 == "'x'" }))
         #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == "# done" }))
@@ -44,6 +44,21 @@ struct ChatCodeHighlighterTests {
         let tokens = self.kinds("echo \"# not a comment\" # real", language: "bash")
         #expect(tokens.contains(where: { $0.0 == .string && $0.1 == "\"# not a comment\"" }))
         #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == "# real" }))
+    }
+
+    @Test func `bash parameter expansion hash is not a comment`() {
+        let tokens = self.kinds("echo ${#items[@]} # count\ncat <# input\necho ok ># output", language: "bash")
+        #expect(!tokens.contains(where: { $0.0 == .comment && $0.1.contains("items") }))
+        #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == "# count" }))
+        #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == "# input" }))
+        #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == "# output" }))
+    }
+
+    @Test func `swift nested block comment stays one comment token`() {
+        let comment = "/* outer /* inner */ outer tail */"
+        let tokens = self.kinds("\(comment) let value = 1", language: "swift")
+        #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == comment }))
+        #expect(tokens.contains(where: { $0.0 == .keyword && $0.1 == "let" }))
     }
 
     @Test func `json literals are keywords`() {
@@ -62,7 +77,7 @@ struct ChatCodeHighlighterTests {
     @Test func `unterminated string stops at end of line`() {
         let tokens = self.kinds("let s = \"open\nlet y = 2", language: "swift")
         #expect(tokens.contains(where: { $0.0 == .string && $0.1 == "\"open" }))
-        #expect(tokens.filter { $0.0 == .keyword && $0.1 == "let" }.count == 2)
+        #expect(tokens.count(where: { $0.0 == .keyword && $0.1 == "let" }) == 2)
     }
 
     @Test func `identifiers with digits are not numbers`() {
@@ -83,5 +98,12 @@ struct ChatCodeHighlighterTests {
         let second = ChatCodeHighlightCache.highlighted(code: code, languageId: "swift")
         #expect(first == second)
         #expect(String(first.characters) == code)
+    }
+
+    @Test @MainActor func `oversized blocks bypass highlighting unchanged`() {
+        let code = String(repeating: "let value = 1\n", count: ChatCodeHighlighter.maxHighlightedLines)
+        let highlighted = ChatCodeHighlightCache.highlighted(code: code, languageId: "swift")
+        #expect(String(highlighted.characters) == code)
+        #expect(!ChatCodeHighlighter.isWithinHighlightLimits(code))
     }
 }

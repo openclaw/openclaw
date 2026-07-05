@@ -31,10 +31,33 @@ enum ChatCodeHighlighter {
 
         let keywords: Set<String>
         let lineCommentPrefixes: [String]
+        let lineCommentNeedsBoundary: Bool
         let blockComment: BlockComment?
+        let nestedBlockComments: Bool
         let stringDelimiters: Set<Character>
         let supportsTripleQuotes: Bool
+
+        init(
+            keywords: Set<String>,
+            lineCommentPrefixes: [String],
+            lineCommentNeedsBoundary: Bool = false,
+            blockComment: BlockComment?,
+            nestedBlockComments: Bool = false,
+            stringDelimiters: Set<Character>,
+            supportsTripleQuotes: Bool)
+        {
+            self.keywords = keywords
+            self.lineCommentPrefixes = lineCommentPrefixes
+            self.lineCommentNeedsBoundary = lineCommentNeedsBoundary
+            self.blockComment = blockComment
+            self.nestedBlockComments = nestedBlockComments
+            self.stringDelimiters = stringDelimiters
+            self.supportsTripleQuotes = supportsTripleQuotes
+        }
     }
+
+    static let maxHighlightedLines = 200
+    static let maxHighlightedBytes = 20000
 
     static func language(for id: String?) -> Language? {
         switch id {
@@ -49,7 +72,9 @@ enum ChatCodeHighlighter {
     }
 
     static func attributedCode(_ code: String, languageId: String?) -> AttributedString {
-        guard let language = self.language(for: languageId) else { return AttributedString(code) }
+        guard let language = self.language(for: languageId), self.isWithinHighlightLimits(code) else {
+            return AttributedString(code)
+        }
         var output = AttributedString()
         for token in self.tokens(code: code, language: language) {
             var piece = AttributedString(token.text)
@@ -78,14 +103,25 @@ enum ChatCodeHighlighter {
 
             if let block = language.blockComment, self.matches(chars, at: index, block.open) {
                 flushPlain()
-                index = self.consumeBlockComment(chars, from: index, block: block, into: &tokens)
+                index = self.consumeBlockComment(
+                    chars,
+                    from: index,
+                    block: block,
+                    nested: language.nestedBlockComments,
+                    into: &tokens)
                 continue
             }
 
-            if language.lineCommentPrefixes.contains(where: { self.matches(chars, at: index, $0) }) {
+            let startsLineComment = language.lineCommentPrefixes.contains { prefix in
+                self.matches(chars, at: index, prefix) &&
+                    (!language.lineCommentNeedsBoundary || self.isLineCommentBoundary(chars, at: index))
+            }
+            if startsLineComment {
                 flushPlain()
                 var end = index
-                while end < chars.count, chars[end] != "\n" { end += 1 }
+                while end < chars.count, chars[end] != "\n" {
+                    end += 1
+                }
                 tokens.append(ChatCodeToken(kind: .comment, text: String(chars[index..<end])))
                 index = end
                 continue
@@ -148,15 +184,38 @@ enum ChatCodeHighlighter {
         _ chars: [Character],
         from start: Int,
         block: Language.BlockComment,
+        nested: Bool,
         into tokens: inout [ChatCodeToken]) -> Int
     {
+        var depth = 1
         var end = start + block.open.count
-        while end < chars.count, !self.matches(chars, at: end, block.close) {
-            end += 1
+        while end < chars.count {
+            if nested, self.matches(chars, at: end, block.open) {
+                depth += 1
+                end += block.open.count
+            } else if self.matches(chars, at: end, block.close) {
+                depth -= 1
+                end += block.close.count
+                if depth == 0 { break }
+            } else {
+                end += 1
+            }
         }
-        if end < chars.count { end += block.close.count }
         tokens.append(ChatCodeToken(kind: .comment, text: String(chars[start..<end])))
         return end
+    }
+
+    private static func isLineCommentBoundary(_ chars: [Character], at index: Int) -> Bool {
+        guard index > 0 else { return true }
+        let previous = chars[index - 1]
+        return previous.isWhitespace || ";&|()<>".contains(previous)
+    }
+
+    static func isWithinHighlightLimits(_ code: String) -> Bool {
+        guard code.utf8.count <= self.maxHighlightedBytes else { return false }
+        let newlineCount = code.lazy.count(where: { $0 == "\n" })
+        let lineCount = code.isEmpty ? 0 : newlineCount + 1
+        return lineCount <= self.maxHighlightedLines
     }
 
     private static func consumeString(
@@ -225,6 +284,7 @@ enum ChatCodeHighlighter {
         ],
         lineCommentPrefixes: ["//"],
         blockComment: Language.BlockComment(open: "/*", close: "*/"),
+        nestedBlockComments: true,
         stringDelimiters: ["\""],
         supportsTripleQuotes: true)
 
@@ -239,6 +299,7 @@ enum ChatCodeHighlighter {
         ],
         lineCommentPrefixes: ["//"],
         blockComment: Language.BlockComment(open: "/*", close: "*/"),
+        nestedBlockComments: true,
         stringDelimiters: ["\""],
         supportsTripleQuotes: true)
 
@@ -278,6 +339,7 @@ enum ChatCodeHighlighter {
             "while",
         ],
         lineCommentPrefixes: ["#"],
+        lineCommentNeedsBoundary: true,
         blockComment: nil,
         stringDelimiters: ["\"", "'"],
         supportsTripleQuotes: false)
@@ -300,6 +362,11 @@ enum ChatCodeHighlightCache {
     private static let capacity = 160
 
     static func highlighted(code: String, languageId: String?) -> AttributedString {
+        guard ChatCodeHighlighter.language(for: languageId) != nil,
+              ChatCodeHighlighter.isWithinHighlightLimits(code)
+        else {
+            return AttributedString(code)
+        }
         let key = "\(languageId ?? "")\u{0}\(code)"
         if let hit = self.cache[key] { return hit }
         let value = ChatCodeHighlighter.attributedCode(code, languageId: languageId)

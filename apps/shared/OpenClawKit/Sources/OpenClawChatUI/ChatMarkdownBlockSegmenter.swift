@@ -28,6 +28,49 @@ struct ChatMarkdownTable: Equatable {
     let rows: [[String]]
 }
 
+enum ChatMarkdownBlockSyntax {
+    private static let htmlBlockTagNames =
+        "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|section|source|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
+
+    static func startsBlock(_ line: String, includesSetextUnderline: Bool = true) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let startsIndependentBlock = self.matches(line, #"^\s{0,3}#{1,6}(\s|$)"#)
+            || self.matches(line, #"^\s{0,3}>"#)
+            || self.matches(line, #"^\s{0,3}([-+*])(?:\s+|$)"#)
+            || self.matches(line, #"^\s{0,3}\d{1,9}[.)](?:\s+|$)"#)
+            || self.matches(line, #"^( {4}|\t)"#)
+            || self.matches(line, #"^\s{0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$"#)
+        return startsIndependentBlock
+            || (includesSetextUnderline && self.matches(line, #"^\s{0,3}={3,}$"#))
+    }
+
+    private static func matches(_ line: String, _ pattern: String) -> Bool {
+        line.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    static func startsHTMLBlock(_ line: String) -> Bool {
+        guard line.range(of: #"^\s{0,3}<"#, options: .regularExpression) != nil else { return false }
+        let caseInsensitivePatterns = [
+            #"^\s{0,3}<(?:script|pre|textarea|style)(?:\s|>|$)"#,
+            #"^\s{0,3}</?(?:"# + self.htmlBlockTagNames + #")(?:\s|/?>|$)"#,
+        ]
+        let literalPatterns = [
+            #"^\s{0,3}<!--"#,
+            #"^\s{0,3}<\?"#,
+            #"^\s{0,3}<![A-Z]"#,
+            #"^\s{0,3}<!\[CDATA\["#,
+            #"^\s{0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t\v\f]+[A-Za-z_:][A-Za-z0-9:._-]*(?:[ \t\v\f]*=[ \t\v\f]*(?:[^ \t\r\n\v\f"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t\v\f]*/?>|</[A-Za-z][A-Za-z0-9-]*[ \t\v\f]*>)[ \t\v\f]*$"#,
+        ]
+        return caseInsensitivePatterns.contains { pattern in
+            line.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        } || literalPatterns.contains { pattern in
+            line.range(of: pattern, options: .regularExpression) != nil
+        }
+    }
+}
+
 enum ChatMarkdownBlockSegmenter {
     /// Splits message markdown into prose / fenced-code / table blocks.
     /// `isComplete: false` (streaming) keeps a trailing open fence or a table
@@ -221,7 +264,15 @@ enum ChatMarkdownBlockSegmenter {
         while cursor < lines.count {
             let line = lines[cursor]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, line.contains("|") else { break }
+            // GFM rows have optional boundary/separator pipes. Once a table has
+            // started, any nonblank line can therefore be a one-cell body row.
+            guard !trimmed.isEmpty,
+                  !ChatMarkdownBlockSyntax.startsBlock(line, includesSetextUnderline: false),
+                  !ChatMarkdownBlockSyntax.startsHTMLBlock(line),
+                  FenceOpener.parse(line) == nil
+            else { break }
+            // In cmark-gfm, link reference definitions are not block openers
+            // inside an active table; without a blank line they remain cells.
             // GFM pads short rows and truncates long ones to the header width.
             var cells = self.parseRow(line)
             if cells.count < header.count {
