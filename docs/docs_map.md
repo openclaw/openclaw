@@ -1774,6 +1774,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Author
   - H3: Provider scaffold
   - H2: Install
+  - H3: Extended-stable install and update boundaries
   - H3: Marketplace shorthand
   - H2: List
   - H3: Plugin index
