@@ -1331,11 +1331,12 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.append("--search")
     if args.model:
         cmd.extend(["--model", args.model])
-    if args.thinking:
-        cmd.extend(["-c", f'model_reasoning_effort="{args.thinking}"'])
     # User overrides go before the isolation flags so isolation stays authoritative on conflicts.
     for override in codex_config_overrides(args):
         cmd.extend(["-c", override])
+    # Dedicated settings win over the generic config escape hatch.
+    if args.thinking:
+        cmd.extend(["-c", f'model_reasoning_effort="{args.thinking}"'])
     # After --codex-config so an explicit speed wins over a service_tier value in the raw overrides.
     speed_override = codex_speed_override(args)
     if speed_override is not None:
@@ -1418,6 +1419,17 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 
 def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    project_settings = [
+        path
+        for path in (repo / ".factory" / "settings.json", repo / ".factory" / "settings.local.json")
+        if path.exists()
+    ]
+    if project_settings:
+        raise SystemExit(
+            "droid engine refused project-local settings: "
+            + format_repo_paths(repo, project_settings)
+            + ". Droid settings can execute host hooks outside review tool permissions."
+        )
     prompt_path = Path(tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False).name)
     prompt_path.write_text(prompt)
     cmd = [
@@ -1555,6 +1567,11 @@ def cursor_local_hook_paths(repo: Path) -> list[Path]:
     return [path for path in candidates if path.exists()]
 
 
+def cursor_local_permission_paths(repo: Path) -> list[Path]:
+    path = repo / ".cursor" / "cli.json"
+    return [path] if path.exists() else []
+
+
 def format_repo_paths(repo: Path, paths: list[Path]) -> str:
     return "; ".join(str(path.relative_to(repo)) for path in paths)
 
@@ -1661,6 +1678,7 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--no-web-search is not supported by the cursor engine; Cursor CLI does not expose a documented per-run web-search disable flag")
     local_mcp_paths = cursor_local_mcp_paths(repo)
     local_hook_paths = cursor_local_hook_paths(repo)
+    local_permission_paths = cursor_local_permission_paths(repo)
     if not args.cursor_allow_workspace_instructions:
         raise SystemExit(
             "cursor engine requires --cursor-allow-workspace-instructions for an explicitly trusted repo; "
@@ -1677,6 +1695,12 @@ def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "cursor engine refused project-local MCP config: "
             + format_repo_paths(repo, local_mcp_paths)
             + ". Cursor MCP tools cannot be restricted to read-only review access."
+        )
+    if local_permission_paths:
+        raise SystemExit(
+            "cursor engine refused project-local permission config: "
+            + format_repo_paths(repo, local_permission_paths)
+            + ". Project permissions can override the read-only review policy."
         )
     print(
         "cursor isolation warning: trusted project-local resources are being allowed explicitly.",
@@ -2551,6 +2575,14 @@ def self_test_engine_isolation() -> int:
                 Path("mcp.json"),
             ):
                 (repo / relative_path).unlink(missing_ok=True)
+            try:
+                run_cursor(args, repo, "review hostile patch")
+            except SystemExit as exc:
+                if "project-local permission config" not in str(exc):
+                    raise
+            else:
+                raise SystemExit("cursor isolation self-test failed: local permission config should be refused")
+            (repo / ".cursor" / "cli.json").unlink()
             run_cursor(args, repo, "review hostile patch")
             cursor_record = json.loads(record_path.read_text())
             cursor_argv = cursor_record["argv"]
@@ -3065,7 +3097,14 @@ def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
 
 def env_truthy(name: str) -> bool:
     value = os.environ.get(name)
-    return value is not None and value.strip().lower() not in {"", "0", "false", "no", "off"}
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"invalid boolean environment value for {name}: {value}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -3330,6 +3369,7 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         clone.model = model
         clone.thinking = thinking
         clone.fallback_model = fallback_model
+        clone.tools = False if engine == "pi" else args.tools
         result.append(clone)
     return result
 
@@ -3445,6 +3485,7 @@ def reviewer_test_args(**overrides: Any) -> argparse.Namespace:
         "fallback_model": None,
         "codex_config": None,
         "codex_speed": None,
+        "tools": True,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -3713,7 +3754,9 @@ def main() -> int:
                 print(f"codex_speed: {speed}")
     else:
         print(f"reviewers: {', '.join(reviewer_label(reviewer) for reviewer in reviewers)}")
-    print(f"tools: {'on' if args.tools else 'off'}")
+    tool_states = {reviewer.tools for reviewer in reviewers}
+    tools_label = "mixed" if len(tool_states) > 1 else ("on" if tool_states.pop() else "off")
+    print(f"tools: {tools_label}")
     print(f"web_search: {'on' if args.web_search else 'off'}")
     display_ref = args.commit if target == "commit" else target_ref
     if display_ref:

@@ -151,6 +151,21 @@ class AutoreviewHardeningTests(unittest.TestCase):
         self.assertNotIn("GIT_DIR", env)
         self.assertNotIn("OPENAI_API_KEY", env)
 
+    def test_boolean_environment_values_fail_closed(self) -> None:
+        with mock.patch.dict(os.environ, {"AUTOREVIEW_TEST_BOOL": "flase"}):
+            with self.assertRaisesRegex(SystemExit, "invalid boolean environment value"):
+                self.helper["env_truthy"]("AUTOREVIEW_TEST_BOOL")
+
+    def test_droid_refuses_project_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            settings = repo / ".factory" / "settings.json"
+            settings.parent.mkdir()
+            settings.write_text("{}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(SystemExit, "droid engine refused project-local settings"):
+                self.helper["run_droid"](argparse.Namespace(), repo, "prompt")
+
     def test_read_text_truncates_without_scanning_tail(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "large.txt"
