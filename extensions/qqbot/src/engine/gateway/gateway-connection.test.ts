@@ -79,6 +79,7 @@ async function startConnection(params: { onDisconnected?: (info: unknown) => voi
 describe("GatewayConnection disconnect status", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    createQQWSClientMock.mockReset();
   });
 
   afterEach(() => {
@@ -110,14 +111,32 @@ describe("GatewayConnection disconnect status", () => {
 
   it("reports a fatal disconnect when reconnect attempts are exhausted", async () => {
     const onDisconnected = vi.fn();
-    const { ws, controller, started } = await startConnection({ onDisconnected });
+    const sockets = Array.from({ length: MAX_RECONNECT_ATTEMPTS + 1 }, () => new FakeWebSocket());
+    let socketIndex = 0;
+    createQQWSClientMock.mockImplementation(async () => sockets[socketIndex++]);
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+      onDisconnected,
+    });
+    const started = connection.start();
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(1);
+    });
 
-    // Each close consumes one reconnect attempt without ever reconnecting
-    // (fake timers never fire the scheduled connect), so the attempt
-    // counter reaches the cap and the next close gives up permanently.
-    for (let attempt = 0; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
-      ws.emit("close", 1006, Buffer.from(""));
+    for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS; attempt++) {
+      sockets[attempt].emit("close", 1006, Buffer.from(""));
+      await vi.runOnlyPendingTimersAsync();
+      await vi.waitFor(() => {
+        expect(createQQWSClientMock).toHaveBeenCalledTimes(attempt + 2);
+      });
     }
+    sockets[MAX_RECONNECT_ATTEMPTS].emit("close", 1006, Buffer.from(""));
 
     expect(onDisconnected).toHaveBeenCalledWith({
       reason: "reconnect attempts exhausted",
@@ -162,6 +181,40 @@ describe("GatewayConnection disconnect status", () => {
     staleWs.emit("close", 1000, Buffer.from(""));
 
     expect(onDisconnected).not.toHaveBeenCalled();
+    controller.abort();
+    await started;
+  });
+
+  it("ignores a stale close while a server-driven reconnect is pending", async () => {
+    const onDisconnected = vi.fn();
+    const staleWs = new FakeWebSocket();
+    const replacementWs = new FakeWebSocket();
+    createQQWSClientMock.mockResolvedValueOnce(staleWs).mockResolvedValueOnce(replacementWs);
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+      onDisconnected,
+    });
+    const started = connection.start();
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(1);
+    });
+
+    staleWs.emit("open");
+    staleWs.emit("message", JSON.stringify({ op: 7 }));
+    staleWs.emit("close", 1006, Buffer.from(""));
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_100);
+    await vi.waitFor(() => {
+      expect(createQQWSClientMock).toHaveBeenCalledTimes(2);
+    });
+
     controller.abort();
     await started;
   });

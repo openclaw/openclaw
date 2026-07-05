@@ -55,7 +55,7 @@ async function startAccountAndCaptureGatewayOptions() {
     expect(startGatewayMock).toHaveBeenCalled();
   });
   const options = startGatewayMock.mock.calls[0]?.[0] as StartGatewayOptions;
-  return { options, statusWrites, getStatus: () => status };
+  return { account, options, statusWrites, getStatus: () => status };
 }
 
 describe("qqbot channel gateway status", () => {
@@ -76,26 +76,43 @@ describe("qqbot channel gateway status", () => {
   });
 
   it("records the close reason as lastError on a fatal disconnect", async () => {
-    const { options, getStatus } = await startAccountAndCaptureGatewayOptions();
+    const { account, options, getStatus } = await startAccountAndCaptureGatewayOptions();
 
     options.onReady?.({});
     options.onDisconnected?.({ reason: "banned", fatal: true });
 
-    expect(getStatus().connected).toBe(false);
+    // connected=false is the shared health monitor's recoverable-disconnect
+    // signal. Fatal closes clear the raw signal so they stay stopped.
+    expect(getStatus().connected).toBeUndefined();
     // `running` is owned by the gateway lifecycle store: the account task
     // stays held until an explicit stop/abort, so the plugin must not
     // flip it here (a Start action would no-op against a held task).
     expect(getStatus().running).toBe(true);
     expect(getStatus().lastError).toBe("banned");
+
+    const publicStatus = await qqbotPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg: {},
+      runtime: getStatus(),
+    });
+    expect(publicStatus?.connected).toBe(false);
+    expect(publicStatus?.lastError).toBe("banned");
   });
 
-  it("restores connected status when the gateway resumes after a disconnect", async () => {
+  it("clears fatal errors when the gateway becomes ready or resumes", async () => {
     const { options, getStatus } = await startAccountAndCaptureGatewayOptions();
 
     options.onReady?.({});
-    options.onDisconnected?.({ reason: "close code 1006", fatal: false });
+    options.onDisconnected?.({ reason: "banned", fatal: true });
     options.onResumed?.({});
 
     expect(getStatus().connected).toBe(true);
+    expect(getStatus().lastError).toBeNull();
+
+    options.onDisconnected?.({ reason: "offline/sandbox-only", fatal: true });
+    options.onReady?.({});
+
+    expect(getStatus().connected).toBe(true);
+    expect(getStatus().lastError).toBeNull();
   });
 });

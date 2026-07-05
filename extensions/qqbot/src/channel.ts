@@ -362,6 +362,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             running: true,
             connected: true,
             lastConnectedAt: Date.now(),
+            lastError: null,
           });
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
@@ -374,6 +375,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             running: true,
             connected: true,
             lastConnectedAt: Date.now(),
+            lastError: null,
           });
           persistAccountCredentialSnapshot(account);
         },
@@ -388,14 +390,12 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           log?.info(
             `[qqbot:${account.accountId}] Gateway disconnected${reason ? `: ${reason}` : ""}`,
           );
-          // Keep channel status honest: the websocket is down, so stop
-          // reporting connected. Fatal closes (banned / offline / retries
-          // exhausted) never reconnect, so surface the reason as lastError.
-          // `running` stays owned by the gateway lifecycle store — the
-          // account task is still held until an explicit stop/abort.
+          // Raw connected=false asks the shared health monitor to recover the
+          // channel. Fatal closes must not enter that restart loop; the status
+          // adapter still projects an absent connection state as disconnected.
           ctx.setStatus({
             ...ctx.getStatus(),
-            connected: false,
+            connected: fatal ? undefined : false,
             ...(fatal && reason ? { lastError: reason } : {}),
           });
         },
