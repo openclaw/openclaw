@@ -97,6 +97,7 @@ import {
 import {
   buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
+  mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
@@ -466,9 +467,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
+  // Mirror the runtime gate's effective sender allowlist so the startup
+  // warning fires only for configs where every group message actually drops.
+  const effectiveGroupAllowFrom = mergeIMessageGroupAllowFromWithLegacyChatTargets({
+    groupAllowFrom,
+    allowFrom,
+    allowLegacyConversationTargets: allowLegacyConversationAllowFromForGroup,
+  });
   warnGroupAllowlistMisconfigOnce({
     groupPolicy,
-    groups: imessageCfg.groups,
+    hasGroupAllowFrom: effectiveGroupAllowFrom.length > 0,
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });

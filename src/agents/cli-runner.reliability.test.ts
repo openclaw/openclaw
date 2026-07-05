@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -24,6 +24,7 @@ import {
   resolveMcpLoopbackYieldContext,
   updateMcpLoopbackToolCallCapture,
 } from "../gateway/mcp-http.loopback-runtime.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -308,7 +309,17 @@ const CLI_RESEED_PROMPT =
   "Continue this conversation using the OpenClaw transcript below as prior session history.\n\n<conversation_history>\nUser: earlier context\n</conversation_history>\n\n<next_user_message>\nhi\n</next_user_message>";
 
 describe("runCliAgent reliability", () => {
+  beforeEach(() => {
+    // Binding-flush retry timing has dedicated coverage. Reliability cases only
+    // need its stable not-yet-flushed outcome, without filesystem polling/sleeps.
+    setCliRunnerTestDeps({
+      claudeCliSessionTranscriptHasContent: async () => false,
+      delay: async () => {},
+    });
+  });
+
   afterEach(() => {
+    restoreCliRunnerTestDeps();
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
     mockAutoCapture.mockReset();
@@ -318,6 +329,8 @@ describe("runCliAgent reliability", () => {
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
     resetClaudeLiveSessionsForTest();
+    resetDiagnosticEventsForTest();
+    vi.useRealTimers();
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -1659,6 +1672,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("keeps non-capture live-session artifacts through fresh recovery retry", async () => {
+    vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const artifactDir = autoCleanupTempDirs.make("openclaw-live-retry-artifacts-");
     const mcpConfigPath = path.join(artifactDir, "mcp.json");
@@ -1807,6 +1821,7 @@ describe("runCliAgent reliability", () => {
       },
     });
     await firstSpawned;
+    await vi.advanceTimersByTimeAsync(1_000);
     const result = await resultPromise;
 
     expect(result.payloads).toEqual([{ text: "fresh ok" }]);

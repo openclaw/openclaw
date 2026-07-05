@@ -77,6 +77,9 @@ export async function createCopilotByokProxy(
       }
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
+        // The proxy is private and ephemeral. Do not let a client's keep-alive
+        // socket delay shutdown after every upstream request has been aborted.
+        server.closeAllConnections();
       });
     },
   };
