@@ -692,21 +692,24 @@ export function buildInboundUserContextPrefix(
   }
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
-    blocks.push(
-      formatUntrustedJsonBlock(
-        "Chat history since last reply (untrusted, for context):",
-        boundedHistory.map((entry) => {
-          const media = buildInboundHistoryMediaPromptPayload(entry.media);
-          return {
-            sender: sanitizePromptBody(entry.sender),
-            timestamp_ms: entry.timestamp,
-            message_id: normalizePromptMetadataString(entry.messageId),
-            body: sanitizePromptBody(entry.body),
-            media: media.length > 0 ? media : undefined,
-          };
-        }),
-      ),
-    );
+    const historyLines = boundedHistory.flatMap((entry) => {
+      const line = formatChatWindowMessage(
+        {
+          message_id: entry.messageId,
+          sender: entry.sender,
+          timestamp_ms: entry.timestamp,
+          body: entry.body,
+          media_type: entry.media?.[0]?.contentType,
+        },
+        envelope,
+      );
+      return line ? [line] : [];
+    });
+    if (historyLines.length > 0) {
+      blocks.push(
+        ["Chat history since last reply (untrusted, for context):", ...historyLines].join("\n"),
+      );
+    }
   }
 
   if (currentMessageContext) {
