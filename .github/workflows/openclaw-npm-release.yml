@@ -266,6 +266,8 @@ jobs:
             if (
               !fileName.endsWith(".tgz") ||
               fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName) ||
               path.dirname(resolved) !== process.cwd()
             ) {
               console.error(`npm pack reported unsafe tarball filename ${JSON.stringify(fileName)}.`);
