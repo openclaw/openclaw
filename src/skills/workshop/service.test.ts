@@ -174,7 +174,7 @@ describe("skill workshop proposals", () => {
     async () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), directorySymlinkType);
       const skillDir = path.join(targetSkillsDir, "shared-skill");
       await writeSkill({
         dir: skillDir,
@@ -221,7 +221,7 @@ describe("skill workshop proposals", () => {
     async () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-readonly-skills-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), directorySymlinkType);
       const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
       const proposal = await proposeCreateSkill({
         workspaceDir,
@@ -255,8 +255,8 @@ describe("skill workshop proposals", () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-trusted-");
       const untrustedSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-untrusted-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
-      await fs.symlink(untrustedSkillsDir, path.join(workspaceDir, "other-skills"), "dir");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), directorySymlinkType);
+      await fs.symlink(untrustedSkillsDir, path.join(workspaceDir, "other-skills"), directorySymlinkType);
       const config = {
         skills: {
           load: { allowSymlinkTargets: [targetSkillsDir] },
@@ -304,7 +304,7 @@ describe("skill workshop proposals", () => {
     async () => {
       const workspaceDir = await makeWorkspace();
       const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-untrusted-skills-");
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), directorySymlinkType);
       const proposal = await proposeCreateSkill({
         workspaceDir,
         name: "Untrusted Symlink Skill",
