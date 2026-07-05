@@ -61,6 +61,7 @@ export type SlashCommandContext = {
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
+  defaultAgentId?: string;
   agentId?: string;
 };
 
@@ -527,7 +528,9 @@ function resolveSelectedAgentId(
   return (
     parseAgentSessionKey(normalizedSessionKey ?? "")?.agentId ??
     normalizeOptionalLowercaseString(context.agentId) ??
-    (normalizedSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined)
+    (normalizedSessionKey === DEFAULT_MAIN_KEY
+      ? (normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID)
+      : undefined)
   );
 }
 
@@ -612,6 +615,8 @@ function resolveCommandSessionState(
   defaults: SessionsListResult["defaults"] | undefined;
 } {
   const selectedAgentId = resolveSelectedAgentId(sessionKey, context);
+  const defaultAgentId =
+    normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID;
   const cachedAgentId = normalizeOptionalLowercaseString(context.sessionsResultAgentId);
   const cachedSession =
     context.sessionsResult && selectedAgentId && cachedAgentId === selectedAgentId
@@ -621,7 +626,7 @@ function resolveCommandSessionState(
     session: resolveCurrentSession(sessions, sessionKey) ?? cachedSession,
     // sessions.list scopes rows by agent, but its defaults remain global.
     defaults:
-      !selectedAgentId || selectedAgentId === DEFAULT_AGENT_ID ? sessions.defaults : undefined,
+      !selectedAgentId || selectedAgentId === defaultAgentId ? sessions.defaults : undefined,
   };
 }
 

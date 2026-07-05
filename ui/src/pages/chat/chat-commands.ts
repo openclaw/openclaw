@@ -11,6 +11,10 @@ import {
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
 import { scopedAgentIdForSession, type SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  resolveUiDefaultAgentId,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
@@ -51,7 +55,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-  };
+  } & UiSessionDefaultsHost;
 
 function setChatCommandError(
   host: { lastError?: string | null; chatError?: string | null },
@@ -231,6 +235,7 @@ export async function dispatchChatSlashCommand(
       chatModelCatalog: host.chatModelCatalog,
       sessionsResult: host.sessionsResult,
       sessionsResultAgentId: host.sessionsResultAgentId,
+      defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: scopedAgentIdForSession(host, targetSessionKey),
     });
   } catch (err) {

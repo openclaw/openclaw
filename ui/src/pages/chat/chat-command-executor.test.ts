@@ -210,6 +210,34 @@ describe("executeSlashCommand directives", () => {
     expect(result.content).toBe("**Current model:** `default`\n**Available:** `work-model`");
   });
 
+  it("reports global model defaults for a configured default agent", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { modelProvider: "openai", model: "work-default" },
+          sessions: [],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:work:main",
+      "model",
+      "",
+      {
+        agentId: "work",
+        defaultAgentId: "work",
+        chatModelCatalog: [
+          { id: "work-default", name: "Work Default", provider: "openai", available: true },
+        ],
+      },
+    );
+
+    expect(result.content).toBe("**Current model:** `work-default`\n**Available:** `work-default`");
+  });
+
   it("uses a matching cached agent row when the scoped model list is temporarily empty", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
@@ -718,6 +746,39 @@ describe("executeSlashCommand directives", () => {
     expect(result.content).toBe(
       "Current thinking level: off.\nOptions: default, off, minimal, low, medium, high.",
     );
+  });
+
+  it("reports global thinking defaults for a configured default agent", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: {
+            modelProvider: "openai",
+            model: "work-default",
+            thinkingDefault: "high",
+            thinkingOptions: ["off", "low", "high"],
+          },
+          sessions: [],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:work:main",
+      "think",
+      "",
+      {
+        agentId: "work",
+        defaultAgentId: "work",
+        chatModelCatalog: [
+          { id: "work-default", name: "Work Default", provider: "openai", reasoning: true },
+        ],
+      },
+    );
+
+    expect(result.content).toBe("Current thinking level: high.\nOptions: default, off, low, high.");
   });
 
   it("accepts minimal and xhigh thinking levels", async () => {
