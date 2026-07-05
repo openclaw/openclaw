@@ -1525,7 +1525,7 @@ export const ru: TranslationMap = {
       badge: "Истек",
     },
     composer: {
-      placeholder: "Сообщение {name} (Enter для отправки)",
+      placeholder: "Сообщение {name}",
       placeholderWithAttachments: "Добавьте сообщение или вставьте еще изображения...",
       placeholderDisconnected: "Подключитесь к шлюзу, чтобы начать общение...",
       attachFile: "Прикрепить файл",

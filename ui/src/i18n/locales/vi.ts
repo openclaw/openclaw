@@ -1506,7 +1506,7 @@ export const vi: TranslationMap = {
       badge: "Đã hết hạn",
     },
     composer: {
-      placeholder: "Message {name} (Enter to send)",
+      placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",

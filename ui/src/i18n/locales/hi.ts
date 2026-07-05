@@ -1500,7 +1500,7 @@ export const hi: TranslationMap = {
       badge: "समाप्त",
     },
     composer: {
-      placeholder: "{name} को संदेश भेजें (भेजने के लिए Enter)",
+      placeholder: "{name} को संदेश भेजें",
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       attachFile: "फ़ाइल संलग्न करें",

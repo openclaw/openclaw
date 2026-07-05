@@ -1477,7 +1477,7 @@ export const zh_CN: TranslationMap = {
       badge: "已过期",
     },
     composer: {
-      placeholder: "给 {name} 发消息（Enter 发送）",
+      placeholder: "给 {name} 发消息",
       placeholderWithAttachments: "添加消息或继续粘贴图片...",
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       attachFile: "附加文件",
