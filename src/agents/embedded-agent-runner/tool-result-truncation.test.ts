@@ -8,6 +8,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
@@ -62,7 +63,7 @@ afterEach(async () => {
   }
 });
 
-function makeToolResult(text: string, toolCallId = "call_1"): ToolResultMessage {
+function makeToolResult(text: string, toolCallId = "call_1", details?: unknown): ToolResultMessage {
   // Tool-result fixtures use increasing timestamps so persisted branch rewrites
   // can preserve ordering while changing content.
   return {
@@ -71,8 +72,17 @@ function makeToolResult(text: string, toolCallId = "call_1"): ToolResultMessage 
     toolName: "read",
     content: [{ type: "text", text }],
     isError: false,
+    ...(details !== undefined ? { details } : {}),
     timestamp: nextTimestamp(),
   };
+}
+
+function textWithFullOutputFooter(text: string, fullOutputPath: string): string {
+  return `${text}\n\n[Showing truncated output. ${formatFullOutputFooter(fullOutputPath)}]`;
+}
+
+function realisticSpillPath(dir: string, name: string): string {
+  return path.join(dir, `${name}-${"segment-".repeat(8)}output.log`);
 }
 
 function makeUserMessage(text: string): UserMessage {
@@ -102,6 +112,11 @@ function getFirstToolResultText(message: AgentMessage | ToolResultMessage): stri
 
 async function createTmpDir(): Promise<string> {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-result-truncation-test-"));
+  return tmpDir;
+}
+
+async function createShortTmpDir(): Promise<string> {
+  tmpDir = await fs.mkdtemp(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "oc-"));
   return tmpDir;
 }
 
@@ -720,6 +735,188 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
     expect(result.truncatedCount).toBeGreaterThan(0);
     expect(totalChars).toBeLessThanOrEqual(8);
+  });
+
+  it("points aggregate elision at live spill files", async () => {
+    const spillPath = path.join(await createShortTmpDir(), "o");
+    await fs.writeFile(spillPath, "complete command output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "spill_1", {
+        fullOutputPath: spillPath,
+      }),
+      makeToolResult("b".repeat(100), "spill_2"),
+      makeToolResult("c".repeat(100), "spill_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 500, 100);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain("read");
+    expect(text).toContain(spillPath);
+    await fs.rm(spillPath, { force: true });
+  });
+
+  it("keeps capped spill markers distinct during aggregate elision", async () => {
+    const spillPath = path.join(await createShortTmpDir(), "p");
+    await fs.writeFile(spillPath, "partial web output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "partial_spill_1", {
+        fullOutputPath: spillPath,
+        spilledChars: 2_000_000,
+        spillTruncated: true,
+      }),
+      makeToolResult("b".repeat(100), "partial_spill_2"),
+      makeToolResult("c".repeat(100), "partial_spill_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 300, 100);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain("partial");
+    expect(text).toContain(spillPath);
+    expect(text).not.toContain("full output preserved");
+    await fs.rm(spillPath, { force: true });
+  });
+
+  it("detects spill footers escaped inside JSON tool results", async () => {
+    const spillPath = path.join(await createShortTmpDir(), "C:\\s");
+    await fs.writeFile(spillPath, "json wrapped output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult(
+        JSON.stringify({ text: textWithFullOutputFooter("a".repeat(100), spillPath) }, null, 2),
+        "escaped_spill_1",
+        { fullOutputPath: spillPath },
+      ),
+      makeToolResult("b".repeat(100), "escaped_spill_2"),
+      makeToolResult("c".repeat(100), "escaped_spill_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 300, 100);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain("read");
+    expect(text).toContain(spillPath);
+    await fs.rm(spillPath, { force: true });
+  });
+
+  it("falls back to rerun guidance when the spill file is gone", async () => {
+    const dir = await createTmpDir();
+    const spillPath = path.join(dir, "deleted-output.log");
+    await fs.writeFile(spillPath, "complete command output", { mode: 0o600 });
+    await fs.rm(spillPath);
+    const messages: AgentMessage[] = [
+      makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "deleted_spill_1", {
+        fullOutputPath: spillPath,
+      }),
+      makeToolResult("b".repeat(100), "deleted_spill_2"),
+      makeToolResult("c".repeat(100), "deleted_spill_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 100, 100);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain("[tool result elided");
+    expect(text).not.toContain(spillPath);
+  });
+
+  it("keeps plain aggregate elision behavior without a spill pointer", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "plain_1"),
+      makeToolResult("b".repeat(100), "plain_2"),
+      makeToolResult("c".repeat(100), "plain_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 100, 100);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain("[tool result elided");
+    expect(text).not.toContain("full output preserved at");
+  });
+
+  it("does not disclose details-only spill paths during aggregate elision", async () => {
+    const spillPath = path.join(await createTmpDir(), "private-output.log");
+    await fs.writeFile(spillPath, "private output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "private_spill_1", { fullOutputPath: spillPath }),
+      makeToolResult("b".repeat(100), "private_spill_2"),
+      makeToolResult("c".repeat(100), "private_spill_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 100, 100);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain("[tool result elided");
+    expect(text).not.toContain(spillPath);
+    await fs.rm(spillPath, { force: true });
+  });
+
+  it("floors tiny aggregate elision budgets at compact spill markers", async () => {
+    const dir = await createTmpDir();
+    const spillPath = path.join(dir, "budget-output.log");
+    await fs.writeFile(spillPath, "complete command output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "budget_1", {
+        fullOutputPath: spillPath,
+      }),
+      makeToolResult("b".repeat(100), "budget_2"),
+      makeToolResult("c".repeat(100), "budget_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 8);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toBe(`[read ${spillPath}]`);
+  });
+
+  it("keeps pointerless near-zero aggregate budgets sliced", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "sliced_plain_1"),
+      makeToolResult("b".repeat(100), "sliced_plain_2"),
+      makeToolResult("c".repeat(100), "sliced_plain_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 94);
+    const texts = result.messages.map((message) => getFirstToolResultText(message));
+
+    expect(
+      texts.some((text) => text.startsWith("[tool result elided:") && !text.includes("rerun")),
+    ).toBe(true);
+  });
+
+  it("keeps realistic spill pointers intact in near-zero aggregate elision budgets", async () => {
+    const dir = await createTmpDir();
+    const spillPath = realisticSpillPath(dir, "realistic");
+    await fs.writeFile(spillPath, "complete command output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult(textWithFullOutputFooter("a".repeat(2_000), spillPath), "realistic_1", {
+        fullOutputPath: spillPath,
+      }),
+      makeToolResult("b".repeat(2_000), "realistic_2"),
+      makeToolResult("c".repeat(2_000), "realistic_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 5_000, 1);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toBe(`[read ${spillPath}]`);
+  });
+
+  it("uses spill-aware aggregate truncation suffixes with realistic paths", async () => {
+    const dir = await createTmpDir();
+    const spillPath = realisticSpillPath(dir, "suffix");
+    await fs.writeFile(spillPath, "complete command output", { mode: 0o600 });
+    const messages: AgentMessage[] = [
+      makeToolResult(textWithFullOutputFooter("a".repeat(5_000), spillPath), "suffix_1", {
+        fullOutputPath: spillPath,
+      }),
+      makeToolResult("b".repeat(5_000), "suffix_2"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 8_000, 9_000);
+    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
+
+    expect(text).toContain(`full output at ${spillPath}`);
+    expect(text).not.toContain("narrow args");
   });
 
   it("does not restore filtered image blocks when reusing a projection", () => {

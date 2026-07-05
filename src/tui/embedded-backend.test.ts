@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const agentCommandFromIngressMock = vi.fn();
@@ -238,6 +239,12 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
+function emitRegisteredAgentEvent(evt: unknown) {
+  if (registeredListener) {
+    notifyListeners([registeredListener], evt);
+  }
+}
+
 describe("EmbeddedTuiBackend", () => {
   const originalRuntimeLog = defaultRuntime.log;
   const originalRuntimeError = defaultRuntime.error;
@@ -414,6 +421,40 @@ describe("EmbeddedTuiBackend", () => {
         },
       },
     ]);
+  });
+
+  it("isolates TUI event consumer failures in the agent event bus", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    backend.onEvent = () => {
+      throw new Error("render failed");
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-listener-error",
+    });
+
+    expect(() =>
+      emitRegisteredAgentEvent({
+        runId: "run-listener-error",
+        stream: "assistant",
+        data: { text: "hello", delta: "hello" },
+      }),
+    ).not.toThrow();
+    await flushMicrotasks();
+
+    backend.onEvent = undefined;
+    pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
+    await flushMicrotasks();
+    await backend.stop();
   });
 
   it("lists configured replace-mode models without loading the gateway catalog", async () => {
