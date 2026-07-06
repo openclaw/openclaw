@@ -42,6 +42,7 @@ fun ChatMessageListCard(
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  gatewayOffline: Boolean,
   modifier: Modifier = Modifier,
   outboxItems: List<ChatOutboxItem> = emptyList(),
   onRetryOutbox: (String) -> Unit = {},
@@ -96,7 +97,7 @@ fun ChatMessageListCard(
     }
 
     if (timeline.items.isEmpty()) {
-      if (historyLoading) {
+      if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
         LoadingChatHint(modifier = Modifier.align(Alignment.Center))
       } else {
         EmptyChatHint(modifier = Modifier.align(Alignment.Center), healthOk = healthOk)

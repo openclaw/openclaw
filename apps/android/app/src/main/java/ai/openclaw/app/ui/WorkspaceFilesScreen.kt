@@ -376,8 +376,7 @@ private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
 }
 
 /** File extensions double as fence language hints; unknown ones render plain. */
-private fun workspaceLanguageHint(name: String): String? =
-  name.substringAfterLast('.', missingDelimiterValue = "").lowercase().ifEmpty { null }
+private fun workspaceLanguageHint(name: String): String? = name.substringAfterLast('.', missingDelimiterValue = "").lowercase().ifEmpty { null }
 
 /** Exports one previewed file through the system share sheet via FileProvider. */
 private fun shareWorkspaceFile(

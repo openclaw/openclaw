@@ -81,6 +81,15 @@ class ChatController internal constructor(
   private val _messagesFromCache = MutableStateFlow(false)
   val messagesFromCache: StateFlow<Boolean> = _messagesFromCache.asStateFlow()
 
+  private data class LiveHistoryMarker(
+    val sessionKey: String,
+    val sessionId: String?,
+    val generation: Long,
+  )
+
+  @Volatile
+  private var liveHistoryMarker: LiveHistoryMarker? = null
+
   private val _historyLoading = MutableStateFlow(false)
   val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
@@ -198,6 +207,7 @@ class ChatController internal constructor(
     _modelCatalog.value = emptyList()
     chatMetadataAgentId = null
     chatMetadataLoadState = ChatMetadataLoadState.Unloaded
+    clearLiveHistoryMarker()
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.addAll(pendingRuns)
     }
@@ -232,6 +242,7 @@ class ChatController internal constructor(
         clearMessages = true,
         markLoading = false,
       )
+      clearLiveHistoryMarker()
       _sessions.value = emptyList()
       sessionsListArchived = false
       unreadPatchSessionKey = null
@@ -254,6 +265,7 @@ class ChatController internal constructor(
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key == _sessionKey.value) {
+      if (hasCurrentLiveHistory(key)) return
       refresh()
       return
     }
@@ -534,6 +546,7 @@ class ChatController internal constructor(
     }
     updateErrorText(null)
     _healthOk.value = false
+    clearLiveHistoryMarker()
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
@@ -545,6 +558,30 @@ class ChatController internal constructor(
       _messagesFromCache.value = false
     }
     return generation
+  }
+
+  private fun clearLiveHistoryMarker() {
+    liveHistoryMarker = null
+  }
+
+  private fun markLiveHistoryApplied(
+    sessionKey: String,
+    sessionId: String?,
+    generation: Long,
+  ) {
+    liveHistoryMarker = LiveHistoryMarker(sessionKey = sessionKey, sessionId = sessionId, generation = generation)
+  }
+
+  private fun hasCurrentLiveHistory(sessionKey: String): Boolean {
+    val marker = liveHistoryMarker ?: return false
+    // Same-session load may skip refresh only for the exact live snapshot that
+    // applied in the active generation. Cached or stale lifecycle state must refetch.
+    return marker.sessionKey == sessionKey &&
+      marker.generation == historyLoadGeneration.get() &&
+      marker.sessionId == _sessionId.value &&
+      !_messagesFromCache.value &&
+      _errorText.value == null &&
+      _healthOk.value
   }
 
   private fun normalizeRequestedSessionKey(sessionKey: String): String {
@@ -950,6 +987,7 @@ class ChatController internal constructor(
         _messagesFromCache.value = false
         _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
         _sessionId.value = history.sessionId
+        markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
         _historyLoading.value = false
         if (historyLoadErrorGeneration == generation) {
           updateErrorText(null)

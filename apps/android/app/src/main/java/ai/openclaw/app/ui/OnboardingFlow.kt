@@ -571,7 +571,8 @@ fun OnboardingFlow(
         val message =
           when (scanned.error) {
             GatewayEndpointValidationError.INSECURE_REMOTE_URL,
-            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
+            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+            ->
               gatewayEndpointValidationMessage(scanned.error, GatewayEndpointInputSource.QR_SCAN)
             else -> "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."
           }
@@ -2987,7 +2988,7 @@ private fun rememberPermissionState(
         null
       },
       if (smsAvailable) {
-        PermissionRowModel("SMS", "Read and send SMS messages", Icons.Default.Notifications, smsGranted) {
+        PermissionRowModel("SMS", "Device access; Gateway opt-in still required", Icons.Default.Notifications, smsGranted) {
           request(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
         }
       } else {
