@@ -282,6 +282,24 @@ describe("isProfileInCooldown", () => {
     });
     expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(true);
   });
+
+  it("keeps a pre-existing unscoped block profile-wide after upgrade (#99810)", () => {
+    // Upgrade compat: blocks persisted before model-scoping carry
+    // blockedModel: undefined. The new model-aware read must still treat them
+    // as profile-wide so an old subscription_limit block is not silently
+    // bypassed for a sibling model after upgrade.
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 120_000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    });
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
+  });
 });
 
 describe("resolveProfilesUnavailableReason", () => {

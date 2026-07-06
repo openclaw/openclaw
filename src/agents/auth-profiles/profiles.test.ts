@@ -726,4 +726,52 @@ describe("promoteAuthProfileInOrder", () => {
       expect(persisted?.[expiredProfileId]?.blockedModel).toBeUndefined();
     });
   });
+
+  it("clears a pre-existing unscoped block on success after upgrade (#99810)", async () => {
+    await withAuthProfileTestState("openclaw-auth-success-legacy-block-", async ({ agentDir }) => {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const profileId = "openai:shared-oauth";
+      const now = Date.now();
+      // Block persisted before model-scoping: blockedModel is undefined.
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "shared-access",
+              refresh: "shared-refresh",
+              expires: now + 60 * 60 * 1000,
+            },
+          },
+          usageStats: {
+            [profileId]: {
+              blockedUntil: now + 60 * 60 * 1000,
+              blockedReason: "subscription_limit",
+              blockedSource: "wham",
+              errorCount: 3,
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const runtimeStore = loadAuthProfileStoreForRuntime(agentDir);
+      await markAuthProfileSuccess({
+        store: runtimeStore,
+        provider: "openai",
+        profileId,
+        agentDir,
+        model: "gpt-5.5",
+      });
+
+      // An unscoped block is profile-wide, so a real success proves the profile
+      // works and must clear it rather than stranding the profile blocked.
+      const stats = loadAuthProfileStoreForRuntime(agentDir).usageStats?.[profileId];
+      expect(stats?.blockedUntil).toBeUndefined();
+      expect(stats?.blockedModel).toBeUndefined();
+      expect(stats?.errorCount).toBe(0);
+    });
+  });
 });

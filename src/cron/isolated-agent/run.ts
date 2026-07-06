@@ -982,6 +982,7 @@ async function prepareCronRunContext(params: {
             // store and key that persistence will later write.
             cfg: cfgWithAgentDefaults,
             provider,
+            model,
             acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
               provider,
               harnessRuntime: resolveAgentHarnessPolicy({

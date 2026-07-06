@@ -2043,6 +2043,11 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
+    // Regression (#99810): auto-reply must thread the active model so a sibling
+    // model's cooldown is not treated as a profile-wide block.
+    expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-opus-4-1" }),
+    );
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
