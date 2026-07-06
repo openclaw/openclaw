@@ -755,8 +755,8 @@ describe("anthropic provider replay hooks", () => {
         provider: "claude-cli",
         modelId: model.id,
         model,
-      } as never),
-    ).toBeUndefined();
+      } as never)?.cost,
+    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("resolves dated modern Claude refs without discovery templates", async () => {

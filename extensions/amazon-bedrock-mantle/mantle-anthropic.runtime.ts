@@ -104,7 +104,7 @@ function buildMantleAnthropicBaseOptions(
   apiKey: string,
 ) {
   return {
-    temperature: requiresDefaultSampling(model) ? undefined : options?.temperature,
+    ...(requiresDefaultSampling(model) ? {} : { temperature: options?.temperature }),
     maxTokens:
       options?.maxTokens ||
       (isClaudeSonnet5Model(model) ? model.maxTokens : Math.min(model.maxTokens, 32_000)),
