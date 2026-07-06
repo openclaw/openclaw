@@ -207,13 +207,6 @@ function mockCronEditJobLookup(schedule: unknown): void {
       if (method === "cron.status") {
         return { enabled: true };
       }
-      if (method === "cron.list") {
-        return {
-          ok: true,
-          params: {},
-          jobs: [{ id: "job-1", schedule }],
-        };
-      }
       if (method === "cron.get") {
         return { id: "job-1", schedule };
       }
@@ -1182,16 +1175,6 @@ describe("cron cli", () => {
         if (method === "cron.status") {
           return { enabled: true };
         }
-        if (method === "cron.list") {
-          return {
-            jobs: [
-              {
-                ...createCronJob("job-1", "Command"),
-                payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
-              },
-            ],
-          };
-        }
         if (method === "cron.get") {
           return {
             ...createCronJob("job-1", "Command"),
@@ -1214,6 +1197,13 @@ describe("cron cli", () => {
       kind: "command",
       timeoutSeconds: 120,
     });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.get",
+      expect.anything(),
+      { id: "job-1" },
+      undefined,
+    );
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
   });
 
   it("sets and clears lightContext on cron edit", async () => {
@@ -1590,6 +1580,13 @@ describe("cron cli", () => {
       tz: "UTC",
       staggerMs: 0,
     });
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.get",
+      expect.anything(),
+      { id: "job-1" },
+      undefined,
+    );
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
   });
 
   it("rejects --exact on edit when existing job is not cron", async () => {

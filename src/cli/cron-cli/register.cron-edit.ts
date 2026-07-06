@@ -25,6 +25,9 @@ import {
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 
+const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
+const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
+
 const assignIf = (
   target: Record<string, unknown>,
   key: string,
@@ -36,8 +39,56 @@ const assignIf = (
   }
 };
 
+function isUnknownCronGetMethodError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "GatewayClientRequestError" &&
+    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown method: cron.get")
+  );
+}
+
+async function loadCronJobForEditViaList(
+  opts: Record<string, unknown>,
+  id: string,
+): Promise<CronJob | undefined> {
+  let offset = 0;
+  for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
+    const listed = (await callGatewayFromCli("cron.list", opts, {
+      includeDisabled: true,
+      limit: CRON_EDIT_LOOKUP_PAGE_SIZE,
+      offset,
+    })) as { jobs?: CronJob[]; hasMore?: boolean; nextOffset?: number | null } | null;
+    const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+    if (existing) {
+      return existing;
+    }
+    if (!listed?.hasMore || typeof listed.nextOffset !== "number") {
+      return undefined;
+    }
+    if (listed.nextOffset <= offset) {
+      throw new Error("cron.list pagination did not advance while looking up cron job");
+    }
+    offset = listed.nextOffset;
+  }
+  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
+}
+
 async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Promise<CronJob> {
-  return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+  try {
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+  } catch (error) {
+    if (!isUnknownCronGetMethodError(error)) {
+      throw error;
+    }
+    // Protocol-v4 gateways shipped before cron.get; keep remote edits working
+    // without paying the paginated lookup cost on current gateways.
+    const existing = await loadCronJobForEditViaList(opts, id);
+    if (!existing) {
+      throw new Error(`unknown cron job id: ${id}`);
+    }
+    return existing;
+  }
 }
 
 export function registerCronEditCommand(cron: Command) {
