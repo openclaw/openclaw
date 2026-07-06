@@ -268,6 +268,10 @@ export async function createMatrixQaTransportAdapter(
         sutUserId: provisioning.sut.userId,
         topology: provisioning.topology,
       }),
+    createRuntimeEnvPatch: () => ({
+      OPENCLAW_QA_MATRIX_DRIVER_USER_ID: provisioning.driver.userId,
+      OPENCLAW_QA_MATRIX_OBSERVER_USER_ID: provisioning.observer.userId,
+    }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForMatrixChannelReady(gateway, accountId, timeoutMs, pollIntervalMs),
     buildAgentDelivery: () => ({
