@@ -111,7 +111,7 @@ function extractUserVisibleText(message: Record<string, unknown>): string | unde
 }
 
 function readOpenClawMeta(message: Record<string, unknown>): Record<string, unknown> {
-  const meta = message.__openclaw;
+  const meta = message["__openclaw"];
   return meta && typeof meta === "object" && !Array.isArray(meta)
     ? (meta as Record<string, unknown>)
     : {};
@@ -207,6 +207,7 @@ function readSearchSource(database: OpenClawAgentDatabase, path: string) {
 function deleteIndexedPath(database: OpenClawAgentDatabase, path: string): void {
   const kysely = getNodeSqliteKysely<SearchSourceDatabase>(database.db);
   runSqliteImmediateTransactionSync(database.db, () => {
+    // sqlite-allow-raw: FTS5 virtual tables need direct row cleanup by path.
     database.db.prepare("DELETE FROM session_transcript_search_fts WHERE path = ?").run(path);
     executeSqliteQuerySync(
       database.db,
@@ -226,9 +227,11 @@ function replaceIndexedRows(params: {
   const kysely = getNodeSqliteKysely<SearchSourceDatabase>(params.database.db);
   const now = Date.now();
   runSqliteImmediateTransactionSync(params.database.db, () => {
+    // sqlite-allow-raw: FTS5 virtual tables need direct stale-row cleanup by session key.
     params.database.db
       .prepare("DELETE FROM session_transcript_search_fts WHERE session_key = ? AND path <> ?")
       .run(params.target.sessionKey, params.path);
+    // sqlite-allow-raw: FTS5 virtual tables need direct replace-by-path cleanup.
     params.database.db
       .prepare("DELETE FROM session_transcript_search_fts WHERE path = ?")
       .run(params.path);
@@ -263,13 +266,14 @@ function replaceIndexedRows(params: {
           }),
         ),
     );
-    const insert = params.database.db.prepare(
-      [
-        "INSERT INTO session_transcript_search_fts",
-        "(path, session_key, session_id, agent_id, seq, message_id, role, timestamp_ms, text)",
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ].join(" "),
-    );
+    const insert =
+      /* sqlite-allow-raw: FTS5 inserts use the virtual table schema. */ params.database.db.prepare(
+        [
+          "INSERT INTO session_transcript_search_fts",
+          "(path, session_key, session_id, agent_id, seq, message_id, role, timestamp_ms, text)",
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ].join(" "),
+      );
     for (const row of params.rows) {
       insert.run(
         row.path,
@@ -383,7 +387,7 @@ function createFallbackSnippet(text: string, query: string): string {
   const haystack = text.toLowerCase();
   const needle = query.toLowerCase();
   const matchAt = haystack.indexOf(needle);
-  const center = matchAt >= 0 ? matchAt : 0;
+  const center = Math.max(0, matchAt);
   const start = Math.max(0, center - Math.floor(DEFAULT_SNIPPET_CHARS / 2));
   const raw = text.slice(start, start + DEFAULT_SNIPPET_CHARS);
   return `${start > 0 ? "..." : ""}${raw}${start + raw.length < text.length ? "..." : ""}`;
@@ -401,8 +405,8 @@ function queryAgentIndex(params: {
   }
   const placeholders = params.sessionKeys.map(() => "?").join(", ");
   try {
-    const rows = params.database.db
-      .prepare(
+    const statement =
+      /* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 are SQLite primitives. */ params.database.db.prepare(
         [
           "SELECT session_key, session_id, agent_id, seq, role,",
           "snippet(session_transcript_search_fts, 8, '[', ']', '...', 12) AS snippet,",
@@ -413,16 +417,16 @@ function queryAgentIndex(params: {
           "ORDER BY rank ASC, timestamp_ms DESC",
           "LIMIT ?",
         ].join(" "),
-      )
-      .all(ftsQuery, ...params.sessionKeys, params.limit) as SearchQueryRow[];
+      );
+    const rows = statement.all(ftsQuery, ...params.sessionKeys, params.limit) as SearchQueryRow[];
     return rows.flatMap((row) => {
       const hit = normalizeQueryRow(row);
       return hit ? [hit] : [];
     });
   } catch {
     const like = `%${escapeLikeQuery(params.query)}%`;
-    const rows = params.database.db
-      .prepare(
+    const statement =
+      /* sqlite-allow-raw: LIKE fallback queries the FTS5 virtual table. */ params.database.db.prepare(
         [
           "SELECT session_key, session_id, agent_id, seq, role, text AS snippet,",
           "timestamp_ms, message_id",
@@ -432,8 +436,8 @@ function queryAgentIndex(params: {
           "ORDER BY timestamp_ms DESC",
           "LIMIT ?",
         ].join(" "),
-      )
-      .all(...params.sessionKeys, like, params.limit) as SearchQueryRow[];
+      );
+    const rows = statement.all(...params.sessionKeys, like, params.limit) as SearchQueryRow[];
     return rows.flatMap((row) => {
       const normalized = normalizeQueryRow({
         ...row,

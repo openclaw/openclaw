@@ -267,10 +267,19 @@ export function createSessionsSearchTool(opts?: {
       const hits = Array.isArray(result?.hits) ? result.hits.filter(isSessionSearchHit) : [];
       return jsonResult({
         query: result.query ?? query,
-        hits: hits.map((hit) => ({
-          ...hit,
-          sessionKey: displayKeyByKey.get(hit.sessionKey) ?? hit.sessionKey,
-        })),
+        hits: hits.map((hit) => {
+          const sessionKey = displayKeyByKey.get(hit.sessionKey) ?? hit.sessionKey;
+          return {
+            sessionKey,
+            sessionId: hit.sessionId,
+            agentId: hit.agentId,
+            seq: hit.seq,
+            role: hit.role,
+            snippet: hit.snippet,
+            timestampMs: hit.timestampMs,
+            messageId: hit.messageId,
+          };
+        }),
         indexedSessions: result.indexedSessions ?? 0,
         searchedSessions: result.searchedSessions ?? sessionKeys.length,
       });

@@ -2015,6 +2015,104 @@ public struct SessionsPreviewParams: Codable, Sendable {
     }
 }
 
+public struct SessionsSearchParams: Codable, Sendable {
+    public let query: String
+    public let sessionkey: String?
+    public let sessionkeys: [String]?
+    public let agentid: String?
+    public let limit: Int?
+
+    public init(
+        query: String,
+        sessionkey: String?,
+        sessionkeys: [String]?,
+        agentid: String? = nil,
+        limit: Int?)
+    {
+        self.query = query
+        self.sessionkey = sessionkey
+        self.sessionkeys = sessionkeys
+        self.agentid = agentid
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case sessionkey = "sessionKey"
+        case sessionkeys = "sessionKeys"
+        case agentid = "agentId"
+        case limit
+    }
+}
+
+public struct SessionsSearchHit: Codable, Sendable {
+    public let sessionkey: String
+    public let sessionid: String
+    public let agentid: String
+    public let seq: Int
+    public let role: AnyCodable
+    public let snippet: String
+    public let timestampms: Int?
+    public let messageid: String?
+
+    public init(
+        sessionkey: String,
+        sessionid: String,
+        agentid: String,
+        seq: Int,
+        role: AnyCodable,
+        snippet: String,
+        timestampms: Int?,
+        messageid: String?)
+    {
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.seq = seq
+        self.role = role
+        self.snippet = snippet
+        self.timestampms = timestampms
+        self.messageid = messageid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case seq
+        case role
+        case snippet
+        case timestampms = "timestampMs"
+        case messageid = "messageId"
+    }
+}
+
+public struct SessionsSearchResult: Codable, Sendable {
+    public let query: String
+    public let hits: [SessionsSearchHit]
+    public let indexedsessions: Int
+    public let searchedsessions: Int
+
+    public init(
+        query: String,
+        hits: [SessionsSearchHit],
+        indexedsessions: Int,
+        searchedsessions: Int)
+    {
+        self.query = query
+        self.hits = hits
+        self.indexedsessions = indexedsessions
+        self.searchedsessions = searchedsessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case hits
+        case indexedsessions = "indexedSessions"
+        case searchedsessions = "searchedSessions"
+    }
+}
+
 public struct SessionsDescribeParams: Codable, Sendable {
     public let key: String
     public let includederivedtitles: Bool?
