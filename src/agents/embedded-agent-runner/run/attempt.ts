@@ -499,8 +499,9 @@ import {
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
+  computeContextEngineMessageBudget,
   estimateLlmBoundaryTokenPressure,
-  estimateRenderedLlmBoundaryTokenPressure,
+  estimateTranscriptTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -2671,6 +2672,15 @@ export async function runEmbeddedAttempt(
           fallbackReason: params.fallbackReason,
           degradedReason: params.degradedReason,
         });
+        // Mid-tool-loop assemble calls carry no new user prompt — the original
+        // prompt is already part of the transcript — so the loop budget only
+        // sets aside the system prompt and the compaction reserve.
+        const loopAssembleTokenBudget = computeContextEngineMessageBudget({
+          contextWindowTokens: contextTokenBudgetForGuard,
+          compactionReserveTokens: settingsManager.getCompactionReserveTokens(),
+          systemPrompt: systemPromptText,
+          prompt: "",
+        });
         const removeContextEngineLoopHook = installContextEngineLoopHook({
           agent: activeSession.agent,
           contextEngine: activeContextEngine,
@@ -2678,6 +2688,7 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
+          assembleTokenBudget: loopAssembleTokenBudget,
           modelId: params.modelId,
           ...(transcriptPolicy.repairToolUseResultPairing
             ? {
@@ -2696,14 +2707,9 @@ export async function runEmbeddedAttempt(
               cwd: effectiveCwd,
               agentDir,
               tokenBudget: params.contextTokenBudget,
-              // Mid-tool-loop the next model call has no new user prompt — the
-              // continuation is driven by tool results that are already in
-              // `messages`. Estimate against messages + system prompt only.
-              currentTokenCount: estimateLlmBoundaryTokenPressure({
-                messages,
-                systemPrompt: systemPromptText,
-                prompt: "",
-              }),
+              // Messages-only estimate to match the assemble contract: the loop
+              // assemble budget already sets aside the system prompt and reserve.
+              currentTokenCount: estimateTranscriptTokenPressure(messages),
               promptCache:
                 promptCache ??
                 buildLoopPromptCacheInfo({
@@ -3372,25 +3378,18 @@ export async function runEmbeddedAttempt(
                   DEFAULT_CONTEXT_TOKENS,
               ),
             );
-            const contextEngineAssemblePromptBudget = Math.max(
-              1,
-              contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
-            );
-            const contextEngineAssembleRenderedPromptTokens =
-              estimateRenderedLlmBoundaryTokenPressure({
-                systemPrompt: systemPromptText,
-                prompt: params.prompt ?? "",
-              });
-            const contextEngineAssembleMessageBudget = Math.max(
-              1,
-              contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
-            );
-            // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
-            const preassemblyCurrentTokenCount = estimateLlmBoundaryTokenPressure({
-              messages: activeSession.messages,
+            const contextEngineAssembleMessageBudget = computeContextEngineMessageBudget({
+              contextWindowTokens: contextEngineAssembleContextTokenBudget,
+              compactionReserveTokens: contextEngineAssembleReserveTokens,
               systemPrompt: systemPromptText,
               prompt: params.prompt ?? "",
             });
+            // Messages-only estimate: tokenBudget already accounts for the rendered
+            // system/user prompt and the compaction reserve, so engines size any
+            // systemPromptAddition as tokenBudget - currentTokenCount.
+            const preassemblyCurrentTokenCount = estimateTranscriptTokenPressure(
+              activeSession.messages,
+            );
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,

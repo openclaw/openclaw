@@ -3013,6 +3013,11 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     });
     expect(typeof runtimeContext?.currentTokenCount).toBe("number");
     expect(runtimeContext?.currentTokenCount as number).toBeGreaterThan(0);
+
+    // The install site also derives a loop assemble budget (window minus
+    // reserve and rendered system-prompt pressure) for the hook.
+    expect(typeof loopHookParams.assembleTokenBudget).toBe("number");
+    expect(loopHookParams.assembleTokenBudget as number).toBeGreaterThan(0);
   });
 
   it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {

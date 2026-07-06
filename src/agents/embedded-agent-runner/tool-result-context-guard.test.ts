@@ -737,6 +737,29 @@ describe("installContextEngineLoopHook", () => {
     expect(assembleParams).not.toHaveProperty("currentTokenCount");
   });
 
+  it("prefers assembleTokenBudget for assemble while afterTurn keeps tokenBudget", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      assembleTokenBudget: 2048,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.afterTurn).tokenBudget).toBe(tokenBudget);
+    const assembleParams = engine.assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.tokenBudget).toBe(2048);
+  });
+
   it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();

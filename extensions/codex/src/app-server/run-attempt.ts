@@ -11,7 +11,8 @@ import {
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
-  estimateLlmBoundaryTokenPressure,
+  computeContextEngineMessageBudget,
+  estimateTranscriptTokenPressure,
   finalizeHarnessContextEngineTurn,
   FAST_MODE_AUTO_PROGRESS_KIND,
   formatFastModeAutoProgressText,
@@ -1025,18 +1026,27 @@ export async function runCodexAppServerAttempt(
     if (!activeContextEngine) {
       return;
     }
-    // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
-    const preassemblyCurrentTokenCount = estimateLlmBoundaryTokenPressure({
-      messages: historyMessages,
-      systemPrompt: developerInstructions,
-      prompt: params.prompt ?? "",
-    });
+    // Codex app-server owns compaction natively, so no OpenClaw compaction
+    // reserve is held back on this path — the budget only sets aside the
+    // rendered developer-instructions/prompt pressure.
+    const assembleTokenBudget =
+      typeof params.contextTokenBudget === "number"
+        ? computeContextEngineMessageBudget({
+            contextWindowTokens: params.contextTokenBudget,
+            compactionReserveTokens: 0,
+            systemPrompt: developerInstructions,
+            prompt: params.prompt ?? "",
+          })
+        : undefined;
+    // Messages-only estimate: engines size any systemPromptAddition as
+    // tokenBudget - currentTokenCount.
+    const preassemblyCurrentTokenCount = estimateTranscriptTokenPressure(historyMessages);
     const assembled = await assembleHarnessContextEngine({
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       messages: historyMessages,
-      tokenBudget: params.contextTokenBudget,
+      tokenBudget: assembleTokenBudget,
       currentTokenCount: preassemblyCurrentTokenCount,
       availableTools: new Set(
         flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)

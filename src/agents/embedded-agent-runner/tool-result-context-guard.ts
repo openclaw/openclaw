@@ -330,6 +330,8 @@ export function installContextEngineLoopHook(params: {
   sessionKey?: string;
   sessionFile: string;
   tokenBudget?: number;
+  /** Budget for assemble calls: context window minus compaction reserve and rendered system-prompt pressure. Falls back to `tokenBudget` when absent. */
+  assembleTokenBudget?: number;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -393,6 +395,12 @@ export function installContextEngineLoopHook(params: {
       return lastAssembledView ?? providerMessages;
     }
     try {
+      // Resolved once per iteration: afterTurn and assemble share it, so the
+      // currentTokenCount estimate inside the callback is computed once.
+      const loopRuntimeContext = params.getRuntimeContext?.({
+        messages: transcriptMessages,
+        prePromptMessageCount,
+      });
       if (typeof contextEngine.afterTurn === "function") {
         await contextEngine.afterTurn({
           sessionId,
@@ -401,10 +409,7 @@ export function installContextEngineLoopHook(params: {
           messages: transcriptMessages,
           prePromptMessageCount,
           tokenBudget,
-          runtimeContext: params.getRuntimeContext?.({
-            messages: transcriptMessages,
-            prePromptMessageCount,
-          }),
+          runtimeContext: loopRuntimeContext,
           runtimeSettings: params.runtimeSettings,
           isHeartbeat: params.isHeartbeat,
         });
@@ -433,15 +438,12 @@ export function installContextEngineLoopHook(params: {
       lastSeenLength = transcriptMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = transcriptMessages;
-      const loopCurrentTokenCount = params.getRuntimeContext?.({
-        messages: sourceMessages,
-        prePromptMessageCount,
-      })?.currentTokenCount;
+      const loopCurrentTokenCount = loopRuntimeContext?.currentTokenCount;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
         messages: providerMessages,
-        tokenBudget,
+        tokenBudget: params.assembleTokenBudget ?? tokenBudget,
         ...(typeof loopCurrentTokenCount === "number"
           ? { currentTokenCount: loopCurrentTokenCount }
           : {}),

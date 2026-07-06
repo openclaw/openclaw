@@ -287,6 +287,41 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/**
+ * Estimates the token pressure of transcript messages alone — no system prompt or
+ * incoming prompt. This is the estimator behind `ContextEngine.assemble`'s
+ * `currentTokenCount`: it pairs with `computeContextEngineMessageBudget` so engines
+ * can compute assemble headroom as `tokenBudget - currentTokenCount`.
+ */
+export function estimateTranscriptTokenPressure(messages: AgentMessage[]): number {
+  const historyTokens = messages.reduce(
+    (sum, message) => sum + estimateMessageTokenPressure(message),
+    0,
+  );
+  return Math.max(0, Math.ceil(historyTokens * SAFETY_MARGIN));
+}
+
+/**
+ * Budget available to a context engine's assembled messages: the resolved context
+ * window minus the runtime's compaction reserve and the rendered system/user prompt
+ * pressure. Every `ContextEngine.assemble` call site derives `tokenBudget` through
+ * this helper so the field means the same thing on every harness path.
+ */
+export function computeContextEngineMessageBudget(params: {
+  contextWindowTokens: number;
+  compactionReserveTokens: number;
+  systemPrompt?: string;
+  prompt: string;
+}): number {
+  const reserveTokens = Math.max(0, Math.floor(params.compactionReserveTokens));
+  const promptBudget = Math.max(1, Math.floor(params.contextWindowTokens) - reserveTokens);
+  const renderedPromptTokens = estimateRenderedLlmBoundaryTokenPressure({
+    systemPrompt: params.systemPrompt,
+    prompt: params.prompt,
+  });
+  return Math.max(1, promptBudget - renderedPromptTokens);
+}
+
 function normalizeLlmBoundaryTokenPressure(
   pressure: LlmBoundaryTokenPressure | undefined,
 ): LlmBoundaryTokenPressure | undefined {
