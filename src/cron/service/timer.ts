@@ -1077,7 +1077,9 @@ export function applyTriggerNoFireResult(
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
   }
   try {
-    const naturalNext = computeNextRunAtMs(job.schedule, result.endedAt);
+    // Job-level computation keeps per-job cron staggering intact on quiet
+    // ticks; raw schedule math would collapse watchers onto exact boundaries.
+    const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
     const floorMs = Math.max(
       MIN_REFIRE_GAP_MS,
       resolveCronTriggerMinIntervalMs(state.deps.cronConfig),

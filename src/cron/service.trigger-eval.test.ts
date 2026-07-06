@@ -3,6 +3,7 @@ import { appendCronRunLog, readCronRunLogEntriesSync } from "./run-log.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
@@ -240,6 +241,30 @@ describe("cron trigger evaluation", () => {
       expect(failed.cron.getJob(job.id)?.state.nextRunAtMs).toEqual(expect.any(Number));
     } finally {
       failed.cron.stop();
+    }
+  });
+
+  it("keeps per-job cron staggering when rescheduling quiet ticks", async () => {
+    const evaluateCronTrigger = vi.fn(async () => ({
+      kind: "evaluated" as const,
+      fire: false,
+    }));
+    const harness = await createHarness({ evaluateCronTrigger });
+    try {
+      const job = await harness.cron.add(
+        watcher({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 300_000 } }),
+      );
+      const dueAt = job.state.nextRunAtMs ?? 0;
+      await runWhenDue(harness.cron, job.id);
+
+      const stored = harness.cron.getJob(job.id);
+      if (!stored) {
+        throw new Error("missing job");
+      }
+      // Must match the job-level (stagger-aware) computation, not the raw boundary.
+      expect(stored.state.nextRunAtMs).toBe(computeJobNextRunAtMs(stored, dueAt));
+    } finally {
+      harness.cron.stop();
     }
   });
 

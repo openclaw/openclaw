@@ -8,6 +8,10 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCronTriggerEvaluator } from "./trigger-script.js";
 
+type EvaluatorDeps = Parameters<typeof createCronTriggerEvaluator>[0];
+type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
+type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
+
 function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
   return {
     status: "completed",
@@ -57,7 +61,7 @@ function createEvaluator(
 
 describe("cron trigger script evaluator", () => {
   it("prefers a valid returned value and injects trigger state", async () => {
-    const runHeadless = vi.fn(async () =>
+    const runHeadless = vi.fn(async (_params: HeadlessParams) =>
       completed({
         value: { fire: true, message: "changed", state: { revision: 2 } },
         output: [{ type: "json", value: { fire: false, state: { revision: 1 } } }],
@@ -78,16 +82,20 @@ describe("cron trigger script evaluator", () => {
       state: { revision: 2 },
     });
     expect(runHeadless).toHaveBeenCalledOnce();
-    expect(runHeadless.mock.calls[0]?.[0].extraNamespaces).toEqual([
-      {
-        id: "cron:trigger",
-        globalName: "trigger",
-        scope: {
-          kind: "object",
-          entries: [["state", { kind: "value", value: { revision: 1 } }]],
-        },
-      },
-    ]);
+    expect(runHeadless).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraNamespaces: [
+          {
+            id: "cron:trigger",
+            globalName: "trigger",
+            scope: {
+              kind: "object",
+              entries: [["state", { kind: "value", value: { revision: 1 } }]],
+            },
+          },
+        ],
+      }),
+    );
   });
 
   it("falls back to the last json output entry", async () => {
@@ -160,7 +168,7 @@ describe("cron trigger script evaluator", () => {
 
   it("invalidates a cached runtime when toolsAllow changes", async () => {
     const config = {} as OpenClawConfig;
-    const prepareRuntime = vi.fn(async () => createPreparedRuntime(config));
+    const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
     const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
     const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
 
