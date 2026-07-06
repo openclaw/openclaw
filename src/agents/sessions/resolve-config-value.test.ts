@@ -191,6 +191,17 @@ describe("ModelRegistry availability with env apiKey", () => {
     expect(registry.hasConfiguredAuth(model)).toBe(true);
   });
 
+  it("includes provider in getAvailable when runtime API key override is set", () => {
+    process.env[TEST_ENV_KEY] = "";
+    modelsPath = writeTestModelsJson(TEST_ENV_KEY);
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(TEST_PROVIDER, "sk-runtime-override");
+    const registry = ModelRegistry.create(authStorage, modelsPath);
+    const model = registry.find(TEST_PROVIDER, "test-model")!;
+    expect(registry.getAvailable()).toEqual([model]);
+    expect(registry.hasConfiguredAuth(model)).toBe(true);
+  });
+
   it("includes provider in getAvailable when apiKey is a shell command", () => {
     modelsPath = writeTestModelsJson("!echo sk-test");
     const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);

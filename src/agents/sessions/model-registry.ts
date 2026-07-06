@@ -594,7 +594,29 @@ export class ModelRegistry {
    * Get API key for a model.
    */
   hasConfiguredAuth(model: Model): boolean {
-    return this.getProviderAuthStatus(model.provider).configured;
+    const provider = model.provider;
+    if (this.authStorage.hasAuth(provider)) {
+      return true;
+    }
+
+    const providerConfig = this.providerRequestConfigs.get(provider);
+    if (providerConfig?.auth === "aws-sdk") {
+      return true;
+    }
+
+    const apiKey = providerConfig?.apiKey;
+    if (!apiKey) {
+      return false;
+    }
+
+    // If apiKey names an env var that is explicitly set to empty, the provider
+    // is not available even though the models.json entry has an apiKey field.
+    // Shell commands ("!..."), literal keys, and absent env vars stay available.
+    if (apiKey in process.env && !process.env[apiKey]) {
+      return false;
+    }
+
+    return true;
   }
 
   private getModelRequestKey(provider: string, modelId: string): string {
