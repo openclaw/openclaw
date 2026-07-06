@@ -747,13 +747,14 @@ function trimSqliteLedger(
   while (serializedBytes > state.maxSerializedBytes) {
     const event = db
       .prepare(
-        `SELECT e.session_id AS session_id, e.seq AS seq
+        `SELECT e.session_id AS session_id, e.seq AS seq,
+                length(e.session_id) + length(e.session_key) + length(e.update_json) + COALESCE(length(e.run_id), 0) + 32 AS event_bytes
            FROM acp_replay_events e
            JOIN acp_replay_sessions s ON s.session_id = e.session_id
           ORDER BY s.updated_at ASC, e.seq ASC
           LIMIT 1`,
       )
-      .get() as { session_id: string; seq: number | bigint } | undefined;
+      .get() as { session_id: string; seq: number | bigint; event_bytes: number | bigint } | undefined;
     if (!event) {
       break;
     }
@@ -764,23 +765,24 @@ function trimSqliteLedger(
     db.prepare("UPDATE acp_replay_sessions SET complete = 0 WHERE session_id = ?").run(
       event.session_id,
     );
-    serializedBytes = estimateSqliteLedgerBytes(db);
+    serializedBytes -= normalizeSqliteInteger(event.event_bytes);
   }
 
   while (serializedBytes > state.maxSerializedBytes) {
     const session = db
       .prepare(
-        `SELECT session_id
+        `SELECT session_id,
+                length(session_id) + length(session_key) + length(cwd) + 32 AS session_bytes
            FROM acp_replay_sessions
           ORDER BY updated_at ASC, session_id ASC
           LIMIT 1`,
       )
-      .get() as { session_id: string } | undefined;
+      .get() as { session_id: string; session_bytes: number | bigint } | undefined;
     if (!session) {
       break;
     }
     db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
-    serializedBytes = estimateSqliteLedgerBytes(db);
+    serializedBytes -= normalizeSqliteInteger(session.session_bytes);
   }
 }
 
