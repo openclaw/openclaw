@@ -6,7 +6,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
-import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import {
+  resolveTrustedInboundBareBody,
+  stripInboundMetadata,
+} from "../auto-reply/reply/strip-inbound-meta.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -2741,7 +2744,8 @@ export async function loadSessionLogs(params: {
       if (!content) {
         continue;
       }
-      content = stripInboundMetadata(content);
+      const trustedBareBody = role === "user" ? resolveTrustedInboundBareBody(message) : undefined;
+      content = trustedBareBody ?? stripInboundMetadata(content);
       if (role === "user") {
         content = stripMessageIdHints(stripEnvelope(content)).trim();
       }
