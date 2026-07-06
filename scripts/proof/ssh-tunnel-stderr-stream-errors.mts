@@ -69,6 +69,8 @@ try {
 } finally {
   childProcess.spawn = originalSpawn;
   for (const server of servers) {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
