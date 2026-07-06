@@ -101,4 +101,35 @@ describe("durable Discord delivery", () => {
       "second chunk",
     ]);
   });
+
+  it("declares reconcileUnknownSend adapter for reconnect drain recovery", () => {
+    const messageShape = discordPlugin.message?.adapter ?? discordPlugin.message;
+    expect(messageShape).toBeDefined();
+    const durable = (messageShape as { durableFinal?: Record<string, unknown> }).durableFinal;
+    expect(durable).toBeDefined();
+    expect(durable).toHaveProperty("reconcileUnknownSend");
+    expect(typeof durable?.reconcileUnknownSend).toBe("function");
+    const capabilities = durable?.capabilities as Record<string, unknown> | undefined;
+    expect(capabilities?.reconcileUnknownSend).toBe(true);
+  });
+
+  it("returns not_sent so reconnect drain can safely retry failed sends", async () => {
+    const messageShape = discordPlugin.message?.adapter ?? discordPlugin.message;
+    const durable = (messageShape as { durableFinal?: { reconcileUnknownSend?: Function } })
+      .durableFinal;
+    expect(durable?.reconcileUnknownSend).toBeDefined();
+
+    const result = await durable!.reconcileUnknownSend!({
+      cfg: { channels: { discord: { token: "test-token" } } },
+      queueId: "test-queue-id",
+      channel: "discord",
+      to: "channel:123456",
+      accountId: "default",
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      payloads: [{ text: "test message" }],
+    });
+
+    expect(result).toEqual({ status: "not_sent" });
+  });
 });

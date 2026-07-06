@@ -84,7 +84,7 @@ import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
-const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
+const discordMessageAdapterBase = createChannelMessageAdapterFromOutbound({
   id: "discord",
   outbound: discordOutbound,
   live: {
@@ -102,6 +102,24 @@ const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
   },
 });
+
+/** Discord message adapter with durable-final reconciliation. When a send
+ *  fails during a network outage, the delivery queue entry is marked
+ *  `send_attempt_started`. Without `reconcileUnknownSend` the reconnect
+ *  drain refuses blind replay and the message is permanently dropped.
+ *  Returning `not_sent` allows safe retry — the common case is a network
+ *  error where the message never reached Discord. (#100979) */
+const discordMessageAdapter = {
+  ...discordMessageAdapterBase,
+  durableFinal: {
+    capabilities: {
+      ...discordMessageAdapterBase.durableFinal?.capabilities,
+      reconcileUnknownSend: true,
+    },
+    reconcileUnknownSendKinds: { text: true },
+    reconcileUnknownSend: async () => ({ status: "not_sent" as const }),
+  },
+} satisfies typeof discordMessageAdapterBase;
 
 function startDiscordStartupProbe(params: {
   accountId: string;
