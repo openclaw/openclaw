@@ -236,6 +236,26 @@
     "target": "local loopback"
   },
   {
+    "source": "Local text workers",
+    "target": "本地文本 worker"
+  },
+  {
+    "source": "Local models",
+    "target": "本地模型"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "CLI backends",
+    "target": "CLI backends"
+  },
+  {
+    "source": "LLM task",
+    "target": "LLM task"
+  },
+  {
     "source": "Tailscale",
     "target": "Tailscale"
   },
