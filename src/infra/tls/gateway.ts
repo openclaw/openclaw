@@ -2,6 +2,8 @@
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +30,19 @@ export type GatewayTlsRuntime = {
   error?: string;
 };
 
+/**
+ * SAN identities asserted in generated self-signed certificates:
+ *   DNS:localhost, DNS:<hostname>, IP:127.0.0.1, IP:::1
+ *
+ * localhost and 127.0.0.1 cover local CLI probe connections. The OS hostname
+ * covers remote Gateway pairing. ::1 covers IPv6 loopback users. This is the
+ * minimum set needed for Node >=17 TLS identity checks to pass.
+ *
+ * Generation uses OpenSSL `req -addext` (available since OpenSSL 1.1.1, 2018).
+ * If the system OpenSSL does not support `-addext`, it falls back to a
+ * configuration-file approach. */
+const SAN_IDENTITIES = `DNS:localhost,DNS:${os.hostname()},IP:127.0.0.1,IP:::1`;
+
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
@@ -47,7 +62,7 @@ async function generateSelfSignedCert(params: {
   }
   // Use execFile with a trusted system binary; certificate paths are arguments,
   // not shell text.
-  await execFileAsync(opensslBin, [
+  const baseArgs: string[] = [
     "req",
     "-x509",
     "-newkey",
@@ -62,9 +77,39 @@ async function generateSelfSignedCert(params: {
     params.certPath,
     "-subj",
     "/CN=openclaw-gateway",
-    "-addext",
-    `subjectAltName=DNS:localhost,DNS:${os.hostname()},IP:127.0.0.1,IP:::1`,
-  ]);
+  ];
+  try {
+    // Try -addext first (OpenSSL >=1.1.1).
+    await execFileAsync(opensslBin, [...baseArgs, "-addext", `subjectAltName=${SAN_IDENTITIES}`]);
+  } catch (addextErr) {
+    // Fallback: write a temporary config file with the SAN extension.
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tls-"));
+    try {
+      const configPath = path.join(tmpDir, "san-config.cnf");
+      const configContent = [
+        "[req]",
+        "distinguished_name = req_distinguished_name",
+        "x509_extensions = v3_req",
+        "prompt = no",
+        "",
+        "[req_distinguished_name]",
+        "CN = openclaw-gateway",
+        "",
+        "[v3_req]",
+        `subjectAltName = ${SAN_IDENTITIES}`,
+      ].join("\n");
+      await writeFile(configPath, configContent, "utf8");
+      await execFileAsync(opensslBin, [
+        ...baseArgs,
+        "-config",
+        configPath,
+        "-extensions",
+        "v3_req",
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});
   params.log?.info?.(
