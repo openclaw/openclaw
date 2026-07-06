@@ -150,7 +150,7 @@ describe("describeImageWithModel", () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue(
+    fetchMock.mockImplementation(async () =>
       Response.json({
         base_resp: { status_code: 0 },
         content: "portal ok",

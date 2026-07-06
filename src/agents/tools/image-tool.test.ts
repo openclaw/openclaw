@@ -447,7 +447,7 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
 }
 
 function stubMinimaxOkFetch() {
-  const fetch = vi.fn().mockResolvedValue(
+  const fetch = vi.fn().mockImplementation(async () =>
     Response.json({
       content: "ok",
       base_resp: { status_code: 0, status_msg: "" },
@@ -459,7 +459,7 @@ function stubMinimaxOkFetch() {
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
-  const fetch = vi.fn().mockResolvedValue(
+  const fetch = vi.fn().mockImplementation(async () =>
     Response.json({
       content,
       base_resp: baseResp,
