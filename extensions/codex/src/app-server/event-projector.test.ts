@@ -1654,27 +1654,26 @@ describe("CodexAppServerEventProjector", () => {
 
   it("projects guardianWarning circuit-breaker notifications", async () => {
     // Regression for #101207: when Codex's guardian review hits its rejection
-    // circuit-breaker, it emits a `guardianWarning` notification right before
-    // ending the turn as interrupted. That notification must be projected on the
-    // guardian stream instead of being silently dropped.
+    // circuit-breaker, it emits a thread-scoped `guardianWarning` notification
+    // (only threadId + message, no turnId) right before ending the turn as
+    // interrupted. It must route through the thread-scoped filter and be
+    // projected on the guardian stream — not dropped by the turn-strict filter.
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
-    await projector.handleNotification(
-      forCurrentTurn("guardianWarning", {
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: {
+        threadId: THREAD_ID,
         message: "Guardian rejection limit reached; ending turn as interrupted.",
-        reviewId: "review-7",
-        targetItemId: "cmd-7",
-      }),
-    );
+      },
+    } as ProjectorNotification);
 
     const warning = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.guardian",
       phase: "warning",
     }).data;
     expect(warning.message).toBe("Guardian rejection limit reached; ending turn as interrupted.");
-    expect(warning.reviewId).toBe("review-7");
-    expect(warning.targetItemId).toBe("cmd-7");
   });
 
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {

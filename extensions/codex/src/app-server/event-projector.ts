@@ -684,6 +684,13 @@ export class CodexAppServerEventProjector {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
       }
+    } else if (notification.method === "guardianWarning") {
+      // guardianWarning is thread-scoped: codex emits it with only a threadId
+      // (no turnId), so correlate it on the thread alone — otherwise the
+      // turn-strict filter below would drop it before it reaches the switch.
+      if (readCodexNotificationThreadId(params) !== this.threadId) {
+        return;
+      }
     } else if (!this.isNotificationForTurn(params)) {
       return;
     }
@@ -1264,19 +1271,12 @@ export class CodexAppServerEventProjector {
     // Codex emits `guardianWarning` from its rejection circuit-breaker (e.g. 3
     // consecutive or 10 total denials in a turn) right before ending the turn
     // as interrupted. Project it on the guardian stream so callers can see why
-    // the turn degraded instead of silently dropping the notification. The exact
-    // v2 param shape is not bundled in OpenClaw's protocol schemas, so read the
-    // human-readable reason defensively across the names Codex has used.
+    // the turn degraded instead of silently dropping the notification.
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
         phase: "warning",
-        message:
-          readNullableString(params, "message") ??
-          readNullableString(params, "warning") ??
-          readNullableString(params, "reason"),
-        reviewId: readString(params, "reviewId"),
-        targetItemId: readNullableString(params, "targetItemId"),
+        message: readString(params, "message"),
       },
     });
   }
