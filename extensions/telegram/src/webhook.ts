@@ -1022,6 +1022,19 @@ export async function startTelegramWebhook(opts: {
     status.noteWebhookAdvertised();
     runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
   };
+  const closeAfterStartupFailure = async () => {
+    shutDown = true;
+    if (drainTimer) {
+      clearInterval(drainTimer);
+    }
+    server.close();
+    await bot.stop();
+    await closeTransportOnce();
+    status.noteWebhookStop();
+    if (diagnosticsEnabled) {
+      stopDiagnosticHeartbeat();
+    }
+  };
   const shouldRetryWebhookRegistration = (err: unknown): boolean =>
     isRetryableTelegramApiError(err, { context: "webhook" });
   const retryWebhookRegistration = async (firstAttempt: number): Promise<void> => {
@@ -1050,23 +1063,11 @@ export async function startTelegramWebhook(opts: {
           runtime.error?.(
             `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
           );
+          await closeAfterStartupFailure();
           return;
         }
       }
       attempt += 1;
-    }
-  };
-  const closeAfterStartupFailure = async () => {
-    shutDown = true;
-    if (drainTimer) {
-      clearInterval(drainTimer);
-    }
-    server.close();
-    await bot.stop();
-    await closeTransportOnce();
-    status.noteWebhookStop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
     }
   };
 

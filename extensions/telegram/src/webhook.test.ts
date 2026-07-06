@@ -632,6 +632,45 @@ describe("startTelegramWebhook", () => {
     expectMockMessageContains(runtimeError, "telegram setWebhook failed: unauthorized");
   });
 
+  it("stops local listener and bot when retry loop encounters a non-recoverable error", async () => {
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+
+    const unauthorizedError = Object.assign(new Error("unauthorized"), { error_code: 401 });
+    setWebhookSpy
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(unauthorizedError);
+
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      runtime: { log: runtimeLog, error: runtimeError, exit: vi.fn() },
+      setStatus,
+      webhookRegistrationRetryPolicy: {
+        initialMs: 0,
+        maxMs: 0,
+        factor: 1,
+        jitter: 0,
+      },
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+      });
+      expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+      expectMockMessageContains(
+        runtimeError,
+        "telegram setWebhook retry stopped after non-recoverable error",
+      );
+    } finally {
+      await started.stop();
+    }
+  });
+
   it("retries transient getMe startup init failures before starting the account", async () => {
     const runtimeLog = vi.fn();
     initSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(undefined);
