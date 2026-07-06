@@ -117,6 +117,11 @@ function mockGraphMediaFetch(options: {
   vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
     options.fetchCalls?.push(params.url);
     const url = params.url;
+    for (const [fragment, response] of Object.entries(options.valueResponses ?? {})) {
+      if (url.includes(fragment)) {
+        return guardedFetchResult(params, response);
+      }
+    }
     if (url.endsWith(`/messages/${options.messageId}`) && !url.includes("hostedContents")) {
       return guardedFetchResult(
         params,
@@ -125,11 +130,6 @@ function mockGraphMediaFetch(options: {
     }
     if (url.endsWith("/hostedContents")) {
       return guardedFetchResult(params, mockFetchResponse({ value: options.hostedContents ?? [] }));
-    }
-    for (const [fragment, response] of Object.entries(options.valueResponses ?? {})) {
-      if (url.includes(fragment)) {
-        return guardedFetchResult(params, response);
-      }
     }
     return guardedFetchResult(params, mockFetchResponse({}, 404));
   });
@@ -220,14 +220,15 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     const hugeBody = oversizedGraphJson({
       value: [{ id: "hosted-huge", contentType: "image/png", contentBytes: null }],
     });
+    const hugeResponse = new Response(hugeBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
 
     mockGraphMediaFetch({
       messageId: "msg-huge",
       valueResponses: {
-        "/hostedContents": new Response(hugeBody, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        "/hostedContents": hugeResponse,
       },
       fetchCalls,
     });
@@ -240,6 +241,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
 
     expect(result.media).toHaveLength(0);
     expect(result.hostedCount).toBe(0);
+    expect(hugeResponse.bodyUsed).toBe(true);
   });
 
   it("uses inline contentBytes when available instead of $value", async () => {
