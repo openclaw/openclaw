@@ -43,6 +43,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tts.enable", scope: "operator.write" },
   { name: "tts.disable", scope: "operator.write" },
   { name: "tts.convert", scope: "operator.write" },
+  { name: "tts.speak", scope: "operator.write" },
   { name: "tts.setProvider", scope: "operator.write" },
   { name: "tts.setPersona", scope: "operator.write" },
   { name: "config.get", scope: "operator.read" },
