@@ -1,5 +1,8 @@
 // Msteams plugin module implements graph behavior.
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonArrayFieldResponse,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -50,8 +53,6 @@ type GraphAttachment = {
   thumbnailUrl?: string | null;
   content?: unknown;
 };
-
-const MS_TEAMS_GRAPH_COLLECTION_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export function buildMSTeamsGraphMessageUrls(params: {
   conversationType?: string | null;
@@ -146,12 +147,12 @@ async function fetchGraphCollection(params: {
       return { status, items: [] };
     }
     try {
-      const data = await readProviderJsonResponse<{ value?: unknown[] }>(
+      const items = await readProviderJsonArrayFieldResponse(
         response,
         "MS Teams Graph collection",
-        { maxBytes: MS_TEAMS_GRAPH_COLLECTION_MAX_RESPONSE_BYTES },
+        "value",
       );
-      return { status, items: Array.isArray(data.value) ? data.value : [] };
+      return { status, items };
     } catch {
       return { status, items: [] };
     }
@@ -352,7 +353,10 @@ export async function downloadMSTeamsGraphMedia(params: {
           attachments?: GraphAttachment[];
         };
         try {
-          msgData = (await msgRes.json()) as typeof msgData;
+          msgData = await readProviderJsonResponse<typeof msgData>(
+            msgRes,
+            "MS Teams Graph message",
+          );
         } catch (err) {
           debugLog?.debug?.("graph media message parse failed", {
             messageUrl,

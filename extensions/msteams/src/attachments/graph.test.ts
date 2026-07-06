@@ -82,6 +82,10 @@ function mockBinaryResponse(data: Uint8Array, status = 200) {
   return new Response(Buffer.from(data) as BodyInit, { status });
 }
 
+function oversizedGraphJson(payload: Record<string, unknown>): string {
+  return JSON.stringify({ ...payload, padding: "x".repeat(16 * 1024 * 1024) });
+}
+
 type GuardedFetchParams = { url: string; init?: RequestInit };
 
 function guardedFetchResult(params: GuardedFetchParams, response: Response) {
@@ -213,9 +217,8 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
 
   it("skips hosted content when the Graph collection response exceeds the byte cap", async () => {
     const fetchCalls: string[] = [];
-    const hugeBody = JSON.stringify({
+    const hugeBody = oversizedGraphJson({
       value: [{ id: "hosted-huge", contentType: "image/png", contentBytes: null }],
-      padding: "x".repeat(16 * 1024 * 1024),
     });
 
     mockGraphMediaFetch({
@@ -392,6 +395,29 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     // Regression guard: attachmentCount now reflects real inline attachments,
     // not the imaginary `/attachments` sub-resource count.
     expect(result.attachmentCount).toBe(1);
+  });
+
+  it("skips message metadata when the Graph response exceeds the byte cap", async () => {
+    mockGraphMediaFetch({
+      messageId: "msg-huge",
+      messageResponse: oversizedGraphJson({ attachments: [] }),
+    });
+    const logger = { warn: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-huge",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+      logger,
+    });
+
+    expect(result.media).toHaveLength(0);
+    expect(result.attachmentCount).toBe(0);
+    const [message, context] = requireFirstMockCall(logger.warn, "message parse warning");
+    expect(message).toBe("msteams graph message parse failed");
+    expect((context as { error?: unknown }).error).toBe(
+      "MS Teams Graph message: JSON response exceeds 16777216 bytes",
+    );
   });
 
   it("logs a debug event when the message fetch throws instead of swallowing it", async () => {
