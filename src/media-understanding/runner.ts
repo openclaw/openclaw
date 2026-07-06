@@ -640,7 +640,7 @@ async function resolveKeyEntry(params: {
               providerRegistry,
             }))
           : model;
-    if ((capability === "image" || capability === "video") && !resolvedModel) {
+    if (capability === "image" && !resolvedModel) {
       return null;
     }
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
@@ -922,7 +922,7 @@ async function resolveActiveModelEntry(params: {
         providerRegistry: params.providerRegistry,
       });
   }
-  if ((params.capability === "image" || params.capability === "video") && !model) {
+  if ((params.capability === "image" || params.capability === "audio") && !model) {
     return null;
   }
   return {

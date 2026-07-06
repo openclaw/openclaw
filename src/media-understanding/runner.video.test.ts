@@ -239,8 +239,8 @@ describe("runCapability video provider wiring", () => {
     });
   });
 
-  it("skips video providers without a resolvable default model", async () => {
-    let describeCalls = 0;
+  it("preserves self-defaulting video providers without registry model metadata", async () => {
+    let seenModel: string | undefined;
 
     await withTempDir(
       { prefix: "openclaw-video-no-default-provider-" },
@@ -278,9 +278,9 @@ describe("runCapability video provider wiring", () => {
                 {
                   id: "moonshot",
                   capabilities: ["video"],
-                  describeVideo: async () => {
-                    describeCalls += 1;
-                    return { text: "moonshot" };
+                  describeVideo: async (req) => {
+                    seenModel = req.model;
+                    return { text: "moonshot", model: "provider-default" };
                   },
                 },
               ],
@@ -288,11 +288,11 @@ describe("runCapability video provider wiring", () => {
             activeModel: { provider: "moonshot" },
           });
 
-          expect(result.outputs).toHaveLength(0);
-          expect(result.decision.outcome).toBe("skipped");
-          expect(result.decision.attachments).toHaveLength(1);
-          expect(result.decision.attachments[0]?.attempts).toHaveLength(0);
-          expect(describeCalls).toBe(0);
+          expect(result.decision.outcome).toBe("success");
+          const output = requireCapabilityOutput(result, 0);
+          expect(output.provider).toBe("moonshot");
+          expect(output.model).toBe("provider-default");
+          expect(seenModel).toBeUndefined();
         });
       },
     );
