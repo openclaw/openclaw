@@ -14,6 +14,9 @@ export type MarketplaceFeedTrustedPublicKeyConfig = {
   publicKey: string;
 };
 
+/** @deprecated Use MarketplaceFeedTrustedPublicKeyConfig. */
+export type MarketplaceFeedSigningKeyConfig = MarketplaceFeedTrustedPublicKeyConfig;
+
 export type MarketplaceFeedProfileConfig = {
   url: string;
   verification?: MarketplaceFeedVerificationConfig;
