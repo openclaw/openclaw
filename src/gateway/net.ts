@@ -504,33 +504,33 @@ export function isSecureWebSocketUrl(
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
-  if (isTrustedPlaintextWebSocketHost(parsed.hostname)) {
+  if (isTrustedPlaintextWebSocketHost(parsed.hostname, opts?.allowPrivateWs)) {
     return true;
-  }
-  // Optional break-glass for trusted private-DNS overlays.
-  if (opts?.allowPrivateWs) {
-    return isTrustedPlaintextWebSocketHost(parsed.hostname);
   }
   return false;
 }
 
-function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+function isTrustedPlaintextWebSocketHost(hostname: string, allowPrivateWs = false): boolean {
   if (isPrivateOrLoopbackHost(hostname)) {
     return true;
   }
   const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
-  return (
-    normalized.endsWith(".local") ||
-    normalized.endsWith(".ts.net") ||
-    normalized.endsWith(".internal") ||
-    normalized.endsWith(".lan") ||
-    normalized.endsWith(".home") ||
-    normalized.endsWith(".corp") ||
-    normalized.endsWith(".onion") ||
-    normalized.endsWith(".test") ||
-    normalized.endsWith(".invalid") ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".example") ||
-    normalized.endsWith(".ai")
-  );
+  if (normalized.endsWith(".local") || normalized.endsWith(".ts.net")) {
+    return true;
+  }
+  if (allowPrivateWs) {
+    return (
+      normalized.endsWith(".internal") ||
+      normalized.endsWith(".lan") ||
+      normalized.endsWith(".home") ||
+      normalized.endsWith(".corp") ||
+      normalized.endsWith(".onion") ||
+      normalized.endsWith(".test") ||
+      normalized.endsWith(".invalid") ||
+      normalized.endsWith(".localhost") ||
+      normalized.endsWith(".example") ||
+      normalized.endsWith(".ai")
+    );
+  }
+  return false;
 }

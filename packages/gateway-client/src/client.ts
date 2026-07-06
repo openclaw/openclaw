@@ -257,27 +257,31 @@ function isPrivateOrLoopbackHost(host: string): boolean {
   return isPrivateOrLoopbackIpAddress(address);
 }
 
-function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+function isTrustedPlaintextWebSocketHost(hostname: string, allowPrivateWs = false): boolean {
   if (isPrivateOrLoopbackHost(hostname)) {
     return true;
   }
   const normalized = hostname.toLowerCase().trim().replace(/\.+$/, "");
   // Plain ws:// is still useful for local discovery and Tailnet names. Public
   // hostnames must use wss:// unless the caller opts into the private break-glass.
-  return (
-    normalized.endsWith(".local") ||
-    normalized.endsWith(".ts.net") ||
-    normalized.endsWith(".internal") ||
-    normalized.endsWith(".lan") ||
-    normalized.endsWith(".home") ||
-    normalized.endsWith(".corp") ||
-    normalized.endsWith(".onion") ||
-    normalized.endsWith(".test") ||
-    normalized.endsWith(".invalid") ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".example") ||
-    normalized.endsWith(".ai")
-  );
+  if (normalized.endsWith(".local") || normalized.endsWith(".ts.net")) {
+    return true;
+  }
+  if (allowPrivateWs) {
+    return (
+      normalized.endsWith(".internal") ||
+      normalized.endsWith(".lan") ||
+      normalized.endsWith(".home") ||
+      normalized.endsWith(".corp") ||
+      normalized.endsWith(".onion") ||
+      normalized.endsWith(".test") ||
+      normalized.endsWith(".invalid") ||
+      normalized.endsWith(".localhost") ||
+      normalized.endsWith(".example") ||
+      normalized.endsWith(".ai")
+    );
+  }
+  return false;
 }
 
 function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boolean }): boolean {
@@ -291,11 +295,11 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
     if (protocol !== "ws:") {
       return false;
     }
-    if (isLoopbackHost(url.hostname) || isTrustedPlaintextWebSocketHost(url.hostname)) {
+    if (
+      isLoopbackHost(url.hostname) ||
+      isTrustedPlaintextWebSocketHost(url.hostname, options?.allowPrivateWs)
+    ) {
       return true;
-    }
-    if (options?.allowPrivateWs === true) {
-      return isTrustedPlaintextWebSocketHost(url.hostname);
     }
     return false;
   } catch {
