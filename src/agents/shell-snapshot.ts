@@ -469,6 +469,7 @@ async function runShell(opts: {
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
+    child.stdout.on("error", () => {});
     child.on("error", () => {
       finish(null);
     });
