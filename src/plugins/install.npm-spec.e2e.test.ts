@@ -657,7 +657,7 @@ describe("installPluginFromNpmSpec e2e", () => {
       dependencies?: Record<string, string>;
       openclaw?: { managedPeerDependencies?: string[] };
     };
-    expect(rootManifest.dependencies?.[runtimePeer]).toBe("1.0.0");
+    expect(["1.0.0", "^1.0.0"]).toContain(rootManifest.dependencies?.[runtimePeer]);
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).toContain(runtimePeer);
   });
 

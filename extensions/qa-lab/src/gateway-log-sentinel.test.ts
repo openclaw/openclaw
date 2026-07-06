@@ -2,12 +2,20 @@
 import { describe, expect, it } from "vitest";
 import {
   assertNoGatewayLogSentinels,
+  extractGatewayMessageText,
   formatGatewayLogSentinelSummary,
   scanDirectReplyTranscriptSentinels,
   scanGatewayLogSentinels,
 } from "./gateway-log-sentinel.js";
 
 describe("gateway log sentinels", () => {
+  it.each([
+    [{ content: [{ type: "toolResult", content: "codex output" }] }, "codex output"],
+    [{ content: [{ type: "text", text: "standard output" }] }, "standard output"],
+  ])("extracts message text from tool result shapes", (message, expected) => {
+    expect(extractGatewayMessageText(message)).toBe(expected);
+  });
+
   it("classifies May 13 beta.5 operational failure signatures", () => {
     const findings = scanGatewayLogSentinels(
       [

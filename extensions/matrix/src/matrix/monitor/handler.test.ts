@@ -634,6 +634,7 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).toHaveBeenCalled();
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.GroupRequireMention).toBe(false);
     expect(runPrepared.mock.calls[0]?.[0].botLoopProtection).toEqual({
       scopeId: "ops",
       conversationId: "!room:example.org",
@@ -3229,13 +3230,13 @@ describe("matrix monitor handler draft streaming", () => {
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",
       "$draft1",
-      expect.stringContaining("completed"),
+      expect.stringContaining("Exec"),
       expect.any(Object),
     );
     const recoveredEdit = mockCalls(editMessageMatrixMock, "editMessageMatrix").find(
-      ([, eventId, body]) =>
-        eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
+      ([, eventId, body]) => eventId === "$draft1" && typeof body === "string",
     );
+    expect(recoveredEdit?.[2]).not.toContain("completed");
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
   });
@@ -3293,7 +3294,8 @@ describe("matrix monitor handler draft streaming", () => {
       ([, eventId, body]) =>
         eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
     );
-    expect(completedEdit?.[2]).not.toContain("install dependencies");
+    expect(completedEdit).toBeUndefined();
+    expect(singleTextMessageBody()).toContain("install dependencies");
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {

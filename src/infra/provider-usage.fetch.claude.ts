@@ -1,6 +1,8 @@
 // Fetches Claude provider usage windows.
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -12,14 +14,25 @@ type ClaudeUsageResponse = {
   seven_day?: { utilization?: number; resets_at?: string };
   seven_day_sonnet?: { utilization?: number };
   seven_day_opus?: { utilization?: number };
+  limits?: Array<{
+    percent?: number;
+    resets_at?: string;
+    is_active?: boolean;
+    scope?: { model?: { id?: string; display_name?: string } };
+  }>;
+  extra_usage?: {
+    is_enabled?: boolean;
+    monthly_limit?: number;
+    used_credits?: number;
+    utilization?: number;
+    currency?: string;
+  };
 };
 
 type ClaudeWebOrganizationsResponse = Array<{
   uuid?: string;
   name?: string;
 }>;
-
-type ClaudeWebUsageResponse = ClaudeUsageResponse;
 
 function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
   const windows: UsageWindow[] = [];
@@ -45,6 +58,31 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
     windows.push({
       label: data.seven_day_sonnet ? "Sonnet" : "Opus",
       usedPercent: clampPercent(modelWindow.utilization),
+    });
+  }
+
+  const knownLabels = new Set(windows.map((window) => window.label.toLowerCase()));
+  for (const limit of data.limits ?? []) {
+    if (limit.is_active === false || !Number.isFinite(limit.percent)) {
+      continue;
+    }
+    const model = limit.scope?.model;
+    const label = model?.display_name?.trim() || model?.id?.trim();
+    if (!label || knownLabels.has(label.toLowerCase())) {
+      continue;
+    }
+    knownLabels.add(label.toLowerCase());
+    windows.push({
+      label,
+      usedPercent: clampPercent(limit.percent ?? 0),
+      resetAt: limit.resets_at ? new Date(limit.resets_at).getTime() : undefined,
+    });
+  }
+
+  if (data.extra_usage?.is_enabled && Number.isFinite(data.extra_usage.utilization)) {
+    windows.push({
+      label: "Extra usage",
+      usedPercent: clampPercent(data.extra_usage.utilization ?? 0),
     });
   }
 
@@ -85,6 +123,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!orgRes.ok) {
+    await discardUsageResponseBody(orgRes);
     return null;
   }
 
@@ -105,6 +144,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
+    await discardUsageResponseBody(usageRes);
     return null;
   }
 
@@ -112,7 +152,7 @@ async function fetchClaudeWebUsage(
   if (!parsedUsage.ok) {
     return null;
   }
-  const data = parsedUsage.data as ClaudeWebUsageResponse;
+  const data = parsedUsage.data as ClaudeUsageResponse;
   const windows = buildClaudeUsageWindows(data);
 
   if (windows.length === 0) {
@@ -148,9 +188,9 @@ export async function fetchClaudeUsage(
   if (!res.ok) {
     let message: string | undefined;
     try {
-      const data = (await res.json()) as {
+      const data = await readProviderJsonResponse<{
         error?: { message?: unknown } | null;
-      };
+      }>(res, "Anthropic usage error");
       const raw = data?.error?.message;
       if (typeof raw === "string" && raw.trim()) {
         message = raw.trim();
@@ -185,10 +225,32 @@ export async function fetchClaudeUsage(
   }
   const data = parsed.data as ClaudeUsageResponse;
   const windows = buildClaudeUsageWindows(data);
+  const extra = data.extra_usage;
+  const unit = extra?.currency?.trim().toUpperCase() || "USD";
+  const billing =
+    extra?.is_enabled === true &&
+    typeof extra.used_credits === "number" &&
+    Number.isFinite(extra.used_credits) &&
+    extra.used_credits >= 0 &&
+    typeof extra.monthly_limit === "number" &&
+    Number.isFinite(extra.monthly_limit) &&
+    extra.monthly_limit >= 0
+      ? [
+          {
+            type: "budget" as const,
+            // Anthropic reports extra-usage currency in minor units.
+            used: extra.used_credits / 100,
+            limit: extra.monthly_limit / 100,
+            unit,
+            period: "month",
+          },
+        ]
+      : undefined;
 
   return {
     provider: "anthropic",
     displayName: PROVIDER_LABELS.anthropic,
     windows,
+    ...(billing ? { billing } : {}),
   };
 }

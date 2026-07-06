@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createQaLabWebSearchProvider as createQaLabWebSearchContractProvider } from "../web-search-contract-api.js";
 import {
   createQaLabWebSearchProvider,
+  QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
   QA_LAB_WEB_SEARCH_PROVIDER_ID,
 } from "./qa-web-search-provider.js";
 
@@ -54,5 +55,17 @@ describe("qa-lab web search provider", () => {
     }
 
     await expect(tool.execute({ __qaFailureMode: "denied-input" })).rejects.toThrow(/query/i);
+  });
+
+  it("keeps the QA failure sentinel as a deterministic tool failure", async () => {
+    const provider = createQaLabWebSearchProvider();
+    const tool = provider.createTool({});
+    if (!tool) {
+      throw new Error("expected QA Lab web search tool");
+    }
+
+    await expect(tool.execute({ query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY })).rejects.toThrow(
+      /denied input sentinel/i,
+    );
   });
 });

@@ -271,6 +271,26 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+  it("sanitizes model artifacts before writing session memory", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
+      {
+        role: "assistant",
+        content: 'Looks good\n<tool_call>{"name":"read","arguments":{"path":"secret.md"}}',
+      },
+      { role: "assistant", content: "NO_REPLY" },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(memoryContent).toContain("user: Review this [REMOVED_SPECIAL_TOKEN]system");
+    expect(memoryContent).toContain("assistant: Looks good");
+    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).not.toContain("<|im_start|>");
+    expect(memoryContent).not.toContain("<tool_call>");
+    expect(memoryContent).not.toContain("secret.md");
+    expect(memoryContent).not.toContain("NO_REPLY");
+  });
+
   it("does not call the model provider for a filename slug by default", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },
@@ -649,9 +669,9 @@ describe("session-memory hook", () => {
       currentSessionFile: resetSessionFile,
       sessionId,
     });
-    expect(previousSessionFile).toBeUndefined();
+    expect(previousSessionFile).toBe(resetSessionFile);
 
-    const memoryContent = await getRecentSessionContentWithResetFallback(resetSessionFile);
+    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
     expect(memoryContent).toContain("user: Message from reset pointer");
     expect(memoryContent).toContain("assistant: Recovered directly from reset file");
   });
@@ -683,6 +703,40 @@ describe("session-memory hook", () => {
     const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
+  });
+
+  it("falls back to latest reset transcript when only archived copies remain", async () => {
+    const { sessionsDir } = await createSessionMemoryWorkspace();
+
+    const sessionId = "reset-only-session";
+    const olderResetFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Older archived session" },
+        { role: "assistant", content: "Older archived summary" },
+      ]),
+    });
+    const newerResetFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-34.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Newest archived session" },
+        { role: "assistant", content: "Newest archived summary" },
+      ]),
+    });
+
+    const previousSessionFile = await findPreviousSessionFile({
+      sessionsDir,
+      sessionId,
+    });
+    expect(previousSessionFile).toBe(newerResetFile);
+    expect(previousSessionFile).not.toBe(olderResetFile);
+
+    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
+    expect(memoryContent).toContain("user: Newest archived session");
+    expect(memoryContent).toContain("assistant: Newest archived summary");
+    expect(memoryContent).not.toContain("Older archived session");
   });
 
   it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
@@ -811,5 +865,151 @@ describe("session-memory hook", () => {
 
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  it("preserves delivery-mirror with unique text when no raw assistant precedes it (message-tool scenario)", async () => {
+    // When a delivery-mirror row is the only assistant reply (e.g., the
+    // response comes from a message-tool send, not a raw model turn),
+    // it must be preserved — not filtered out by a blanket DM skip.
+    const sessionContent = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "Turn on the lights" } }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Lights turned on" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const assistantLines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    // The delivery-mirror is the only assistant reply — must be preserved
+    expect(assistantLines).toEqual(["assistant: Lights turned on"]);
+    expect(memoryContent).toContain("Lights turned on");
+  });
+
+  it("filters delivery-mirror duplicates but preserves standalone gateway-injected assistant rows (fixes #92563)", async () => {
+    const sessionContent = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "What is 2+2?" } }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "claude",
+          content: [
+            { type: "thinking", text: "..." },
+            { type: "text", text: "2+2 = 4" },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "2+2 = 4" }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [{ type: "text", text: "standalone gateway reply" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const assistantLines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    // delivery-mirror duplicate is filtered, gateway-injected standalone is preserved
+    expect(assistantLines).toEqual(["assistant: 2+2 = 4", "assistant: standalone gateway reply"]);
+    expect(memoryContent).toContain("standalone gateway reply");
+  });
+
+  it("preserves delivery-mirror after user turn even when mirroring older assistant text", async () => {
+    // Without the user-turn reset of `lastAssistantText`, a delivery-mirror
+    // row after a user message that echoes a *previous* turn's assistant
+    // content would be incorrectly filtered.
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Your number is 123-4567" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Your number is 123-4567" }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "I changed it to 987-6543" },
+      }),
+      // This delivery-mirror echoes the old assistant text from a previous turn.
+      // In the new turn, it must NOT be filtered — there is no other assistant
+      // reply in this turn to deduplicate against.
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Your number is 123-4567" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    expect(lines).toEqual([
+      "assistant: Your number is 123-4567",
+      "assistant: Your number is 123-4567",
+    ]);
+  });
+
+  it("preserves delivery-mirror after an omitted slash-command user turn", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Done" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Done" }],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "/new" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Done" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    const lines = memoryContent!.split("\n").filter((l) => l.startsWith("assistant:"));
+    expect(lines).toEqual(["assistant: Done", "assistant: Done"]);
+    expect(memoryContent).not.toContain("user: /new");
   });
 });

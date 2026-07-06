@@ -27,11 +27,6 @@ export type PersistedThreadBindingRecord = ThreadBindingRecord & {
   expiresAt?: number;
 };
 
-export type PersistedThreadBindingsPayload = {
-  version: 1;
-  bindings: Record<string, PersistedThreadBindingRecord>;
-};
-
 export type ThreadBindingManager = {
   accountId: string;
   getIdleTimeoutMs: () => number;

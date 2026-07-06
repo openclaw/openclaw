@@ -8,6 +8,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { sleep } from "./lib/sleep.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+
+const { formatGeneratedModule } = (await import(
+  new URL("./lib/format-generated-module.mjs", import.meta.url).href
+)) as {
+  formatGeneratedModule: (
+    source: string,
+    options: {
+      errorLabel: string;
+      outputPath: string;
+      repoRoot: string;
+    },
+  ) => string;
+};
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -25,6 +40,11 @@ type LocaleEntry = {
 type GlossaryEntry = {
   source: string;
   target: string;
+};
+
+type RunProcessParentSignalState = {
+  done: boolean;
+  signal: NodeJS.Signals | null;
 };
 
 type TranslationMemoryEntry = {
@@ -91,7 +111,12 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const CONTROL_UI_SOURCE_DIR = path.join(ROOT, "ui", "src", "ui");
+const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
+  path.join(ROOT, "ui", "src", "app"),
+  path.join(ROOT, "ui", "src", "components"),
+  path.join(ROOT, "ui", "src", "lib"),
+  path.join(ROOT, "ui", "src", "pages"),
+] as const;
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const RAW_COPY_BASELINE_VERSION = 1;
 const MAX_BATCH_ITEMS = 20;
@@ -102,6 +127,7 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
 const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
 const RUN_PROCESS_TIMEOUT_MS = 120_000;
 const RUN_PROCESS_KILL_GRACE_MS = 5_000;
+const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
@@ -144,6 +170,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
   { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
   { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
+  { locale: "hi", fileName: "hi.ts", exportName: "hi", languageKey: "hi" },
   { locale: "ar", fileName: "ar.ts", exportName: "ar", languageKey: "ar" },
   { locale: "it", fileName: "it.ts", exportName: "it", languageKey: "it" },
   { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
@@ -154,6 +181,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
   { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
   { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
+  { locale: "ru", fileName: "ru.ts", exportName: "ru", languageKey: "ru" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -236,6 +264,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Korean";
     case "fr":
       return "French";
+    case "hi":
+      return "Hindi";
     case "ar":
       return "Arabic";
     case "it":
@@ -256,6 +286,10 @@ function prettyLanguageLabel(locale: string): string {
       return "Dutch";
     case "fa":
       return "Persian";
+    case "ru":
+      return "Russian";
+    case "sv":
+      return "Swedish";
     case "de":
       return "German";
     case "es":
@@ -582,6 +616,8 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- The JSON must be an object whose keys exactly match the provided ids.",
     "- Translate all English prose; keep code, URLs, product names, CLI commands, config keys, and env vars in English.",
     "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
+    "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
+    "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
     "- Preserve punctuation, ellipses, arrows, and casing when they are part of literal UI text.",
     "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
     "- Use fluent, neutral product UI language.",
@@ -602,12 +638,6 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
     "",
     JSON.stringify(payload, null, 2),
   ].join("\n");
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function formatDuration(ms: number): string {
@@ -784,7 +814,9 @@ function collectRawCopyFromSource(params: {
 }
 
 async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
-  const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
+  const files = (
+    await Promise.all(CONTROL_UI_RAW_COPY_SOURCE_DIRS.map((dir) => walkControlUiSourceFiles(dir)))
+  ).flat();
   const findings: RawCopyFinding[] = [];
   for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
     const source = await readFile(filePath, "utf8");
@@ -991,6 +1023,15 @@ function formatProcessOutput(capture: ProcessOutputCapture): string {
   return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
 }
 
+function maybeReraiseRunProcessParentSignal(signal: NodeJS.Signals): void {
+  for (const state of activeRunProcessParentSignals) {
+    if (state.signal === null || !state.done) {
+      return;
+    }
+  }
+  process.kill(process.pid, signal);
+}
+
 export async function runProcess(
   executable: string,
   args: string[],
@@ -1015,6 +1056,9 @@ export async function runProcess(
     let waitingForKillGrace = false;
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let parentSignalPending: NodeJS.Signals | null = null;
+    const parentSignalState: RunProcessParentSignalState = { done: false, signal: null };
+    activeRunProcessParentSignals.add(parentSignalState);
     const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -1030,7 +1074,7 @@ export async function runProcess(
       if (force) {
         taskkillArgs.push("/F");
       }
-      const result = spawnSync("taskkill.exe", taskkillArgs, { stdio: "ignore" });
+      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, { stdio: "ignore" });
       return result.status === 0;
     };
     const signalChild = (signal: NodeJS.Signals) => {
@@ -1058,9 +1102,28 @@ export async function runProcess(
     };
     const relayParentSignal = (signal: NodeJS.Signals) => {
       const handler = () => {
+        parentSignalPending = signal;
+        parentSignalState.signal = signal;
         signalChild(signal);
         cleanupParentSignalHandlers();
-        process.kill(process.pid, signal);
+        if (!processGroupIsAlive()) {
+          parentSignalState.done = true;
+          maybeReraiseRunProcessParentSignal(signal);
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        waitingForKillGrace = true;
+        // Keep this timer ref'ed so parent signal relay can force-kill stubborn
+        // process groups before re-raising the original signal.
+        killTimer = setTimeout(() => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          signalChild("SIGKILL");
+          parentSignalState.done = true;
+          maybeReraiseRunProcessParentSignal(signal);
+        }, killGraceMs);
       };
       parentSignalHandlers.push({ handler, signal });
       process.once(signal, handler);
@@ -1087,8 +1150,11 @@ export async function runProcess(
       }
       settled = true;
       clearTimeout(timeout);
-      if (killTimer) {
+      if (!parentSignalPending && killTimer) {
         clearTimeout(killTimer);
+      }
+      if (!parentSignalPending) {
+        activeRunProcessParentSignals.delete(parentSignalState);
       }
       cleanupParentSignalHandlers();
       callback();
@@ -1158,6 +1224,19 @@ export async function runProcess(
       child.stdin.end();
     }
     child.once("close", (code, signal) => {
+      if (parentSignalPending) {
+        if (processGroupIsAlive()) {
+          childClosedResult = { code, signal };
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+        }
+        parentSignalState.done = true;
+        maybeReraiseRunProcessParentSignal(parentSignalPending);
+        return;
+      }
       if (waitingForKillGrace && processGroupIsAlive()) {
         childClosedResult = { code, signal };
         return;
@@ -1168,18 +1247,12 @@ export async function runProcess(
 }
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const directFormatterPath = path.join(ROOT, "node_modules", ".bin", "oxfmt");
-  const formatterCommand =
-    process.platform !== "win32" && existsSync(directFormatterPath) ? directFormatterPath : "pnpm";
-  const formatterArgs =
-    formatterCommand === directFormatterPath
-      ? ["--stdin-filepath", path.relative(ROOT, filePath)]
-      : ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)];
-  const result = await runProcess(formatterCommand, formatterArgs, {
-    input: source,
-    rejectOnFailure: true,
+  const formatted = formatGeneratedModule(source, {
+    errorLabel: "control ui locale",
+    outputPath: filePath,
+    repoRoot: ROOT,
   });
-  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
+  return restoreReplacementCorruptedStringLiterals(source, formatted);
 }
 
 function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
@@ -1424,12 +1497,77 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
+export type NativeTranslationEntry = {
+  id: string;
+  source: string;
+  sourcePath: string;
+};
+
+export async function translateNativeEntries(
+  entries: readonly NativeTranslationEntry[],
+  targetLocale: string,
+  glossary: readonly GlossaryEntry[] = [],
+): Promise<Map<string, string>> {
+  if (!hasTranslationProvider()) {
+    throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
+  }
+  const pending = entries.map((entry) => ({
+    cacheKey: cacheKey(entry.id, hashText(entry.source), targetLocale),
+    key: entry.id,
+    text: entry.source,
+    textHash: hashText(entry.source),
+  }));
+  const batches = buildTranslationBatches(pending);
+  let client: TranslationClient | null = null;
+  const clientAccess: ClientAccess = {
+    async getClient() {
+      if (!client) {
+        client = await TranslationClient.create(buildSystemPrompt(targetLocale, glossary));
+      }
+      return client;
+    },
+    async resetClient() {
+      if (!client) {
+        return;
+      }
+      await client.close();
+      client = null;
+    },
+  };
+  try {
+    const translated = new Map<string, string>();
+    for (const [batchIndex, batch] of batches.entries()) {
+      const result = await translateBatch(clientAccess, batch, {
+        locale: targetLocale,
+        localeCount: 1,
+        localeIndex: 1,
+        batchCount: batches.length,
+        batchIndex: batchIndex + 1,
+      });
+      for (const [id, value] of result) {
+        translated.set(id, value);
+      }
+    }
+    return translated;
+  } finally {
+    await clientAccess.resetClient();
+  }
+}
+
 type SyncOutcome = {
   changed: boolean;
   fallbackCount: number;
   locale: string;
   wrote: boolean;
 };
+
+export function shouldReuseExistingTranslation(options: {
+  allowTranslate: boolean;
+  force: boolean;
+  isFallback: boolean;
+}): boolean {
+  return !options.isFallback || (!options.allowTranslate && !options.force);
+}
 
 async function syncLocale(
   entry: LocaleEntry,
@@ -1464,8 +1602,13 @@ async function syncLocale(
     const cachedByText = tmByTextHash.get(textHash);
     const existing = existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
+    const shouldReuse = shouldReuseExistingTranslation({
+      allowTranslate,
+      force: options.force,
+      isFallback: shouldRefreshFallback,
+    });
 
-    if (cached && !(allowTranslate && shouldRefreshFallback)) {
+    if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
@@ -1484,7 +1627,7 @@ async function syncLocale(
       continue;
     }
 
-    if (existing !== undefined && !(allowTranslate && shouldRefreshFallback)) {
+    if (existing !== undefined && shouldReuse) {
       nextFlat.set(key, existing);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);

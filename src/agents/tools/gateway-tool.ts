@@ -19,8 +19,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -78,9 +78,6 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "messages.groupChat.visibleReplies",
   "messages.groupChat.unmentionedInbound",
 ] as const;
-
-/** @internal Exposed for regression tests only; do not import from runtime code. */
-export const ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST = ALLOWED_GATEWAY_CONFIG_PATHS;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
 export function assertGatewayConfigMutationAllowedForTest(params: {
@@ -496,7 +493,7 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        let sentinelPath: string | null = null;
+        let sentinelWritten = false;
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
@@ -505,10 +502,13 @@ export function createGatewayTool(opts?: {
           sessionKey,
           emitHooks: {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(payload);
+              await writeRestartSentinel(payload);
+              sentinelWritten = true;
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              if (sentinelWritten) {
+                await clearRestartSentinel();
+              }
             },
           },
         });

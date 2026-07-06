@@ -174,10 +174,22 @@ fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
-    if [ ! -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
-      run_setup_command npm install -g @anthropic-ai/claude-code
-    fi
+    claude_code_version="$(
+      node -e 'const path = require("node:path"); const packagePath = path.join(path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
+    )"
+    claude_package_json="$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json"
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
+    installed_claude_code_version=""
+    if [ -f "$claude_package_json" ]; then
+      installed_claude_code_version="$(
+        node -e 'process.stdout.write(require(process.argv[1]).version);' \
+          "$claude_package_json" 2>/dev/null || true
+      )"
+    fi
+    if [ "$installed_claude_code_version" != "$claude_code_version" ]; then
+      rm -f "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
+      run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"
+    fi
     if [ ! -x "$real_claude" ] && [ -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
       mv "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
     fi
@@ -196,6 +208,8 @@ WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
+    echo "Using Claude Code $claude_code_version declared by the installed Claude Agent SDK"
+    claude --version
     claude auth status || true
     ;;
   codex)
@@ -422,6 +436,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
+    -e OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON="${OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_TEST_FILES="${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL="${OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS" \

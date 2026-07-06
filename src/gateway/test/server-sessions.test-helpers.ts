@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -21,23 +22,38 @@ import {
   writeSessionStore,
 } from "../test-helpers.js";
 
-let sessionManagerModulePromise:
-  | Promise<typeof import("../../agents/sessions/index.js")>
-  | undefined;
-let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
+export const getSessionManagerModule = createLazyRuntimeModule(
+  () => import("../../agents/sessions/index.js"),
+);
 
-export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("../../agents/sessions/index.js");
-  return await sessionManagerModulePromise;
-}
-
-export async function getGatewayConfigModule() {
-  gatewayConfigModulePromise ??= import("../../config/config.js");
-  return await gatewayConfigModulePromise;
-}
+export const getGatewayConfigModule = createLazyRuntimeModule(
+  () => import("../../config/config.js"),
+);
 
 export async function getSessionsHandlers() {
   return (await import("../server-methods/sessions.js")).sessionsHandlers;
+}
+
+export function createLinearSessionTranscript(sessionId: string, contents: string[]): string {
+  const records: Array<Record<string, unknown>> = [
+    {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-06-19T12:00:00.000Z",
+      cwd: "/tmp",
+    },
+  ];
+  for (const [index, content] of contents.entries()) {
+    records.push({
+      type: "message",
+      id: `${sessionId}-entry-${index}`,
+      parentId: index === 0 ? null : `${sessionId}-entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`,
+      message: { role: "user", content, timestamp: index + 1 },
+    });
+  }
+  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }
 
 export function createDeferred<T>() {
@@ -100,7 +116,7 @@ const subagentLifecycleHookState = vi.hoisted(() => ({
 }));
 
 const threadBindingMocks = vi.hoisted(() => ({
-  unbindThreadBindingsBySessionKey: vi.fn((_params?: unknown) => []),
+  unbindThreadBindingsBySessionKey: vi.fn(async (_params?: unknown) => []),
 }));
 const acpRuntimeMocks = vi.hoisted(() => ({
   cancel: vi.fn(async () => {}),
@@ -362,8 +378,16 @@ export function setupGatewaySessionsTestHarness() {
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
     if (withTranscripts) {
-      await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
-      await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+      await fs.writeFile(
+        mainTranscript,
+        createLinearSessionTranscript("sess-main-global", ["main one", "main two"]),
+        "utf-8",
+      );
+      await fs.writeFile(
+        workTranscript,
+        createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
+        "utf-8",
+      );
     }
     await fs.writeFile(
       mainStorePath,
@@ -562,6 +586,12 @@ export function expectActiveRunCleanup(
     cfg: expect.any(Object),
     requesterSessionKey,
   });
+  expectSessionQueueCleanup(expectedQueueKeys);
+  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
+  expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
+}
+
+export function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
@@ -569,8 +599,6 @@ export function expectActiveRunCleanup(
   for (const key of expectedQueueKeys) {
     expect(clearedKeys).toContain(key);
   }
-  expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
-  expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
 export async function getMainPreviewEntry(ws: import("ws").WebSocket) {

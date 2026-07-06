@@ -3,6 +3,7 @@
  * websocket, and dispatching user messages into OpenClaw.
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -170,11 +171,23 @@ export async function startClickClackGatewayAccount(
       }
       const socket = client.websocket(workspaceId, afterCursor);
       await new Promise<void>((resolve, reject) => {
-        const abort = () => {
-          socket.close();
+        let settled = false;
+        let removeAbortListener: (() => void) | undefined;
+        const finishSocketCycle = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          removeAbortListener?.();
+          removeAbortListener = undefined;
           resolve();
         };
+        const abort = () => {
+          socket.close();
+          finishSocketCycle();
+        };
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
+        removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("message", (data) => {
           void (async () => {
             const event = parseSocketEvent(data);
@@ -192,13 +205,30 @@ export async function startClickClackGatewayAccount(
               event,
               botUserId: account.botUserId ?? "",
             });
-          })().catch(reject);
+          })().catch((e: unknown) =>
+            reject(
+              e instanceof Error
+                ? e
+                : new Error(`ClickClack ws message failed: ${formatErrorMessage(e)}`, {
+                    cause: e,
+                  }),
+            ),
+          );
         });
-        socket.on("close", () => {
-          ctx.abortSignal.removeEventListener("abort", abort);
-          resolve();
+        socket.on("close", finishSocketCycle);
+        socket.on("error", (error) => {
+          if (settled || ctx.abortSignal.aborted) {
+            finishSocketCycle();
+            return;
+          }
+          ctx.log?.warn?.(
+            `[${account.accountId}] ClickClack websocket error; reconnecting: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          finishSocketCycle();
+          socket.close();
         });
-        socket.on("error", reject);
       });
       if (!ctx.abortSignal.aborted) {
         await new Promise((resolve) => {

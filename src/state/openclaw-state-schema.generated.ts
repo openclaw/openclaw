@@ -475,6 +475,20 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
 CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
   ON installed_plugin_index(generated_at_ms DESC, index_key);
 
+CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
+  feed_url TEXT NOT NULL PRIMARY KEY,
+  body TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checksum TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
+  ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -528,6 +542,19 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
+
+CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
+  boot_id TEXT NOT NULL PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  outcome TEXT,
+  startup_reason TEXT,
+  reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
+  ON gateway_boot_lifecycle(started_at_ms);
 
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,
@@ -858,6 +885,10 @@ CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
   name TEXT NOT NULL,
   description TEXT,
   enabled INTEGER NOT NULL,
@@ -884,10 +915,12 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   payload_external_content_source_json TEXT,
   payload_light_context INTEGER,
   payload_tools_allow_json TEXT,
+  payload_tools_allow_is_default INTEGER,
   delivery_mode TEXT,
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
   delivery_completion_mode TEXT,
@@ -1213,4 +1246,25 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
-  ON backup_runs(created_at DESC, id);\n`;
+  ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS worktrees (
+  id TEXT NOT NULL PRIMARY KEY,
+  repo_fingerprint TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_ref TEXT NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
+  owner_id TEXT,
+  snapshot_ref TEXT,
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  removed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
+  ON worktrees(repo_fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
+  ON worktrees(removed_at);\n`;

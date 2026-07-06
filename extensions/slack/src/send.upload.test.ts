@@ -1,14 +1,13 @@
 // Slack tests cover send.upload plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import "./blocks.test-helpers.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
 } from "./sent-thread-cache.js";
 
 // --- Module mocks (must precede dynamic import) ---
-installSlackBlockTestMocks();
 const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
   vi.fn(async (_mediaUrl: string, _options?: unknown) => ({
     buffer: Buffer.from("fake-image"),
@@ -55,8 +54,7 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
-const { sendMessageSlack, clearSlackDmChannelCache, clearSlackSendQueuesForTest } =
-  await import("./send.js");
+const { sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
@@ -168,7 +166,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     fetchWithSsrFGuard.mockClear();
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
-    clearSlackSendQueuesForTest();
     clearSlackThreadParticipationCache();
   });
 

@@ -24,6 +24,8 @@ scenario:
     - extensions/qa-lab/src/gateway-child.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
+    isolationReason: Seeds persisted gateway session/subagent state and restarts the gateway.
     summary: Seed stale subagent session state on disk, restart the real gateway, then assert sessions.list filters only the stale child links.
 
 flow:

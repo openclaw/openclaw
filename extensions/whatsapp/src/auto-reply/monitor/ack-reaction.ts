@@ -67,7 +67,7 @@ export async function maybeSendAckReaction(params: {
       isGroup,
       directEnabled,
       groupMode,
-      wasMentioned: params.msg.wasMentioned === true,
+      wasMentioned: (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
       groupActivated: activation === "always",
     });
 

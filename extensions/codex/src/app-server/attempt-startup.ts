@@ -346,6 +346,7 @@ export async function startCodexAttemptThread(params: {
                               timeoutMs: params.appServer.requestTimeoutMs,
                               signal,
                             }),
+                          configCwd: startupExecutionCwd,
                           appCache: defaultCodexAppInventoryCache,
                           appCacheKey: pluginAppCacheKey,
                         }),

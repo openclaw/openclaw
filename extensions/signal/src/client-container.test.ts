@@ -17,15 +17,34 @@ import {
 
 // spyOn approach works with vitest forks pool for cross-directory imports
 const mockFetch = vi.fn();
+
+// Build a Response-like `body` stream from a string so the production code exercises the
+// bounded body readers (readProviderTextResponse / readResponseTextLimited) instead of an
+// unbounded res.text(). Kept local to this file to avoid touching shared HTTP test mocks.
+function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (bytes.byteLength > 0) {
+          controller.enqueue(bytes);
+        }
+        controller.close();
+      },
+    }),
+  };
+}
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
+  options: [] as Array<{ maxPayload?: number } | undefined>,
 }));
 
 beforeEach(() => {
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
   wsMockState.behavior = "close";
   wsMockState.urls = [];
+  wsMockState.options = [];
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -67,8 +86,9 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL) {
+    constructor(url: string | URL, options?: { maxPayload?: number }) {
       wsMockState.urls.push(String(url));
+      wsMockState.options.push(options);
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
@@ -130,6 +150,22 @@ describe("containerCheck", () => {
     expectFirstFetchCall("http://localhost:8080/v1/about", "GET");
   });
 
+  it("cancels /v1/about response bodies after simple health checks", async () => {
+    const cancel = vi.fn(async () => undefined);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { cancel },
+    });
+
+    await expect(containerCheck("http://localhost:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("returns ok:false when /v1/about returns 404", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -169,6 +205,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
@@ -183,6 +220,19 @@ describe("containerCheck", () => {
       error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
     });
   });
+
+  it("rejects container receive endpoints that close before opening", async () => {
+    wsMockState.behavior = "close";
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await containerCheck("http://localhost:8080", 1000, "+14259798283");
+
+    expect(result).toEqual({
+      ok: false,
+      status: null,
+      error: "Signal container receive WebSocket closed before open (1000: done)",
+    });
+  });
 });
 
 describe("containerRestRequest", () => {
@@ -194,7 +244,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ version: "1.0" }),
+      ...bodyStream(JSON.stringify({ version: "1.0" })),
     });
 
     const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
@@ -207,7 +257,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 201,
-      text: async () => "",
+      ...bodyStream(""),
     });
 
     await containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST", {
@@ -230,7 +280,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 201,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      ...bodyStream(JSON.stringify({ timestamp: 1700000000000 })),
     });
 
     const result = await containerRestRequest(
@@ -260,7 +310,7 @@ describe("containerRestRequest", () => {
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
-      text: async () => "Server error details",
+      ...bodyStream("Server error details"),
     });
 
     await expect(
@@ -272,7 +322,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "",
+      ...bodyStream(""),
     });
 
     const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
@@ -283,7 +333,7 @@ describe("containerRestRequest", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "{}",
+      ...bodyStream("{}"),
     });
 
     await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080", timeoutMs: 5000 });
@@ -303,7 +353,7 @@ describe("containerRestRequest", () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => "{}",
+        ...bodyStream("{}"),
       });
 
       await containerRestRequest("/v1/about", {
@@ -328,7 +378,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
     });
 
     const result = await containerSendMessage({
@@ -353,7 +403,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: "not-a-number" }),
+      ...bodyStream(JSON.stringify({ timestamp: "not-a-number" })),
     });
 
     await expect(
@@ -372,7 +422,7 @@ describe("containerSendMessage", () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify({ timestamp }),
+        ...bodyStream(JSON.stringify({ timestamp })),
       });
 
       await expect(
@@ -390,7 +440,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -411,7 +461,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -430,7 +480,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -459,7 +509,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerSendMessage({
@@ -622,9 +672,11 @@ describe("containerFetchAttachment", () => {
   });
 
   it("returns null on non-ok response", async () => {
+    const cancel = vi.fn(async () => undefined);
     mockFetch.mockResolvedValue({
       ok: false,
       status: 404,
+      body: { cancel },
     });
 
     const result = await containerFetchAttachment("attachment-123", {
@@ -632,6 +684,7 @@ describe("containerFetchAttachment", () => {
     });
 
     expect(result).toBeNull();
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("encodes attachment ID in URL", async () => {
@@ -767,7 +820,7 @@ describe("containerRestRequest edge cases", () => {
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
-      text: async () => "",
+      ...bodyStream(""),
     });
 
     await expect(
@@ -779,12 +832,102 @@ describe("containerRestRequest edge cases", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => "not-valid-json",
+      ...bodyStream("not-valid-json"),
     });
 
     await expect(
       containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Signal REST returned malformed JSON");
+  });
+
+  it("fails closed when the success body exceeds the response size cap", async () => {
+    // Drive the real bounded reader with a >16 MiB stream. Pull lazily so the cap
+    // (16 MiB) trips and cancels the stream long before 20 MiB is materialized.
+    const ONE_MIB = new Uint8Array(1024 * 1024);
+    let emitted = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= 20) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(ONE_MIB);
+      },
+    });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: stream,
+    });
+
+    await expect(
+      containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" }),
+    ).rejects.toThrow(/exceeds \d+ bytes/);
+    // The stream must have been cancelled at the cap, not drained to completion.
+    expect(emitted).toBeLessThan(20);
+  });
+
+  it("bounds the error body so a huge failure response cannot be buffered whole", async () => {
+    const HUGE = "x".repeat(1024 * 1024); // 1 MiB of error text
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream(HUGE),
+    });
+
+    await containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST").then(
+      () => {
+        throw new Error("expected containerRestRequest to reject");
+      },
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        expect(message.startsWith("Signal REST 500:")).toBe(true);
+        // readResponseTextLimited truncates the diagnostic body well below the 1 MiB payload.
+        expect(message.length).toBeLessThan(64 * 1024);
+      },
+    );
+  });
+
+  it("parses a large but under-cap success body without truncation", async () => {
+    // Regression guard: a legitimate multi-MiB JSON response (well under the 16 MiB
+    // cap) must still be read in full and parsed intact — the bound must not clip
+    // valid container payloads. Build ~4 MiB of real JSON.
+    const items = Array.from({ length: 50_000 }, (_, i) => ({
+      id: i,
+      note: "signal-container-payload-entry",
+    }));
+    const payload = JSON.stringify({ items });
+    expect(payload.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(payload.length).toBeLessThan(16 * 1024 * 1024);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(payload),
+    });
+
+    const result = await containerRestRequest<{ items: Array<{ id: number }> }>("/v1/about", {
+      baseUrl: "http://localhost:8080",
+    });
+    // Full body round-trips: first and last entries survive, count is exact.
+    expect(result.items).toHaveLength(50_000);
+    expect(result.items[0]?.id).toBe(0);
+    expect(result.items[49_999]?.id).toBe(49_999);
+  });
+
+  it("returns undefined for an empty success body via the bounded reader", async () => {
+    // The bounded reader must preserve the existing empty-body -> undefined contract
+    // (no spurious JSON.parse("") throw) so well-behaved 200/empty responses are unchanged.
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(""),
+    });
+
+    const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
+    expect(result).toBeUndefined();
   });
 });
 
@@ -806,6 +949,7 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });
@@ -837,7 +981,7 @@ describe("containerSendReaction", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      ...bodyStream(JSON.stringify({ timestamp: 1700000000000 })),
     });
 
     const result = await containerSendReaction({
@@ -873,7 +1017,7 @@ describe("containerRpcRequest reactions", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({}),
+      ...bodyStream(JSON.stringify({})),
     });
 
     await containerRpcRequest(
@@ -905,7 +1049,7 @@ describe("containerRemoveReaction", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      ...bodyStream(JSON.stringify({ timestamp: 1700000000000 })),
     });
 
     const result = await containerRemoveReaction({

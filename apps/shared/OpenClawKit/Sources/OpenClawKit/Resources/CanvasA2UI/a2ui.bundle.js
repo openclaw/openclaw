@@ -1,4 +1,3 @@
-// Bundled A2UI runtime resource embedded by OpenClawKit.
 var __defProp$1 = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
 	let target = {};
@@ -657,11 +656,12 @@ var ZodType = class {
 			data,
 			parsedType: getParsedType(data)
 		};
-		return handleResult(ctx, this._parseSync({
+		const result = this._parseSync({
 			data,
 			path: ctx.path,
 			parent: ctx
-		}));
+		});
+		return handleResult(ctx, result);
 	}
 	"~validate"(data) {
 		const ctx = {
@@ -718,7 +718,8 @@ var ZodType = class {
 			path: ctx.path,
 			parent: ctx
 		});
-		return handleResult(ctx, await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult)));
+		const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+		return handleResult(ctx, result);
 	}
 	refine(check, message) {
 		const getIssueProperties = (val) => {
@@ -3271,7 +3272,8 @@ var ZodPromise = class extends ZodType {
 			});
 			return INVALID;
 		}
-		return OK((ctx.parsedType === ZodParsedType.promise ? ctx.data : Promise.resolve(ctx.data)).then((data) => {
+		const promisified = ctx.parsedType === ZodParsedType.promise ? ctx.data : Promise.resolve(ctx.data);
+		return OK(promisified.then((data) => {
 			return this._def.type.parseAsync(data, {
 				path: ctx.path,
 				errorMap: ctx.common.contextualErrorMap
@@ -3745,35 +3747,23 @@ const DataValueMapItemSchema = lazyType(() => objectType({
 		message: `Value map item must have exactly one value property (valueString, valueNumber, valueBoolean, valueMap), found ${count}.`
 	});
 }));
-const DataValueSchema = objectType({
-	key: stringType(),
-	valueString: stringType().optional(),
-	valueNumber: numberType().optional(),
-	valueBoolean: booleanType().optional(),
-	valueMap: arrayType(DataValueMapItemSchema).optional()
-}).strict().superRefine((val, ctx) => {
-	let count = 0;
-	if (val.valueString !== void 0) count++;
-	if (val.valueNumber !== void 0) count++;
-	if (val.valueBoolean !== void 0) count++;
-	if (val.valueMap !== void 0) count++;
-	if (count !== 1) ctx.addIssue({
-		code: ZodIssueCode.custom,
-		message: `Value must have exactly one value property (valueString, valueNumber, valueBoolean, valueMap), found ${count}.`
+function createDataValueSchema(options = {}) {
+	const maxDepth = options.maxDepth ?? 5;
+	return DataValueMapItemSchema.superRefine((val, ctx) => {
+		const checkDepth = (v, currentDepth) => {
+			if (currentDepth > maxDepth) {
+				ctx.addIssue({
+					code: ZodIssueCode.custom,
+					message: `valueMap recursion exceeded maximum depth of ${maxDepth}.`
+				});
+				return;
+			}
+			if (v.valueMap && Array.isArray(v.valueMap)) for (const item of v.valueMap) checkDepth(item, currentDepth + 1);
+		};
+		checkDepth(val, 1);
 	});
-}).superRefine((val, ctx) => {
-	const checkDepth = (v, currentDepth) => {
-		if (currentDepth > 5) {
-			ctx.addIssue({
-				code: ZodIssueCode.custom,
-				message: "valueMap recursion exceeded maximum depth of 5."
-			});
-			return;
-		}
-		if (v.valueMap && Array.isArray(v.valueMap)) for (const item of v.valueMap) checkDepth(item, currentDepth + 1);
-	};
-	checkDepth(val, 1);
-});
+}
+const DataValueSchema = createDataValueSchema();
 objectType({
 	path: stringType().optional(),
 	literalNumber: numberType().optional(),
@@ -5552,7 +5542,7 @@ var Signal;
 * (though, see deep.ts for nested / deep behavior)
 */
 const createStorage = (initial = null) => new Signal.State(initial, { equals: () => false });
-const ARRAY_GETTER_METHODS = new Set([
+const ARRAY_GETTER_METHODS = /* @__PURE__ */ new Set([
 	Symbol.iterator,
 	"concat",
 	"entries",
@@ -5575,7 +5565,7 @@ const ARRAY_GETTER_METHODS = new Set([
 	"some",
 	"values"
 ]);
-const ARRAY_WRITE_THEN_READ_METHODS = new Set([
+const ARRAY_WRITE_THEN_READ_METHODS = /* @__PURE__ */ new Set([
 	"fill",
 	"push",
 	"unshift"
@@ -6703,8 +6693,10 @@ var i$5 = class {
 * SPDX-License-Identifier: BSD-3-Clause
 */ const { I: t$2 } = j$1, i$4 = (o) => o, n$6 = (o) => null === o || "object" != typeof o && "function" != typeof o, r$4 = (o) => void 0 === o.strings, s$5 = () => document.createComment(""), v = (o, n, e) => {
 	const l = o._$AA.parentNode, d = void 0 === n ? o._$AB : n._$AA;
-	if (void 0 === e) e = new t$2(l.insertBefore(s$5(), d), l.insertBefore(s$5(), d), o, o.options);
-	else {
+	if (void 0 === e) {
+		const i = l.insertBefore(s$5(), d), n = l.insertBefore(s$5(), d);
+		e = new t$2(i, n, o, o.options);
+	} else {
 		const t = e._$AB.nextSibling, n = e._$AM, c = n !== o;
 		if (c) {
 			let t;
@@ -7314,7 +7306,8 @@ let Root = (() => {
 				if (this.#lightDomEffectDisposer) this.#lightDomEffectDisposer();
 				this.#lightDomEffectDisposer = effect(() => {
 					const allChildren = this.childComponents ?? null;
-					D(this.renderComponentTree(allChildren), this, { host: this });
+					const lightDomTemplate = this.renderComponentTree(allChildren);
+					D(lightDomTemplate, this, { host: this });
 				});
 			}
 		}
@@ -9260,8 +9253,9 @@ var __runInitializers$10 = function(thisArg, initializers, value) {
 			return b`(empty)`;
 		}
 		render() {
+			const classes = merge(this.theme.components.Image.all, this.usageHint ? this.theme.components.Image[this.usageHint] : {});
 			return b`<section
-      class=${e$2(merge(this.theme.components.Image.all, this.usageHint ? this.theme.components.Image[this.usageHint] : {}))}
+      class=${e$2(classes)}
       style=${o$2({
 				...this.theme.additionalStyles?.Image ?? {},
 				"--object-fit": this.fit ?? "fill"
@@ -9953,10 +9947,11 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
         </div>
       `;
 			const count = currentSelections.length;
+			const headerText = count > 0 ? `${count} Selected` : this.description ?? "Select items";
 			return b`
       <div class="container">
         <div class="dropdown-header" @click=${() => this.isOpen = !this.isOpen}>
-          <span class="header-text">${count > 0 ? `${count} Selected` : this.description ?? "Select items"}</span>
+          <span class="header-text">${headerText}</span>
           <span class="chevron ${this.isOpen ? "open" : ""}">
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -9975,9 +9970,10 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
           <div class="options-scroll-container">
             ${filteredOptions.map((option) => {
 				const label = extractStringValue(option.label, this.component, this.processor, this.surfaceId);
+				const isSelected = currentSelections.includes(option.value);
 				return b`
                 <div
-                  class="option-item ${currentSelections.includes(option.value) ? "selected" : ""}"
+                  class="option-item ${isSelected ? "selected" : ""}"
                   @click=${(e) => {
 					e.stopPropagation();
 					this.toggleSelection(option.value);
@@ -11536,21 +11532,26 @@ const markdown$1 = e$6(class MarkdownDirective extends i$5 {
 	* if present. Otherwise, it returns the value wrapped in a span.
 	*/
 	render(value, markdownRenderer, markdownOptions) {
-		if (markdownRenderer) return m(markdownRenderer(value, markdownOptions).then((value) => {
-			return o(value);
-		}), b`<span class="no-markdown-renderer">${value}</span>`);
-		return m((async () => {
+		if (markdownRenderer) {
+			const rendered = markdownRenderer(value, markdownOptions).then((value) => {
+				return o(value);
+			});
+			return m(rendered, b`<span class="no-markdown-renderer">${value}</span>`);
+		}
+		const dynamicRendererPromise = (async () => {
 			try {
 				const { renderMarkdown } = await import("@a2ui/markdown-it");
-				return o(await renderMarkdown(value, markdownOptions));
-			} catch (e) {
+				const rendered = await renderMarkdown(value, markdownOptions);
+				return o(rendered);
+			} catch {
 				if (!MarkdownDirective.defaultMarkdownWarningLogged) {
 					console.warn("[MarkdownDirective] Failed to load optional `@a2ui/markdown-it` renderer. Using fallback regex.");
 					MarkdownDirective.defaultMarkdownWarningLogged = true;
 				}
 				return b`<span class="no-markdown-renderer">${value}</span>`;
 			}
-		})(), b`<span class="no-markdown-renderer">${value}</span>`);
+		})();
+		return m(dynamicRendererPromise, b`<span class="no-markdown-renderer">${value}</span>`);
 	}
 });
 /**
@@ -11779,8 +11780,9 @@ var __runInitializers$1 = function(thisArg, initializers, value) {
 			return additionalStyles;
 		}
 		render() {
+			const classes = merge(this.theme.components.Text.all, this.usageHint ? this.theme.components.Text[this.usageHint] : {});
 			return b`<section
-      class=${e$2(merge(this.theme.components.Text.all, this.usageHint ? this.theme.components.Text[this.usageHint] : {}))}
+      class=${e$2(classes)}
       style=${this.theme.additionalStyles?.Text ? o$2(this.#getAdditionalStyles()) : A}
     >
       ${this.#renderText()}
@@ -11936,6 +11938,10 @@ var __runInitializers = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
+/**
+* Canvas A2UI browser bootstrap that installs theme overrides and native bridge
+* helpers.
+*/
 const modalStyles = i$10`
   dialog {
     position: fixed;

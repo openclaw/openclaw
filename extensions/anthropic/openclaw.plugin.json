@@ -1,5 +1,6 @@
 {
   "id": "anthropic",
+  "icon": "https://cdn.simpleicons.org/anthropic",
   "activation": {
     "onStartup": false
   },
@@ -242,7 +243,8 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["anthropic"]
+    "mediaUnderstandingProviders": ["anthropic"],
+    "usageProviders": ["anthropic"]
   },
   "mediaUnderstandingProviderMetadata": {
     "anthropic": {

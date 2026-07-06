@@ -13,10 +13,13 @@ public protocol OpenClawChatTransport: Sendable {
     func createSession(
         key: String,
         label: String?,
-        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey: String?,
+        worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
     func listModels() async throws -> [OpenClawChatModelChoice]
+    var supportsSlashCommandCatalog: Bool { get }
+    func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
     func sendMessage(
         sessionKey: String,
         message: String,
@@ -42,7 +45,8 @@ extension OpenClawChatTransport {
     public func createSession(
         key _: String,
         label _: String?,
-        parentSessionKey _: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey _: String?,
+        worktree _: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
         throw NSError(
             domain: "OpenClawChatTransport",
@@ -89,6 +93,14 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
+    }
+
+    public var supportsSlashCommandCatalog: Bool {
+        false
+    }
+
+    public func listCommands(sessionKey _: String) async throws -> [OpenClawChatCommandChoice] {
+        []
     }
 
     public func setSessionModel(sessionKey _: String, model _: String?) async throws {

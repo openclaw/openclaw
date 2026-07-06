@@ -182,17 +182,6 @@ function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): Embedd
   };
 }
 
-export async function createLlamaCppEmbeddingProvider(
-  options: EmbeddingProviderCreateOptions,
-  runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
-): Promise<EmbeddingProvider> {
-  const result = await createLlamaCppEmbeddingProviderResult(options, runtimeOptions);
-  if (!result.provider) {
-    throw new Error("llama.cpp local embedding provider was unavailable");
-  }
-  return result.provider;
-}
-
 export async function createLlamaCppMemoryEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
   runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},

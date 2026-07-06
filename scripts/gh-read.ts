@@ -43,6 +43,11 @@ type GitHubJsonOptions = {
   timeoutMs?: number;
 };
 
+type GitHubBodyReadOptions = {
+  signal?: AbortSignal;
+  timeoutPromise?: Promise<never>;
+};
+
 export function parseRepoArg(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -174,11 +179,11 @@ function createAppJwt(appId: string, privateKeyPem: string) {
 async function withGitHubFetchTimeout<T>(
   label: string,
   timeoutMs: number,
-  run: (signal: AbortSignal) => Promise<T>,
+  run: (signal: AbortSignal, timeoutPromise: Promise<never>) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
       reject(error);
@@ -194,9 +199,35 @@ async function withGitHubFetchTimeout<T>(
   }
 }
 
+function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
+}
+
+async function readGitHubErrorChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutPromise: Promise<never> | undefined,
+  markCanceled: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const read = reader.read();
+  if (!timeoutPromise) {
+    return await read;
+  }
+  return await Promise.race([
+    read,
+    timeoutPromise.catch((error: unknown) => {
+      markCanceled();
+      cancelReaderSoon(reader);
+      throw error;
+    }),
+  ]);
+}
+
 export async function readBoundedGitHubErrorText(
   response: Response,
   maxChars = GITHUB_ERROR_BODY_MAX_CHARS,
+  options: Pick<GitHubBodyReadOptions, "timeoutPromise"> = {},
 ): Promise<string> {
   if (!response.body) {
     return "";
@@ -206,10 +237,13 @@ export async function readBoundedGitHubErrorText(
   const decoder = new TextDecoder();
   let text = "";
   let truncated = false;
+  let canceled = false;
 
   try {
     while (text.length <= maxChars) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readGitHubErrorChunk(reader, options.timeoutPromise, () => {
+        canceled = true;
+      });
       if (done) {
         text += decoder.decode();
         break;
@@ -225,7 +259,7 @@ export async function readBoundedGitHubErrorText(
   } finally {
     if (truncated) {
       await reader.cancel().catch(() => undefined);
-    } else {
+    } else if (!canceled) {
       reader.releaseLock();
     }
   }
@@ -236,12 +270,15 @@ export async function readBoundedGitHubErrorText(
 export async function readBoundedGitHubJson<T>(
   response: Response,
   maxBytes = GITHUB_JSON_BODY_MAX_BYTES,
+  options: GitHubBodyReadOptions = {},
 ): Promise<T> {
   const text = await readBoundedResponseText(response, "GitHub API", maxBytes, {
     createTooLargeError: (message) =>
       Object.assign(new Error(message), {
         code: "ETOOBIG",
       }),
+    signal: options.signal,
+    timeoutPromise: options.timeoutPromise,
   });
   return JSON.parse(text) as T;
 }
@@ -260,7 +297,7 @@ export async function githubJson<T>(
   return await withGitHubFetchTimeout(
     `GitHub API ${init?.method ?? "GET"} ${path}`,
     timeoutMs,
-    async (signal) => {
+    async (signal, timeoutPromise) => {
       const response = await fetchImpl(`https://api.github.com${path}`, {
         method: init?.method ?? "GET",
         headers: {
@@ -275,11 +312,11 @@ export async function githubJson<T>(
       });
 
       if (!response.ok) {
-        const text = await readBoundedGitHubErrorText(response);
+        const text = await readBoundedGitHubErrorText(response, undefined, { timeoutPromise });
         fail(`${init?.method ?? "GET"} ${path} failed (${response.status}): ${text}`);
       }
 
-      return await readBoundedGitHubJson<T>(response);
+      return await readBoundedGitHubJson<T>(response, undefined, { signal, timeoutPromise });
     },
   );
 }

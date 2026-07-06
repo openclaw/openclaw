@@ -22,11 +22,13 @@ export async function repairLoadedGatewayServiceForStart(params: {
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
   stdout: NodeJS.WritableStream;
+  warn?: (message: string) => void;
 }): Promise<{ result: "started"; message: string; warnings?: string[]; loaded: boolean }> {
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const existingEnvironment = params.state.command?.environment;
+  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv: existingEnvironment,
@@ -57,27 +59,31 @@ export async function repairLoadedGatewayServiceForStart(params: {
     }
   }
 
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: installEnv,
-    port,
-    runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-    wrapperPath,
-    existingEnvironment,
-    config: cfg,
-    warn: (message) => {
-      warnings.push(message);
-      if (!params.json) {
-        defaultRuntime.log(`- ${message}`);
-      }
-    },
-  });
+  const { programArguments, workingDirectory, environment, environmentValueSources } =
+    await buildGatewayInstallPlan({
+      env: installEnv,
+      port,
+      runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      wrapperPath,
+      existingEnvironment,
+      existingEnvironmentValueSources,
+      config: cfg,
+      warn: (message) => {
+        warnings.push(message);
+        if (!params.json) {
+          defaultRuntime.log(`- ${message}`);
+        }
+      },
+    });
 
   await params.service.install({
     env: installEnv as GatewayServiceEnv,
     stdout: params.stdout,
+    warn: params.warn,
     programArguments,
     workingDirectory,
     environment,
+    environmentValueSources,
   });
 
   let loaded;

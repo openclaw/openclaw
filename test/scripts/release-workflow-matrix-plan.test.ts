@@ -140,6 +140,56 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ]);
   });
 
+  it("limits MiniMax Docker live-model coverage to the stable M2.7 pair", () => {
+    const plan = createReleaseWorkflowMatrixPlan({
+      includeLiveSuites: true,
+      includeReleasePathSuites: true,
+      releaseProfile: "stable",
+    });
+
+    expect(plan.liveModels.matrix.include).toContainEqual({
+      provider_label: "MiniMax",
+      providers: "minimax",
+      models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+      max_models: "2",
+      profiles: "stable full",
+    });
+  });
+
+  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+    const jobs = workflow().jobs;
+    const dockerLiveJob = jobs.validate_live_docker_provider_suites;
+    const anthropicEntries = dockerLiveJob.strategy.matrix.include
+      .filter((entry) => entry.suite_group === "live-gateway-anthropic-docker")
+      .map((entry) => ({
+        advisory: entry.advisory,
+        profiles: entry.profiles,
+        suiteId: entry.suite_id,
+      }));
+
+    expect(anthropicEntries).toEqual([
+      {
+        advisory: undefined,
+        profiles: "stable",
+        suiteId: "live-gateway-anthropic-docker",
+      },
+      {
+        advisory: true,
+        profiles: "full",
+        suiteId: "live-gateway-anthropic-docker-full",
+      },
+    ]);
+    expect(dockerLiveJob.strategy.matrix.include).toContainEqual(
+      expect.objectContaining({ suite_id: "live-gateway-anthropic-docker-full" }),
+    );
+
+    const conditionalSteps = dockerLiveJob.steps.filter((step) => step.if);
+    expect(conditionalSteps.length).toBeGreaterThan(0);
+    for (const step of conditionalSteps) {
+      expect(step.if).toContain("inputs.live_suite_filter == matrix.suite_group");
+    }
+  });
+
   it("disables live model planning when focused recovery targets another live suite", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,
@@ -168,6 +218,12 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     );
     expect(jobs.validate_live_models_docker.strategy.matrix).toBe(
       "${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}",
+    );
+    expect(jobs.validate_live_models_docker.env.OPENCLAW_LIVE_MODELS).toBe(
+      "${{ matrix.models || 'modern' }}",
+    );
+    expect(jobs.validate_live_models_docker.env.OPENCLAW_LIVE_MAX_MODELS).toBe(
+      "${{ matrix.max_models || '6' }}",
     );
   });
 

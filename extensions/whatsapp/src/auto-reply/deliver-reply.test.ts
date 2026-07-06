@@ -624,6 +624,32 @@ describe("deliverWebReply", () => {
     expect(warnContext.mediaUrl).toBe("http://example.com/img.jpg");
   });
 
+  it("delivers the opening text chunk when the first media fails on a multi-chunk reply", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "boom");
+
+    await deliverWebReply({
+      replyResult: { text: "ALPHALINEBRAVOLINE", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 9,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(replyText(msg, 0)).toContain("ALPHALINE");
+    expect(replyText(msg, 0)).toContain("⚠️ Media failed");
+    const allReplies = (
+      msg.platform.reply as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls
+      .map((call) => String(call[0]))
+      .join("\n");
+    expect(allReplies).toContain("ALPHALINE");
+    expect(allReplies).toContain("BRAVOLINE");
+    expect(allReplies).not.toContain("boom");
+  });
+
   it("still attempts later media after the first media fails", async () => {
     vi.clearAllMocks();
     const msg = makeMsg();
@@ -785,14 +811,19 @@ describe("deliverWebReply", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaLocalRoots: undefined,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/voice.ogg",
+        mediaLocalRoots: undefined,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
     expect(loadWebMedia).toHaveBeenCalledWith("/tmp/voice.ogg", {
       maxBytes: 1024 * 1024,
       localRoots: undefined,

@@ -45,7 +45,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: b63b6f9e20efb23641df00487e982230d81a90ac
+        default: 4f146016583018bad9e24f8e64a6af5f963bb7ee
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -66,6 +66,7 @@ env:
   OCM_LINUX_X64_SHA256: b849b8de5d77e97e0df9319703254ae95e29d7f26a7552ea79bf173ff110ea0a
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.5
+  KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
   kova:
@@ -98,7 +99,7 @@ jobs:
             live: "true"
             include_filters: "scenario:agent-cold-warm-message"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'b63b6f9e20efb23641df00487e982230d81a90ac' }}
+      KOVA_REF: ${{ inputs.kova_ref || '4f146016583018bad9e24f8e64a6af5f963bb7ee' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -150,11 +151,39 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve OpenClaw target ref
+        id: target
+        if: steps.lane.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF_INPUT: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested="${TARGET_REF_INPUT:-}"
+          if [[ -z "$requested" ]]; then
+            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "tested_ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
+          if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
+            echo "::error::Unable to resolve OpenClaw target_ref '${requested}'." >&2
+            exit 1
+          fi
+          if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::OpenClaw target_ref '${requested}' resolved to invalid SHA '${resolved_sha}'." >&2
+            exit 1
+          fi
+          echo "checkout_ref=${resolved_sha}" >> "$GITHUB_OUTPUT"
+          echo "tested_ref=${requested}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.target_ref || github.ref }}
+          ref: ${{ steps.target.outputs.checkout_ref }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -291,6 +320,7 @@ jobs:
             --auth "$AUTH_MODE"
             --parallel 1
             --repeat "$repeat"
+            --timeout-ms "$KOVA_SCENARIO_TIMEOUT_MS"
             --report-dir "$REPORT_DIR"
             --execute
             --json
@@ -361,6 +391,7 @@ jobs:
           - Kova repository: ${KOVA_REPOSITORY}
           - Kova ref: ${KOVA_REF}
           - Kova profile: ${PROFILE}
+          - Kova scenario timeout: ${KOVA_SCENARIO_TIMEOUT_MS}ms
           - Lane auth: ${AUTH_MODE}
           - Lane model: ${PERFORMANCE_MODEL_ID}
           - Lane repeat: ${repeat}

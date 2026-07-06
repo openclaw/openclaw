@@ -29,7 +29,9 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { runWithImageModelFallback } from "../agents/model-fallback.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
+import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -53,6 +55,7 @@ import type {
   ImageGenerationOutputFormat,
   ImageGenerationQuality,
 } from "../image-generation/types.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
@@ -60,22 +63,18 @@ import {
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
+  describePreparedImageWithModel,
   describeImageFile,
-  describeImageFileWithModel,
+  prepareImageDescriptionInput,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { saveMediaBuffer } from "../media/store.js";
-import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+import { listMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -144,12 +143,12 @@ type CapabilityEnvelope = {
   error?: string;
 };
 
-const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--thinking", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -177,14 +176,14 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider"],
+    flags: ["--provider", "--method"],
     resultShape: "interactive auth result",
   },
   {
     id: "model.auth.logout",
     description: "Remove saved auth profiles for one provider.",
     transports: ["local"],
-    flags: ["--provider", "--json"],
+    flags: ["--provider", "--agent", "--json"],
     resultShape: "removed profile ids",
   },
   {
@@ -224,6 +223,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--file",
       "--prompt",
       "--model",
+      "--count",
       "--size",
       "--aspect-ratio",
       "--resolution",
@@ -263,7 +263,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
@@ -1085,27 +1085,50 @@ async function runImageDescribe(params: {
     params.files.map(async (filePath) => {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
-      const result = activeModel
-        ? await describeImageFileWithModel({
+      const preparedImage = activeModel
+        ? await prepareImageDescriptionInput({
             filePath: resolvedPath,
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
-            agentDir,
-            provider: activeModel.provider,
-            model: activeModel.model,
-            prompt: prompt ?? "Describe the image.",
             timeoutMs: params.timeoutMs,
           })
-        : await describeImageFile({
-            filePath: resolvedPath,
-            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-            cfg,
-            agentDir,
-            prompt,
-            timeoutMs: params.timeoutMs,
-          });
-      if (!result.text) {
-        if (isMissingMediaUnderstandingProvider(result)) {
+        : undefined;
+      const result =
+        activeModel && preparedImage
+          ? await runWithImageModelFallback({
+              cfg,
+              modelOverride: `${activeModel.provider}/${activeModel.model}`,
+              run: async (provider, model) => {
+                const described = await describePreparedImageWithModel({
+                  image: preparedImage,
+                  cfg,
+                  agentDir,
+                  provider,
+                  model,
+                  prompt: prompt ?? "Describe the image.",
+                  timeoutMs: params.timeoutMs,
+                });
+                if (!described.text?.trim()) {
+                  throw new Error(`No description returned for image: ${resolvedPath}`);
+                }
+                return described;
+              },
+            })
+          : {
+              result: await describeImageFile({
+                filePath: resolvedPath,
+                ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                cfg,
+                agentDir,
+                prompt,
+                timeoutMs: params.timeoutMs,
+              }),
+              provider: undefined,
+              model: undefined,
+              attempts: [],
+            };
+      if (!result.result.text) {
+        if (isMissingMediaUnderstandingProvider(result.result)) {
           throw new Error(
             "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
           );
@@ -1114,9 +1137,10 @@ async function runImageDescribe(params: {
       }
       return {
         path: resolvedPath,
-        text: result.text,
-        provider: activeModel?.provider ?? ("provider" in result ? result.provider : undefined),
-        model: result.model,
+        text: result.result.text,
+        provider: result.provider ?? result.result.provider,
+        model: result.result.model ?? result.model,
+        attempts: result.attempts,
         kind: "image.description",
       };
     }),
@@ -1127,8 +1151,8 @@ async function runImageDescribe(params: {
     transport: "local" as const,
     provider: outputs[0]?.provider,
     model: outputs[0]?.model,
-    attempts: [],
-    outputs,
+    attempts: outputs.flatMap((output) => output.attempts),
+    outputs: outputs.map(({ attempts: _attempts, ...output }) => output),
   } satisfies CapabilityEnvelope;
 }
 
@@ -1322,7 +1346,10 @@ async function runVideoGenerate(params: {
       if (!videoBuffer && video.url) {
         const response = await fetch(video.url, { signal: AbortSignal.timeout(120_000) });
         if (!response.ok) {
-          throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
+          await assertOkOrThrowHttpError(
+            response,
+            `${result.provider} generated video download failed`,
+          );
         }
         if (params.output && response.body) {
           const mimeType = normalizeMimeType(video.mimeType);
@@ -1344,7 +1371,24 @@ async function runVideoGenerate(params: {
           const stat = await fs.stat(filePath);
           return { path: filePath, mimeType: video.mimeType, size: stat.size };
         }
-        videoBuffer = Buffer.from(await response.arrayBuffer());
+        // Provider-supplied video URLs are untrusted external sources, and the
+        // in-memory fallback (no --output) must not buffer an unbounded body:
+        // generated videos routinely exceed tens of MiB and a hostile/buggy
+        // provider could exhaust process memory. Cap the read (fail-closed:
+        // overflow cancels the stream and throws rather than silently
+        // truncating) using the same shared bounded reader the rest of the
+        // media stack relies on. The --output branch above already streams
+        // straight to disk, so only this buffered path needs the guard. The
+        // overflow error reports only the provider label and byte cap (never
+        // the raw URL, which may be signed/tokenized) to match the sibling
+        // generated-media downloaders.
+        const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
+        videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(
+              `${result.provider} generated video download exceeds ${maxBytes} bytes; pass --output to stream large videos to disk`,
+            ),
+        });
       }
 
       return {
@@ -2040,7 +2084,6 @@ async function runMemoryEmbeddingCreate(params: {
   provider?: string;
   model?: string;
 }) {
-  ensureMemoryEmbeddingProvidersRegistered();
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
@@ -2073,15 +2116,6 @@ async function runMemoryEmbeddingCreate(params: {
       dimensions: embedding.length,
     })),
   } satisfies CapabilityEnvelope;
-}
-
-function ensureMemoryEmbeddingProvidersRegistered(): void {
-  if (listMemoryEmbeddingProviders().length > 0) {
-    return;
-  }
-  registerBuiltInMemoryEmbeddingProviders({
-    registerMemoryEmbeddingProvider,
-  });
 }
 
 function registerCapabilityListAndInspect(capability: Command) {
@@ -2313,6 +2347,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--count <n>", "Number of images")
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
@@ -2331,6 +2366,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.edit",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -2858,7 +2894,6 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        ensureMemoryEmbeddingProvidersRegistered();
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);

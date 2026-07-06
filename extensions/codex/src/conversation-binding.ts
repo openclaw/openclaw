@@ -5,17 +5,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -57,6 +54,7 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
+import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -123,7 +121,7 @@ type CodexConversationConfig = Parameters<
 type ResolvedCodexConversationConfig = NonNullable<CodexConversationConfig>;
 
 type CodexConversationGlobalState = {
-  queues: Map<string, Promise<void>>;
+  queue: KeyedAsyncQueue;
 };
 
 async function resolveConversationAppServerRuntime(params: {
@@ -172,7 +170,7 @@ function getGlobalState(): CodexConversationGlobalState {
   const globalState = globalThis as typeof globalThis & {
     [CODEX_CONVERSATION_GLOBAL_STATE]?: CodexConversationGlobalState;
   };
-  globalState[CODEX_CONVERSATION_GLOBAL_STATE] ??= { queues: new Map() };
+  globalState[CODEX_CONVERSATION_GLOBAL_STATE] ??= { queue: new KeyedAsyncQueue() };
   return globalState[CODEX_CONVERSATION_GLOBAL_STATE];
 }
 
@@ -247,6 +245,9 @@ export async function handleCodexConversationInboundClaim(
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
+  }
+  if (!canMutateCodexHost(event)) {
+    return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   const nativeExecutionBlock =
     data.kind === "codex-cli-node-session"
@@ -511,7 +512,7 @@ async function writeThreadBindingFromResponse(
       sandbox: resolved.execPolicy?.touched
         ? resolved.runtime.sandbox
         : (params.sandbox ?? resolved.runtime.sandbox),
-      serviceTier: params.serviceTier ?? resolved.runtime.serviceTier,
+      serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
       networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
     },
@@ -689,7 +690,7 @@ async function runBoundTurn(params: {
           }),
           approvalPolicy: typeof approvalPolicy === "string" ? approvalPolicy : undefined,
           sandbox,
-          serviceTier,
+          serviceTier: serviceTier ?? undefined,
           networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
           networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
         },
@@ -881,10 +882,11 @@ function readSessionExecOverrides(params: {
     return undefined;
   }
   const storePath = resolveStorePath(params.config.session?.store, { agentId: params.agentId });
-  const entry = resolveSessionStoreEntry({
-    store: loadSessionStore(storePath, { skipCache: true }),
+  const entry = getSessionEntry({
+    storePath,
     sessionKey,
-  }).existing;
+    readConsistency: "latest",
+  });
   if (!entry?.execSecurity && !entry?.execAsk) {
     return undefined;
   }
@@ -973,22 +975,7 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
 }
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const state = getGlobalState();
-  const previous = state.queues.get(key) ?? Promise.resolve();
-  const next = previous.then(run, run);
-  const queued = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  state.queues.set(key, queued);
-  void next
-    .finally(() => {
-      if (state.queues.get(key) === queued) {
-        state.queues.delete(key);
-      }
-    })
-    .catch(() => undefined);
-  return next;
+  return getGlobalState().queue.enqueue(key, run);
 }
 
 function resolveThreadRequestModelProvider(params: {

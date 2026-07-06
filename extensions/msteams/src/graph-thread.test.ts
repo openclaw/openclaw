@@ -37,6 +37,15 @@ describe("stripHtmlFromTeamsMessage", () => {
     );
   });
 
+  it("does not double-decode escaped entities (decodes &amp; last)", () => {
+    // Graph encodes literally-typed entity text by escaping its '&' to '&amp;'.
+    // Decoding '&amp;' first would re-decode the now-bare '&lt;'/'&gt;' into
+    // angle brackets, corrupting the user's literal text.
+    expect(stripHtmlFromTeamsMessage("The token is &amp;lt;APIKEY&amp;gt;")).toBe(
+      "The token is &lt;APIKEY&gt;",
+    );
+  });
+
   it("normalizes multiple whitespace to single space", () => {
     expect(stripHtmlFromTeamsMessage("hello   world")).toBe("hello world");
   });

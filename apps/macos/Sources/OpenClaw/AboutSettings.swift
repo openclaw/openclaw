@@ -1,27 +1,33 @@
+import OpenClawChatUI
 import SwiftUI
 
 struct AboutSettings: View {
     weak var updater: UpdaterProviding?
+    @Environment(\.colorScheme) private var colorScheme
     @State private var iconHover = false
     @AppStorage("autoUpdateEnabled") private var autoCheckEnabled = true
     @State private var didLoadUpdaterState = false
 
     var body: some View {
         VStack(spacing: 8) {
-            let appIcon = NSApplication.shared.applicationIconImage ?? CritterIconRenderer.makeIcon(blink: 0)
             Button {
                 if let url = URL(string: "https://github.com/openclaw/openclaw") {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
-                Image(nsImage: appIcon)
-                    .resizable()
+                // Hero treatment from openclaw.ai: coral silhouette glow at 10% of
+                // size, teal glow at 15% plus scale 1.1 on hover.
+                OpenClawMascotView()
                     .frame(width: 160, height: 160)
-                    .cornerRadius(24)
-                    .shadow(color: self.iconHover ? .accentColor.opacity(0.25) : .clear, radius: 10)
-                    .scaleEffect(self.iconHover ? 1.05 : 1.0)
+                    .shadow(
+                        color: OpenClawMascotView.heroGlowColor(
+                            for: self.colorScheme,
+                            hovering: self.iconHover),
+                        radius: self.iconHover ? 24 : 16)
+                    .scaleEffect(self.iconHover ? 1.1 : 1.0)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("OpenClaw on GitHub")
             .focusable(false)
             .pointingHandCursor()
             .onHover { hover in
@@ -167,22 +173,6 @@ private struct AboutLinkRow: View {
         .buttonStyle(.plain)
         .onHover { self.hovering = $0 }
         .pointingHandCursor()
-    }
-}
-
-private struct AboutMetaRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(self.label)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(self.value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.primary)
-        }
     }
 }
 
