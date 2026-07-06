@@ -148,7 +148,7 @@ function fileSidebarContent(name: string, content: string): string {
 }
 
 function basenameForPath(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).at(-1) ?? filePath;
+  return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
 function artifactSidebarContent(params: {

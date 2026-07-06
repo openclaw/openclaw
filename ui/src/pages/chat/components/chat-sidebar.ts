@@ -153,14 +153,14 @@ export function buildRawSidebarContent(
   return null;
 }
 
-export function splitHighlightedHtmlIntoLines(html: string): string[] {
+export function splitHighlightedHtmlIntoLines(highlightedHtml: string): string[] {
   const lines = [""];
   const openSpans: string[] = [];
   const tokenPattern = /<span(?:\s[^>]*)?>|<\/span>|\n/g;
   let cursor = 0;
-  for (const match of html.matchAll(tokenPattern)) {
+  for (const match of highlightedHtml.matchAll(tokenPattern)) {
     const lineIndex = lines.length - 1;
-    lines[lineIndex] += html.slice(cursor, match.index);
+    lines[lineIndex] += highlightedHtml.slice(cursor, match.index);
     const token = match[0];
     if (token === "\n") {
       lines[lineIndex] += "</span>".repeat(openSpans.length);
@@ -174,7 +174,7 @@ export function splitHighlightedHtmlIntoLines(html: string): string[] {
     }
     cursor = match.index + token.length;
   }
-  lines[lines.length - 1] += html.slice(cursor);
+  lines[lines.length - 1] += highlightedHtml.slice(cursor);
   return lines;
 }
 
