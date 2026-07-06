@@ -127,6 +127,7 @@ export async function sendDiscordOutboundPayload(params: {
               verbose: false,
               ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
               replyTo: voiceReplyTo,
+              replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
               onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
             }),
         );
@@ -141,7 +142,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, payload.text, {
             verbose: false,
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-            replyTo: voiceReplyTo,
+            replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
             onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
@@ -152,7 +153,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, "", {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-            replyTo: voiceReplyTo,
+            replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
             onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
@@ -188,6 +189,7 @@ export async function sendDiscordOutboundPayload(params: {
                 components: nativeComponents,
                 embeds,
                 filename,
+                replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
                 ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
                 onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
               }),
@@ -201,6 +203,7 @@ export async function sendDiscordOutboundPayload(params: {
                 components: isFirst ? nativeComponents : undefined,
                 embeds: isFirst ? embeds : undefined,
                 filename: isFirst ? filename : undefined,
+                replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
                 onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
               }),
           ),
@@ -226,6 +229,7 @@ export async function sendDiscordOutboundPayload(params: {
         async () =>
           await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+            replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
             onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
@@ -236,6 +240,7 @@ export async function sendDiscordOutboundPayload(params: {
           async () =>
             await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
               ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+              replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
               onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
             }),
         );
@@ -245,6 +250,7 @@ export async function sendDiscordOutboundPayload(params: {
           await sendContext.send(sendContext.target, text, {
             verbose: false,
             ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+            replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
             onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );

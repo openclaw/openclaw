@@ -155,6 +155,7 @@ type DiscordComponentSendOpts = {
   rest?: RequestClient;
   silent?: boolean;
   replyTo?: string;
+  replyToFirstChunkOnly?: boolean;
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
@@ -282,6 +283,7 @@ export async function sendDiscordComponentMessage(
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,
       replyTo: opts.replyTo,
+      replyToFirstChunkOnly: opts.replyToFirstChunkOnly,
       silent: opts.silent,
       textLimit: opts.textLimit,
       maxLinesPerMessage: opts.maxLinesPerMessage,

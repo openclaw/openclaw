@@ -330,6 +330,7 @@ describe("discordOutbound", () => {
       },
       accountId: "default",
       replyToId: "reply-1",
+      replyToIdSource: "implicit",
       replyToMode: "first",
       onDeliveryResult,
     });
@@ -356,7 +357,7 @@ describe("discordOutbound", () => {
       2,
     );
     expect(messageOptions.accountId).toBe("default");
-    expect(messageOptions.replyTo).toBe("reply-1");
+    expect(messageOptions.replyTo).toBeUndefined();
 
     const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
     expect(mediaCall[0]).toBe("channel:123456");
@@ -364,7 +365,7 @@ describe("discordOutbound", () => {
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
     expect(mediaOptions.mediaUrl).toBe("https://example.com/extra.png");
-    expect(mediaOptions.replyTo).toBe("reply-1");
+    expect(mediaOptions.replyTo).toBeUndefined();
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
@@ -377,7 +378,7 @@ describe("discordOutbound", () => {
     ]);
   });
 
-  it("keeps captured replyTo on audioAsVoice sends when replyToMode is batched", async () => {
+  it("uses a single implicit reply on audioAsVoice sends when replyToMode is batched", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:123456",
@@ -389,6 +390,7 @@ describe("discordOutbound", () => {
       },
       accountId: "default",
       replyToId: "reply-1",
+      replyToIdSource: "implicit",
       replyToMode: "batched",
     });
 
@@ -399,7 +401,7 @@ describe("discordOutbound", () => {
       hoisted.sendMessageDiscordMock.mock.calls.map(
         (call) => (call[2] as { replyTo?: unknown } | undefined)?.replyTo,
       ),
-    ).toEqual(["reply-1", "reply-1"]);
+    ).toEqual([undefined, undefined]);
   });
 
   it.each([
@@ -556,7 +558,26 @@ describe("discordOutbound", () => {
     ).toEqual(["explicit-reply-1", "explicit-reply-1"]);
   });
 
-  it("sends video captions as text before a media-only video follow-up", async () => {
+  it.each([
+    {
+      name: "implicit first-mode",
+      replyToIdSource: "implicit" as const,
+      replyToMode: "first" as const,
+      expectedReplyIds: ["reply-1", undefined],
+    },
+    {
+      name: "implicit all-mode",
+      replyToIdSource: "implicit" as const,
+      replyToMode: "all" as const,
+      expectedReplyIds: ["reply-1", "reply-1"],
+    },
+    {
+      name: "explicit first-mode",
+      replyToIdSource: "explicit" as const,
+      replyToMode: "first" as const,
+      expectedReplyIds: ["reply-1", "reply-1"],
+    },
+  ])("sends $name video captions before media with the expected replies", async (testCase) => {
     await discordOutbound.sendMedia?.({
       cfg: {},
       to: "channel:123456",
@@ -564,6 +585,8 @@ describe("discordOutbound", () => {
       mediaUrl: "/tmp/render.mp4",
       accountId: "default",
       replyToId: "reply-1",
+      replyToIdSource: testCase.replyToIdSource,
+      replyToMode: testCase.replyToMode,
     });
 
     const captionCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
@@ -576,7 +599,7 @@ describe("discordOutbound", () => {
       2,
     );
     expect(captionOptions.accountId).toBe("default");
-    expect(captionOptions.replyTo).toBe("reply-1");
+    expect(captionOptions.replyTo).toBe(testCase.expectedReplyIds[0]);
 
     const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
     expect(mediaCall[0]).toBe("channel:123456");
@@ -584,6 +607,25 @@ describe("discordOutbound", () => {
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
     expect(mediaOptions.mediaUrl).toBe("/tmp/render.mp4");
+    expect(mediaOptions.replyTo).toBe(testCase.expectedReplyIds[1]);
+  });
+
+  it("marks implicit first-mode media sends for first-chunk native replies only", async () => {
+    await discordOutbound.sendMedia?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "caption\nfollow-up",
+      mediaUrl: "https://example.com/photo.png",
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      formatting: { maxLinesPerMessage: 1 },
+    });
+
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyToFirstChunkOnly).toBe(true);
   });
 
   it("touches bound thread activity after shared outbound delivery succeeds", async () => {
@@ -685,6 +727,7 @@ describe("discordOutbound", () => {
       accountId: "default",
       mediaLocalRoots: ["/tmp/media"],
       replyToId: "reply-1",
+      replyToIdSource: "implicit",
       replyToMode: "first",
     });
 
@@ -707,6 +750,7 @@ describe("discordOutbound", () => {
     expect(componentOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
     expect(componentOptions.accountId).toBe("default");
     expect(componentOptions.replyTo).toBe("reply-1");
+    expect(componentOptions.replyToFirstChunkOnly).toBe(true);
 
     const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
     expect(messageCall[0]).toBe("channel:123456");
@@ -833,6 +877,8 @@ describe("discordOutbound", () => {
       },
       accountId: "default",
       replyToId: "reply-1",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
     });
 
     const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
@@ -844,6 +890,7 @@ describe("discordOutbound", () => {
     expect(options.filename).toBe("photo.png");
     expect(options.accountId).toBe("default");
     expect(options.replyTo).toBe("reply-1");
+    expect(options.replyToFirstChunkOnly).toBe(true);
   });
 
   it("preserves explicit component payload replies when replyToMode is off", async () => {
@@ -978,6 +1025,27 @@ describe("discordOutbound", () => {
         (call) => (call[2] as { replyTo?: unknown } | undefined)?.replyTo,
       ),
     ).toEqual(["reply-1", undefined]);
+  });
+
+  it.each([
+    { name: "implicit", replyToIdSource: "implicit" as const, firstChunkOnly: true },
+    { name: "source-omitted", replyToIdSource: undefined, firstChunkOnly: true },
+    { name: "explicit", replyToIdSource: "explicit" as const, firstChunkOnly: false },
+  ])("sets $name first-mode text chunk fanout", async (testCase) => {
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "line one\nline two",
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToIdSource: testCase.replyToIdSource,
+      replyToMode: "first",
+      formatting: { maxLinesPerMessage: 1 },
+    });
+
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.replyToFirstChunkOnly).toBe(testCase.firstChunkOnly);
   });
 
   it("leaves non-approval mentions unchanged", async () => {

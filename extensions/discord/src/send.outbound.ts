@@ -46,6 +46,7 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  replyToFirstChunkOnly?: boolean;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -91,6 +92,7 @@ async function sendDiscordThreadTextChunks(params: {
       params.silent,
       params.suppressEmbeds,
       params.maxChars,
+      undefined,
       params.onResult,
     );
   }
@@ -286,6 +288,7 @@ export async function sendMessageDiscord(
           opts.silent,
           suppressEmbeds,
           textLimit,
+          undefined,
           reportThreadResult,
         );
         await sendDiscordThreadTextChunks({
@@ -369,6 +372,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        opts.replyToFirstChunkOnly,
         reportResult,
       );
     } else {
@@ -385,6 +389,7 @@ export async function sendMessageDiscord(
         opts.silent,
         suppressEmbeds,
         textLimit,
+        opts.replyToFirstChunkOnly,
         reportResult,
       );
     }

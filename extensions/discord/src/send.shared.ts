@@ -329,6 +329,7 @@ async function sendDiscordText(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  replyToFirstChunkOnly?: boolean,
   onResult?: DiscordSendProgress,
 ) {
   if (!text.trim()) {
@@ -351,7 +352,7 @@ async function sendDiscordText(
       components: chunkComponents,
       embeds: chunkEmbeds,
       flags,
-      replyTo,
+      replyTo: replyToFirstChunkOnly && !isFirst ? undefined : replyTo,
     });
     return (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
@@ -397,6 +398,7 @@ async function sendDiscordMedia(
   silent?: boolean,
   suppressEmbeds?: boolean,
   maxChars?: number,
+  replyToFirstChunkOnly?: boolean,
   onResult?: DiscordSendProgress,
 ) {
   const media = await loadWebMedia(
@@ -475,7 +477,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      replyToFirstChunkOnly ? undefined : replyTo,
       request,
       maxLinesPerMessage,
       undefined,
@@ -484,6 +486,7 @@ async function sendDiscordMedia(
       silent,
       suppressEmbeds,
       maxChars,
+      replyToFirstChunkOnly,
       onResult,
     );
     for (const id of followup.platformMessageIds) {

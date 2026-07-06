@@ -25,6 +25,7 @@ import {
   loadDiscordSendRuntime,
   resolveDiscordFormattingOptions,
   resolveDiscordOutboundTarget,
+  shouldReplyToFirstDiscordChunkOnly,
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
@@ -171,6 +172,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       identity,
       silent,
@@ -200,6 +203,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
           await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
             verbose: false,
             replyTo: replyToId ?? undefined,
+            replyToFirstChunkOnly: shouldReplyToFirstDiscordChunkOnly({
+              replyToIdSource,
+              replyToMode,
+            }),
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,
@@ -224,6 +231,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       silent,
       formatting,
@@ -234,6 +243,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
         (await loadDiscordSendRuntime()).sendMessageDiscord;
       const target = resolveDiscordOutboundTarget({ to, threadId });
       const formattingOptions = resolveDiscordFormattingOptions({ formatting });
+      const replyTo = replyToId ?? undefined;
+      const replyToFirstChunkOnly = shouldReplyToFirstDiscordChunkOnly({
+        replyToIdSource,
+        replyToMode,
+      });
       if (audioAsVoice && mediaUrl) {
         const sendVoice =
           resolveOutboundSendDep<DiscordVoiceSendFn>(deps, "discordVoice") ??
@@ -244,7 +258,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
           fn: async () =>
             await sendVoice(target, mediaUrl, {
               cfg,
-              replyTo: replyToId ?? undefined,
+              replyTo,
               accountId: accountId ?? undefined,
               silent: silent ?? undefined,
             }),
@@ -257,7 +271,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
           fn: async () =>
             await send(target, text, {
               verbose: false,
-              replyTo: replyToId ?? undefined,
+              replyTo,
+              replyToFirstChunkOnly,
               accountId: accountId ?? undefined,
               silent: silent ?? undefined,
               cfg,
@@ -276,6 +291,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
             await send(target, "", {
               verbose: false,
               mediaUrl,
+              replyTo: replyToFirstChunkOnly ? undefined : replyTo,
               mediaAccess,
               mediaLocalRoots,
               mediaReadFile,
@@ -301,7 +317,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
             mediaAccess,
             mediaLocalRoots,
             mediaReadFile,
-            replyTo: replyToId ?? undefined,
+            replyTo,
+            replyToFirstChunkOnly,
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,
