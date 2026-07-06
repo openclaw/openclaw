@@ -196,7 +196,13 @@ describe("qa scenario catalog", () => {
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
+      "matrix-post-restart-room-continue",
+      "matrix-restart-replay-dedupe",
+      "matrix-restart-resume",
+      "slack-restart-resume",
       "subagent-stale-child-links",
+      "telegram-repeated-command-authorization",
+      "whatsapp-restart-resume",
     ]);
     expect(
       scenarios
@@ -216,6 +222,7 @@ describe("qa scenario catalog", () => {
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
     const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
+    const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
@@ -232,6 +239,17 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
     expect(uxMatrix.execution.config).toBeUndefined();
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
+    expect(otelSmoke.execution.kind).toBe("script");
+    if (otelSmoke.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
+    }
+    expect(otelSmoke.execution.args).toStrictEqual([
+      "--output-dir",
+      "${outputDir}",
+      "--logs-exporter",
+      "both",
+    ]);
+    expect(otelSmoke.coverage?.secondary).not.toContain("harness.qa-lab");
   });
 
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
@@ -791,6 +809,24 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredChannelDriver).toBeUndefined();
     expect(config?.requiredProviderMode).toBe("mock-openai");
+  });
+
+  it("marks channel-owned access gates with their required channel driver", () => {
+    const liveScenarioIds = [
+      "whatsapp-access-control-dm-disabled",
+      "whatsapp-access-control-dm-open",
+      "whatsapp-access-control-group-disabled",
+      "whatsapp-access-control-group-open",
+      "whatsapp-pairing-block",
+      "matrix-allowlist-hot-reload",
+    ];
+
+    for (const scenarioId of liveScenarioIds) {
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+      expect(config?.requiredChannelDriver, scenarioId).toBe("live");
+    }
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

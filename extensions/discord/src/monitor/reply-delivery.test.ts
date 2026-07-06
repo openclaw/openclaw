@@ -120,6 +120,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToId: "reply-1",
       replyToMode: "all",
+      allowedMentions: { parse: [] },
       kind: "final",
     });
 
@@ -139,6 +140,7 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.cfg).toBe(params.cfg);
     expect(sendOptions.token).toBe("token");
     expect(sendOptions.rest).toBe(rest);
+    expect(sendOptions.allowedMentions).toEqual({ parse: [] });
   });
 
   it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {

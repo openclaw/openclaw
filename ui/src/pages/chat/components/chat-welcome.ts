@@ -7,7 +7,7 @@ import {
 } from "../../../lib/agents/display.ts";
 import { resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
 
-export type ChatWelcomeProps = {
+type ChatWelcomeProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;

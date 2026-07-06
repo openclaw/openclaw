@@ -66,7 +66,7 @@ type ChatThreadState = {
   historyRenderAnchorFrame: number | null;
 };
 
-export type ChatThreadProps = {
+type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
   loading: boolean;

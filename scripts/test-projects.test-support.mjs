@@ -671,6 +671,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
+  ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
@@ -2075,6 +2076,14 @@ const SOURCE_TEST_TARGETS = new Map([
   [
     "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
     ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
+    ["test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
+    ["test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts"],
   ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],

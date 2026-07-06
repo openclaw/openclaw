@@ -316,6 +316,21 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("applies explicit allowed mentions to fresh messages", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "heads up @everyone <@123>", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      allowedMentions: { parse: [] },
+    });
+
+    expect(requireRestBody(postMock).allowed_mentions).toEqual({ parse: [] });
+  });
+
   it("does not suppress explicit Discord embeds by default", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });

@@ -18,6 +18,7 @@ import {
 } from "./create.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
+  readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
   type SessionChangedResult,
@@ -466,8 +467,8 @@ function appendSessionResults(
   };
 }
 
-function isSessionEvent(event: GatewayEventFrame): boolean {
-  return event.event === "sessions.changed";
+function isSessionStateEvent(event: GatewayEventFrame): boolean {
+  return event.event === "sessions.changed" || event.event === "session.message";
 }
 
 function canReconcileSessionEvent(options: SessionListOptions): boolean {
@@ -977,15 +978,35 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     void refresh();
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (isSessionEvent(event)) {
-      if (!canReconcileSessionEvent(lastListOptions)) {
-        void refresh({ ...lastListOptions, force: true });
-        return;
-      }
+    if (isSessionStateEvent(event)) {
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
         showArchived: lastListOptions.showArchived,
       });
+      const eventInfo = readSessionChangedEvent(event.payload);
+      const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+      const status = reconciled.status ?? eventInfo?.status;
+      const runEnded =
+        hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+      if (event.event === "session.message" && !runEnded) {
+        return;
+      }
+      if (!canReconcileSessionEvent(lastListOptions)) {
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
+      const priorRow =
+        reconciled.row ??
+        (eventInfo
+          ? state.result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, eventInfo.key))
+          : undefined);
+      const activeRunClearNeedsRefresh = runEnded && priorRow?.hasActiveRun === true;
+      if (activeRunClearNeedsRefresh) {
+        // Terminal lifecycle events can omit hasActiveRun. Re-list when the
+        // stale-row guard preserves an active row after the run has ended.
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
       if (reconciled.applied) {
         if (reconciled.result !== state.result || reconciled.deletedKey) {
           publish({

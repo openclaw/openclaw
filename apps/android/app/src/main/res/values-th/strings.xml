@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">เอนด์พอยต์ที่แก้ไขแล้ว</string>
     <string name="gateway_trust_first_seen">ตรวจสอบลายนิ้วมือของใบรับรองก่อนเชื่อถือเกตเวย์นี้\n\n%1$s</string>
     <string name="gateway_trust_changed">ใบรับรองของเกตเวย์มีการเปลี่ยนแปลง ดำเนินการต่อเมื่อคุณคาดว่าจะมีการเปลี่ยนแปลงนี้เท่านั้น\n\nSHA-256 เดิม:\n%1$s\n\nSHA-256 ใหม่:\n%2$s</string>
+    <string name="switch_gateway">สลับ Gateway</string>
+    <string name="select_gateway">เลือก Gateway</string>
+    <string name="active_gateway">Gateway ที่ใช้งานอยู่</string>
 </resources>

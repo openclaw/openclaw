@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Point de terminaison résolu</string>
     <string name="gateway_trust_first_seen">Vérifiez l’empreinte du certificat avant d’accorder votre confiance à cette passerelle.\n\n%1$s</string>
     <string name="gateway_trust_changed">Le certificat de la passerelle a changé. Continuez uniquement si vous vous attendiez à ce changement.\n\nAncien SHA-256 :\n%1$s\n\nNouveau SHA-256 :\n%2$s</string>
+    <string name="switch_gateway">Changer de Gateway</string>
+    <string name="select_gateway">Sélectionner un Gateway</string>
+    <string name="active_gateway">Gateway actif</string>
 </resources>

@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Endpoint yang diselesaikan</string>
     <string name="gateway_trust_first_seen">Verifikasi sidik jari sertifikat sebelum memercayai gateway ini.\n\n%1$s</string>
     <string name="gateway_trust_changed">Sertifikat gateway berubah. Lanjutkan hanya jika Anda mengharapkan perubahan ini.\n\nSHA-256 lama:\n%1$s\n\nSHA-256 baru:\n%2$s</string>
+    <string name="switch_gateway">Ganti gateway</string>
+    <string name="select_gateway">Pilih gateway</string>
+    <string name="active_gateway">Gateway aktif</string>
 </resources>

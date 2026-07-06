@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Điểm cuối đã phân giải</string>
     <string name="gateway_trust_first_seen">Xác minh dấu vân tay chứng chỉ trước khi tin cậy cổng này.\n\n%1$s</string>
     <string name="gateway_trust_changed">Chứng chỉ cổng đã thay đổi. Chỉ tiếp tục nếu bạn mong đợi thay đổi này.\n\nSHA-256 cũ:\n%1$s\n\nSHA-256 mới:\n%2$s</string>
+    <string name="switch_gateway">Chuyển Gateway</string>
+    <string name="select_gateway">Chọn Gateway</string>
+    <string name="active_gateway">Gateway đang hoạt động</string>
 </resources>

@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -87,8 +88,13 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
+  val messageSpeechState by viewModel.chatMessageSpeech.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
+
+  DisposableEffect(viewModel) {
+    onDispose(viewModel::stopChatMessageSpeech)
+  }
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
@@ -177,6 +183,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onReplyMessage = viewModel::setChatReplyDraft,
+      speechState = messageSpeechState,
+      onToggleListen = viewModel::toggleChatMessageSpeech,
     )
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {

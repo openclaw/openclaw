@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Löst slutpunkt</string>
     <string name="gateway_trust_first_seen">Verifiera certifikatets fingeravtryck innan du litar på denna gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">Gateway-certifikatet har ändrats. Fortsätt bara om du förväntade dig denna ändring.\n\nTidigare SHA-256:\n%1$s\n\nNy SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Byt Gateway</string>
+    <string name="select_gateway">Välj Gateway</string>
+    <string name="active_gateway">Aktiv Gateway</string>
 </resources>

@@ -258,7 +258,7 @@ export async function monitorLineProvider(
                     }).catch(() => {});
                   }
 
-                  const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
+                  const deliveryResult = await deliverLineAutoReply({
                     payload,
                     lineData,
                     to: ctxPayload.From,
@@ -288,7 +288,16 @@ export async function monitorLineProvider(
                       },
                     },
                   });
-                  replyTokenUsed = nextReplyTokenUsed;
+                  replyTokenUsed = deliveryResult.replyTokenUsed;
+
+                  if (deliveryResult.status === "partial") {
+                    // Text reached the user but a rich/media bubble did not.
+                    // Surface the tagged partial failure after adopting the
+                    // consumed reply-token state so later blocks in this turn
+                    // route correctly; recordChannelRuntimeState is skipped
+                    // because this delivery was not a clean success.
+                    throw deliveryResult.error;
+                  }
 
                   recordChannelRuntimeState({
                     channel: "line",

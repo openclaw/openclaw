@@ -415,6 +415,8 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /** Provider-owned model used to validate app-guided secret setup. */
+  starterModel?: string;
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
