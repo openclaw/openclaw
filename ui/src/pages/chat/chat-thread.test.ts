@@ -848,12 +848,16 @@ describe("buildChatItems", () => {
     expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
   });
 
-  it("keeps a live tool card ordered with its stream segment when a keyed preamble precedes it", () => {
+  it("keeps a live tool card after its stream segment when an unkeyed preamble shifts indexes", () => {
     const items = buildChatItems(
       createProps({
         streamSegments: [
-          { text: "Checking workspace", ts: 1_500, itemId: "preamble-1" },
-          { text: "I will inspect the file.", ts: 2_000, toolCallId: "call-read" },
+          { text: "Checking workspace", ts: 1_500 },
+          {
+            text: "Checking workspace I will inspect the file.",
+            ts: 2_000,
+            toolCallId: "call-read",
+          },
         ],
         toolMessages: [
           {

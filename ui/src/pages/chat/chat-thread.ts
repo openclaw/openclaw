@@ -693,9 +693,10 @@ function sortChatItemsByVisibleTime(
       return {
         item,
         index,
+        predecessorKey,
         timestamp:
-          timestamp != null && predecessorTimestamp != null && timestamp <= predecessorTimestamp
-            ? predecessorTimestamp
+          timestamp != null && predecessorTimestamp != null
+            ? Math.max(timestamp, predecessorTimestamp)
             : timestamp,
       };
     })
@@ -711,6 +712,12 @@ function sortChatItemsByVisibleTime(
       }
       if (a.timestamp !== b.timestamp) {
         return a.timestamp - b.timestamp;
+      }
+      if (a.predecessorKey === b.item.key) {
+        return 1;
+      }
+      if (b.predecessorKey === a.item.key) {
+        return -1;
       }
       return a.index - b.index;
     })
@@ -977,6 +984,17 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const segments = props.streamSegments ?? [];
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
+  const toolItems = tools.map((message, index) => ({
+    key: messageKey(message, index + history.length),
+    message,
+  }));
+  const toolKeysByCallId = new Map<string, string>();
+  for (const tool of toolItems) {
+    const toolCallId = asRecord(tool.message)?.toolCallId;
+    if (typeof toolCallId === "string" && toolCallId.trim()) {
+      toolKeysByCallId.set(toolCallId.trim(), tool.key);
+    }
+  }
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
   const toolStreamPredecessors = new Map<string, string>();
@@ -1001,27 +1019,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           isStreaming: false,
         });
         const toolCallId = segment.toolCallId?.trim();
-        if (toolCallId) {
-          const matchingToolIndex = tools.findIndex((tool, toolIndex) => {
-            if (toolIndex < i) {
-              return false;
-            }
-            return asRecord(tool)?.toolCallId === toolCallId;
-          });
-          if (matchingToolIndex >= 0) {
-            toolStreamPredecessors.set(
-              messageKey(tools[matchingToolIndex], matchingToolIndex + history.length),
-              streamKey,
-            );
-          }
+        const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
+        if (toolKey) {
+          // Gateway and browser clocks can disagree. Keep the assistant text that
+          // introduced a tool causally before its card even when timestamps do not.
+          toolStreamPredecessors.set(toolKey, streamKey);
         }
       }
     }
-    if (i < tools.length && props.showToolCalls) {
+    const tool = toolItems[i];
+    if (tool && props.showToolCalls) {
       items.push({
         kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
+        key: tool.key,
+        message: tool.message,
       });
     }
   }
