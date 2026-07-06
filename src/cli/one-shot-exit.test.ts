@@ -22,7 +22,9 @@ describe("one-shot CLI exit", () => {
     };
 
     exitAfterOneShotOutput(runtime, {} as NodeJS.ProcessEnv);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(shouldForceExitAfterOneShotOutput(runtime, {} as NodeJS.ProcessEnv)).toBe(false);
