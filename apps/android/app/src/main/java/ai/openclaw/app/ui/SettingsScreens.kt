@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobDetail
+import ai.openclaw.app.GatewayCronJobDetailState
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayTalkSetupReadiness
@@ -113,6 +114,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -248,17 +250,21 @@ private fun CronJobsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  var selectedJobId by remember { mutableStateOf<String?>(null) }
-  selectedJobId?.let { jobId ->
-    CronJobDetailSettingsScreen(viewModel = viewModel, jobId = jobId, onBack = { selectedJobId = null })
-    return
-  }
-
   val cronStatus by viewModel.cronStatus.collectAsState()
   val cronJobs by viewModel.cronJobs.collectAsState()
   val cronRefreshing by viewModel.cronRefreshing.collectAsState()
   val cronErrorText by viewModel.cronErrorText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  var selectedJobId by rememberSaveable { mutableStateOf<String?>(null) }
+  selectedJobId?.let { jobId ->
+    CronJobDetailSettingsScreen(
+      viewModel = viewModel,
+      jobId = jobId,
+      jobName = cronJobs.firstOrNull { it.id == jobId }?.name,
+      onBack = { selectedJobId = null },
+    )
+    return
+  }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -305,14 +311,17 @@ private fun CronJobsSettingsScreen(
 private fun CronJobDetailSettingsScreen(
   viewModel: MainViewModel,
   jobId: String,
+  jobName: String?,
   onBack: () -> Unit,
 ) {
   BackHandler(onBack = onBack)
 
-  val job by viewModel.cronJobDetail.collectAsState()
-  val loading by viewModel.cronJobDetailLoading.collectAsState()
-  val errorText by viewModel.cronJobDetailErrorText.collectAsState()
+  val detailState by viewModel.cronJobDetailState.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+
+  DisposableEffect(viewModel, jobId) {
+    onDispose { viewModel.clearCronJobDetail() }
+  }
 
   LaunchedEffect(isConnected, jobId) {
     if (isConnected) {
@@ -320,9 +329,11 @@ private fun CronJobDetailSettingsScreen(
     }
   }
 
-  val current = job?.takeIf { it.id == jobId }
+  val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
+  val loading = (detailState as? GatewayCronJobDetailState.Loading)?.id == jobId
+  val errorText = (detailState as? GatewayCronJobDetailState.Error)?.takeIf { it.id == jobId }?.message
   SettingsDetailFrame(
-    title = current?.name ?: "Cron Job",
+    title = current?.name ?: jobName ?: "Cron Job",
     subtitle = "Inspect scheduled gateway work.",
     icon = Icons.Default.Bolt,
     onBack = onBack,
@@ -334,16 +345,14 @@ private fun CronJobDetailSettingsScreen(
       modifier = Modifier.fillMaxWidth(),
     )
 
-    errorText?.let { text ->
-      ClawPanel {
-        Text(text = text, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-    }
-
     when {
       !isConnected ->
         ClawPanel {
           Text(text = "Connect the gateway to inspect cron jobs.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      errorText != null ->
+        ClawPanel {
+          Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
         }
       current == null ->
         ClawPanel {
