@@ -93,14 +93,19 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     mode: GATEWAY_CLIENT_MODES.CLI,
     caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
-      // Gateway delivery stays non-blocking, but translator failures must not
-      // escape this callback as unhandled process rejections.
-      void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
-        process.stderr.write(`openclaw acp: gateway event ${evt.event} failed\n`);
-        if (opts.verbose) {
-          process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}\n`);
-        }
-      });
+      const evtAgent = agent;
+      if (evtAgent) {
+        evtAgent.trackHandler(
+          evtAgent.handleGatewayEvent(evt).catch((err: unknown) => {
+            process.stderr.write(`openclaw acp: gateway event ${evt.event} failed
+`);
+            if (opts.verbose) {
+              process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}
+`);
+            }
+          }),
+        );
+      }t handlers before closing ledger on shutdown)
     },
     onHelloOk: () => {
       resolveGatewayReady();
@@ -129,13 +134,21 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     }
     stopped = true;
     resolveGatewayReady();
-    // Stop the gateway first to prevent in-flight events from writing to the
-    // ledger after the database handles are closed.
+    // Stop the gateway first to prevent new events from dispatching while
+    // we drain in-flight handlers.
     gateway.stop();
-    eventLedger?.close();
-    // If no WebSocket is active (e.g. between reconnect attempts),
-    // gateway.stop() won't trigger onClose, so resolve directly.
-    onClosed();
+    const close = () => {
+      eventLedger?.close();
+      // If no WebSocket is active (e.g. between reconnect attempts),
+      // gateway.stop() won't trigger onClose, so resolve directly.
+      onClosed();
+    };
+    const drainPromise = typeof agent?.drain === "function" ? agent.drain() : undefined;
+    if (drainPromise) {
+      void drainPromise.then(close);
+    } else {
+      close();
+    }
   };
 
   process.once("SIGINT", shutdown);

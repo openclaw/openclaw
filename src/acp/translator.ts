@@ -262,6 +262,27 @@ export class AcpGatewayAgent implements Agent {
   private disconnectTimer: NodeJS.Timeout | null = null;
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
+  private pendingHandlers: Promise<void>[] = [];
+  private drainResolve: (() => void) | null = null;
+
+  trackHandler(promise: Promise<void>): void {
+    this.pendingHandlers.push(promise);
+    promise.finally(() => {
+      const idx = this.pendingHandlers.indexOf(promise);
+      if (idx !== -1) this.pendingHandlers.splice(idx, 1);
+      if (this.pendingHandlers.length === 0 && this.drainResolve) {
+        this.drainResolve();
+        this.drainResolve = null;
+      }
+    });
+  }
+
+  async drain(): Promise<void> {
+    if (this.pendingHandlers.length === 0) return;
+    return new Promise((resolve) => {
+      this.drainResolve = resolve;
+    });
+  }
 
   private pendingPromptKey(sessionId: string, runId: string): string {
     return `${sessionId}\u0000${runId}`;
