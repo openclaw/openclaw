@@ -1046,6 +1046,35 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun pttStartWaitingForPreparationIsInvalidatedByCancel() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      preparationMutex.lock()
+      try {
+        val start = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null) }
+        yield()
+        val cancel = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null) }
+        yield()
+        preparationMutex.unlock()
+
+        assertEquals("NODE_BACKGROUND_UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)
+        assertNull(withTimeout(5_000) { cancel.await() }.error)
+        val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+        assertNull(talkMode.activePushToTalkCaptureId)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        if (preparationMutex.isLocked) preparationMutex.unlock()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
   fun sameManualMicModeReassertsCaptureAndInvalidatesPendingPtt() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)

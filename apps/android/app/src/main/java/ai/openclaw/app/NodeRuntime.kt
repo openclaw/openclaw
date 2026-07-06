@@ -1906,17 +1906,18 @@ class NodeRuntime private constructor(
 
   private suspend fun stopPreparedTalkPttCapture(
     stopCapture: suspend () -> TalkPttStopPayload,
-  ): TalkPttStopPayload =
-    withContext(NonCancellable) {
+  ): TalkPttStopPayload {
+    // Preparation can suspend on gateway config. Invalidate it before waiting,
+    // while later starts queue behind this stop with the new command epoch.
+    talkPttCommandEpoch.incrementAndGet()
+    return withContext(NonCancellable) {
       voiceCapturePreparationMutex.withLock {
-        // Invalidation and capture stop share the preparation lock. A later start
-        // must observe the new epoch only after this stop releases the lock.
-        talkPttCommandEpoch.incrementAndGet()
         val payload = stopCapture()
         finishTalkCaptureIfIdleLocked(payload.captureId)
         payload
       }
     }
+  }
 
   private fun finishTalkCaptureIfIdleLocked(captureId: String) {
     synchronized(voiceCaptureOwnershipLock) {
