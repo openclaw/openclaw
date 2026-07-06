@@ -8,6 +8,12 @@ Adds read-only Cron Job details in Settings, including schedule, payload and del
 
 Gateway sessions now retry immediately when Android regains a validated network, without waiting for the current reconnect backoff.
 
+Canvas main-frame navigation now blocks device-local loopback and unspecified web targets while preserving remote, LAN, emulator-host, and bundled canvases.
+
+Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
+
+Camera clip capture no longer emits release-path diagnostics containing temporary file details.
+
 ## 2026.6.11 - 2026-07-01
 
 Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.
