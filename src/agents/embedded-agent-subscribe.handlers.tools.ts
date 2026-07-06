@@ -1272,6 +1272,13 @@ export async function handleToolExecutionEnd(
       replayInvalid: true,
       hadPotentialSideEffects: true,
     });
+    ctx.state.currentAttemptReplayState = mergeEmbeddedRunReplayState(
+      ctx.state.currentAttemptReplayState,
+      {
+        replayInvalid: true,
+        hadPotentialSideEffects: true,
+      },
+    );
   }
 
   // Commit messaging tool evidence on success, discard on error.

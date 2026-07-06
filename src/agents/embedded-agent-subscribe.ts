@@ -220,6 +220,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     compactionRetryPromise: null,
     unsubscribed: false,
     replayState: createEmbeddedRunReplayState(params.initialReplayState),
+    currentAttemptReplayState: createEmbeddedRunReplayState(),
     livenessState: "working",
     hadDeterministicSideEffect: false,
     pendingEventChain: null,
@@ -1255,6 +1256,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
+    state.currentAttemptReplayState = createEmbeddedRunReplayState();
     state.livenessState = "working";
     resetAssistantMessageState(0);
   };
@@ -1437,6 +1439,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
+    getCurrentAttemptReplayState: () => ({ ...state.currentAttemptReplayState }),
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.

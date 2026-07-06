@@ -47,6 +47,7 @@ function createContext(
       pendingToolTrustedLocalMedia: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
+      currentAttemptReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,
         final: true,

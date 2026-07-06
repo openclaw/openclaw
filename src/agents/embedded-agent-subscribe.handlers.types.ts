@@ -149,6 +149,12 @@ export type EmbeddedAgentSubscribeState = {
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
+  /** Per-attempt replay state that starts clean for every attempt, tracking
+   *  only the current attempt's side effects independently of prior-turn
+   *  accumulated history. Used to gate silent provider-error retries so a
+   *  transient 5xx after prior tool calls is still retryable when the failed
+   *  attempt itself did not produce side effects. */
+  currentAttemptReplayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
   terminalStopReason?: string;
   yielded?: boolean;
@@ -319,6 +325,7 @@ type ToolHandlerState = Pick<
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"
   | "replayState"
+  | "currentAttemptReplayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
