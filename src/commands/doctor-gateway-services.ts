@@ -763,6 +763,14 @@ export async function maybeRepairGatewayServiceConfig(
     ...serviceInstallEnv,
     ...command.environment,
   };
+  const installedWindowsTaskName = command.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim();
+  const serviceRepairEnv =
+    updateRepairWillRewriteWindowsTask && installedWindowsTaskName
+      ? {
+          ...serviceInstallEnv,
+          OPENCLAW_WINDOWS_TASK_NAME: installedWindowsTaskName,
+        }
+      : serviceInstallEnv;
   const updateRepairShouldInstall =
     updateRepairMode &&
     updateParentAllowsGatewayActivation(process.env) &&
@@ -776,7 +784,7 @@ export async function maybeRepairGatewayServiceConfig(
     updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
   try {
     await repairService({
-      env: serviceInstallEnv,
+      env: serviceRepairEnv,
       stdout: process.stdout,
       warn: (message) => note(message, "Gateway"),
       programArguments: updatedPlan.programArguments,
@@ -788,11 +796,17 @@ export async function maybeRepairGatewayServiceConfig(
       updateRepairShouldInstall &&
       !isTruthyEnvValue(process.env[UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV])
     ) {
+      const restartEnv = {
+        ...serviceRepairEnv,
+        ...updatedPlan.environment,
+      };
+      if (installedWindowsTaskName) {
+        // Scheduled Task identity is caller-owned; a canonical rebuilt plan must
+        // not redirect restart/cleanup to the default task after profile repair.
+        restartEnv.OPENCLAW_WINDOWS_TASK_NAME = installedWindowsTaskName;
+      }
       await service.restart({
-        env: {
-          ...serviceInstallEnv,
-          ...updatedPlan.environment,
-        },
+        env: restartEnv,
         stdout: process.stdout,
       });
       note("Restarted the repaired gateway for a legacy update parent.", "Gateway");

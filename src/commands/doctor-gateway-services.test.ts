@@ -1030,8 +1030,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+    expectCallField(
+      mocks.install,
+      "env",
+      expect.objectContaining({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work" }),
+    );
     expect(mocks.restart).toHaveBeenCalledWith({
-      env: expect.objectContaining({ OPENCLAW_SERVICE_VERSION: "2026.5.26" }),
+      env: expect.objectContaining({
+        OPENCLAW_SERVICE_VERSION: "2026.5.26",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work",
+      }),
       stdout: process.stdout,
     });
     expectNoteContaining("Restarted the repaired gateway for a legacy update parent.", "Gateway");
