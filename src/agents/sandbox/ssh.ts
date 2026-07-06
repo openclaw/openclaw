@@ -704,6 +704,7 @@ export async function runSshSandboxCommand(
       resolve({ stdout, stderr, code: exitCode });
     });
 
+    child.stdin?.on("error", reject);
     if (params.stdin !== undefined) {
       child.stdin.end(params.stdin);
       return;

@@ -100,4 +100,24 @@ describe("ssh sandbox stream errors", () => {
       }),
     ).rejects.toThrow("stderr read failed");
   });
+
+  it("rejects when stdin emits an error", async () => {
+    spawnMock.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const { child, stdin } = createMockSpawnChild();
+        process.nextTick(() => {
+          stdin?.emit("error", new Error("stdin write failed"));
+        });
+        return child as unknown as ChildProcess;
+      },
+    );
+
+    await expect(
+      runSshSandboxCommand({
+        session: fakeSession(),
+        remoteCommand: "echo hi",
+        allowFailure: false,
+      }),
+    ).rejects.toThrow("stdin write failed");
+  });
 });
