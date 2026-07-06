@@ -1674,6 +1674,48 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it.each([
+    [1024, 768],
+    [1366, 900],
+    [1440, 900],
+  ] as const)(
+    "scrolls long BTW side result bodies instead of expanding the card at %sx%s",
+    async (width, height) => {
+      const longBody = Array.from({ length: 80 }, (_, i) => `<p>Line ${i + 1}</p>`).join("");
+      const page = await openBrowserPage(width, height);
+      try {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+            <section class="chat-side-result" role="status" aria-live="polite" aria-label="BTW side result">
+              <div class="chat-side-result__header">
+                <div class="chat-side-result__label-row">
+                  <span class="chat-side-result__label">BTW</span>
+                  <span class="chat-side-result__meta">Not saved to chat history</span>
+                </div>
+                <button class="btn chat-side-result__dismiss" type="button">X</button>
+              </div>
+              <div class="chat-side-result__question">What is the full answer?</div>
+              <div class="chat-side-result__body">${longBody}</div>
+            </section>
+          </body></html>`,
+        );
+        const body = await page.locator(".chat-side-result__body").evaluate((node) => {
+          const style = getComputedStyle(node as HTMLElement);
+          return {
+            overflow: style.overflow,
+            clientHeight: (node as HTMLElement).clientHeight,
+            scrollHeight: (node as HTMLElement).scrollHeight,
+          };
+        });
+        expect(body.overflow).toBe("auto");
+        expect(body.clientHeight).toBeLessThan(body.scrollHeight);
+        expect(body.clientHeight).toBeLessThanOrEqual(480);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it("renders BTW side results as a mobile overlay without horizontal overflow", async () => {
     const page = await openFixture(320, 568, { sideResult: true });
     try {
