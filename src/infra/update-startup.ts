@@ -65,7 +65,6 @@ type AutoUpdateRunResult = {
   reason?: string;
   command?: string;
   logPath?: string;
-  restartDelayMs?: number;
 };
 
 export type UpdateAvailable = {
@@ -359,13 +358,20 @@ async function startManagedServiceAutoUpdateHandoff(params: {
         note: "background auto-update",
       },
     });
+    // Pair helper creation with restart scheduling before any state persistence
+    // can fail and leave an indefinite handoff waiting on a live parent.
+    scheduleGatewaySigusr1Restart({
+      delayMs: restartDelayMs,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
+    });
     return {
       ok: true,
       code: 0,
       reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
       command: started.command,
       logPath: started.logPath,
-      restartDelayMs,
     };
   } catch (err) {
     return {
@@ -537,8 +543,6 @@ export async function runGatewayUpdateCheck(params: {
     ...state,
     lastCheckedAt: resolveUpdateCheckTimestamp(now),
   };
-  let pendingAutoUpdateRestartDelayMs: number | null = null;
-
   if (status.installKind !== "package") {
     delete nextState.lastAvailableVersion;
     delete nextState.lastAvailableTag;
@@ -642,7 +646,6 @@ export async function runGatewayUpdateCheck(params: {
           root: root ?? status.root ?? undefined,
         });
         if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
-          pendingAutoUpdateRestartDelayMs = outcome.restartDelayMs ?? 0;
           params.log.info("auto-update handoff started", {
             channel,
             version: resolved.version,
@@ -679,14 +682,6 @@ export async function runGatewayUpdateCheck(params: {
   }
 
   await writeState(nextState);
-  if (pendingAutoUpdateRestartDelayMs !== null) {
-    scheduleGatewaySigusr1Restart({
-      delayMs: pendingAutoUpdateRestartDelayMs,
-      reason: "update.auto",
-      skipCooldown: true,
-      skipDeferral: true,
-    });
-  }
 }
 
 export function scheduleGatewayUpdateCheck(params: {

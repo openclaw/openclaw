@@ -168,6 +168,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "started"; pid?: number; command: string }
       | { status: "unavailable"; command: string; message: string }
       | null = null;
+    let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
     const sentinelMeta: UpdateRestartSentinelMeta = {
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext ? { deliveryContext } : {}),
@@ -233,8 +234,15 @@ export const updateHandlers: GatewayRequestHandlers = {
         });
         if (supervisor && hasHandoffContext) {
           try {
+            const beforeVersion = installSurface.root
+              ? await readPackageVersion(installSurface.root)
+              : null;
             const startedAt = Date.now();
             const handoffId = randomUUID();
+            const managedRestartDelayMs = resolveManagedServiceHandoffRestartDelayMs(
+              restartDelayMs,
+              supervisor,
+            );
             sentinelMeta.handoffId = handoffId;
             // Managed services update from a detached helper so the running
             // gateway does not replace its own package or git-built dist tree
@@ -246,7 +254,7 @@ export const updateHandlers: GatewayRequestHandlers = {
                 config.gateway?.reload?.deferralTimeoutMs,
               ),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
-              restartDelayMs,
+              restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,
               handoffId,
               supervisor,
@@ -256,9 +264,20 @@ export const updateHandlers: GatewayRequestHandlers = {
               ...(started.pid ? { pid: started.pid } : {}),
               command: started.command,
             };
-            const beforeVersion = installSurface.root
-              ? await readPackageVersion(installSurface.root)
-              : null;
+            // Once the detached helper exists, arm its parent exit without an
+            // intervening await so persistence failures cannot orphan it.
+            managedHandoffRestart = scheduleGatewaySigusr1Restart({
+              delayMs: managedRestartDelayMs,
+              reason: "update.run",
+              skipDeferral: true,
+              skipCooldown: true,
+              audit: {
+                actor: actor.actor,
+                deviceId: actor.deviceId,
+                clientIp: actor.clientIp,
+                changedPaths: [],
+              },
+            });
             result = {
               status: "skipped",
               mode: installSurface.mode,
@@ -369,19 +388,15 @@ export const updateHandlers: GatewayRequestHandlers = {
     // (corrupted node_modules, partial builds) and causes a crash loop.
     const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
     const restart =
-      handoff?.status === "started" || result.status === "ok"
+      managedHandoffRestart ??
+      (result.status === "ok"
         ? scheduleGatewaySigusr1Restart({
-            delayMs:
-              handoff?.status === "started"
-                ? resolveManagedServiceHandoffRestartDelayMs(restartDelayMs, supervisor)
-                : updateWasPackageSwap
-                  ? 0
-                  : restartDelayMs,
+            delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
             reason: "update.run",
-            // Package swaps and managed handoffs should restart without waiting
-            // for normal deferral/cooldown windows; the new code is already staged.
-            skipDeferral: updateWasPackageSwap || handoff?.status === "started",
-            skipCooldown: updateWasPackageSwap || handoff?.status === "started",
+            // Package swaps should restart without waiting for normal
+            // deferral/cooldown windows; the new code is already staged.
+            skipDeferral: updateWasPackageSwap,
+            skipCooldown: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,
@@ -389,7 +404,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               changedPaths: [],
             },
           })
-        : null;
+        : null);
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
     );

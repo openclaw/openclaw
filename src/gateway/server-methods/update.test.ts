@@ -10,6 +10,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
 let capturedPayload: RestartSentinelPayload | undefined;
+let restartSentinelWriteError: Error | null = null;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
 const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
@@ -97,6 +98,9 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
+      if (restartSentinelWriteError) {
+        throw restartSentinelWriteError;
+      }
       capturedPayload = payload;
     },
   };
@@ -186,6 +190,7 @@ vi.mock("./validation.js", () => ({
 
 beforeEach(() => {
   capturedPayload = undefined;
+  restartSentinelWriteError = null;
   isRestartEnabledMock.mockReset();
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
@@ -512,6 +517,21 @@ describe("update.run restart scheduling", () => {
     );
   });
 
+  it("arms the managed restart before optional sentinel persistence", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+    restartSentinelWriteError = new Error("state database unavailable");
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(payload?.sentinel?.persisted).toBe(false);
+    expect(payload?.ok).toBe(true);
+  });
+
   it("keeps a startup grace before restarting after systemd handoff spawn", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGlobalInstallSurface();
@@ -523,7 +543,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         supervisor: "systemd",
-        restartDelayMs: 0,
+        restartDelayMs: 2000,
       }),
     );
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
