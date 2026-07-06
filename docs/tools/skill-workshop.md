@@ -202,6 +202,14 @@ Skill Workshop tool, so run proposal review actions from a normal host-side
 agent session or the CLI.
 </Note>
 
+## Suggested skills
+
+OpenClaw detects durable instructions such as “next time,” “remember to,” and reactive corrections
+when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
+the most recent detected workflow through `skill_workshop`; the user decides whether to create a
+proposal. This built-in suggestion does not create or change a skill by itself. Enable
+`skills.workshop.autonomous.enabled` to create pending proposals directly instead.
+
 ## Approval and autonomy
 
 ```json5
@@ -222,11 +230,16 @@ agent session or the CLI.
 
 | Setting                    | Default     | Effect                                                                                                                                                                 |
 | -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Lets OpenClaw create pending proposals from durable conversation signals after a successful turn.                                                                      |
+| `autonomous.enabled`       | `false`     | Creates pending proposals directly instead of offering the most recent detected workflow on the next turn.                                                             |
 | `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
 | `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
 | `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
 | `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+
+Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
+corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
+to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
+revises its own pending proposal when another correction targets the same skill.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.
@@ -295,6 +308,15 @@ Default state directory: `~/.openclaw`.
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
+
+### Tool-policy diagnostic
+
+When autonomous capture is enabled, `openclaw doctor` runs the
+`core/doctor/skill-workshop-tool-policy` check for the default agent. If policy
+hides `skill_workshop`, the warning names the first excluding config layer and
+the exact `allow` or `alsoAllow` change to make. Older runbooks may still use
+`openclaw plugins inspect skill-workshop`; that command now explains that Skill
+Workshop is built in and prints the same policy hint when applicable.
 
 ## Related
 

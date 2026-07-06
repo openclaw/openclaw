@@ -12,13 +12,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -248,6 +248,9 @@ class GatewaySession(
 
   @Volatile private var reconnectPausedForAuthFailure = false
 
+  // Network recovery must interrupt the current backoff without creating a parallel loop.
+  private val reconnectSignal = Channel<Unit>(Channel.CONFLATED)
+
   /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
   fun connect(
     endpoint: GatewayEndpoint,
@@ -266,6 +269,8 @@ class GatewaySession(
       connectionToClose = currentConnection
       if (job?.isActive != true) {
         job = scope.launch(Dispatchers.IO) { runLoop() }
+      } else {
+        reconnectSignal.trySend(Unit)
       }
     }
     connectionToClose?.closeQuietly()
@@ -290,6 +295,7 @@ class GatewaySession(
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
+      drainReconnectSignals()
       connectionToClose = currentConnection
       jobToCancel = job
       job = null
@@ -314,8 +320,31 @@ class GatewaySession(
 
   /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
-    reconnectPausedForAuthFailure = false
-    currentConnection?.closeQuietly()
+    signalReconnect(resumeAuthPaused = true)
+  }
+
+  /** Wakes transport backoff without overriding a deliberate auth-failure pause. */
+  internal fun retryAfterNetworkRestore() {
+    signalReconnect(resumeAuthPaused = false)
+  }
+
+  private fun signalReconnect(resumeAuthPaused: Boolean) {
+    synchronized(lifecycleLock) {
+      if (resumeAuthPaused) {
+        reconnectPausedForAuthFailure = false
+      } else if (reconnectPausedForAuthFailure) {
+        return
+      }
+      if (desired == null) return
+      currentConnection?.closeQuietly()
+      reconnectSignal.trySend(Unit)
+    }
+  }
+
+  private fun drainReconnectSignals() {
+    while (reconnectSignal.tryReceive().isSuccess) {
+      // A newly ready connection already incorporates every earlier retry request.
+    }
   }
 
   private fun readyConnection(): Connection? = currentConnection?.takeIf { it.isReady() }
@@ -1188,16 +1217,17 @@ class GatewaySession(
       if (target == null) {
         currentConnection?.closeQuietly()
         currentConnection = null
-        delay(250)
+        withTimeoutOrNull(250) { reconnectSignal.receive() }
         continue
       }
       if (reconnectPausedForAuthFailure) {
-        delay(250)
+        withTimeoutOrNull(250) { reconnectSignal.receive() }
         continue
       }
 
       try {
         onDisconnected(if (attempt == 0) "Connecting…" else "Reconnecting…")
+        drainReconnectSignals()
         connectOnce(target)
         attempt = 0
       } catch (err: Throwable) {
@@ -1211,11 +1241,13 @@ class GatewaySession(
           onConnectFailure(gatewayConnectFailure.gatewayError, pauseForAuthFailure)
         }
         if (pauseForAuthFailure) {
-          reconnectPausedForAuthFailure = true
+          synchronized(lifecycleLock) {
+            reconnectPausedForAuthFailure = true
+          }
           continue
         }
         val sleepMs = minOf(8_000L, (350.0 * Math.pow(1.7, attempt.toDouble())).toLong())
-        delay(sleepMs)
+        withTimeoutOrNull(sleepMs) { reconnectSignal.receive() }
       }
     }
   }
@@ -1263,6 +1295,7 @@ class GatewaySession(
           conn.closeQuietly()
           return@withContext
         }
+        drainReconnectSignals()
         conn.awaitClose()
       } finally {
         // Callback failures and cancellation must drain this socket's owned work before the loop

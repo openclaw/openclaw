@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.R
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -55,6 +57,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -74,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,6 +108,8 @@ fun ChatScreen(
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
@@ -121,6 +128,8 @@ fun ChatScreen(
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
+  val activeAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
+  val workspaceGit = gatewayAgents.firstOrNull { it.id == activeAgentId }?.workspaceGit == true
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -169,8 +178,7 @@ fun ChatScreen(
   var input by rememberSaveable { mutableStateOf("") }
 
   LaunchedEffect(chatDraft) {
-    val draft = chatDraft?.trim()?.ifEmpty { null } ?: return@LaunchedEffect
-    input = draft
+    input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
     viewModel.clearChatDraft()
   }
 
@@ -181,9 +189,9 @@ fun ChatScreen(
       gatewayReady = healthOk && !gatewayOffline,
     )
 
-  val startNewChat = {
+  val startNewChat: (Boolean) -> Unit = { worktree ->
     if (newChatEnabled) {
-      viewModel.startNewChat()
+      viewModel.startNewChat(worktree = worktree)
       viewModel.refreshChatSessions(limit = 100)
       viewModel.refreshChatCommands()
     }
@@ -201,9 +209,11 @@ fun ChatScreen(
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
+      workspaceGit = workspaceGit,
       onNewChat = {
-        startNewChat()
+        startNewChat(false)
       },
+      onNewChatInWorktree = { startNewChat(true) },
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
@@ -246,6 +256,7 @@ fun ChatScreen(
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onStarterPrompt = { prompt -> input = prompt },
+      onReplyMessage = viewModel::setChatReplyDraft,
       modifier = Modifier.weight(1f),
     )
 
@@ -407,9 +418,13 @@ private fun ChatHeader(
   healthOk: Boolean,
   pendingRunCount: Int,
   newChatEnabled: Boolean,
+  workspaceGit: Boolean,
   onNewChat: () -> Unit,
+  onNewChatInWorktree: () -> Unit,
   onMore: () -> Unit,
 ) {
+  var newChatMenuExpanded by remember { mutableStateOf(false) }
+  val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -440,6 +455,25 @@ private fun ChatHeader(
           },
       )
       HeaderIcon(icon = Icons.Default.Add, contentDescription = "New chat", enabled = newChatEnabled, onClick = onNewChat)
+      if (workspaceGit) {
+        Box {
+          HeaderIcon(
+            icon = Icons.Default.MoreHoriz,
+            contentDescription = "More new chat options",
+            enabled = newChatEnabled,
+            onClick = { newChatMenuExpanded = true },
+          )
+          DropdownMenu(expanded = newChatMenuExpanded, onDismissRequest = { newChatMenuExpanded = false }) {
+            DropdownMenuItem(
+              text = { Text(newChatInWorktreeLabel) },
+              onClick = {
+                newChatMenuExpanded = false
+                onNewChatInWorktree()
+              },
+            )
+          }
+        }
+      }
       HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -523,6 +557,7 @@ private fun ChatMessageList(
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
+  onReplyMessage: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
@@ -558,6 +593,7 @@ private fun ChatMessageList(
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
+              onReplyMessage = onReplyMessage,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -572,6 +608,7 @@ private fun ChatMessageList(
               live = true,
               content = listOf(ChatMessageContent(text = item.text)),
               timestampMs = null,
+              onReplyMessage = onReplyMessage,
             )
           ChatTimelineItem.Thinking -> ChatThinkingBubble()
         }
@@ -726,6 +763,7 @@ private fun ChatBubble(
   live: Boolean,
   content: List<ChatMessageContent>,
   timestampMs: Long?,
+  onReplyMessage: (String) -> Unit,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -743,41 +781,49 @@ private fun ChatBubble(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
-    Surface(
+    val messageText = chatMessagePlainText(displayableContent)
+    ChatMessageActionHost(
+      text = messageText,
+      onReply = onReplyMessage,
+      enabled = !live,
       modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
-      shape = RoundedCornerShape(7.dp),
-      color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
-      contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
-      tonalElevation = 1.dp,
-      shadowElevation = 2.dp,
     ) {
-      Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-          text =
-            when {
-              live -> "OpenClaw · Live"
-              isUser -> "You"
-              normalizedRole == "system" -> "System"
-              else -> "OpenClaw"
-            },
-          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-          color = ClawTheme.colors.text,
-        )
-        displayableContent.forEach { part ->
-          if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-          } else {
-            Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
-        timestampMs?.let {
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(7.dp),
+        color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
+        contentColor = ClawTheme.colors.text,
+        border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+        tonalElevation = 1.dp,
+        shadowElevation = 2.dp,
+      ) {
+        Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
-            text = formatChatTimestamp(it),
-            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
-            color = ClawTheme.colors.textMuted,
-            modifier = Modifier.align(Alignment.End),
+            text =
+              when {
+                live -> "OpenClaw · Live"
+                isUser -> "You"
+                normalizedRole == "system" -> "System"
+                else -> "OpenClaw"
+              },
+            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+            color = ClawTheme.colors.text,
           )
+          displayableContent.forEach { part ->
+            if (part.type == "text") {
+              ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+            } else {
+              Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            }
+          }
+          timestampMs?.let {
+            Text(
+              text = formatChatTimestamp(it),
+              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+              color = ClawTheme.colors.textMuted,
+              modifier = Modifier.align(Alignment.End),
+            )
+          }
         }
       }
     }

@@ -487,6 +487,10 @@ describe("cron view", () => {
       container,
     );
 
+    const summary = getElement(container, ".cron-job-details__summary", HTMLElement);
+    expect(summary.querySelector(".cron-job-detail-label")?.textContent?.trim()).toBe("Prompt");
+    expect(summary.querySelector(".cron-job-details__preview")?.textContent?.trim()).toBe("do it");
+
     const details = Array.from(container.querySelectorAll(".cron-job-detail-section")).map(
       (section) => ({
         label: section.querySelector(".cron-job-detail-label")?.textContent?.trim(),
@@ -494,15 +498,9 @@ describe("cron view", () => {
       }),
     );
     expect(details).toEqual([
-      { label: "Prompt", value: "do it" },
       { label: "Model", value: "Default" },
       { label: "Delivery", value: "webhook (https://example.invalid/cron)" },
     ]);
-    expect(
-      Array.from(container.querySelectorAll(".cron-job-chips .chip")).map((chip) =>
-        chip.textContent?.trim(),
-      ),
-    ).toContain("Model: Default");
   });
 
   it("shows configured cron job models in job details", () => {
@@ -523,9 +521,7 @@ describe("cron view", () => {
     );
     expect(details).toContainEqual({ label: "Model", value: "openai/gpt-5.2" });
     expect(
-      Array.from(container.querySelectorAll(".cron-job-chips .chip")).map((chip) =>
-        chip.textContent?.trim(),
-      ),
+      getElement(container, ".cron-job-meta-line", HTMLElement).textContent?.replace(/\s+/g, " "),
     ).toContain("Model: openai/gpt-5.2");
   });
 
@@ -918,8 +914,12 @@ describe("cron view", () => {
       container,
     );
 
+    const menu = getElement(container, ".cron-job-menu", HTMLDetailsElement);
+    menu.setAttribute("open", "");
+
     const cloneButton = getButtonByText(container, "Clone");
     cloneButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(menu.hasAttribute("open")).toBe(false);
 
     const enableButton = getButtonByText(container, "Disable");
     enableButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));

@@ -12,8 +12,8 @@ type CreateOptions = {
 
 const createGhosttyTerminalMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@openclaw/libterminal/browser", () => {
-  return { createGhosttyTerminal: createGhosttyTerminalMock };
+vi.mock("./terminal-runtime.ts", () => {
+  return { createIsolatedGhosttyTerminal: createGhosttyTerminalMock };
 });
 
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
@@ -21,6 +21,8 @@ import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 describe("OpenClawTerminalPanel", () => {
   afterEach(() => {
     document.body.replaceChildren();
+    localStorage.clear();
+    sessionStorage.clear();
     createGhosttyTerminalMock.mockReset();
   });
 
@@ -146,5 +148,86 @@ describe("OpenClawTerminalPanel", () => {
     expect(requests.some((entry) => entry.method === "terminal.close")).toBe(true);
     expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
     expect(panel.renderRoot.querySelector(".tp-new")).not.toBeNull();
+  });
+
+  it("opens a fresh terminal after the last tab is closed", async () => {
+    const controllers = Array.from({ length: 2 }, () => ({
+      terminal: {
+        cols: 100,
+        rows: 30,
+        viewportY: 0,
+        write: vi.fn(),
+        focus: vi.fn(),
+      },
+      write: vi.fn(),
+      fit: vi.fn(),
+      dispose: vi.fn(),
+    }));
+    createGhosttyTerminalMock
+      .mockResolvedValueOnce(controllers[0])
+      .mockResolvedValueOnce(controllers[1]);
+
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
+    let openCount = 0;
+    const client: TerminalGatewayClient = {
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.open") {
+          openCount += 1;
+          return {
+            sessionId: `session-${openCount}`,
+            agentId: "main",
+            shell: "/bin/bash",
+            cwd: "/work",
+            confined: false,
+          } as T;
+        }
+        return {} as T;
+      },
+      addEventListener: (nextListener) => {
+        listener = nextListener;
+        return () => {
+          if (listener === nextListener) {
+            listener = undefined;
+          }
+        };
+      },
+    };
+    const panel = document.createElement("openclaw-terminal-panel") as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(1);
+    });
+
+    const staleOutput = "CLOSE_RESET_SENTINEL";
+    listener?.({
+      event: "terminal.data",
+      payload: { sessionId: "session-1", seq: 0, data: staleOutput },
+    });
+    expect(new TextDecoder().decode(controllers[0].write.mock.calls[0]?.[0])).toBe(staleOutput);
+
+    await panel.updateComplete;
+    (panel.renderRoot.querySelector(".tp-tab__close") as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual({
+        method: "terminal.close",
+        params: { sessionId: "session-1" },
+      });
+    });
+    expect(controllers[0].dispose).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
+
+    panel.toggle();
+    await vi.waitFor(() => {
+      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(2);
+    });
+    expect(requests.some((entry) => entry.method === "terminal.attach")).toBe(false);
+    expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2);
+    expect(controllers[1].write).not.toHaveBeenCalled();
   });
 });

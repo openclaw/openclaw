@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Faire confiance à cette passerelle ?</string>
     <string name="trust_and_continue">Faire confiance et continuer</string>
     <string name="cancel">Annuler</string>
+    <string name="new_chat_in_worktree">Nouveau chat dans le worktree</string>
     <string name="endpoint">Point de terminaison</string>
     <string name="status">État</string>
     <string name="connected_gateway_ready">Votre passerelle est active et prête.</string>

@@ -46,6 +46,7 @@ fun ChatMessageListCard(
   outboxItems: List<ChatOutboxItem> = emptyList(),
   onRetryOutbox: (String) -> Unit = {},
   onDeleteOutbox: (String) -> Unit = {},
+  onReplyMessage: (String) -> Unit = {},
 ) {
   val timeline =
     remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems) {
@@ -76,7 +77,11 @@ fun ChatMessageListCard(
     ) {
       itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
         when (item) {
-          is ChatTimelineItem.Message -> ChatMessageBubble(message = item.message)
+          is ChatTimelineItem.Message ->
+            ChatMessageBubble(
+              message = item.message,
+              onReplyMessage = onReplyMessage,
+            )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
               item = item.item,

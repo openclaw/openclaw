@@ -32,6 +32,20 @@ func chatReaderHasNewerContent(
     return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
 }
 
+/// The view's own one-shot positioning always runs in a nil-animation transaction, so
+/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
+/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
+    switch phase {
+    case .interacting, .animating:
+        true
+    case .idle, .tracking, .decelerating:
+        false
+    @unknown default:
+        false
+    }
+}
+
 @MainActor
 public struct OpenClawChatView: View {
     public enum Style {
@@ -252,7 +266,7 @@ public struct OpenClawChatView: View {
             }
             .onScrollPhaseChange { _, phase in
                 guard self.hasPerformedInitialScroll else { return }
-                if phase == .interacting {
+                if chatReaderScrollReleasesFollow(phase) {
                     self.isUserScrolling = true
                     self.followTarget = nil
                 } else if phase == .idle, self.isUserScrolling {

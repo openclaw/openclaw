@@ -1264,6 +1264,18 @@ describe("doctor health contributions", () => {
     expect(mocks.collectHeartbeatTemplateHealthFindings).toHaveBeenCalledWith(ctx.cfg);
   });
 
+  it("exposes the Skill Workshop tool-policy check to doctor lint", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/skill-workshop-tool-policy",
+    );
+
+    expect(check).toMatchObject({
+      id: "core/doctor/skill-workshop-tool-policy",
+      kind: "core",
+    });
+  });
+
   it("preserves allow-exec Gateway SecretRef resolution in auth health", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
     const ctx = {

@@ -1,6 +1,7 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
@@ -120,6 +121,7 @@ function stopMaintenanceTimers(timers: {
 describe("startGatewayMaintenanceTimers", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -148,6 +150,23 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
 
+    stopMaintenanceTimers(timers);
+  });
+
+  it("passes owner activity to default managed worktree cleanup", async () => {
+    vi.useFakeTimers();
+    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+    });
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const { runWorktreeGc: _runWorktreeGc, ...deps } = createMaintenanceTimerDeps();
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await Promise.resolve();
+
+    expect(gc).toHaveBeenCalledWith({ isOwnerActive: expect.any(Function) });
     stopMaintenanceTimers(timers);
   });
 

@@ -36,7 +36,7 @@ export type AgentToolSection = {
   tools: AgentToolEntry[];
 };
 
-export const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
+const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
   {
     id: "fs",
     label: "Files",

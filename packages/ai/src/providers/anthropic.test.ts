@@ -149,6 +149,37 @@ describe("Anthropic provider", () => {
     expect(config.authToken).toBeNull();
   });
 
+  it("puts Claude subscription billing identity first for OAuth requests", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-ant-oat01-test-token",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect((capturedPayload as { system?: unknown }).system).toEqual([
+      {
+        type: "text",
+        text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+      },
+      {
+        type: "text",
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
+  });
+
   it("keeps aggregate cache billing buckets out of the context total", async () => {
     const client = {
       messages: {

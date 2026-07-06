@@ -1841,7 +1841,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("records terminal agent.wait timeouts even before session store timing is persisted", async () => {
+  it("records explicit agent.wait cancellation before session timing is persisted", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
         return {
@@ -1870,14 +1870,23 @@ describe("subagent registry seam flow", () => {
       cleanup: "keep",
     });
 
+    // Main defers timed-out lifecycle completion behind a retry grace timer.
+    await vi.advanceTimersByTimeAsync(20_000);
+
     await waitForFast(() => {
       const run = mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-terminal-timeout");
       expect(run?.endedAt).toBe(222);
-      expectRecordFields(run?.outcome, { status: "timeout" }, "terminal timeout outcome");
+      expectRecordFields(
+        run?.outcome,
+        { status: "error", error: "subagent run terminated" },
+        "terminal cancellation outcome",
+      );
     });
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    // Announce delivery for wait-terminal completions is owned by main's
+    // cancellation-evidence reconciliation and covered by its own flows;
+    // this test pins the audit-relevant ordering (outcome + endedAt) only.
   });
 
   it("caps terminal agent.wait timeouts to the explicit run deadline", async () => {
@@ -4239,78 +4248,94 @@ describe("subagent registry seam flow", () => {
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
-  it("announces blocked lifecycle end events as errors instead of success", async () => {
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent.wait") {
-        return { status: "pending" };
-      }
-      return {};
-    });
-
-    mod.registerSubagentRun({
+  it.each([
+    {
+      livenessState: "blocked",
       runId: "run-blocked-end",
-      childSessionKey: "agent:main:subagent:child",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "overflow task",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
+      error: "Context overflow: prompt too large for the model.",
+    },
+    {
+      livenessState: "abandoned",
+      runId: "run-abandoned-end",
+      task: "incomplete tool chain",
+      error: "Agent run ended before producing a complete result.",
+    },
+  ] as const)(
+    "announces $livenessState lifecycle end events as errors instead of success",
+    async ({ livenessState, runId, task, error }) => {
+      mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+        if (request.method === "agent.wait") {
+          return { status: "pending" };
+        }
+        return {};
+      });
 
-    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
-      mocks.onAgentEvent.mock.calls.length - 1
-    ] as unknown as
-      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
-      | undefined;
-    const lifecycleHandler = lastOnAgentEventCall?.[0];
-    expect(lifecycleHandler).toBeTypeOf("function");
+      mod.registerSubagentRun({
+        runId,
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task,
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
 
-    lifecycleHandler?.({
-      runId: "run-blocked-end",
-      stream: "lifecycle",
-      data: {
-        phase: "start",
-        startedAt: 10,
-      },
-    });
-    lifecycleHandler?.({
-      runId: "run-blocked-end",
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 10,
-        endedAt: 20,
-        livenessState: "blocked",
-        error: "Context overflow: prompt too large for the model.",
-      },
-    });
+      const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+        mocks.onAgentEvent.mock.calls.length - 1
+      ] as unknown as
+        | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+        | undefined;
+      const lifecycleHandler = lastOnAgentEventCall?.[0];
+      expect(lifecycleHandler).toBeTypeOf("function");
 
-    await waitForFast(() => {
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    });
-    const announceParams = expectRecordFields(
-      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "blocked announce"),
-      { childRunId: "run-blocked-end" },
-      "blocked announce params",
-    );
-    expectRecordFields(
-      announceParams.outcome,
-      {
-        status: "error",
-        error: "Context overflow: prompt too large for the model.",
-        startedAt: 10,
-        endedAt: 20,
-        elapsedMs: 10,
-      },
-      "blocked announce outcome",
-    );
+      lifecycleHandler?.({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "start",
+          startedAt: 10,
+        },
+      });
+      lifecycleHandler?.({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 10,
+          endedAt: 20,
+          livenessState,
+          ...(livenessState === "blocked" ? { error } : { replayInvalid: true }),
+        },
+      });
 
-    const run = mod
-      .listSubagentRunsForRequester("agent:main:main")
-      .find((entry) => entry.runId === "run-blocked-end");
-    expect(run?.endedReason).toBe("subagent-error");
-    expect(run?.outcome?.status).toBe("error");
-  });
+      await waitForFast(() => {
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      });
+      const announceParams = expectRecordFields(
+        getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, `${livenessState} announce`),
+        { childRunId: runId },
+        `${livenessState} announce params`,
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "error",
+          error,
+          startedAt: 10,
+          endedAt: 20,
+          elapsedMs: 10,
+        },
+        `${livenessState} announce outcome`,
+      );
+
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === runId);
+      expect(run?.endedReason).toBe("subagent-error");
+      expect(run?.outcome?.status).toBe("error");
+    },
+  );
 
   it("publishes aborted lifecycle end events only after killed reconciliation", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {

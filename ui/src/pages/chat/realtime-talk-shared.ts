@@ -78,7 +78,7 @@ export type RealtimeTalkGatewayRelaySessionResult = {
   consultFastMode?: boolean;
 };
 
-export type RealtimeTalkManagedRoomSessionResult = {
+type RealtimeTalkManagedRoomSessionResult = {
   provider: string;
   transport: "managed-room";
   roomUrl: string;

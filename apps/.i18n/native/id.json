@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.d55616e142c8be0f",
+      "source": "Off",
+      "translated": "Mati"
+    },
+    {
+      "id": "native.android.f59b83f58086eb89",
+      "source": "Default",
+      "translated": "Default"
+    },
+    {
       "id": "native.android.805d35da3b3c9d18",
       "source": "Ready",
       "translated": "Siap"
@@ -1459,11 +1469,6 @@
       "translated": "Belum diberikan"
     },
     {
-      "id": "native.android.561d07951dc36959",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.3b7e036da1b10671",
       "source": "Back",
       "translated": "Kembali"
@@ -1674,11 +1679,6 @@
       "translated": "Cron Jobs"
     },
     {
-      "id": "native.android.4a583b7a36684ed7",
-      "source": "Enabled",
-      "translated": "Diaktifkan"
-    },
-    {
       "id": "native.android.b043fde2bb211935",
       "source": "Android shows scheduled work status. Create and edit schedules from the desktop app.",
       "translated": "Android menampilkan status pekerjaan terjadwal. Buat dan edit jadwal dari aplikasi desktop."
@@ -1697,6 +1697,21 @@
       "id": "native.android.fe85be29a00c5e58",
       "source": "Create recurring OpenClaw work from the desktop app.",
       "translated": "Buat pekerjaan OpenClaw berulang dari aplikasi desktop."
+    },
+    {
+      "id": "native.android.e3a6337e3c28d3f5",
+      "source": "Connect the gateway to inspect cron jobs.",
+      "translated": "Hubungkan gateway untuk memeriksa cron job."
+    },
+    {
+      "id": "native.android.2d3daa5032913461",
+      "source": "Cron job not loaded.",
+      "translated": "Cron job tidak dimuat."
+    },
+    {
+      "id": "native.android.401993832e04f790",
+      "source": "Loading cron job…",
+      "translated": "Memuat cron job…"
     },
     {
       "id": "native.android.6da97c8c6e1a3d3a",
@@ -2174,6 +2189,41 @@
       "translated": "Masalah"
     },
     {
+      "id": "native.android.4a583b7a36684ed7",
+      "source": "Enabled",
+      "translated": "Diaktifkan"
+    },
+    {
+      "id": "native.android.1a3b13c02f53120f",
+      "source": "No",
+      "translated": "Tidak"
+    },
+    {
+      "id": "native.android.9f6111d68ea1c273",
+      "source": "Yes",
+      "translated": "Ya"
+    },
+    {
+      "id": "native.android.4fcad8b85203f5a8",
+      "source": "Last Error",
+      "translated": "Kesalahan Terakhir"
+    },
+    {
+      "id": "native.android.369f2775636e8fd4",
+      "source": "Delivery Error",
+      "translated": "Kesalahan Pengiriman"
+    },
+    {
+      "id": "native.android.d02323bcac09c67f",
+      "source": "Tap to copy",
+      "translated": "Ketuk untuk menyalin"
+    },
+    {
+      "id": "native.android.09641868d42a68fb",
+      "source": "$title copied",
+      "translated": "$title disalin"
+    },
+    {
       "id": "native.android.727e7f203b075b43",
       "source": "Default assistant",
       "translated": "Asisten default"
@@ -2212,6 +2262,26 @@
       "id": "native.android.35d4bc86e9ba395d",
       "source": "Off",
       "translated": "Nonaktif"
+    },
+    {
+      "id": "native.android.22f3549d0fab271d",
+      "source": "System Event Text",
+      "translated": "Teks Peristiwa Sistem"
+    },
+    {
+      "id": "native.android.35e7850777bd6c6a",
+      "source": "Agent Prompt",
+      "translated": "Prompt Agen"
+    },
+    {
+      "id": "native.android.c49027320aa3f807",
+      "source": "Command",
+      "translated": "Perintah"
+    },
+    {
+      "id": "native.android.f36439e78187c554",
+      "source": "Payload Text",
+      "translated": "Teks Payload"
     },
     {
       "id": "native.android.46ba30c035d8f9b3",
@@ -3274,6 +3344,11 @@
       "translated": "Chat baru"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "Lebih banyak opsi chat baru"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Segarkan chat"
@@ -3459,11 +3534,6 @@
       "translated": "Tidak ada yang perlu Anda perhatikan"
     },
     {
-      "id": "native.android.75e509075f59deaa",
-      "source": "Needs attention",
-      "translated": "Perlu perhatian"
-    },
-    {
       "id": "native.android.c5e56f0e8af094fb",
       "source": "Speaking · waiting for reply",
       "translated": "Berbicara · menunggu balasan"
@@ -3582,6 +3652,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "Batal"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "Chat baru di worktree"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4567,6 +4642,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Membuka Pengaturan / Gateway"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "Chat Baru"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Chat Baru di Worktree"
     },
     {
       "id": "native.apple.ced228bb4d20a726",
@@ -6099,7 +6184,7 @@
       "translated": "Speakerphone"
     },
     {
-      "id": "native.apple.e1383011b9ccc3a3",
+      "id": "native.apple.1604352fea16d495",
       "source": "Wake Words",
       "translated": "Kata Bangun"
     },
@@ -6174,7 +6259,7 @@
       "translated": "Status Layar Debug"
     },
     {
-      "id": "native.apple.2bb13c2d7465f99e",
+      "id": "native.apple.8584babe715b1133",
       "source": "Discovery Logs",
       "translated": "Log Penemuan"
     },
@@ -12622,6 +12707,31 @@
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "Model"
+    },
+    {
+      "id": "native.apple.745b004e0b5b6b80",
+      "source": "Pinned",
+      "translated": "Disematkan"
+    },
+    {
+      "id": "native.apple.69381a0a462ccd84",
+      "source": "Recent",
+      "translated": "Terbaru"
+    },
+    {
+      "id": "native.apple.aa321cf4820426ef",
+      "source": "Models",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.75550b03f06d6abc",
+      "source": "Pin model",
+      "translated": "Sematkan model"
+    },
+    {
+      "id": "native.apple.af4df27bdbacb5de",
+      "source": "Unpin model",
+      "translated": "Lepas sematan model"
     },
     {
       "id": "native.apple.5dfc0700d8dff8de",

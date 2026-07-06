@@ -2252,19 +2252,24 @@ describe("DiscordVoiceManager", () => {
 
   it("uses agent-proxy realtime voice by default", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "agent proxy answer" }] });
-    const manager = createManager({
-      groupPolicy: "open",
-      voice: {
-        enabled: true,
-        model: "openai/gpt-5.5",
-        realtime: {
-          provider: "openai",
-          model: "gpt-realtime-2",
-          speakerVoice: "cedar",
-          debounceMs: 1,
+    const cfg = { auth: { order: { openai: ["openai:codex-cli"] } } } as never;
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          model: "openai/gpt-5.5",
+          realtime: {
+            provider: "openai",
+            model: "gpt-realtime-2",
+            speakerVoice: "cedar",
+            debounceMs: 1,
+          },
         },
       },
-    });
+      undefined,
+      cfg,
+    );
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 
@@ -2301,6 +2306,7 @@ describe("DiscordVoiceManager", () => {
       | {
           audioSink?: { sendAudio: (audio: Buffer) => void };
           autoRespondToAudio?: boolean;
+          cfg?: unknown;
           instructions?: string;
           tools?: Array<{ name: string }>;
           onToolCall?: (
@@ -2314,6 +2320,7 @@ describe("DiscordVoiceManager", () => {
           ) => void;
         }
       | undefined;
+    expect(bridgeParams?.cfg).toBe(cfg);
     expect(bridgeParams?.autoRespondToAudio).toBe(false);
     expect(bridgeParams?.instructions).toContain("same OpenClaw agent");
     expect(bridgeParams?.instructions).toContain("short natural backchannel");

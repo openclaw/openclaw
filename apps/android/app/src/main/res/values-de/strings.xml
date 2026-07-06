@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Diesem Gateway vertrauen?</string>
     <string name="trust_and_continue">Vertrauen und fortfahren</string>
     <string name="cancel">Abbrechen</string>
+    <string name="new_chat_in_worktree">Neuer Chat im Worktree</string>
     <string name="endpoint">Endpunkt</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Ihr Gateway ist aktiv und bereit.</string>

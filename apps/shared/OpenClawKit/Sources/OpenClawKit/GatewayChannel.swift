@@ -236,20 +236,6 @@ private struct SelectedConnectAuth {
     let suppressedDeviceTokenRetry: Bool
 }
 
-private enum GatewayConnectErrorCodes {
-    static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
-    static let authDeviceTokenMismatch = GatewayConnectAuthDetailCode.authDeviceTokenMismatch.rawValue
-    static let authTokenMissing = GatewayConnectAuthDetailCode.authTokenMissing.rawValue
-    static let authTokenNotConfigured = GatewayConnectAuthDetailCode.authTokenNotConfigured.rawValue
-    static let authPasswordMissing = GatewayConnectAuthDetailCode.authPasswordMissing.rawValue
-    static let authPasswordMismatch = GatewayConnectAuthDetailCode.authPasswordMismatch.rawValue
-    static let authPasswordNotConfigured = GatewayConnectAuthDetailCode.authPasswordNotConfigured.rawValue
-    static let authRateLimited = GatewayConnectAuthDetailCode.authRateLimited.rawValue
-    static let pairingRequired = GatewayConnectAuthDetailCode.pairingRequired.rawValue
-    static let controlUiDeviceIdentityRequired = GatewayConnectAuthDetailCode.controlUiDeviceIdentityRequired.rawValue
-    static let deviceIdentityRequired = GatewayConnectAuthDetailCode.deviceIdentityRequired.rawValue
-}
-
 public actor GatewayChannelActor {
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)

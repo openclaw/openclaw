@@ -147,6 +147,8 @@ export type TelegramNetworkErrorContext =
   | "webhook"
   | "delete"
   | "react"
+  | "edit"
+  | "action"
   | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;

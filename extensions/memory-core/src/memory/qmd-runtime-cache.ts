@@ -113,10 +113,10 @@ function buildCollectionConfigHash(collections: readonly QmdRuntimeManagedCollec
   return hashText(normalized);
 }
 
-function buildCollectionValidationCacheContextInput(
-  params: QmdRuntimeCollectionValidationCacheContext,
-): string {
-  return JSON.stringify({
+function buildRuntimeCacheContextRecord(
+  params: QmdRuntimeCacheContextBase & { sources: readonly string[] },
+) {
+  return {
     agentId: normalizeText(params.agentId),
     commandHash: hashText(normalizeText(params.qmdCommand)),
     environmentHash: normalizeText(params.qmdEnvironmentHash ?? ""),
@@ -124,6 +124,14 @@ function buildCollectionValidationCacheContextInput(
     qmdVersion: normalizeText(params.qmdVersion ?? ""),
     searchMode: params.searchMode,
     sourceSet: sortedUnique(params.sources),
+  };
+}
+
+function buildCollectionValidationCacheContextInput(
+  params: QmdRuntimeCollectionValidationCacheContext,
+): string {
+  return JSON.stringify({
+    ...buildRuntimeCacheContextRecord(params),
     collectionConfigHash: buildCollectionConfigHash(params.collections),
   });
 }
@@ -131,39 +139,19 @@ function buildCollectionValidationCacheContextInput(
 function buildMultiCollectionProbeCacheContextInput(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
 ): string {
-  return JSON.stringify({
-    agentId: normalizeText(params.agentId),
-    commandHash: hashText(normalizeText(params.qmdCommand)),
-    environmentHash: normalizeText(params.qmdEnvironmentHash ?? ""),
-    indexPathHash: normalizePathIdentity(params.qmdIndexPath),
-    qmdVersion: normalizeText(params.qmdVersion ?? ""),
-    searchMode: params.searchMode,
-    sourceSet: sortedUnique(params.sources),
-  });
-}
-
-function buildCollectionValidationCacheHash(
-  params: QmdRuntimeCollectionValidationCacheContext,
-): string {
-  return hashText(buildCollectionValidationCacheContextInput(params));
-}
-
-function buildMultiCollectionProbeCacheHash(
-  params: QmdRuntimeMultiCollectionProbeCacheContext,
-): string {
-  return hashText(buildMultiCollectionProbeCacheContextInput(params));
+  return JSON.stringify(buildRuntimeCacheContextRecord(params));
 }
 
 export function buildQmdCollectionValidationCacheContextHash(
   params: QmdRuntimeCollectionValidationCacheContext,
 ): string {
-  return buildCollectionValidationCacheHash(params);
+  return hashText(buildCollectionValidationCacheContextInput(params));
 }
 
 export function buildQmdMultiCollectionProbeCacheContextHash(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
 ): string {
-  return buildMultiCollectionProbeCacheHash(params);
+  return hashText(buildMultiCollectionProbeCacheContextInput(params));
 }
 
 function collectionValidationStore(): PluginStateKeyedStore<QmdRuntimeCacheCollectionValidationEntry> {
@@ -183,14 +171,14 @@ function multiCollectionProbeStore(): PluginStateKeyedStore<QmdRuntimeCacheMulti
 function collectionValidationEntryKey(params: QmdRuntimeCollectionValidationCacheContext): string {
   return memoryCoreWorkspaceEntryKey(
     params.workspaceDir,
-    `qmd-runtime-cache.collection-validation:${buildCollectionValidationCacheHash(params)}`,
+    `qmd-runtime-cache.collection-validation:${buildQmdCollectionValidationCacheContextHash(params)}`,
   );
 }
 
 function multiCollectionProbeEntryKey(params: QmdRuntimeMultiCollectionProbeCacheContext): string {
   return memoryCoreWorkspaceEntryKey(
     params.workspaceDir,
-    `qmd-runtime-cache.multi-collection-probe:${buildMultiCollectionProbeCacheHash(params)}`,
+    `qmd-runtime-cache.multi-collection-probe:${buildQmdMultiCollectionProbeCacheContextHash(params)}`,
   );
 }
 
@@ -317,7 +305,7 @@ export async function readQmdCollectionValidationCache(
   try {
     const store = collectionValidationStore();
     const key = collectionValidationEntryKey(params);
-    const expectedKeyHash = buildCollectionValidationCacheHash(params);
+    const expectedKeyHash = buildQmdCollectionValidationCacheContextHash(params);
     const raw = await store.lookup(key);
     if (!raw) {
       return { state: "miss" };
@@ -335,7 +323,7 @@ export async function writeQmdCollectionValidationCache(
 ): Promise<boolean> {
   try {
     const key = collectionValidationEntryKey(params);
-    const keyHash = buildCollectionValidationCacheHash(params);
+    const keyHash = buildQmdCollectionValidationCacheContextHash(params);
     const collectionConfigHash = buildCollectionConfigHash(params.collections);
     const createdAtMs = Math.max(0, Math.floor(nowMs));
     const ttlMs = QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS;
@@ -379,7 +367,7 @@ export async function readQmdMultiCollectionProbeCache(
   try {
     const store = multiCollectionProbeStore();
     const key = multiCollectionProbeEntryKey(params);
-    const expectedKeyHash = buildMultiCollectionProbeCacheHash(params);
+    const expectedKeyHash = buildQmdMultiCollectionProbeCacheContextHash(params);
     const raw = await store.lookup(key);
     if (!raw) {
       return { state: "miss" };
@@ -398,7 +386,7 @@ export async function writeQmdMultiCollectionProbeCache(
 ): Promise<boolean> {
   try {
     const key = multiCollectionProbeEntryKey(params);
-    const keyHash = buildMultiCollectionProbeCacheHash(params);
+    const keyHash = buildQmdMultiCollectionProbeCacheContextHash(params);
     const createdAtMs = Math.max(0, Math.floor(nowMs));
     const ttlMs = QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS;
     const store = multiCollectionProbeStore();
