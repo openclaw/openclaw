@@ -2,10 +2,11 @@ import Foundation
 import Markdown
 
 /// One renderable block of a chat message. Prose stays on the
-/// AttributedString pipeline; fenced code and GFM tables get dedicated views.
+/// AttributedString pipeline; fenced code, display math, and GFM tables get dedicated views.
 enum ChatMarkdownBlock: Equatable {
     case prose(String)
     case code(ChatCodeBlock)
+    case math(ChatMathBlock)
     case table(ChatMarkdownTable)
 }
 
@@ -14,6 +15,12 @@ struct ChatCodeBlock: Equatable {
     let code: String
     /// True when the fence was closed or the message finished streaming.
     /// Open fences render as plain mono text so every streaming delta stays cheap.
+    let isComplete: Bool
+}
+
+struct ChatMathBlock: Equatable {
+    let latex: String
+    /// True when the delimiter was closed or the message finished streaming.
     let isComplete: Bool
 }
 
@@ -50,45 +57,45 @@ enum ChatMarkdownBlockSyntax {
 }
 
 enum ChatMarkdownBlockSegmenter {
+    static let maxMathBytes = 5000
     static let maxTableBytes = 20000
     static let maxTableRows = 100
     static let maxTableColumns = 12
     static let maxTableCells = 600
 
-    /// Extracts only top-level fenced code and GFM tables. The parser owns
+    /// Extracts only top-level fenced code, display math, and GFM tables. The parser owns
     /// CommonMark container and reference semantics; nested blocks stay in the
     /// surrounding prose range unchanged.
     static func segments(markdown: String, isComplete: Bool) -> [ChatMarkdownBlock] {
         let source = SourceBuffer(markdown)
         let document = Document(parsing: source.markdown)
-        var blocks: [ChatMarkdownBlock] = []
-        var proseStart = 0
-
-        func appendProse(until end: Int) {
-            guard proseStart < end else { return }
-            blocks.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])))
-        }
+        let mathResult = self.mathExtractions(
+            source: source,
+            document: document,
+            isComplete: isComplete)
+        var extractions = mathResult.extractions
 
         for child in document.children {
-            guard let lineRange = source.lineRange(for: child.range), lineRange.lowerBound >= proseStart else {
+            guard let lineRange = source.lineRange(for: child.range) else { continue }
+            if mathResult.protectedRanges.contains(where: { $0.contains(lineRange.lowerBound) }) {
                 continue
             }
 
             if let code = child as? Markdown.CodeBlock,
                let opener = FenceOpener.parse(source.lines[lineRange.lowerBound])
             {
-                appendProse(until: lineRange.lowerBound)
                 let language = code.language?
                     .split(whereSeparator: \.isWhitespace)
                     .first
                     .map { $0.lowercased() }
                 let closed = lineRange.count > 1
                     && opener.isClose(source.lines[lineRange.index(before: lineRange.endIndex)])
-                blocks.append(.code(ChatCodeBlock(
-                    language: language,
-                    code: self.dropStructuralCodeNewline(code.code),
-                    isComplete: closed || isComplete)))
-                proseStart = lineRange.upperBound
+                extractions.append(Extraction(
+                    lineRange: lineRange,
+                    block: .code(ChatCodeBlock(
+                        language: language,
+                        code: self.dropStructuralCodeNewline(code.code),
+                        isComplete: closed || isComplete))))
                 continue
             }
 
@@ -105,10 +112,29 @@ enum ChatMarkdownBlockSegmenter {
                 {
                     continue
                 }
-                appendProse(until: tableRange.lowerBound)
-                blocks.append(.table(rendered))
-                proseStart = tableRange.upperBound
+                extractions.append(Extraction(lineRange: tableRange, block: .table(rendered)))
             }
+        }
+
+        extractions.sort { left, right in
+            if left.lineRange.lowerBound != right.lineRange.lowerBound {
+                return left.lineRange.lowerBound < right.lineRange.lowerBound
+            }
+            return left.lineRange.upperBound > right.lineRange.upperBound
+        }
+
+        var blocks: [ChatMarkdownBlock] = []
+        var proseStart = 0
+
+        func appendProse(until end: Int) {
+            guard proseStart < end else { return }
+            blocks.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])))
+        }
+
+        for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
+            appendProse(until: extraction.lineRange.lowerBound)
+            blocks.append(extraction.block)
+            proseStart = extraction.lineRange.upperBound
         }
 
         appendProse(until: source.lines.count)
@@ -116,6 +142,89 @@ enum ChatMarkdownBlockSegmenter {
             return self.proseOnly(source.lines)
         }
         return blocks
+    }
+
+    private static func mathExtractions(
+        source: SourceBuffer,
+        document: Document,
+        isComplete: Bool) -> MathExtractionResult
+    {
+        guard source.markdown.contains("$$") || source.markdown.contains(#"\["#) else {
+            return MathExtractionResult(extractions: [], protectedRanges: [])
+        }
+        var topLevelParagraphLines = Set<Int>()
+        var inlineCodeLines = Set<Int>()
+        func collectInlineCodeLines(from markup: any Markup) {
+            if markup is Markdown.InlineCode, let lineRange = source.lineRange(for: markup.range) {
+                inlineCodeLines.formUnion(lineRange)
+            }
+            for child in markup.children {
+                collectInlineCodeLines(from: child)
+            }
+        }
+        for child in document.children where child is Markdown.Paragraph {
+            if let lineRange = source.lineRange(for: child.range) {
+                topLevelParagraphLines.formUnion(lineRange)
+            }
+            collectInlineCodeLines(from: child)
+        }
+        var extractions: [Extraction] = []
+        var protectedRanges: [Range<Int>] = []
+        var lineIndex = 0
+
+        while lineIndex < source.lines.count {
+            guard topLevelParagraphLines.contains(lineIndex),
+                  !inlineCodeLines.contains(lineIndex),
+                  let opener = MathDelimiter.parse(source.lines[lineIndex])
+            else {
+                lineIndex += 1
+                continue
+            }
+
+            if let sameLineLatex = opener.sameLineLatex {
+                let lineRange = lineIndex..<(lineIndex + 1)
+                if sameLineLatex.utf8.count <= self.maxMathBytes {
+                    extractions.append(Extraction(
+                        lineRange: lineRange,
+                        block: .math(ChatMathBlock(latex: sameLineLatex, isComplete: true))))
+                } else {
+                    protectedRanges.append(lineRange)
+                }
+                lineIndex += 1
+                continue
+            }
+
+            let contentStart = lineIndex + 1
+            var closeIndex = contentStart
+            while closeIndex < source.lines.count,
+                  !opener.isClose(source.lines[closeIndex])
+            {
+                closeIndex += 1
+            }
+
+            let closed = closeIndex < source.lines.count
+            guard closed || isComplete else {
+                // The first unmatched opener owns the remaining stream. Stop
+                // here so later opener-looking lines do not trigger rescans.
+                protectedRanges.append(lineIndex..<source.lines.count)
+                return MathExtractionResult(extractions: extractions, protectedRanges: protectedRanges)
+            }
+
+            let contentEnd = closed ? closeIndex : source.lines.count
+            let lineRange = lineIndex..<(closed ? closeIndex + 1 : source.lines.count)
+            let latex = source.lines[contentStart..<contentEnd]
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if latex.utf8.count <= self.maxMathBytes {
+                extractions.append(Extraction(
+                    lineRange: lineRange,
+                    block: .math(ChatMathBlock(latex: latex, isComplete: closed || isComplete))))
+            } else {
+                protectedRanges.append(lineRange)
+            }
+            lineIndex = lineRange.upperBound
+        }
+        return MathExtractionResult(extractions: extractions, protectedRanges: protectedRanges)
     }
 
     private static func proseOnly(_ lines: [String]) -> [ChatMarkdownBlock] {
@@ -148,6 +257,52 @@ enum ChatMarkdownBlockSegmenter {
 
     private static func dropStructuralCodeNewline(_ code: String) -> String {
         code.hasSuffix("\n") ? String(code.dropLast()) : code
+    }
+
+    private struct Extraction {
+        let lineRange: Range<Int>
+        let block: ChatMarkdownBlock
+    }
+
+    private struct MathExtractionResult {
+        let extractions: [Extraction]
+        /// Rejected math stays prose and owns any block-looking syntax inside its span.
+        let protectedRanges: [Range<Int>]
+    }
+
+    private struct MathDelimiter {
+        let close: String
+        let sameLineLatex: String?
+
+        static func parse(_ line: String) -> MathDelimiter? {
+            let (indent, afterIndent) = FenceOpener.leadingSpaces(of: line)
+            guard indent <= 3, afterIndent < line.endIndex else { return nil }
+            let suffix = line[afterIndent...]
+            let pair: (open: String, close: String)
+            if suffix.hasPrefix("$$") {
+                pair = ("$$", "$$")
+            } else if suffix.hasPrefix(#"\["#) {
+                pair = (#"\["#, #"\]"#)
+            } else {
+                return nil
+            }
+
+            let contentStart = suffix.index(suffix.startIndex, offsetBy: pair.open.count)
+            let remainder = suffix[contentStart...]
+            if remainder.trimmingCharacters(in: .whitespaces).isEmpty {
+                return MathDelimiter(close: pair.close, sameLineLatex: nil)
+            }
+            guard let closeRange = remainder.range(of: pair.close, options: .backwards),
+                  remainder[closeRange.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty
+            else { return nil }
+            let latex = remainder[..<closeRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return MathDelimiter(close: pair.close, sameLineLatex: latex)
+        }
+
+        func isClose(_ line: String) -> Bool {
+            line.trimmingCharacters(in: .whitespaces) == self.close
+        }
     }
 
     private static func table(
@@ -324,7 +479,7 @@ enum ChatMarkdownBlockSegmenter {
             return count >= self.count && line[cursor...].allSatisfy(\.isWhitespace)
         }
 
-        private static func leadingSpaces(of line: String) -> (count: Int, end: String.Index) {
+        fileprivate static func leadingSpaces(of line: String) -> (count: Int, end: String.Index) {
             var count = 0
             var cursor = line.startIndex
             while cursor < line.endIndex, line[cursor] == " " {

@@ -3729,6 +3729,13 @@ function createVitestArgs(params) {
   ];
 }
 
+export function createVitestPreflightPnpmArgs(config) {
+  if (config !== UI_E2E_VITEST_CONFIG) {
+    return null;
+  }
+  return ["exec", "node", "scripts/ensure-playwright-chromium.mjs"];
+}
+
 export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
@@ -4254,6 +4261,7 @@ export function createVitestRunSpecs(args, params = {}) {
       includeFilePath,
       includePatterns: plan.includePatterns,
       pnpmArgs: createVitestArgs(plan),
+      preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };
   });

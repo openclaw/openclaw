@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Lita på denna gateway?</string>
     <string name="trust_and_continue">Lita på och fortsätt</string>
     <string name="cancel">Avbryt</string>
+    <string name="new_chat_in_worktree">Ny chatt i worktree</string>
     <string name="endpoint">Slutpunkt</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Din gateway är aktiv och redo.</string>

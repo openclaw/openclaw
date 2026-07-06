@@ -36,11 +36,13 @@ describe("navigationIconForRoute", () => {
       overview: "barChart",
       activity: "activity",
       workboard: "folder",
+      worktrees: "folder",
       channels: "link",
       instances: "radio",
       sessions: "fileText",
       usage: "barChart",
       cron: "loader",
+      tasks: "loader",
       agents: "folder",
       skills: "zap",
       "skill-workshop": "wrench",
@@ -74,11 +76,13 @@ describe("titleForRoute", () => {
       overview: "Overview",
       activity: "Activity",
       workboard: "Workboard",
+      worktrees: "Worktrees",
       channels: "Channels",
       instances: "Instances",
       sessions: "Sessions",
       usage: "Usage",
       cron: "Cron Jobs",
+      tasks: "Tasks",
       agents: "Agents",
       skills: "Skills",
       "skill-workshop": "Skill Workshop",
@@ -106,11 +110,13 @@ describe("subtitleForRoute", () => {
       overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
       workboard: "Agent work queue and session handoff.",
+      worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       instances: "Connected clients and nodes.",
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Wakeups and recurring runs.",
+      tasks: "Background tasks: subagents, cron runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
@@ -171,6 +177,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("worktrees")).toBe("/worktrees");
   });
 
   it("prepends base path", () => {
@@ -184,6 +191,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");

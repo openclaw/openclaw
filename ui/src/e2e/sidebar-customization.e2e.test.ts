@@ -98,15 +98,19 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
       const overviewItem = menu.getByRole("menuitemcheckbox", { name: "Overview" });
       await expect.poll(() => overviewItem.getAttribute("aria-checked")).toBe("true");
+      const worktreesItem = menu.getByRole("menuitemcheckbox", { name: "Worktrees" });
+      await expect.poll(() => worktreesItem.getAttribute("aria-checked")).toBe("false");
       await expect
         .poll(() => overviewItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
+      await worktreesItem.click();
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview", "Worktrees"]);
       await overviewItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Worktrees"]);
       await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Worktrees"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>

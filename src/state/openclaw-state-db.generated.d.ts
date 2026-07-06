@@ -80,6 +80,26 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
+export interface AuditEvents {
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string;
+  error_code: string | null;
+  event_id: string;
+  kind: string;
+  occurred_at: number;
+  run_id: string;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string | null;
+  source_id: string;
+  source_sequence: number;
+  status: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+}
+
 export interface AuthProfileState {
   state_json: string;
   store_key: string;
@@ -494,6 +514,16 @@ export interface FlowRuns {
   sync_mode: Generated<string>;
   updated_at: number;
   wait_json: string | null;
+}
+
+export interface GatewayBootLifecycle {
+  boot_id: string;
+  completed_at_ms: number | null;
+  outcome: string | null;
+  pid: number;
+  reason: string | null;
+  started_at_ms: number;
+  startup_reason: string | null;
 }
 
 export interface GatewayRestartHandoff {
@@ -958,6 +988,21 @@ export interface WorkspaceSetupState {
   workspace_path: string;
 }
 
+export interface Worktrees {
+  base_ref: string;
+  branch: string;
+  created_at: number;
+  id: string;
+  last_active_at: number;
+  owner_id: string | null;
+  owner_kind: string;
+  path: string;
+  removed_at: number | null;
+  repo_fingerprint: string;
+  repo_root: string;
+  snapshot_ref: string | null;
+}
+
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
@@ -966,6 +1011,7 @@ export interface DB {
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registrations: ApnsRegistrations;
+  audit_events: AuditEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
@@ -991,6 +1037,7 @@ export interface DB {
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
+  gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
@@ -1024,4 +1071,5 @@ export interface DB {
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
   workspace_setup_state: WorkspaceSetupState;
+  worktrees: Worktrees;
 }

@@ -143,12 +143,12 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
 function resolveGoalCommandHint(status: SessionGoalStatus): string {
   switch (status) {
     case "active":
-      return "/goal pause, /goal complete, /goal clear";
+      return "/goal edit <objective>, /goal pause, /goal complete, /goal clear";
     case "paused":
     case "blocked":
     case "usage_limited":
     case "budget_limited":
-      return "/goal resume, /goal clear";
+      return "/goal resume, /goal edit <objective>, /goal clear";
     case "complete":
       return "/goal clear";
   }
@@ -278,6 +278,39 @@ export async function updateSessionGoalStatus(
         next.budgetLimitedAt = now;
       }
       updated = next;
+      return { goal: updated };
+    },
+  });
+  if (!result || !updated) {
+    throw new Error(foundSession ? "goal not found" : "session not found");
+  }
+  return cloneGoal(updated);
+}
+
+export async function updateSessionGoalObjective(
+  options: SessionGoalStoreOptions & { objective: string },
+): Promise<SessionGoal> {
+  const objective = options.objective.trim();
+  if (!objective) {
+    throw new Error("objective required");
+  }
+  const now = nowMs(options.now);
+  let updated: SessionGoal | undefined;
+  let foundSession = false;
+  const result = await patchSessionEntry({
+    sessionKey: options.sessionKey,
+    storePath: options.storePath,
+    update: (entry) => {
+      foundSession = true;
+      const accounted = accountGoalUsage(entry, now);
+      if (!accounted) {
+        throw new Error("goal not found");
+      }
+      if (TERMINAL_GOAL_STATUSES.has(accounted.status)) {
+        throw new Error(`goal is already ${accounted.status}`);
+      }
+      // Rewording keeps status and token accounting; only the target moves.
+      updated = { ...accounted, objective, updatedAt: now };
       return { goal: updated };
     },
   });

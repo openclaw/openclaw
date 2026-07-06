@@ -74,6 +74,10 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadAuditHandlers = lazyHandlerModule(
+  () => import("./server-methods/audit.js"),
+  (module) => module.auditHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -125,6 +129,10 @@ const loadDoctorHandlers = lazyHandlerModule(
 const loadEnvironmentsHandlers = lazyHandlerModule(
   () => import("./server-methods/environments.js"),
   (module) => module.environmentsHandlers,
+);
+const loadWorktreesHandlers = lazyHandlerModule(
+  () => import("./server-methods/worktrees.js"),
+  (module) => module.worktreesHandlers,
 );
 const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
@@ -399,6 +407,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "worktrees.list",
+      "worktrees.create",
+      "worktrees.remove",
+      "worktrees.restore",
+      "worktrees.gc",
+    ],
+    loadHandlers: loadWorktreesHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "exec.approvals.get",
       "exec.approvals.set",
       "exec.approvals.node.get",
@@ -467,6 +485,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.mode",
     ],
     loadHandlers: loadTalkHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["audit.list"],
+    loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],

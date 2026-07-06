@@ -105,6 +105,28 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun transcriptRoundTripDropsInternalRoleRows() =
+    runTest {
+      val store = cache()
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "main",
+        messages =
+          listOf(
+            message("hello", role = "user"),
+            message("private tool output", role = "toolResult"),
+            message("visible plugin notice", role = "custom"),
+            message("reply", role = "assistant"),
+          ),
+      )
+
+      val loaded = store.loadTranscript("gateway-a", "main")
+
+      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
+      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
+    }
+
+  @Test
   fun transcriptWriteKeepsOnlyNewestBoundedMessages() =
     runTest {
       val store = cache()

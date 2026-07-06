@@ -10,6 +10,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -1269,6 +1270,9 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.userTurnTranscriptRecorder
+          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+          : {}),
       },
     );
     if (steerOutcome.queued) {
@@ -1391,7 +1395,7 @@ export async function runReplyAgent(params: {
         try {
           await opts.onBlockReply(noticePayload);
         } catch (err) {
-          logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
+          logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
         }
       }
     : undefined;
@@ -1561,34 +1565,52 @@ export async function runReplyAgent(params: {
     });
     return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
   };
-  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  type SessionResetOptions = {
+    failureLabel: string;
+    buildLogMessage: (nextSessionId: string) => string;
+    cleanupTranscripts?: boolean;
+  };
+  const resetSession = async ({
+    failureLabel,
+    buildLogMessage,
+    cleanupTranscripts,
+  }: SessionResetOptions): Promise<boolean> =>
+    await resetReplyRunSession({
+      options: {
+        failureLabel,
+        buildLogMessage,
+        cleanupTranscripts,
+      },
+      sessionKey,
+      queueKey,
+      activeSessionEntry,
+      activeSessionStore,
+      storePath,
+      messageThreadId:
+        typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
+      followupRun,
+      onActiveSessionEntry: (nextEntry) => {
+        activeSessionEntry = nextEntry;
+      },
+      onNewSession: () => {
+        activeIsNewSession = true;
+      },
+    });
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "role ordering conflict",
+      buildLogMessage: (nextSessionId) =>
+        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+      cleanupTranscripts: true,
+    });
   let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
 
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
-
-    const visibleMemoryFlushErrorPayloads: ReplyPayload[] = [];
-    activeSessionEntry = await traceAgentPhase("reply.memory_flush", () =>
+    // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
+    // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
+    const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
         followupRun,
@@ -1606,54 +1628,66 @@ export async function runReplyAgent(params: {
         isHeartbeat,
         replyOperation,
         onVisibleErrorPayloads: (payloads) => {
-          visibleMemoryFlushErrorPayloads.push(...payloads);
+          logVerbose(
+            `memory flush produced ${payloads.length} visible maintenance error payload(s); continuing user reply`,
+          );
         },
       }),
     );
+    activeSessionEntry = memoryFlushResult.sessionEntry;
 
     if (replyOperation.result?.kind === "aborted") {
       throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
     }
 
-    if (visibleMemoryFlushErrorPayloads.length > 0) {
-      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-      const payloadResult = await buildReplyPayloads({
-        config: cfg,
-        payloads: visibleMemoryFlushErrorPayloads,
-        isHeartbeat,
-        didLogHeartbeatStrip: false,
-        silentExpected: true,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        messageProvider: followupRun.run.messageProvider,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingChatType: sessionCtx.ChatType,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
+    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    try {
+      activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+        runPreflightCompactionIfNeeded({
+          cfg,
+          followupRun,
+          promptForEstimate: followupRun.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          runtimePolicySessionKey,
+          storePath,
+          isHeartbeat,
+          replyOperation,
+          onCompactionNotice: sendDirectCompactionNotice,
         }),
-        originatingThreadId: replyRouteThreadId,
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
-      const replyPayloads = payloadResult.replyPayloads.map((payload) =>
-        markReplyPayloadForSourceSuppressionDelivery(payload),
       );
-      if (replyPayloads.length > 0) {
-        replyOperation.freezeAbort();
-        replyOperation.fail(
-          "run_failed",
-          new Error("memory flush produced visible error payloads"),
-        );
-        await signalTypingIfNeeded(replyPayloads, typingSignals);
-        return returnWithQueuedFollowupDrain(
-          replyPayloads.length === 1 ? replyPayloads[0] : replyPayloads,
-        );
+      preflightCompactionApplied =
+        (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
+    } catch (err) {
+      const canRotateAfterPreflightFailure =
+        memoryFlushResult.outcome === "exhausted" &&
+        !replyOperation.abortSignal.aborted &&
+        isLikelyContextOverflowError(String(err));
+      if (!canRotateAfterPreflightFailure) {
+        throw err;
       }
+      logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
+    }
+
+    if (memoryFlushResult.outcome === "exhausted" && !preflightCompactionApplied) {
+      await resetSession({
+        failureLabel: "memory flush exhaustion",
+        buildLogMessage: (nextSessionId) =>
+          `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
+        // Rotate only when compaction could not recover the bloated context.
+        cleanupTranscripts: false,
+      });
+      if (activeSessionEntry?.sessionId) {
+        replyOperation.updateSessionId(activeSessionEntry.sessionId);
+      }
+    }
+
+    // Exhausted background maintenance is non-terminal: optionally notify, then reply normally.
+    if (memoryFlushResult.outcome === "exhausted") {
+      await sendDirectCompactionNotice?.("memory_flush_degraded");
     }
 
     runFollowupTurn = createFollowupRunner({
@@ -1668,45 +1702,6 @@ export async function runReplyAgent(params: {
       agentCfgContextTokens,
       toolProgressDetail,
     });
-
-    type SessionResetOptions = {
-      failureLabel: string;
-      buildLogMessage: (nextSessionId: string) => string;
-      cleanupTranscripts?: boolean;
-    };
-    const resetSession = async ({
-      failureLabel,
-      buildLogMessage,
-      cleanupTranscripts,
-    }: SessionResetOptions): Promise<boolean> =>
-      await resetReplyRunSession({
-        options: {
-          failureLabel,
-          buildLogMessage,
-          cleanupTranscripts,
-        },
-        sessionKey,
-        queueKey,
-        activeSessionEntry,
-        activeSessionStore,
-        storePath,
-        messageThreadId:
-          typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
-        followupRun,
-        onActiveSessionEntry: (nextEntry) => {
-          activeSessionEntry = nextEntry;
-        },
-        onNewSession: () => {
-          activeIsNewSession = true;
-        },
-      });
-    const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-      resetSession({
-        failureLabel: "role ordering conflict",
-        buildLogMessage: (nextSessionId) =>
-          `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-        cleanupTranscripts: true,
-      });
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();

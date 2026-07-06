@@ -21,7 +21,10 @@ actor PortGuardian {
         let executablePath: String?
     }
 
-    private var records: [Record] = []
+    /// Tunnels spawned by THIS process. Disk (`port-guard.json`) holds the union
+    /// across app instances; entries there that we do not own are reap candidates,
+    /// never adopted — adopting them would resurrect records a sibling removed.
+    private var ownRecords: [Int32: Record] = [:]
     private let logger = Logger(subsystem: "ai.openclaw", category: "portguard")
     #if DEBUG
     private var testingDescriptors: [Int: Descriptor] = [:]
@@ -35,8 +38,8 @@ actor PortGuardian {
         self.appSupportDir.appendingPathComponent("port-guard.json", isDirectory: false)
     }
 
-    init() {
-        self.records = Self.loadRecords(from: Self.recordPath)
+    private nonisolated static var recordLockPath: URL {
+        self.appSupportDir.appendingPathComponent("port-guard.lock", isDirectory: false)
     }
 
     func sweep(mode: AppState.ConnectionMode) async {
@@ -48,60 +51,56 @@ actor PortGuardian {
             self.logger.info("port sweep skipped (mode=unconfigured)")
             return
         }
-        let ports = [GatewayEnvironment.gatewayPort()]
-        for port in ports {
-            let listeners = await self.listeners(on: port)
-            guard !listeners.isEmpty else { continue }
-            for listener in listeners {
-                if Self.isExpected(listener, port: port, mode: mode) {
-                    let message = """
-                    port \(port) already served by expected \(listener.command)
-                    (pid \(listener.pid)) — keeping
-                    """
-                    self.logger.info("\(message, privacy: .public)")
-                    continue
-                }
-                if mode == .remote {
-                    let message = """
-                    port \(port) held by \(listener.command)
-                    (pid \(listener.pid)) in remote mode — not killing
-                    """
-                    self.logger.warning(message)
-                    continue
-                }
-                let killed = await self.kill(listener.pid)
-                if killed {
-                    let message = """
-                    port \(port) was held by \(listener.command)
-                    (pid \(listener.pid)); terminated
-                    """
-                    self.logger.error("\(message, privacy: .public)")
-                } else {
-                    self.logger.error("failed to terminate pid \(listener.pid) on port \(port, privacy: .public)")
-                }
+        let port = GatewayEnvironment.gatewayPort()
+        for listener in await self.listeners(on: port) {
+            if Self.isExpected(listener, port: port, mode: mode) {
+                let message = """
+                port \(port) already served by expected \(listener.command)
+                (pid \(listener.pid)) — keeping
+                """
+                self.logger.info("\(message, privacy: .public)")
+                continue
+            }
+            if mode == .remote {
+                let message = """
+                port \(port) held by \(listener.command)
+                (pid \(listener.pid)) in remote mode — not killing
+                """
+                self.logger.warning(message)
+                continue
+            }
+            if await Self.terminateProcess(listener.pid) {
+                let message = """
+                port \(port) was held by \(listener.command)
+                (pid \(listener.pid)); terminated
+                """
+                self.logger.error("\(message, privacy: .public)")
+            } else {
+                self.logger.error("failed to terminate pid \(listener.pid) on port \(port, privacy: .public)")
             }
         }
         self.logger.info("port sweep done")
     }
 
-    func record(port: Int, pid: Int32, command: String, mode: AppState.ConnectionMode) async {
-        try? FileManager().createDirectory(at: Self.appSupportDir, withIntermediateDirectories: true)
-        self.records.removeAll { $0.pid == pid }
-        self.records.append(
-            Record(
-                port: port,
-                pid: pid,
-                command: command,
-                mode: mode.rawValue,
-                timestamp: Date().timeIntervalSince1970))
-        self.save()
+    func record(port: Int, pid: Int32, command: String, mode: AppState.ConnectionMode) {
+        let record = Record(
+            port: port,
+            pid: pid,
+            command: command,
+            mode: mode.rawValue,
+            timestamp: Date().timeIntervalSince1970)
+        self.ownRecords[pid] = record
+        Self.persistRecords { $0[pid] = record }
     }
 
     func removeRecord(pid: Int32) {
-        let before = self.records.count
-        self.records.removeAll { $0.pid == pid }
-        if self.records.count != before {
-            self.save()
+        guard let owned = self.ownRecords.removeValue(forKey: pid) else { return }
+        // Content-guarded like reap: a sibling instance may have re-recorded a
+        // recycled pid for its own new tunnel; that fresh record must survive.
+        Self.persistRecords { merged in
+            if merged[pid] == owned {
+                merged.removeValue(forKey: pid)
+            }
         }
     }
 
@@ -127,32 +126,34 @@ actor PortGuardian {
     /// leaves the tunnel reparented to launchd, holding the remote connection and
     /// squatting the preferred local port so new tunnels drift to ephemeral ports.
     func reapOrphanedTunnels() async {
-        let disk = Self.loadRecords(from: Self.recordPath)
         let plan = Self.planTunnelReap(
-            memory: self.records,
-            disk: disk,
+            own: Array(self.ownRecords.values),
+            disk: Self.loadRecords(from: Self.recordPath),
             processInfo: Self.tunnelProcessInfo(pid:))
-        var kept = plan.keep
+        var removals = plan.drop
         for record in plan.reap {
-            if await self.reapTunnelProcess(record.pid) {
+            if await Self.terminateProcess(record.pid) {
+                removals.append(record)
                 let message = """
                 reaped orphaned ssh tunnel (pid \(record.pid), local port \(record.port))
                 """
                 self.logger.error("\(message, privacy: .public)")
             } else {
-                // Keep the record so the next sweep retries the kill.
-                kept.append(record)
+                // Leave the record in place so the next sweep retries the kill.
                 self.logger.error("failed to reap orphaned tunnel pid \(record.pid, privacy: .public)")
             }
         }
-        // Persist whenever the kept records differ from either source by content, not
-        // just pid set: a reaped/dropped record may exist only in the file (crashed
-        // sibling), and a pid-colliding stale disk record must be overwritten too.
-        let byTime: (Record, Record) -> Bool = { ($0.timestamp, $0.pid) < ($1.timestamp, $1.pid) }
-        kept.sort(by: byTime)
-        if kept != self.records.sorted(by: byTime) || kept != disk.sorted(by: byTime) {
-            self.records = kept
-            self.save()
+        guard !removals.isEmpty else { return }
+        for record in removals where self.ownRecords[record.pid] == record {
+            self.ownRecords.removeValue(forKey: record.pid)
+        }
+        // Remove only records whose content still matches what was classified: a
+        // sibling instance may have re-recorded the same pid for a new tunnel in the
+        // meantime, and that fresh record must survive.
+        Self.persistRecords { merged in
+            for record in removals where merged[record.pid] == record {
+                merged.removeValue(forKey: record.pid)
+            }
         }
     }
 
@@ -194,40 +195,47 @@ actor PortGuardian {
     }
 
     static func planTunnelReap(
-        memory: [Record],
+        own: [Record],
         disk: [Record],
-        processInfo: (Int32) -> TunnelProcessInfo?) -> (reap: [Record], keep: [Record])
+        processInfo: (Int32) -> TunnelProcessInfo?) -> (reap: [Record], keep: [Record], drop: [Record])
     {
         // All app instances share port-guard.json, so disk can hold records from a
-        // crashed sibling this instance never saw. In-memory wins on pid collisions.
+        // crashed sibling this instance never saw. Own records win pid collisions —
+        // they are fresher than anything a dead sibling left behind.
         var merged: [Int32: Record] = [:]
         for record in disk {
             merged[record.pid] = record
         }
-        for record in memory {
+        for record in own {
             merged[record.pid] = record
         }
         let ordered = merged.values.sorted { ($0.timestamp, $0.pid) < ($1.timestamp, $1.pid) }
         var reap: [Record] = []
         var keep: [Record] = []
+        var drop: [Record] = []
         for record in ordered {
             switch self.classifyTunnelRecord(record, process: processInfo(record.pid)) {
             case .keep: keep.append(record)
-            case .drop: continue
+            case .drop: drop.append(record)
             case .reap: reap.append(record)
             }
         }
-        return (reap, keep)
+        return (reap, keep, drop)
     }
 
-    /// Only a confirmed exit may drop the record (later sweeps retry otherwise), and
-    /// callers pick a local port right after reaping — the port is only free once ssh
-    /// has actually exited, not when the signal was delivered. TERM first, then KILL.
-    private func reapTunnelProcess(_ pid: Int32) async -> Bool {
-        _ = await ShellExecutor.run(command: ["kill", "-TERM", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        if await Self.waitForProcessExit(pid: pid) { return true }
-        _ = await ShellExecutor.run(command: ["kill", "-KILL", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        return await Self.waitForProcessExit(pid: pid)
+    /// TERM first, then KILL, returning only once the process is confirmed gone:
+    /// sweep and reap callers rebind the freed port immediately, and reap must not
+    /// forget a still-running tunnel (the record is its only retry path).
+    private static func terminateProcess(_ pid: Int32) async -> Bool {
+        #if canImport(Darwin)
+        guard pid > 0 else { return false }
+        _ = Darwin.kill(pid, SIGTERM)
+        if await self.waitForProcessExit(pid: pid) { return true }
+        _ = Darwin.kill(pid, SIGKILL)
+        return await self.waitForProcessExit(pid: pid)
+        #else
+        return false
+        #endif
     }
 
     private static func waitForProcessExit(pid: Int32, timeout: TimeInterval = 1.0) async -> Bool {
@@ -325,23 +333,17 @@ actor PortGuardian {
         if mode == .unconfigured {
             return []
         }
-        let ports = [GatewayEnvironment.gatewayPort()]
-        var reports: [PortReport] = []
-
-        for port in ports {
-            let listeners = await self.listeners(on: port)
-            let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
-                port: port,
-                mode: mode,
-                listeners: listeners)
-            reports.append(Self.buildReport(
-                port: port,
-                listeners: listeners,
-                mode: mode,
-                tunnelHealthy: tunnelHealthy))
-        }
-
-        return reports
+        let port = GatewayEnvironment.gatewayPort()
+        let listeners = await self.listeners(on: port)
+        let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
+            port: port,
+            mode: mode,
+            listeners: listeners)
+        return [Self.buildReport(
+            port: port,
+            listeners: listeners,
+            mode: mode,
+            tunnelHealthy: tunnelHealthy)]
     }
 
     func probeGatewayHealth(port: Int, timeout: TimeInterval = 2.0) async -> Bool {
@@ -518,13 +520,6 @@ actor PortGuardian {
         #endif
     }
 
-    private func kill(_ pid: Int32) async -> Bool {
-        let term = await ShellExecutor.run(command: ["kill", "-TERM", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        if term.ok { return true }
-        let sigkill = await ShellExecutor.run(command: ["kill", "-KILL", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        return sigkill.ok
-    }
-
     private static func isExpected(_ listener: Listener, port: Int, mode: AppState.ConnectionMode) -> Bool {
         let cmd = listener.command.lowercased()
         let full = listener.fullCommand.lowercased()
@@ -539,12 +534,37 @@ actor PortGuardian {
             {
                 return true
             }
+            if self.isNodeOpenClawGatewayCommand(full) { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
         case .unconfigured:
             return false
         }
+    }
+
+    private static func isNodeOpenClawGatewayCommand(_ fullCommand: String) -> Bool {
+        let tokens = fullCommand
+            .split(whereSeparator: \.isWhitespace)
+            .map { self.unquoteCommandToken(String($0)) }
+        guard tokens.count >= 3 else { return false }
+        guard URL(fileURLWithPath: tokens[0]).lastPathComponent.lowercased() == "node" else {
+            return false
+        }
+        return self.isOpenClawDistEntrypointToken(tokens[1])
+            && tokens[2].lowercased() == "gateway"
+    }
+
+    private static func isOpenClawDistEntrypointToken(_ token: String) -> Bool {
+        let normalized = token.replacingOccurrences(of: "\\", with: "/").lowercased()
+        guard normalized.hasSuffix("/dist/index.js") else { return false }
+        return normalized
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .contains("openclaw")
+    }
+
+    private static func unquoteCommandToken(_ token: String) -> String {
+        token.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
     }
 
     private func probeGatewayHealthIfNeeded(
@@ -565,9 +585,41 @@ actor PortGuardian {
         return decoded
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(self.records) else { return }
-        try? data.write(to: Self.recordPath, options: [.atomic])
+    /// The single write path for port-guard.json: read-merge-write under a file
+    /// lock so concurrent app instances (prod + dev) never clobber each other's
+    /// records — a lost record means an unreapable orphan after a crash.
+    private static func persistRecords(_ mutate: (inout [Int32: Record]) -> Void) {
+        try? FileManager().createDirectory(at: self.appSupportDir, withIntermediateDirectories: true)
+        self.withRecordFileLock {
+            let disk = self.loadRecords(from: self.recordPath)
+            var merged: [Int32: Record] = [:]
+            for record in disk {
+                merged[record.pid] = record
+            }
+            mutate(&merged)
+            let ordered = merged.values.sorted { ($0.timestamp, $0.pid) < ($1.timestamp, $1.pid) }
+            guard ordered != disk else { return }
+            guard let data = try? JSONEncoder().encode(ordered) else { return }
+            try? data.write(to: self.recordPath, options: [.atomic])
+        }
+    }
+
+    /// flock on a sidecar (atomic writes swap the json inode, so locking the json
+    /// itself would not serialize anything). The kernel releases it if we die.
+    private static func withRecordFileLock(_ body: () -> Void) {
+        #if canImport(Darwin)
+        let fd = open(self.recordLockPath.path, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else {
+            body()
+            return
+        }
+        defer { close(fd) }
+        _ = flock(fd, LOCK_EX)
+        defer { _ = flock(fd, LOCK_UN) }
+        body()
+        #else
+        body()
+        #endif
     }
 }
 
@@ -580,11 +632,7 @@ extension PortGuardian {
             self.testingDescriptors.removeValue(forKey: port)
         }
     }
-}
-#endif
 
-#if DEBUG
-extension PortGuardian {
     static func _testTunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {
         self.tunnelProcessInfo(pid: pid)
     }

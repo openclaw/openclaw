@@ -2,6 +2,7 @@
 // and related session-aware RPC handlers used by UI and operator clients.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -586,10 +587,10 @@ function loadBareSessionResetDeliverySession(params: {
 }
 
 function resolveSessionRuntimeCwd(params: {
+  requestedCwd?: string;
   sessionEntry?: SessionEntry;
-  spawnedBy?: string;
 }): string | undefined {
-  return normalizeOptionalString(params.sessionEntry?.spawnedCwd);
+  return normalizeOptionalString(params.requestedCwd ?? params.sessionEntry?.spawnedCwd);
 }
 
 type TrustedGroupMetadata = {
@@ -1150,6 +1151,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupChannel?: string;
       groupSpace?: string;
       lane?: string;
+      cwd?: string;
       extraSystemPrompt?: string;
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
@@ -1173,6 +1175,18 @@ export const agentHandlers: GatewayRequestHandlers = {
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
+    if (request.cwd && !path.isAbsolute(request.cwd)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "cwd must be absolute"));
+      return;
+    }
+    if (request.cwd && !normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "cwd is reserved for plugin-owned subagent runs"),
+      );
+      return;
+    }
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
@@ -3306,7 +3320,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 workspaceDir: sessionEntry?.spawnedWorkspaceDir,
               }),
               cwd: resolveSessionRuntimeCwd({
-                spawnedBy: spawnedByValue,
+                requestedCwd: request.cwd,
                 sessionEntry,
               }),
               // Plugin tools created for Gateway-owned turns must resolve the live

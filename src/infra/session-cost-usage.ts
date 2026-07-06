@@ -2740,12 +2740,9 @@ export async function loadSessionLogs(params: {
       }
 
       // Get timestamp
-      let timestamp = 0;
-      if (typeof parsed.timestamp === "string") {
-        timestamp = new Date(parsed.timestamp).getTime();
-      } else if (typeof message.timestamp === "number") {
-        timestamp = message.timestamp;
-      }
+      // Keep detail logs on the usage-summary timestamp path, including nested
+      // fallback; direct Date parsing can leak NaN as null through Gateway JSON.
+      const timestamp = parseTimestamp(parsed)?.getTime() ?? 0;
 
       // Get usage for assistant messages
       let tokens: number | undefined;

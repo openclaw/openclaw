@@ -425,6 +425,7 @@ const TUI_BUSY_ACTIVITY_STATUSES = new Set([
   "streaming",
   "running",
   "finishing context",
+  "starting up",
 ]);
 
 export function isTuiBusyActivityStatus(status: string): boolean {
@@ -1573,6 +1574,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       reconnectStreamingWatchdog();
     }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    // A reconnect may already have restored a live run's busy status. Only
+    // claim the status line when startup owns it, then release that exact state.
+    if (!isTuiBusyActivityStatus(activityStatus)) {
+      setActivityStatus("starting up");
+    }
     void (async () => {
       try {
         await client.subscribeSessionEvents?.();
@@ -1589,6 +1595,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
       }
       await loadHistory();
+      if (activityStatus === "starting up") {
+        setActivityStatus("idle");
+      }
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
@@ -1604,6 +1613,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
     })().catch((err: unknown) => {
       chatLog.addSystem(`startup failed: ${String(err)}`);
+      if (activityStatus === "starting up") {
+        setActivityStatus("idle");
+      }
       setConnectionStatus("startup failed", 5000);
       tui.requestRender();
     });

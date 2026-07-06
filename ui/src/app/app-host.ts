@@ -240,6 +240,21 @@ export class OpenClawApp extends LitElement {
           ></openclaw-gateway-url-confirmation>
         `
       : nothing;
+    // Embedded mobile terminals own the whole document. Keep the generic login
+    // gate out of this path or a connecting native session exposes Web UI chrome.
+    if (this.terminalOnly) {
+      return html`
+        <openclaw-terminal-panel
+          .client=${this.terminalClient}
+          .available=${this.terminalAvailable}
+          .themeMode=${resolveTerminalThemeMode()}
+          fullscreen
+        ></openclaw-terminal-panel>
+        ${!this.terminalAvailable && (this.gatewayConnected || this.gatewayLastError)
+          ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
+          : nothing}
+      `;
+    }
     // Transport drops after an established session keep the shell mounted
     // (offline banner + client auto-retry); the login gate is reserved for
     // first connects, credential rejections, and manual gate submissions.
@@ -288,21 +303,6 @@ export class OpenClawApp extends LitElement {
           ></openclaw-login-gate>
           ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
-      `;
-    }
-    // Terminal-only document (`?view=terminal`): the mobile apps embed this as
-    // a full-screen WebView page, so render just the terminal — no shell chrome.
-    if (this.terminalOnly) {
-      return html`
-        <openclaw-terminal-panel
-          .client=${this.terminalClient}
-          .available=${this.terminalAvailable}
-          .themeMode=${resolveTerminalThemeMode()}
-          fullscreen
-        ></openclaw-terminal-panel>
-        ${this.terminalAvailable
-          ? nothing
-          : html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`}
       `;
     }
     return html`

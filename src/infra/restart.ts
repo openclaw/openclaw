@@ -60,7 +60,8 @@ let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
-  return next === "update.run" && current !== "update.run";
+  const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
+  return isUpdateRestart(next) && !isUpdateRestart(current);
 }
 
 function hasUnconsumedRestartSignal(): boolean {
@@ -572,7 +573,15 @@ async function emitPreparedGatewayRestart(
     pendingRestartSessionKey = undefined;
   }
 
-  const emitted = emitGatewayRestart(reasonOverride, intent);
+  // A managed update can coalesce while beforeEmit awaits. Promote that reason
+  // at the last possible moment so the run loop performs a process exit.
+  const preferredReason = shouldPreferRestartReason(pendingRestartReason, reasonOverride)
+    ? pendingRestartReason
+    : undefined;
+  const emitted = emitGatewayRestart(
+    preferredReason ?? reasonOverride,
+    preferredReason && intent ? { ...intent, reason: preferredReason } : intent,
+  );
   if (!emitted) {
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }

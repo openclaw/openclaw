@@ -59,6 +59,15 @@ export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode 
     : "near-bottom";
 }
 
+export const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
+export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
+
+export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
+  return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
+    ? (value as ChatSendShortcut)
+    : "enter";
+}
+
 function snapBorderRadius(value: number): BorderRadiusStop {
   let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
   let bestDist = Math.abs(value - best);
@@ -99,6 +108,7 @@ export type UiSettings = {
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
   chatAutoScroll?: ChatAutoScrollMode;
+  chatSendShortcut?: ChatSendShortcut;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
@@ -137,7 +147,7 @@ type NativeControlAuth = {
   password?: string | null;
 };
 
-export type ApplicationStartupSettings = {
+type ApplicationStartupSettings = {
   settings: UiSettings;
   password: string | null;
   pendingGatewayUrl: string | null;
@@ -461,6 +471,7 @@ export function loadSettings(): UiSettings {
     chatShowToolCalls: true,
     chatPersistCommentary: false,
     chatAutoScroll: "near-bottom",
+    chatSendShortcut: "enter",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
@@ -510,6 +521,7 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
+      chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -626,6 +638,9 @@ function persistSettings(next: UiSettings) {
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? false,
     chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
+    ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
+      ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,

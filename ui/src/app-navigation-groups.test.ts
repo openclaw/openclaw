@@ -18,6 +18,10 @@ describe("sidebar pinned routes", () => {
     }
   });
 
+  it("keeps managed worktrees in the customizable sidebar", () => {
+    expect(SIDEBAR_NAV_ROUTES).toContain("worktrees");
+  });
+
   it("keeps channel management and settings slices out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("channels");
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
@@ -29,8 +33,8 @@ describe("sidebar pinned routes", () => {
 
   it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
     expect(
-      normalizeSidebarPinnedRoutes(["workboard", "overview", "workboard", "bogus", 7]),
-    ).toEqual(["workboard", "overview"]);
+      normalizeSidebarPinnedRoutes(["worktrees", "overview", "worktrees", "bogus", 7]),
+    ).toEqual(["worktrees", "overview"]);
     expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 
@@ -41,10 +45,10 @@ describe("sidebar pinned routes", () => {
   });
 
   it("puts every unpinned nav route into the More section", () => {
-    const pinned = ["overview", "agents"] as const;
+    const pinned = ["overview", "worktrees"] as const;
     const more = sidebarMoreRoutes(pinned);
     expect(more).not.toContain("overview");
-    expect(more).not.toContain("agents");
+    expect(more).not.toContain("worktrees");
     expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
   });
 

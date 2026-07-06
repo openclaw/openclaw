@@ -1446,14 +1446,17 @@ function formatHealthFindings(findings: readonly HealthFinding[]): string {
     .join("\n");
 }
 
-async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+async function runCoreHealthFindingNote(
+  ctx: DoctorHealthFlowContext,
+  checkId: string,
+): Promise<void> {
   const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
   const { getHealthCheck } = await loadHealthCheckRegistryModule();
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
   registerCoreHealthChecks();
-  const check = getHealthCheck("core/doctor/provider-catalog-projection");
+  const check = getHealthCheck(checkId);
   if (!check) {
     return;
   }
@@ -1471,29 +1474,16 @@ async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext):
   note(formatHealthFindings(findings), "Doctor warnings");
 }
 
-async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
-  const { getHealthCheck } = await loadHealthCheckRegistryModule();
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
-  const { note } = await loadNoteModule();
+async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection");
+}
 
-  registerCoreHealthChecks();
-  const check = getHealthCheck("core/doctor/runtime-tool-schemas");
-  if (!check) {
-    return;
-  }
-  const findings = await check.detect({
-    mode: "doctor",
-    runtime: ctx.runtime,
-    cfg: ctx.cfg,
-    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
-    configPath: ctx.configPath,
-  });
-  if (findings.length === 0) {
-    return;
-  }
-  ctx.healthOk = false;
-  note(formatHealthFindings(findings), "Doctor warnings");
+async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/runtime-tool-schemas");
+}
+
+async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
@@ -1992,6 +1982,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Runtime tool schemas",
       healthCheckIds: ["core/doctor/runtime-tool-schemas"],
       run: runRuntimeToolSchemasHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:skill-workshop-tool-policy",
+      label: "Skill Workshop tool policy",
+      healthCheckIds: ["core/doctor/skill-workshop-tool-policy"],
+      run: runSkillWorkshopToolPolicyHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",

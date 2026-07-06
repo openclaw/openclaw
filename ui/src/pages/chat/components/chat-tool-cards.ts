@@ -186,7 +186,7 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(
+function buildSidebarContent(
   value: string,
   options?: {
     rawText?: string | null;
@@ -201,7 +201,7 @@ export function buildSidebarContent(
   };
 }
 
-export function buildPreviewSidebarContent(
+function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
   options?: { fullMessageRequest?: FullMessageRequest },
@@ -308,7 +308,7 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
-export function resolveCollapsedToolSummaryParts(params: {
+function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;
@@ -423,29 +423,29 @@ export function renderExpandedToolCardContent(
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-      <div class="chat-tool-card__header">
-        <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${renderToolIcon(display.icon)}</span>
-          <span>${display.label}</span>
-        </div>
-        ${canOpenSidebar
-          ? html`
-              <div class="chat-tool-card__actions">
-                <openclaw-tooltip content="Open in the side panel">
-                  <button
-                    class="chat-tool-card__action-btn"
-                    type="button"
-                    @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                    aria-label="Open tool details in side panel"
-                  >
-                    <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            `
-          : nothing}
-      </div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+      ${detail || canOpenSidebar
+        ? html`
+            <div class="chat-tool-card__header">
+              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+              ${canOpenSidebar
+                ? html`
+                    <div class="chat-tool-card__actions">
+                      <openclaw-tooltip content="Open in the side panel">
+                        <button
+                          class="chat-tool-card__action-btn"
+                          type="button"
+                          @click=${() => onOpenSidebar?.(sidebarActionContent)}
+                          aria-label="Open tool details in side panel"
+                        >
+                          <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
+                        </button>
+                      </openclaw-tooltip>
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
       ${hasInput
         ? renderToolDataBlock({
             label: "Tool input",
