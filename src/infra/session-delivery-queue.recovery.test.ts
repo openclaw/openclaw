@@ -103,6 +103,66 @@ describe("session-delivery queue recovery", () => {
     }
   });
 
+  it("does not let replay pacing consume the session recovery budget", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+        for (const text of ["first", "second", "third"]) {
+          await enqueueSessionDelivery(
+            {
+              kind: "systemEvent",
+              sessionKey: "agent:main:main",
+              text,
+            },
+            tempDir,
+          );
+        }
+
+        let firstDelivered!: () => void;
+        const firstDeliveredPromise = new Promise<void>((resolve) => {
+          firstDelivered = resolve;
+        });
+        const deliveryTimes: number[] = [];
+        const deliver = vi.fn(async () => {
+          deliveryTimes.push(Date.now());
+          if (deliveryTimes.length === 1) {
+            firstDelivered();
+          }
+        });
+
+        const recovery = recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          maxRecoveryMs: 1,
+          log: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+        });
+        await firstDeliveredPromise;
+
+        await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS);
+        expect(deliver).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS);
+        const summary = await recovery;
+
+        expect(deliver).toHaveBeenCalledTimes(3);
+        expect(deliveryTimes).toEqual([
+          startedAt.getTime(),
+          startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS,
+          startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS * 2,
+        ]);
+        expect(summary.recovered).toBe(3);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("defers recovery when the recovery budget would exceed the date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));

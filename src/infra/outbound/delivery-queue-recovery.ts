@@ -740,10 +740,11 @@ export async function recoverPendingDeliveries(opts: {
   const deadline = resolveRecoveryDeadlineMs(opts.maxRecoveryMs);
   const summary = createEmptyRecoverySummary();
   let attemptedReplayCount = 0;
+  let pacedDelayMs = 0;
 
   for (const entry of pending) {
     const now = Date.now();
-    if (now >= deadline) {
+    if (now >= deadline + pacedDelayMs) {
       opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
       // Budget deferral is not a delivery attempt. Keep entries pending without
       // consuming retry budget; attempted failures still flow through failDelivery.
@@ -783,11 +784,13 @@ export async function recoverPendingDeliveries(opts: {
       const paceResult = await waitForRecoveryReplayPace({
         attemptedReplayCount,
         deadlineMs: deadline,
+        pacedDelayMs,
       });
-      if (paceResult === "deadline-exceeded") {
+      if (paceResult.status === "deadline-exceeded") {
         opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
         break;
       }
+      pacedDelayMs += paceResult.sleptMs;
 
       const result = await drainQueuedEntry({
         entry: currentEntry,

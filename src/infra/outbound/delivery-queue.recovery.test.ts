@@ -155,6 +155,50 @@ describe("delivery-queue recovery", () => {
     }
   });
 
+  it("does not let replay pacing consume the recovery budget for eligible backlog tails", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      await enqueueCrashRecoveryEntries();
+      await enqueueDelivery(
+        { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
+        tmpDir(),
+      );
+      let firstDelivered!: () => void;
+      const firstDeliveredPromise = new Promise<void>((resolve) => {
+        firstDelivered = resolve;
+      });
+      const deliveryTimes: number[] = [];
+      const deliver = vi.fn(async () => {
+        deliveryTimes.push(Date.now());
+        if (deliveryTimes.length === 1) {
+          firstDelivered();
+        }
+        return [];
+      });
+
+      const recovery = runRecovery({ deliver, maxRecoveryMs: 1 });
+      await firstDeliveredPromise;
+
+      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS);
+      expect(deliver).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS);
+      const { result } = await recovery;
+
+      expect(deliver).toHaveBeenCalledTimes(3);
+      expect(deliveryTimes).toEqual([
+        startedAt.getTime(),
+        startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS,
+        startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS * 2,
+      ]);
+      expect(result).toMatchObject({ recovered: 3, deferredBackoff: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("moves entries that exceeded max retries to failed/", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },

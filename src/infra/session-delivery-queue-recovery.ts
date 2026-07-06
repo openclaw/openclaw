@@ -215,9 +215,10 @@ export async function recoverPendingSessionDeliveries(opts: {
   const summary = createEmptyRecoverySummary();
   const deadline = resolveSessionDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
   let attemptedReplayCount = 0;
+  let pacedDelayMs = 0;
 
   for (const entry of pending) {
-    if (Date.now() >= deadline) {
+    if (Date.now() >= deadline + pacedDelayMs) {
       opts.log.warn("Session delivery recovery time budget exceeded — remaining entries deferred");
       break;
     }
@@ -254,13 +255,15 @@ export async function recoverPendingSessionDeliveries(opts: {
       const paceResult = await waitForRecoveryReplayPace({
         attemptedReplayCount,
         deadlineMs: deadline,
+        pacedDelayMs,
       });
-      if (paceResult === "deadline-exceeded") {
+      if (paceResult.status === "deadline-exceeded") {
         opts.log.warn(
           "Session delivery recovery time budget exceeded — remaining entries deferred",
         );
         break;
       }
+      pacedDelayMs += paceResult.sleptMs;
 
       const result = await drainQueuedEntry({
         entry: currentEntry,

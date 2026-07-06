@@ -37,18 +37,20 @@ export function releaseRecoveryEntry(entriesInProgress: Set<string>, entryId: st
 }
 
 // Startup recovery can find many already-eligible entries after an outage.
-// Pace only between real replay attempts; backoff/max-retry skips must not spend this budget.
+// Pace only between real replay attempts; the pacing sleep itself must not consume
+// the recovery budget and strand an otherwise eligible backlog tail.
 export async function waitForRecoveryReplayPace(params: {
   attemptedReplayCount: number;
   deadlineMs: number;
-}): Promise<"ready" | "deadline-exceeded"> {
+  pacedDelayMs: number;
+}): Promise<{ status: "ready"; sleptMs: number } | { status: "deadline-exceeded" }> {
   if (params.attemptedReplayCount <= 0) {
-    return "ready";
+    return { status: "ready", sleptMs: 0 };
   }
-  const remainingMs = params.deadlineMs - Date.now();
-  if (remainingMs <= 0) {
-    return "deadline-exceeded";
+  if (Date.now() >= params.deadlineMs + params.pacedDelayMs) {
+    return { status: "deadline-exceeded" };
   }
-  await sleep(Math.min(RECOVERY_REPLAY_SPACING_MS, remainingMs));
-  return Date.now() >= params.deadlineMs ? "deadline-exceeded" : "ready";
+  const sleepStartedAt = Date.now();
+  await sleep(RECOVERY_REPLAY_SPACING_MS);
+  return { status: "ready", sleptMs: Math.max(0, Date.now() - sleepStartedAt) };
 }
