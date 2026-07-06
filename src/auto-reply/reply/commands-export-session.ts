@@ -82,9 +82,12 @@ function isBackendDelegatedSession(
     return false;
   }
   const messages = entries.filter(
-    (entry): entry is SessionMessageEntry => entry.type === "message",
+    (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
   );
-  return messages.length > 0 && messages.every((entry) => entry.message.role === "user");
+  return (
+    messages.length > 0 &&
+    messages.every((transcriptEntry) => transcriptEntry.message.role === "user")
+  );
 }
 
 type SessionExportWarningSummary = {
