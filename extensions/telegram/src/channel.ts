@@ -657,6 +657,8 @@ async function resolveTelegramTargets(params: {
         const id = await lookupTelegramChatId({
           token,
           chatId: normalized,
+          proxyUrl: account.config.proxy,
+          apiRoot: account.config.apiRoot,
           network: account.config.network,
         });
         if (!id) {
