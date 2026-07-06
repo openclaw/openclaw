@@ -88,8 +88,8 @@ function appendFallbackText(text: string, fallback: string): string {
 function keepSendableMarkdownFlexMessages(processed: ProcessedLineMessage): ProcessedLineMessage {
   let text = processed.text;
   const flexMessages = processed.flexMessages.filter((flexMsg) => {
-    const { byteSize, maxBytes } = getLineFlexContainerSize(flexMsg.contents as FlexContainer);
-    if (byteSize <= maxBytes) {
+    const { size, maxSize } = getLineFlexContainerSize(flexMsg.contents as FlexContainer);
+    if (size <= maxSize) {
       return true;
     }
     text = appendFallbackText(text, flexMsg.altText);

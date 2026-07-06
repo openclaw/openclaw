@@ -312,12 +312,12 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
   // Validate Flex container byte size before send so oversized LINE content
   // falls back to text instead of being rejected by the Messaging API.
   if (lineData.flexMessage) {
-    const { byteSize, maxBytes } = getLineFlexContainerSize(
+    const { size, maxSize, unit } = getLineFlexContainerSize(
       lineData.flexMessage.contents as FlexContainer,
     );
-    if (byteSize > maxBytes) {
+    if (size > maxSize) {
       console.warn(
-        `[LINE] FlexMessage byte size ${byteSize} exceeds ${maxBytes} byte limit. Falling back to plain text message.`,
+        `[LINE] FlexMessage ${unit} size ${size} exceeds ${maxSize}. Falling back to plain text message.`,
       );
       const fallbackText = `[內容過長，已轉為純文字] ${lineData.flexMessage.altText}`;
       delete lineData.flexMessage;

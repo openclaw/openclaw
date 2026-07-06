@@ -128,11 +128,9 @@ export async function deliverLineAutoReply(params: {
     : { text: "", flexMessages: [] };
 
   for (const flexMsg of processed.flexMessages) {
-    const { byteSize, maxBytes } = getLineFlexContainerSize(flexMsg.contents as FlexContainer);
-    if (byteSize > maxBytes) {
-      deps.warn?.(
-        `[LINE] FlexMessage from markdown ${byteSize} bytes exceeds ${maxBytes}, skipping`,
-      );
+    const { size, maxSize, unit } = getLineFlexContainerSize(flexMsg.contents as FlexContainer);
+    if (size > maxSize) {
+      deps.warn?.(`[LINE] FlexMessage from markdown ${size} ${unit} exceeds ${maxSize}, skipping`);
       // Fall back to altText so the table/code content isn't silently dropped
       processed.text = processed.text
         ? `${processed.text}\n[${flexMsg.altText}]`

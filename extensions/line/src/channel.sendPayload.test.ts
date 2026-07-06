@@ -712,6 +712,14 @@ describe("linePlugin messaging.transformReplyPayload", () => {
     ],
   });
 
+  const createTooManyBubbleCarousel = () => ({
+    type: "carousel",
+    contents: Array.from({ length: 13 }, () => ({
+      type: "bubble",
+      body: { type: "box", layout: "vertical", contents: [] },
+    })),
+  });
+
   it("validates prebuilt LINE Flex payloads without directive syntax", () => {
     const result = linePlugin.messaging?.transformReplyPayload?.({
       cfg: {} as OpenClawConfig,
@@ -761,6 +769,23 @@ describe("linePlugin messaging.transformReplyPayload", () => {
     });
 
     expect(result?.channelData).toBeUndefined();
+    expect(result?.text).toContain("內容過長");
+  });
+
+  it("rejects prebuilt carousels with too many bubbles", () => {
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        text: "plain text",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: createTooManyBubbleCarousel() },
+          },
+        },
+      },
+    });
+
+    expect(result?.channelData?.line).toBeUndefined();
     expect(result?.text).toContain("內容過長");
   });
 });
