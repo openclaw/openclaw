@@ -114,6 +114,7 @@ export class AppSidebar extends LitElement {
     DEFAULT_SIDEBAR_PINNED_ROUTES;
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
+  @property({ attribute: false }) onToggleCollapse?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -1437,6 +1438,17 @@ export class AppSidebar extends LitElement {
               <span class="sidebar-mode-switch">
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </span>
+              <openclaw-tooltip .content=${this.collapsed ? t("nav.expand") : t("nav.collapse")}>
+                <button
+                  class="sidebar-footer-icon sidebar-collapse-toggle"
+                  type="button"
+                  aria-label=${this.collapsed ? t("nav.expand") : t("nav.collapse")}
+                  aria-expanded=${String(!this.collapsed)}
+                  @click=${() => this.onToggleCollapse?.()}
+                >
+                  ${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                </button>
+              </openclaw-tooltip>
             </div>
           </div>
         </div>

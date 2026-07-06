@@ -54,7 +54,6 @@ import {
 import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
-  createDefaultRealtimeTalkOptions,
   createInitialChatRealtimeState,
   resetChatRealtimeConversation,
   type ChatRealtimeState,
@@ -349,7 +348,6 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
   resetChatRealtimeConversation(state);
-  state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -1050,7 +1048,7 @@ export function createPageState(
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
-    ...createInitialChatRealtimeState(),
+    ...createInitialChatRealtimeState(settings.realtimeTalkInputDeviceId),
     requestUpdate,
     sessionWorkspaceState: undefined,
     sessionWorkspaceOpenRequest: undefined,

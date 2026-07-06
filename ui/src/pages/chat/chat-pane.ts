@@ -358,6 +358,15 @@ export class ChatPane extends LitElement {
       });
       return;
     }
+    if (state.realtimeTalkInputOpen) {
+      event.preventDefault();
+      state.realtimeTalkInputOpen = false;
+      state.requestUpdate();
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLButtonElement>(".agent-chat__talk-caret")?.focus();
+      });
+      return;
+    }
     if (!state.chatMobileControlsOpen) {
       return;
     }
@@ -378,6 +387,13 @@ export class ChatPane extends LitElement {
         changed = true;
       }
     });
+    if (state.realtimeTalkInputOpen) {
+      const inputPicker = this.querySelector(".agent-chat__talk-input-picker");
+      if (!inputPicker || !path.includes(inputPicker)) {
+        state.realtimeTalkInputOpen = false;
+        changed = true;
+      }
+    }
     if (changed) {
       state.requestUpdate();
     }
@@ -426,6 +442,14 @@ export class ChatPane extends LitElement {
     };
     this.state = pageState;
     chatState.attach(pageState);
+    const mediaDevices = globalThis.navigator?.mediaDevices;
+    if (mediaDevices?.addEventListener) {
+      const handleDeviceChange = () => void pageState.refreshRealtimeTalkInputs();
+      mediaDevices.addEventListener("devicechange", handleDeviceChange);
+      chatState.addCleanup(() =>
+        mediaDevices.removeEventListener("devicechange", handleDeviceChange),
+      );
+    }
     if (this.sessionKey) {
       this.setPaneSessionKey(this.sessionKey);
     }
@@ -803,6 +827,11 @@ export class ChatPane extends LitElement {
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkConversation: state.realtimeTalkConversation,
+      realtimeTalkInputOpen: state.realtimeTalkInputOpen,
+      realtimeTalkInputDevices: state.realtimeTalkInputDevices,
+      realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
+      realtimeTalkInputLoading: state.realtimeTalkInputLoading,
+      realtimeTalkInputError: state.realtimeTalkInputError,
       connected: state.connected,
       canSend: state.connected && !selectedSessionArchived,
       disabledReason,
@@ -898,6 +927,19 @@ export class ChatPane extends LitElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+      onToggleRealtimeTalkInput: () => {
+        state.realtimeTalkInputOpen = !state.realtimeTalkInputOpen;
+        state.requestUpdate?.();
+        if (state.realtimeTalkInputOpen) {
+          void state.refreshRealtimeTalkInputs(true);
+        }
+      },
+      onRealtimeTalkInputSelect: (deviceId) => {
+        state.selectRealtimeTalkInput(deviceId);
+        void this.updateComplete.then(() => {
+          this.querySelector<HTMLButtonElement>(".agent-chat__talk-caret")?.focus();
+        });
+      },
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

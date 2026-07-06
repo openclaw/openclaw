@@ -98,6 +98,7 @@ public struct OpenClawChatView: View {
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
+    private let speech: OpenClawChatSpeechController?
 
     private enum ScrollFollowTarget: Equatable {
         case latest
@@ -148,7 +149,8 @@ public struct OpenClawChatView: View {
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
-        talkControl: OpenClawChatTalkControl? = nil)
+        talkControl: OpenClawChatTalkControl? = nil,
+        speech: OpenClawChatSpeechController? = nil)
     {
         _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
@@ -168,6 +170,7 @@ public struct OpenClawChatView: View {
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
+        self.speech = speech
     }
 
     public var body: some View {
@@ -313,6 +316,7 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = self.latestVisibleUserMessageID
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
+            self.speech?.stop()
             self.hasPerformedInitialScroll = false
             self.followTarget = .latest
             self.isAtLiveEdge = true
@@ -321,8 +325,14 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = nil
         }
         .onChange(of: self.scenePhase) { _, newValue in
+            if newValue == .background {
+                self.speech?.stop()
+            }
             guard newValue == .active else { return }
             self.viewModel.resumeFromForeground()
+        }
+        .onDisappear {
+            self.speech?.stop()
         }
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
@@ -439,8 +449,61 @@ public struct OpenClawChatView: View {
                     }
                 }
             }
+        } else if let speech = self.speech, self.isListenable(msg) {
+            VStack(alignment: .leading, spacing: 3) {
+                bubble
+                if let isPreparing = self.speechChipIsPreparing(speech, messageID: msg.id) {
+                    ChatSpeechStatusChip(isPreparing: isPreparing) {
+                        speech.stop()
+                    }
+                    .padding(.leading, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contextMenu {
+                Button {
+                    if speech.isActive(msg.id) {
+                        speech.stop()
+                    } else {
+                        speech.toggle(
+                            messageID: msg.id,
+                            text: ChatMessageVisibleText.visibleText(in: msg))
+                    }
+                } label: {
+                    Label {
+                        if speech.isActive(msg.id) {
+                            Text("Stop Listening")
+                                .font(OpenClawChatTypography.body)
+                        } else {
+                            Text("Listen")
+                                .font(OpenClawChatTypography.body)
+                        }
+                    } icon: {
+                        Image(systemName: speech.isActive(msg.id) ? "stop.circle" : "speaker.wave.2")
+                    }
+                }
+            }
         } else {
             bubble
+        }
+    }
+
+    private func isListenable(_ msg: OpenClawChatMessage) -> Bool {
+        msg.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
+            && ChatMessageVisibleText.hasVisibleText(in: msg)
+    }
+
+    private func speechChipIsPreparing(
+        _ speech: OpenClawChatSpeechController,
+        messageID: UUID) -> Bool?
+    {
+        switch speech.phase {
+        case let .preparing(id) where id == messageID:
+            true
+        case let .speaking(id) where id == messageID:
+            false
+        default:
+            nil
         }
     }
 

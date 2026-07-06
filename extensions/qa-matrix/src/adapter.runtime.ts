@@ -103,6 +103,10 @@ export async function createMatrixQaTransportAdapter(
     accessToken: provisioning.driver.accessToken,
     baseUrl: harness.baseUrl,
   });
+  const observerClient = createMatrixQaClient({
+    accessToken: provisioning.observer.accessToken,
+    baseUrl: harness.baseUrl,
+  });
   let stopped = false;
   let pollingError: Error | undefined;
   let logicalConversationId = provisioning.roomId;
@@ -158,9 +162,11 @@ export async function createMatrixQaTransportAdapter(
     async sendInbound(input) {
       logicalConversationId = input.conversation.id;
       logicalConversationKind = input.conversation.kind;
+      const actor = input.senderId === "observer" ? provisioning.observer : provisioning.driver;
+      const actorClient = input.senderId === "observer" ? observerClient : driverClient;
       const hasPortableMention = input.text.includes("@openclaw");
       const body = input.text.replaceAll("@openclaw", provisioning.sut.userId);
-      const eventId = await driverClient.sendTextMessage({
+      const eventId = await actorClient.sendTextMessage({
         body,
         mentionUserIds: hasPortableMention ? [provisioning.sut.userId] : undefined,
         replyToEventId: input.replyToId ? nativeEventIds.get(input.replyToId) : undefined,
@@ -170,7 +176,7 @@ export async function createMatrixQaTransportAdapter(
       const message = await context.messages.addInboundMessage({
         ...input,
         accountId,
-        senderId: provisioning.driver.userId,
+        senderId: actor.userId,
       });
       nativeEventIds.set(message.id, eventId);
       busMessageIds.set(eventId, message.id);
@@ -195,6 +201,10 @@ export async function createMatrixQaTransportAdapter(
         sutUserId: provisioning.sut.userId,
         topology: provisioning.topology,
       }),
+    createRuntimeEnvPatch: () => ({
+      OPENCLAW_QA_MATRIX_DRIVER_USER_ID: provisioning.driver.userId,
+      OPENCLAW_QA_MATRIX_OBSERVER_USER_ID: provisioning.observer.userId,
+    }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
       await waitForMatrixChannelReady(gateway, accountId, timeoutMs, pollIntervalMs),
     buildAgentDelivery: () => ({

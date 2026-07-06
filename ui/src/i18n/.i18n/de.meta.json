@@ -1,11 +1,13 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-06T17:38:10.000Z",
+  "fallbackKeys": [
+    "chat.composer.loadingMicrophones"
+  ],
+  "generatedAt": "2026-07-06T19:13:26.806Z",
   "locale": "de",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "c0d1e6cf7d92cd25fde015ca112a8080c5cf6e43a7b1a7c7673f66fdbc4de400",
-  "totalKeys": 1636,
-  "translatedKeys": 1636,
+  "sourceHash": "409b541b91b290a77f1be8a2e6a689c99dc7221f3ee49360e5e38b242a565eef",
+  "totalKeys": 1649,
+  "translatedKeys": 1648,
   "workflow": 1
 }

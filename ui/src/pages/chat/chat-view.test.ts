@@ -1278,6 +1278,47 @@ describe("chat composer workbench", () => {
     expect(voiceButton?.closest(".agent-chat__composer-input-row")).not.toBeNull();
     expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
   });
+
+  it("opens microphone selection beside the empty-composer voice action", () => {
+    const onRealtimeTalkInputSelect = vi.fn();
+    const container = renderChatView({
+      onToggleRealtimeTalk: () => undefined,
+      onToggleRealtimeTalkInput: () => undefined,
+      onRealtimeTalkInputSelect,
+      realtimeTalkInputOpen: true,
+      realtimeTalkInputDevices: [
+        { deviceId: "built-in", label: "MacBook Microphone" },
+        { deviceId: "usb", label: "USB Audio Interface" },
+      ],
+      realtimeTalkInputDeviceId: "usb",
+    });
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Microphone input"]',
+    );
+    const menu = container.querySelector<HTMLElement>(
+      '[role="group"][aria-label="Microphone input"]',
+    );
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger?.getAttribute("aria-controls")).toBe(menu?.id);
+
+    const options = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__talk-input-option"),
+    );
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "MacBook Microphone",
+      "USB Audio Interface",
+    ]);
+    expect(options.map((option) => option.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "false",
+      "true",
+    ]);
+
+    options[1]?.click();
+    expect(onRealtimeTalkInputSelect).toHaveBeenCalledWith("built-in");
+  });
 });
 
 afterEach(() => {

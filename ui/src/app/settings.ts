@@ -115,6 +115,7 @@ export type UiSettings = {
   chatPersistCommentary?: boolean;
   chatAutoScroll?: ChatAutoScrollMode;
   chatSendShortcut?: ChatSendShortcut;
+  realtimeTalkInputDeviceId?: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
   navCollapsed: boolean; // Collapsible sidebar state
@@ -623,6 +624,7 @@ export function loadSettings(): UiSettings {
           : defaults.chatPersistCommentary,
       chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -738,6 +740,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
+    ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
+      ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
       : {}),
     splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
