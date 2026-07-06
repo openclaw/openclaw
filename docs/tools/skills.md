@@ -44,16 +44,16 @@ skill name appears in multiple places, the highest source wins.
 | 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
-`SKILL.md` appears anywhere under a configured root:
+`SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
 
 ```text
 <workspace>/skills/research/SKILL.md          ✓ found as "research"
 <workspace>/skills/personal/research/SKILL.md ✓ also found as "research"
 ```
 
-The folder path is for organization only. The skill's name, slash command, and
-allowlist key all come from the `name` frontmatter field (or the directory name
-when `name` is missing).
+The folder path is for organization only. The skill's name and slash command
+come from the `name` frontmatter field (or the directory name when `name` is
+missing). Agent allowlists (below) also match on this `name`.
 
 <Note>
   Codex CLI's native `$CODEX_HOME/skills` directory is **not** an OpenClaw
@@ -119,8 +119,8 @@ when the plugin is enabled — for example, the browser plugin ships a
 
 Plugin skill directories merge at the same low-precedence level as
 `skills.load.extraDirs`, so a same-named bundled, managed, agent, or workspace
-skill overrides them. Gate them via `metadata.openclaw.requires.config` on the
-plugin's config entry.
+skill overrides them. Gate a plugin skill's own eligibility via
+`metadata.openclaw.requires` in its frontmatter, same as any other skill.
 
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
 
@@ -246,10 +246,12 @@ When the user asks to generate an image, use the `image_generate` tool...
 ```
 
 <Note>
-  OpenClaw follows the [AgentSkills](https://agentskills.io) spec. The
-  frontmatter parser supports **single-line keys only** — `metadata` must be a
-  single-line JSON object. Use `{baseDir}` in the body to reference the skill
-  folder path.
+  OpenClaw follows the [AgentSkills](https://agentskills.io) spec. Frontmatter
+  is parsed as YAML first; if that fails, it falls back to a single-line-only
+  parser. Nested `metadata` blocks (including multi-line YAML mappings) are
+  flattened to a JSON string and re-parsed as JSON5, so the block form shown
+  under [Gating](#gating) works. Use `{baseDir}` in the body to reference the
+  skill folder path.
 </Note>
 
 ### Optional frontmatter keys
@@ -286,9 +288,9 @@ When the user asks to generate an image, use the `image_generate` tool...
 
 ## Gating
 
-OpenClaw filters skills at load time using `metadata.openclaw` (single-line
-JSON in the frontmatter). A skill with no `metadata.openclaw` block is always
-eligible unless explicitly disabled.
+OpenClaw filters skills at load time using `metadata.openclaw` (JSON5 object
+embedded in the frontmatter, see the parsing note above). A skill with no
+`metadata.openclaw` block is always eligible unless explicitly disabled.
 
 ```markdown
 ---
@@ -317,8 +319,8 @@ metadata:
   Optional URL shown as "Website" in the macOS Skills UI.
 </ParamField>
 
-<ParamField path="os" type='"darwin" | "linux" | "win32"'>
-  Platform filter. When set, the skill is only eligible on the listed OSes.
+<ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
+  Platform filter. When set, the skill is only eligible on a listed OS.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">
@@ -399,14 +401,15 @@ metadata:
       formulas into system package commands. In Linux containers without
       `brew`, brew-only installers are hidden; use a custom image or install
       the dependency manually.
-    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs and
-      preserves the existing `GOBIN`, `GOPATH`, and `GOTOOLCHAIN` settings. If the
-      configured toolchain cannot satisfy a module's required Go version,
-      onboarding groups the skill with manual Go prerequisites after the install
-      attempt. If `go` is missing and Homebrew is available, OpenClaw installs
-      Go via Homebrew first and sets `GOBIN` to Homebrew's `bin`. On Linux,
-      OpenClaw can instead use `apt-get` as root or through passwordless `sudo`
-      when the refreshed `golang-go` candidate meets the minimum version.
+    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs.
+      If `go` is missing and Homebrew is available, OpenClaw installs Go via
+      Homebrew first; on Linux without Homebrew it can instead use `apt-get`
+      as root or through passwordless `sudo` when the refreshed `golang-go`
+      candidate meets the minimum version. The actual `go install` for the
+      dependency always targets a dedicated OpenClaw-managed bin directory
+      (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
+      your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
+      env vars are read but never overwritten.
     - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
       `extract` (default: auto when archive detected), `stripComponents`,
       `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
@@ -473,8 +476,8 @@ Toggle and configure bundled or managed skills under `skills.entries` in
 
 <Note>
   Config keys match the **skill name** by default. If a skill defines
-  `metadata.openclaw.skillKey`, use that key under `skills.entries`. Quote
-  hyphenated names: JSON5 allows quoted keys.
+  `metadata.openclaw.skillKey`, use that key under `skills.entries` instead.
+  Quote hyphenated names: JSON5 allows quoted keys.
 </Note>
 
 ## Environment injection
@@ -536,8 +539,8 @@ aligned.
         load: {
           extraDirs: ["~/Projects/agent-scripts/skills"],
           allowSymlinkTargets: ["~/Projects/manager/skills"],
-          watch: true,
-          watchDebounceMs: 250,
+          watch: true, // default
+          watchDebounceMs: 250, // default
         },
       },
     }
@@ -565,16 +568,20 @@ aligned.
 ## Token impact
 
 When skills are eligible, OpenClaw injects a compact XML block into the system
-prompt. The cost is deterministic:
+prompt. The cost is deterministic and scales linearly per skill:
 
-```text
-total = 195 + Σ (97 + len(name) + len(description) + len(filepath))
-```
+- **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
+  prose plus the `<available_skills>` wrapper.
+- **Per skill:** ~97 characters + your `name`, `description`, and `location`
+  field lengths.
+- XML escaping expands `& < > " '` into entities, adding a few characters per
+  occurrence.
+- At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
 
-- **Base overhead** (only when ≥ 1 skill): ~195 characters
-- **Per skill:** ~97 characters + your `name`, `description`, and `location` field lengths
-- XML escaping expands `& < > " '` into entities, adding a few characters per occurrence
-- At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths
+If the rendered block would exceed the configured prompt budget
+(`skills.limits.maxSkillsPromptChars`), OpenClaw first drops descriptions
+(compact format: name + location only), then truncates the skill list and adds
+a note pointing at `openclaw skills check`.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 

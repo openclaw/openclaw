@@ -5,6 +5,7 @@ export type SessionCreateParams = {
   currentSessionKey?: string;
   label?: string;
   model?: string;
+  worktree?: boolean;
 };
 
 export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {

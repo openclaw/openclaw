@@ -36,4 +36,50 @@ describe("resolveSessionNavigation", () => {
       Array.from({ length: 9 }, (_, index) => `agent:main:recent-${index}`),
     );
   });
+
+  it("keeps every pinned session when pins exceed the recent-session cap", () => {
+    const pinnedSessions = Array.from({ length: 10 }, (_, index) => ({
+      key: `agent:main:pinned-${index}`,
+      kind: "direct" as const,
+      pinned: true,
+      updatedAt: 100 - index,
+    }));
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([
+        { key: "agent:main:recent", kind: "direct", updatedAt: 1_000 },
+        ...pinnedSessions,
+      ]),
+      resultAgentId: "main",
+      sessionKey: "unknown",
+    });
+
+    expect(navigation.recentSessions.map((row) => row.key)).toEqual([
+      ...pinnedSessions.map((row) => row.key),
+      "agent:main:recent",
+    ]);
+  });
+
+  it("keeps nine recent chats in addition to pinned sessions", () => {
+    const pinnedSessions = Array.from({ length: 3 }, (_, index) => ({
+      key: `agent:main:pinned-${index}`,
+      kind: "direct" as const,
+      pinned: true,
+      updatedAt: 100 - index,
+    }));
+    const recentSessions = Array.from({ length: 10 }, (_, index) => ({
+      key: `agent:main:recent-${index}`,
+      kind: "direct" as const,
+      updatedAt: 1_000 - index,
+    }));
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([...recentSessions, ...pinnedSessions]),
+      resultAgentId: "main",
+      sessionKey: "unknown",
+    });
+
+    expect(navigation.recentSessions.map((row) => row.key)).toEqual([
+      ...pinnedSessions.map((row) => row.key),
+      ...recentSessions.slice(0, 9).map((row) => row.key),
+    ]);
+  });
 });

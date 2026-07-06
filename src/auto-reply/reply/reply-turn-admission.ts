@@ -1,6 +1,7 @@
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -22,7 +23,7 @@ export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup" | "contr
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 export type ReplyTurnAdmission =
-  | { status: "owned"; operation: ReplyOperation }
+  | { status: "owned"; operation: ReplyOperation; sessionEntry?: SessionEntry }
   | {
       status: "skipped";
       reason: "active-run" | "aborted" | "lifecycle-invalidated";
@@ -69,12 +70,21 @@ export async function admitReplyTurn(params: {
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
   onLifecycleInterrupt?: () => void;
+  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
 }): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
   let expectedSessionId = params.expectedSessionId;
   const waitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
+  const waitForFollowupAdmission = async <T>(wait: () => Promise<T>): Promise<T> => {
+    params.onFollowupAdmissionWaitChange?.(true);
+    try {
+      return await wait();
+    } finally {
+      params.onFollowupAdmissionWaitChange?.(false);
+    }
+  };
   while (true) {
     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
       return { status: "skipped", reason: "aborted" };
@@ -82,6 +92,7 @@ export async function admitReplyTurn(params: {
     try {
       const storePath = params.storePath;
       let operation: ReplyOperation | undefined;
+      let admittedSessionEntry: SessionEntry | undefined;
       let interruptedBeforeOperation = false;
       const admission = storePath
         ? await beginSessionWorkAdmission({
@@ -99,6 +110,7 @@ export async function admitReplyTurn(params: {
                 sessionKey: params.sessionKey,
                 readConsistency: "latest",
               });
+              admittedSessionEntry = currentEntry;
               if (expectedSessionId && !currentEntry) {
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
@@ -202,6 +214,7 @@ export async function admitReplyTurn(params: {
       return {
         status: "owned",
         operation,
+        ...(admittedSessionEntry ? { sessionEntry: admittedSessionEntry } : {}),
       };
     } catch (error) {
       if (isAbortSignalAborted(params.upstreamAbortSignal)) {
@@ -214,10 +227,12 @@ export async function admitReplyTurn(params: {
         if (params.kind === "heartbeat") {
           return { status: "skipped", reason: "active-run" };
         }
-        const followupAdmission = await waitForReplyRunFollowupAdmission(
-          params.sessionKey,
-          waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-          { signal: params.upstreamAbortSignal },
+        const followupAdmission = await waitForFollowupAdmission(() =>
+          waitForReplyRunFollowupAdmission(
+            params.sessionKey,
+            waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            { signal: params.upstreamAbortSignal },
+          ),
         );
         if (!followupAdmission.settled) {
           return {

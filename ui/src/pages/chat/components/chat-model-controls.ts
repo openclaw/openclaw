@@ -18,6 +18,7 @@ import {
 
 export type ChatModelControlsProps = {
   activeRunId: string | null;
+  agentDefaultModel?: string;
   connected: boolean;
   gatewayAvailable: boolean;
   loading: boolean;
@@ -40,6 +41,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     defaultLabel,
     options: selectOptions,
   } = resolveChatModelSelectState({
+    agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
     sessionKey: props.sessionKey,
@@ -153,8 +155,6 @@ function renderChatModelReasoningSelect(params: {
   const triggerModel = formatCombinedPickerModelLabel(selectedModelLabel);
   const triggerThinking = formatCombinedPickerThinkingLabel(selectedThinkingLabel);
   const triggerTitle = `${triggerModel} · ${triggerThinking}`;
-  const triggerLabel =
-    selectedThinkingValue === "" ? triggerModel : `${triggerModel} · ${triggerThinking}`;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
   const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
   const hasThinkingOverride = selectedThinkingValue !== "";
@@ -206,7 +206,16 @@ function renderChatModelReasoningSelect(params: {
           }
         }}
       >
-        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
+        <span class="chat-controls__inline-select-label">${triggerModel}</span>
+        ${showReasoning || hasThinkingOverride
+          ? html`<span
+              class="chat-controls__effort-chip ${hasThinkingOverride
+                ? "chat-controls__effort-chip--override"
+                : ""}"
+              aria-hidden="true"
+              >${triggerThinking}</span
+            >`
+          : ""}
         <span class="chat-controls__inline-select-icon" aria-hidden="true">
           ${icons.chevronDown}
         </span>

@@ -101,6 +101,11 @@ function createMockCronService(): CronServiceContract {
     listPage: workflowMocks.cronListPage,
     add: workflowMocks.cronAdd,
     update: vi.fn(async (id, patch) => makeCronJob({ id, ...patch })),
+    updateWithPrecondition: vi.fn(async (id, patch, precondition) => {
+      const job = makeCronJob({ id });
+      await precondition(job, Date.now());
+      return makeCronJob({ ...job, ...patch });
+    }),
     remove: workflowMocks.cronRemove,
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),

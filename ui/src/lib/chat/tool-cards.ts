@@ -1,5 +1,10 @@
 // Control UI chat domain owns pure tool-card extraction rules.
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+  resolveToolUseId,
+} from "../../../../src/chat/tool-content.js";
 import type { ToolCard } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
@@ -142,28 +147,41 @@ export function extractToolPreview(
   return extractCanvasFromText(outputText, toolName);
 }
 
+function resolveToolCallId(
+  item: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  return (
+    resolveToolUseId(item) ||
+    (typeof item.callId === "string" && item.callId.trim()) ||
+    (typeof message.toolCallId === "string" && message.toolCallId.trim()) ||
+    (typeof message.tool_call_id === "string" && message.tool_call_id.trim()) ||
+    (typeof message.toolUseId === "string" && message.toolUseId.trim()) ||
+    (typeof message.tool_use_id === "string" && message.tool_use_id.trim()) ||
+    undefined
+  );
+}
+
+function resolveToolName(item: Record<string, unknown>, message: Record<string, unknown>): string {
+  return (
+    (typeof item.name === "string" && item.name.trim()) ||
+    (typeof message.toolName === "string" && message.toolName.trim()) ||
+    (typeof message.tool_name === "string" && message.tool_name.trim()) ||
+    "tool"
+  );
+}
+
 function resolveToolCardId(
   item: Record<string, unknown>,
   message: Record<string, unknown>,
   index: number,
   prefix = "tool",
 ): string {
-  const explicitId =
-    (typeof item.id === "string" && item.id.trim()) ||
-    (typeof item.toolCallId === "string" && item.toolCallId.trim()) ||
-    (typeof item.tool_call_id === "string" && item.tool_call_id.trim()) ||
-    (typeof item.callId === "string" && item.callId.trim()) ||
-    (typeof message.toolCallId === "string" && message.toolCallId.trim()) ||
-    (typeof message.tool_call_id === "string" && message.tool_call_id.trim()) ||
-    "";
+  const explicitId = resolveToolCallId(item, message);
   if (explicitId) {
     return `${prefix}:${explicitId}`;
   }
-  const name =
-    (typeof item.name === "string" && item.name.trim()) ||
-    (typeof message.toolName === "string" && message.toolName.trim()) ||
-    (typeof message.tool_name === "string" && message.tool_name.trim()) ||
-    "tool";
+  const name = resolveToolName(item, message);
   return `${prefix}:${name}:${index}`;
 }
 
@@ -194,6 +212,25 @@ export function formatCollapsedToolSummaryText(value: string | undefined): strin
   }
   const withoutConnector = normalized.replace(/^with\s+/i, "").trim();
   return withoutConnector || normalized;
+}
+
+function collapsedToolTextKey(value: string | undefined): string | undefined {
+  return formatCollapsedToolSummaryText(value)
+    ?.toLowerCase()
+    .replace(/[\s._-]+/g, "");
+}
+
+export function formatDistinctCollapsedToolSummaryText(
+  value: string | undefined,
+  label: string | undefined,
+): string | undefined {
+  const displayValue = formatCollapsedToolSummaryText(value);
+  if (!displayValue) {
+    return undefined;
+  }
+  const valueKey = collapsedToolTextKey(displayValue);
+  const labelKey = collapsedToolTextKey(label);
+  return valueKey && labelKey && valueKey === labelKey ? undefined : displayValue;
 }
 
 export function formatCollapsedToolPreviewText(value: string | undefined): string | undefined {
@@ -237,16 +274,17 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
-    const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
     const isToolCall =
-      ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
+      isToolCallContentType(item.type) ||
       (typeof item.name === "string" &&
         (item.arguments != null || item.args != null || item.input != null));
     if (isToolCall) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
+      const callId = resolveToolCallId(item, m);
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
-        name: typeof item.name === "string" ? item.name : "tool",
+        ...(callId ? { callId } : {}),
+        name: resolveToolName(item, m),
         args,
         inputText: serializeToolInput(args),
         messageId: transcriptMessageId,
@@ -254,15 +292,17 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       continue;
     }
 
-    if (kind === "toolresult" || kind === "tool_result") {
-      const name = typeof item.name === "string" ? item.name : "tool";
+    if (isToolResultContentType(item.type)) {
+      const name = resolveToolName(item, m);
       const cardId = resolveToolCardId(item, m, index, prefix);
+      const callId = resolveToolCallId(item, m);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         fallbackMatchedCards.add(existing);
+        existing.callId ??= callId;
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {
@@ -272,6 +312,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       }
       cards.push({
         id: cardId,
+        ...(callId ? { callId } : {}),
         name,
         outputText: text,
         messageId: transcriptMessageId,
@@ -295,8 +336,10 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
+    const callId = resolveToolCallId({}, m);
     cards.push({
       id: resolveToolCardId({}, m, 0, prefix),
+      ...(callId ? { callId } : {}),
       name,
       outputText: text,
       messageId: transcriptMessageId,

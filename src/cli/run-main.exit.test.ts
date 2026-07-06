@@ -11,6 +11,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
+import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -2455,6 +2456,13 @@ describe("runCli exit behavior", () => {
       void code;
       return undefined as never;
     }) as typeof process.exit);
+    let finishCompanionCleanup: (() => void) | undefined;
+    const unregisterCompanionCleanup = registerSignalExitBarrier(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCompanionCleanup = resolve;
+        }),
+    );
 
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
@@ -2475,6 +2483,11 @@ describe("runCli exit behavior", () => {
       await vi.waitFor(() => {
         expect(stopProxyMock).toHaveBeenCalledWith(handle);
       });
+      expect(exitSpy).not.toHaveBeenCalled();
+      if (!finishCompanionCleanup) {
+        throw new Error("companion signal cleanup did not start");
+      }
+      finishCompanionCleanup();
       await vi.waitFor(() => {
         expect(exitSpy).toHaveBeenCalledWith(130);
       });
@@ -2483,6 +2496,7 @@ describe("runCli exit behavior", () => {
       await runPromise;
       expect(stopProxyMock).toHaveBeenCalledTimes(1);
     } finally {
+      unregisterCompanionCleanup();
       exitSpy.mockRestore();
       processOnceSpy.mockRestore();
     }

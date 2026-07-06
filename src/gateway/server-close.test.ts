@@ -116,6 +116,7 @@ function createGatewayCloseTestDeps(
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
+    worktreeCleanup: null,
     agentUnsub: null,
     heartbeatUnsub: null,
     transcriptUnsub: null,
@@ -977,7 +978,7 @@ describe("createGatewayCloseHandler", () => {
       createGatewayCloseTestDeps({
         broadcast,
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
         nodeSendToSession,
       }),
@@ -1031,7 +1032,7 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
       }),
     );

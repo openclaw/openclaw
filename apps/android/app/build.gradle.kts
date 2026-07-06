@@ -56,6 +56,7 @@ plugins {
   alias(libs.plugins.ktlint)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.ksp)
 }
 
 android {
@@ -217,6 +218,9 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   implementation(libs.androidx.security.crypto)
+  // Read-only offline cache for chat sessions/transcripts (disposable, destructive migrations only).
+  implementation(libs.androidx.room.runtime)
+  ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)

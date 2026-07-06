@@ -37,12 +37,14 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
+  options: [] as Array<{ maxPayload?: number } | undefined>,
 }));
 
 beforeEach(() => {
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
   wsMockState.behavior = "close";
   wsMockState.urls = [];
+  wsMockState.options = [];
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -84,8 +86,9 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL) {
+    constructor(url: string | URL, options?: { maxPayload?: number }) {
       wsMockState.urls.push(String(url));
+      wsMockState.options.push(options);
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
@@ -202,6 +205,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
@@ -945,6 +949,7 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });

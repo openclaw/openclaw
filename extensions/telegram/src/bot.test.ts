@@ -153,6 +153,7 @@ async function writeDirectTelegramTranscriptContext(params: {
   cfg: OpenClawConfig;
   storePath: string;
   chatId: number;
+  role?: "assistant" | "user";
   senderId: number;
   sessionId: string;
   text: string;
@@ -188,10 +189,10 @@ async function writeDirectTelegramTranscriptContext(params: {
     [
       JSON.stringify({ type: "session", id: params.sessionId }),
       JSON.stringify({
-        id: "transcript-user-1",
+        id: params.role === "assistant" ? "transcript-assistant-1" : "transcript-user-1",
         type: "message",
         message: {
-          role: "user",
+          role: params.role ?? "user",
           content: params.text,
           timestamp: params.timestamp,
         },
@@ -2426,6 +2427,104 @@ describe("createTelegramBot", () => {
       expect(photoMessage?.media_ref).toBe("telegram:file/reference-photo-1");
     } finally {
       await rm(storePath, { force: true });
+    }
+  });
+
+  it("dedupes direct assistant transcript context against cached Telegram replies after stripping directives", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-visible-dedupe-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+    await rm(storePath, { force: true });
+    await rm(`${storePath}.telegram-messages.json`, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({ token: "tok", config });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+      const chatId = 7773;
+      const senderId = 202;
+      const visibleReply = "Yep - I'm here now.";
+      const replyTimestampMs = 1_778_474_700_000;
+      const telegramReplyDate = Math.floor((replyTimestampMs + 5_000) / 1000);
+
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        role: "assistant",
+        senderId,
+        sessionId: "telegram-dm-assistant-visible-dedupe-session",
+        text: `[[reply_to_current]]${visibleReply}`,
+        timestamp: replyTimestampMs,
+      });
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "still there?",
+          date: 1_778_474_850,
+          message_id: 741,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+          reply_to_message: {
+            chat: { id: chatId, type: "private" },
+            date: telegramReplyDate,
+            from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+            message_id: 736,
+            openclaw_prompt_context_timestamp_ms: replyTimestampMs,
+            text: visibleReply,
+          },
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "replySpy call",
+      );
+      const [conversationContext] = requireArray(
+        payload.UntrustedStructuredContext,
+        "structured context",
+      );
+      const contextRecord = requireRecord(conversationContext, "conversation context");
+      const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+      const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+        (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+      );
+
+      expect(messages).toEqual([
+        expect.objectContaining({
+          body: visibleReply,
+          is_reply_target: true,
+          message_id: "736",
+          sender: "OpenClaw",
+        }),
+      ]);
+      expect(messages.filter((message) => message.body === visibleReply)).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain("[[reply_to_current]]");
+      expect(messages.some((message) => String(message.message_id).startsWith("session:"))).toBe(
+        false,
+      );
+    } finally {
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.telegram-messages.json`, { force: true });
     }
   });
 

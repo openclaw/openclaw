@@ -59,6 +59,15 @@ data class ChatCommandEntry(
 
 
 /**
+ * Run still streaming on the gateway when a chat.history snapshot was captured;
+ * [text] is the assistant text buffered so far (may be empty for runs without deltas).
+ */
+data class ChatInFlightRun(
+  val runId: String,
+  val text: String,
+)
+
+/**
  * Snapshot of one chat session, including optional thinking level selected on the gateway.
  */
 data class ChatHistory(
@@ -67,6 +76,7 @@ data class ChatHistory(
   val thinkingLevel: String?,
   val messages: List<ChatMessage>,
   val sessionInfo: ChatSessionEntry? = null,
+  val inFlightRun: ChatInFlightRun? = null,
 )
 
 /**

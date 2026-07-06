@@ -12,6 +12,15 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(htmlToMarkdown(`<p>&#x1D54B;</p>`).text).toBe(doubleT);
   });
 
+  it("preserves surrogate numeric entities as literal text", () => {
+    const highSurrogate = String.fromCharCode(0xd800);
+
+    expect(htmlToMarkdown(`<p>bad &#xD800; end</p>`).text).toBe("bad &#xD800; end");
+    expect(htmlToMarkdown(`<p>bad &#55296; end</p>`).text).toBe("bad &#55296; end");
+    expect(htmlToMarkdown(`<p>bad &#xDFFF; end</p>`).text).toBe("bad &#xDFFF; end");
+    expect(htmlToMarkdown(`<p>bad &#xD800; end</p>`).text).not.toContain(highSurrogate);
+  });
+
   it("decodes &amp; last so an escaped entity is not double-decoded", () => {
     // "&amp;#39;" is the correct HTML encoding of the literal text "&#39;" and must survive intact.
     expect(htmlToMarkdown(`<p>Tom &amp;#39;s pub</p>`).text).toBe("Tom &#39;s pub");

@@ -58,6 +58,7 @@ import type {
 type CodexDynamicToolHookContext = {
   agentId?: string;
   config?: EmbeddedRunAttemptParams["config"];
+  workspaceDir?: string;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;

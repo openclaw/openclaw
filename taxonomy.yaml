@@ -357,7 +357,7 @@ surfaces:
             description: '`health` and `status` RPCs.'
           - name: Identity and presence APIs
             coverageIds: [gateway.identity-and-presence-apis]
-            description: '`gateway.identity.get`, `system-presence`, `system-event`, and heartbeat RPCs.'
+            description: '`gateway.identity.get`, `system.info`, `system-presence`, `system-event`, and heartbeat RPCs.'
           - name: Model APIs
             coverageIds: [gateway.model-apis]
             description: '`models.list` RPCs.'
@@ -1612,10 +1612,14 @@ surfaces:
           - name: Runtime Assembly
             coverageIds: [agents.openclaw-harness, models.codex-cli, workspace.planning]
             description: Covers Runtime Assembly across context-engine selection, registry, host compatibility, legacy fallback, assemble/ingest/after-turn/compact lifecycle, runtime context projection, and the boundary between OpenClaw context assembly and native harness history.
+          - name: Goal continuance
+            coverageIds: [goals.context-injection, goals.continuance]
+            description: Active session goals remain visible in current-turn context and drive concrete followthrough across later turns and compaction.
         docs:
           - docs/concepts/context.md
           - docs/concepts/context-engine.md
           - docs/plan/codex-context-engine-harness.md
+          - docs/tools/goal.md
         search_anchors:
           - Context Engine
           - Runtime Assembly

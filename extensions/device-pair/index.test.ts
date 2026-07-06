@@ -19,6 +19,7 @@ const pluginApiMocks = vi.hoisted(() => ({
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
   resolveGatewayPort: vi.fn(() => 18789),
+  resolveTailscaleServeGatewayUrlsWithRunner: vi.fn(async () => []),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
   writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
     const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
@@ -46,6 +47,8 @@ vi.mock("./api.js", () => {
     resolveGatewayBindUrl: vi.fn(),
     resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
     resolveTailnetHostWithRunner: vi.fn(),
+    resolveTailscaleServeGatewayUrlsWithRunner:
+      pluginApiMocks.resolveTailscaleServeGatewayUrlsWithRunner,
     runPluginCommandWithTimeout: vi.fn(),
     writeQrPngTempFile: pluginApiMocks.writeQrPngTempFile,
   };
@@ -63,6 +66,7 @@ import {
   resolveAdvertisedLanHost,
   resolveGatewayBindUrl,
   resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
 } from "./api.js";
 import registerDevicePair from "./index.js";
 
@@ -894,6 +898,68 @@ describe("device-pair /pair default setup code", () => {
     expect(resolveAdvertisedLanHost).toHaveBeenCalledTimes(1);
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(requireText(result)).toContain("Gateway: ws://10.211.55.3:18789");
+  });
+
+  it("includes a Tailscale Serve fallback for LAN bind-derived setup urls", async () => {
+    vi.mocked(resolveAdvertisedLanHost).mockResolvedValueOnce("192.168.139.3");
+    vi.mocked(resolveGatewayBindUrl).mockImplementationOnce((params) => ({
+      url: `ws://${params.pickLanHost()}:18789`,
+      source: "gateway.bind=lan",
+    }));
+    vi.mocked(resolveTailscaleServeGatewayUrlsWithRunner).mockResolvedValueOnce([
+      "wss://clawmac.tail.ts.net:8443",
+    ]);
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "gateway-token" },
+        },
+      },
+      pluginConfig: { publicUrl: undefined },
+    });
+
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(requireText(result)).toContain("Gateway: ws://192.168.139.3:18789");
+    expect(requireText(result)).toContain("Fallback: wss://clawmac.tail.ts.net:8443");
+  });
+
+  it("does not advertise a loopback Serve route for a custom bind", async () => {
+    vi.mocked(resolveGatewayBindUrl).mockReturnValueOnce({
+      url: "ws://192.168.139.3:18789",
+      source: "gateway.bind=custom",
+    });
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.139.3",
+          auth: { mode: "token", token: "gateway-token" },
+        },
+      },
+      pluginConfig: { publicUrl: undefined },
+    });
+
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(resolveTailscaleServeGatewayUrlsWithRunner).not.toHaveBeenCalled();
+    expect(requireText(result)).toContain("Gateway: ws://192.168.139.3:18789");
+    expect(requireText(result)).not.toContain("Fallback:");
   });
 
   it("rejects public cleartext setup urls before issuing setup codes", async () => {

@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import {
@@ -26,6 +27,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import {
   detectAndLoadPromptImages,
@@ -36,7 +38,6 @@ import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -145,6 +146,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -203,6 +205,7 @@ export function buildCliAgentSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
+    bootstrapMode: params.bootstrapMode,
   });
 }
 

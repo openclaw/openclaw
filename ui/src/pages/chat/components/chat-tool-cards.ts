@@ -7,6 +7,7 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
+  formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
@@ -22,6 +23,20 @@ import {
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+
+export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
+  if (event.detail === 0) {
+    return true;
+  }
+  const target = event.currentTarget;
+  const selection = window.getSelection();
+  if (!(target instanceof Node) || !selection || selection.isCollapsed) {
+    return true;
+  }
+  return ![selection.anchorNode, selection.focusNode].some(
+    (node) => node !== null && target.contains(node),
+  );
+}
 
 function formatToolOutputForSidebar(text: string): string {
   if (isMarkdownBlockArtText(text)) {
@@ -260,23 +275,22 @@ function renderCollapsedToolSummary(params: {
 }) {
   const { label, icon, name, expanded, isError, onToggleExpanded } = params;
   const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
-  const displayName = formatCollapsedToolSummaryText(name);
+  const displayName = formatDistinctCollapsedToolSummaryText(name, displayLabel);
   return html`
     <button
       class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
       type="button"
       aria-expanded=${String(expanded)}
-      @click=${() => onToggleExpanded()}
+      @click=${(event: MouseEvent) => {
+        if (shouldToggleSelectableDisclosure(event)) {
+          onToggleExpanded();
+        }
+      }}
     >
       <span class="chat-tool-msg-summary__icon">${icon}</span>
       <span class="chat-tool-msg-summary__label">${displayLabel}</span>
       ${displayName
         ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
-        : nothing}
-      ${isError
-        ? html`<span class="chat-tool-msg-summary__error-badge" aria-label="Tool returned an error"
-            >${icons.x}<span>Error</span></span
-          >`
         : nothing}
     </button>
   `;
@@ -322,6 +336,7 @@ export function renderToolCard(
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
+    turnSucceeded?: boolean;
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
@@ -331,7 +346,7 @@ export function renderToolCard(
   },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isError = isToolCardError(card);
+  const isError = isToolCardError(card) && opts.turnSucceeded !== true;
   const summary = resolveCollapsedToolSummaryParts({
     card,
     displayLabel: display.label,
@@ -408,34 +423,29 @@ export function renderExpandedToolCardContent(
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-      <div class="chat-tool-card__header">
-        <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${renderToolIcon(display.icon)}</span>
-          <span>${display.label}</span>
-          ${isError
-            ? html`<span class="chat-tool-card__status-badge" role="status"
-                >${icons.x}<span>Error</span></span
-              >`
-            : nothing}
-        </div>
-        ${canOpenSidebar
-          ? html`
-              <div class="chat-tool-card__actions">
-                <openclaw-tooltip content="Open in the side panel">
-                  <button
-                    class="chat-tool-card__action-btn"
-                    type="button"
-                    @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                    aria-label="Open tool details in side panel"
-                  >
-                    <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            `
-          : nothing}
-      </div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+      ${detail || canOpenSidebar
+        ? html`
+            <div class="chat-tool-card__header">
+              ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+              ${canOpenSidebar
+                ? html`
+                    <div class="chat-tool-card__actions">
+                      <openclaw-tooltip content="Open in the side panel">
+                        <button
+                          class="chat-tool-card__action-btn"
+                          type="button"
+                          @click=${() => onOpenSidebar?.(sidebarActionContent)}
+                          aria-label="Open tool details in side panel"
+                        >
+                          <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
+                        </button>
+                      </openclaw-tooltip>
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `
+        : nothing}
       ${hasInput
         ? renderToolDataBlock({
             label: "Tool input",
@@ -449,7 +459,12 @@ export function renderExpandedToolCardContent(
               label: isError ? "Tool error" : "Tool output",
               text: card.outputText!,
             })
-        : nothing}
+        : isError
+          ? renderToolDataBlock({
+              label: "Tool error",
+              text: "No output — tool failed.",
+            })
+          : nothing}
     </div>
   `;
 }

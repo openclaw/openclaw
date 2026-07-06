@@ -125,6 +125,7 @@ public struct HelloOk: Codable, Sendable {
     public let server: [String: AnyCodable]
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
+    public let controluitabs: [[String: AnyCodable]]?
     public let pluginsurfaceurls: [String: AnyCodable]?
     public let auth: [String: AnyCodable]
     public let policy: [String: AnyCodable]
@@ -135,6 +136,7 @@ public struct HelloOk: Codable, Sendable {
         server: [String: AnyCodable],
         features: [String: AnyCodable],
         snapshot: Snapshot,
+        controluitabs: [[String: AnyCodable]]?,
         pluginsurfaceurls: [String: AnyCodable]?,
         auth: [String: AnyCodable],
         policy: [String: AnyCodable])
@@ -144,6 +146,7 @@ public struct HelloOk: Codable, Sendable {
         self.server = server
         self.features = features
         self.snapshot = snapshot
+        self.controluitabs = controluitabs
         self.pluginsurfaceurls = pluginsurfaceurls
         self.auth = auth
         self.policy = policy
@@ -155,6 +158,7 @@ public struct HelloOk: Codable, Sendable {
         case server
         case features
         case snapshot
+        case controluitabs = "controlUiTabs"
         case pluginsurfaceurls = "pluginSurfaceUrls"
         case auth
         case policy
@@ -505,6 +509,94 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     }
 }
 
+public struct SystemInfoParams: Codable, Sendable {}
+
+public struct SystemInfoResult: Codable, Sendable {
+    public let machinename: String
+    public let hostname: String
+    public let platform: String
+    public let release: String
+    public let arch: String
+    public let oslabel: String
+    public let lanaddress: String?
+    public let port: Int?
+    public let nodeversion: String
+    public let pid: Int
+    public let uptimems: Int
+    public let cpucount: Int
+    public let cpumodel: String?
+    public let loadaverage: [AnyCodable]?
+    public let memorytotalbytes: Int
+    public let memoryfreebytes: Int
+    public let disktotalbytes: Int?
+    public let diskavailablebytes: Int?
+    public let diskpath: String?
+
+    public init(
+        machinename: String,
+        hostname: String,
+        platform: String,
+        release: String,
+        arch: String,
+        oslabel: String,
+        lanaddress: String?,
+        port: Int?,
+        nodeversion: String,
+        pid: Int,
+        uptimems: Int,
+        cpucount: Int,
+        cpumodel: String?,
+        loadaverage: [AnyCodable]?,
+        memorytotalbytes: Int,
+        memoryfreebytes: Int,
+        disktotalbytes: Int?,
+        diskavailablebytes: Int?,
+        diskpath: String?)
+    {
+        self.machinename = machinename
+        self.hostname = hostname
+        self.platform = platform
+        self.release = release
+        self.arch = arch
+        self.oslabel = oslabel
+        self.lanaddress = lanaddress
+        self.port = port
+        self.nodeversion = nodeversion
+        self.pid = pid
+        self.uptimems = uptimems
+        self.cpucount = cpucount
+        self.cpumodel = cpumodel
+        self.loadaverage = loadaverage
+        self.memorytotalbytes = memorytotalbytes
+        self.memoryfreebytes = memoryfreebytes
+        self.disktotalbytes = disktotalbytes
+        self.diskavailablebytes = diskavailablebytes
+        self.diskpath = diskpath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case machinename = "machineName"
+        case hostname
+        case platform
+        case release
+        case arch
+        case oslabel = "osLabel"
+        case lanaddress = "lanAddress"
+        case port
+        case nodeversion = "nodeVersion"
+        case pid
+        case uptimems = "uptimeMs"
+        case cpucount = "cpuCount"
+        case cpumodel = "cpuModel"
+        case loadaverage = "loadAverage"
+        case memorytotalbytes = "memoryTotalBytes"
+        case memoryfreebytes = "memoryFreeBytes"
+        case disktotalbytes = "diskTotalBytes"
+        case diskavailablebytes = "diskAvailableBytes"
+        case diskpath = "diskPath"
+    }
+}
+
 public struct AgentEvent: Codable, Sendable {
     public let runid: String
     public let seq: Int
@@ -772,6 +864,7 @@ public struct AgentParams: Codable, Sendable {
     public let timeout: Int?
     public let besteffortdeliver: Bool?
     public let lane: String?
+    public let cwd: String?
     public let cleanupbundlemcponrunend: Bool?
     public let modelrun: Bool?
     public let promptmode: AnyCodable?
@@ -814,6 +907,7 @@ public struct AgentParams: Codable, Sendable {
         timeout: Int?,
         besteffortdeliver: Bool?,
         lane: String?,
+        cwd: String?,
         cleanupbundlemcponrunend: Bool?,
         modelrun: Bool?,
         promptmode: AnyCodable?,
@@ -855,6 +949,7 @@ public struct AgentParams: Codable, Sendable {
         self.timeout = timeout
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
+        self.cwd = cwd
         self.cleanupbundlemcponrunend = cleanupbundlemcponrunend
         self.modelrun = modelrun
         self.promptmode = promptmode
@@ -898,6 +993,7 @@ public struct AgentParams: Codable, Sendable {
         case timeout
         case besteffortdeliver = "bestEffortDeliver"
         case lane
+        case cwd
         case cleanupbundlemcponrunend = "cleanupBundleMcpOnRunEnd"
         case modelrun = "modelRun"
         case promptmode = "promptMode"
@@ -1016,6 +1112,180 @@ public struct WakeParams: Codable, Sendable {
         case text
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+    }
+}
+
+public struct WorktreeRecord: Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let repofingerprint: String
+    public let reporoot: String
+    public let path: String
+    public let branch: String
+    public let baseref: String
+    public let ownerkind: String
+    public let ownerid: String?
+    public let snapshotref: String?
+    public let createdat: Int
+    public let lastactiveat: Int
+    public let removedat: Int?
+
+    public init(
+        id: String,
+        name: String,
+        repofingerprint: String,
+        reporoot: String,
+        path: String,
+        branch: String,
+        baseref: String,
+        ownerkind: String,
+        ownerid: String?,
+        snapshotref: String?,
+        createdat: Int,
+        lastactiveat: Int,
+        removedat: Int?)
+    {
+        self.id = id
+        self.name = name
+        self.repofingerprint = repofingerprint
+        self.reporoot = reporoot
+        self.path = path
+        self.branch = branch
+        self.baseref = baseref
+        self.ownerkind = ownerkind
+        self.ownerid = ownerid
+        self.snapshotref = snapshotref
+        self.createdat = createdat
+        self.lastactiveat = lastactiveat
+        self.removedat = removedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case repofingerprint = "repoFingerprint"
+        case reporoot = "repoRoot"
+        case path
+        case branch
+        case baseref = "baseRef"
+        case ownerkind = "ownerKind"
+        case ownerid = "ownerId"
+        case snapshotref = "snapshotRef"
+        case createdat = "createdAt"
+        case lastactiveat = "lastActiveAt"
+        case removedat = "removedAt"
+    }
+}
+
+public struct WorktreesListParams: Codable, Sendable {}
+
+public struct WorktreesListResult: Codable, Sendable {
+    public let worktrees: [WorktreeRecord]
+
+    public init(
+        worktrees: [WorktreeRecord])
+    {
+        self.worktrees = worktrees
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case worktrees
+    }
+}
+
+public struct WorktreesCreateParams: Codable, Sendable {
+    public let reporoot: String
+    public let name: String?
+    public let baseref: String?
+
+    public init(
+        reporoot: String,
+        name: String?,
+        baseref: String?)
+    {
+        self.reporoot = reporoot
+        self.name = name
+        self.baseref = baseref
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case reporoot = "repoRoot"
+        case name
+        case baseref = "baseRef"
+    }
+}
+
+public struct WorktreesRemoveParams: Codable, Sendable {
+    public let id: String
+    public let force: Bool?
+
+    public init(
+        id: String,
+        force: Bool?)
+    {
+        self.id = id
+        self.force = force
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case force
+    }
+}
+
+public struct WorktreesRemoveResult: Codable, Sendable {
+    public let removed: Bool
+    public let snapshotref: String?
+
+    public init(
+        removed: Bool,
+        snapshotref: String?)
+    {
+        self.removed = removed
+        self.snapshotref = snapshotref
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case removed
+        case snapshotref = "snapshotRef"
+    }
+}
+
+public struct WorktreesRestoreParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct WorktreesGcParams: Codable, Sendable {}
+
+public struct WorktreesGcResult: Codable, Sendable {
+    public let removed: [String]
+    public let orphansdeleted: Int
+    public let snapshotspruned: Int
+
+    public init(
+        removed: [String],
+        orphansdeleted: Int,
+        snapshotspruned: Int)
+    {
+        self.removed = removed
+        self.orphansdeleted = orphansdeleted
+        self.snapshotspruned = snapshotspruned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case removed
+        case orphansdeleted = "orphansDeleted"
+        case snapshotspruned = "snapshotsPruned"
     }
 }
 
@@ -2295,6 +2565,28 @@ public struct SessionsFilesGetResult: Codable, Sendable {
     }
 }
 
+public struct SessionWorktreeInfo: Codable, Sendable {
+    public let id: String
+    public let path: String
+    public let branch: String
+
+    public init(
+        id: String,
+        path: String,
+        branch: String)
+    {
+        self.id = id
+        self.path = path
+        self.branch = branch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case path
+        case branch
+    }
+}
+
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
@@ -2304,6 +2596,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
+    public let worktree: Bool?
 
     public init(
         key: String?,
@@ -2313,7 +2606,8 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String?,
         emitcommandhooks: Bool?,
         task: String?,
-        message: String?)
+        message: String?,
+        worktree: Bool?)
     {
         self.key = key
         self.agentid = agentid
@@ -2323,6 +2617,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
+        self.worktree = worktree
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2334,6 +2629,41 @@ public struct SessionsCreateParams: Codable, Sendable {
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
+        case worktree
+    }
+}
+
+public struct SessionsCreateResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let sessionid: String?
+    public let entry: [String: AnyCodable]?
+    public let runstarted: Bool?
+    public let worktree: SessionWorktreeInfo?
+
+    public init(
+        ok: Bool,
+        key: String,
+        sessionid: String?,
+        entry: [String: AnyCodable]?,
+        runstarted: Bool?,
+        worktree: SessionWorktreeInfo?)
+    {
+        self.ok = ok
+        self.key = key
+        self.sessionid = sessionid
+        self.entry = entry
+        self.runstarted = runstarted
+        self.worktree = worktree
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case sessionid = "sessionId"
+        case entry
+        case runstarted = "runStarted"
+        case worktree
     }
 }
 
@@ -2437,6 +2767,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let label: AnyCodable?
+    public let category: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
     public let thinkinglevel: AnyCodable?
@@ -2466,6 +2797,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         agentid: String? = nil,
         label: AnyCodable?,
+        category: AnyCodable? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
         thinkinglevel: AnyCodable?,
@@ -2494,6 +2826,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
+        self.category = category
         self.archived = archived
         self.pinned = pinned
         self.thinkinglevel = thinkinglevel
@@ -2524,6 +2857,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
+        case category
         case archived
         case pinned
         case thinkinglevel = "thinkingLevel"
@@ -3122,6 +3456,146 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
         case hint
         case hintpath = "hintPath"
         case children
+    }
+}
+
+public struct CrestodianChatParams: Codable, Sendable {
+    public let sessionid: String
+    public let message: String?
+    public let welcomevariant: AnyCodable?
+    public let reset: Bool?
+
+    public init(
+        sessionid: String,
+        message: String?,
+        welcomevariant: AnyCodable?,
+        reset: Bool?)
+    {
+        self.sessionid = sessionid
+        self.message = message
+        self.welcomevariant = welcomevariant
+        self.reset = reset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case message
+        case welcomevariant = "welcomeVariant"
+        case reset
+    }
+}
+
+public struct CrestodianChatResult: Codable, Sendable {
+    public let sessionid: String
+    public let reply: String
+    public let sensitive: Bool?
+    public let action: AnyCodable
+
+    public init(
+        sessionid: String,
+        reply: String,
+        sensitive: Bool? = nil,
+        action: AnyCodable)
+    {
+        self.sessionid = sessionid
+        self.reply = reply
+        self.sensitive = sensitive
+        self.action = action
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case reply
+        case sensitive
+        case action
+    }
+}
+
+public struct CrestodianSetupDetectParams: Codable, Sendable {}
+
+public struct CrestodianSetupDetectResult: Codable, Sendable {
+    public let candidates: [[String: AnyCodable]]
+    public let workspace: String
+    public let configuredmodel: String?
+    public let setupcomplete: Bool
+
+    public init(
+        candidates: [[String: AnyCodable]],
+        workspace: String,
+        configuredmodel: String?,
+        setupcomplete: Bool)
+    {
+        self.candidates = candidates
+        self.workspace = workspace
+        self.configuredmodel = configuredmodel
+        self.setupcomplete = setupcomplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case candidates
+        case workspace
+        case configuredmodel = "configuredModel"
+        case setupcomplete = "setupComplete"
+    }
+}
+
+public struct CrestodianSetupActivateParams: Codable, Sendable {
+    public let kind: AnyCodable
+    public let provider: String?
+    public let apikey: String?
+    public let workspace: String?
+
+    public init(
+        kind: AnyCodable,
+        provider: String?,
+        apikey: String?,
+        workspace: String?)
+    {
+        self.kind = kind
+        self.provider = provider
+        self.apikey = apikey
+        self.workspace = workspace
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case provider
+        case apikey = "apiKey"
+        case workspace
+    }
+}
+
+public struct CrestodianSetupActivateResult: Codable, Sendable {
+    public let ok: Bool
+    public let modelref: String?
+    public let latencyms: Double?
+    public let lines: [String]?
+    public let status: AnyCodable?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        modelref: String?,
+        latencyms: Double?,
+        lines: [String]?,
+        status: AnyCodable?,
+        error: String?)
+    {
+        self.ok = ok
+        self.modelref = modelref
+        self.latencyms = latencyms
+        self.lines = lines
+        self.status = status
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case modelref = "modelRef"
+        case latencyms = "latencyMs"
+        case lines
+        case status
+        case error
     }
 }
 
@@ -4364,6 +4838,7 @@ public struct AgentSummary: Codable, Sendable {
     public let name: String?
     public let identity: [String: AnyCodable]?
     public let workspace: String?
+    public let workspacegit: Bool?
     public let model: [String: AnyCodable]?
     public let agentruntime: [String: AnyCodable]?
     public let thinkinglevels: [[String: AnyCodable]]?
@@ -4375,6 +4850,7 @@ public struct AgentSummary: Codable, Sendable {
         name: String?,
         identity: [String: AnyCodable]?,
         workspace: String?,
+        workspacegit: Bool?,
         model: [String: AnyCodable]?,
         agentruntime: [String: AnyCodable]?,
         thinkinglevels: [[String: AnyCodable]]? = nil,
@@ -4385,6 +4861,7 @@ public struct AgentSummary: Codable, Sendable {
         self.name = name
         self.identity = identity
         self.workspace = workspace
+        self.workspacegit = workspacegit
         self.model = model
         self.agentruntime = agentruntime
         self.thinkinglevels = thinkinglevels
@@ -4397,6 +4874,7 @@ public struct AgentSummary: Codable, Sendable {
         case name
         case identity
         case workspace
+        case workspacegit = "workspaceGit"
         case model
         case agentruntime = "agentRuntime"
         case thinkinglevels = "thinkingLevels"
@@ -6101,6 +6579,9 @@ public struct SkillsUploadCommitParams: Codable, Sendable {
 
 public struct CronJob: Codable, Sendable {
     public let id: String
+    public let declarationkey: String?
+    public let displayname: String?
+    public let owner: [String: AnyCodable]?
     public let agentid: String?
     public let sessionkey: String?
     public let name: String
@@ -6116,9 +6597,22 @@ public struct CronJob: Codable, Sendable {
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
     public let state: [String: AnyCodable]
+    public let nextrunatms: Int?
+    public let lastrunatms: Int?
+    public let lastrunstatus: AnyCodable?
+    public let lastrunerror: String?
+    public let lastdelivered: Bool?
+    public let lastdeliverystatus: AnyCodable?
+    public let lastdeliveryerror: String?
+    public let lastfailurenotificationdelivered: Bool?
+    public let lastfailurenotificationdeliverystatus: AnyCodable?
+    public let lastfailurenotificationdeliveryerror: String?
 
     public init(
         id: String,
+        declarationkey: String? = nil,
+        displayname: String? = nil,
+        owner: [String: AnyCodable]? = nil,
         agentid: String? = nil,
         sessionkey: String?,
         name: String,
@@ -6133,9 +6627,22 @@ public struct CronJob: Codable, Sendable {
         payload: AnyCodable,
         delivery: AnyCodable?,
         failurealert: AnyCodable?,
-        state: [String: AnyCodable])
+        state: [String: AnyCodable],
+        nextrunatms: Int? = nil,
+        lastrunatms: Int? = nil,
+        lastrunstatus: AnyCodable? = nil,
+        lastrunerror: String? = nil,
+        lastdelivered: Bool? = nil,
+        lastdeliverystatus: AnyCodable? = nil,
+        lastdeliveryerror: String? = nil,
+        lastfailurenotificationdelivered: Bool? = nil,
+        lastfailurenotificationdeliverystatus: AnyCodable? = nil,
+        lastfailurenotificationdeliveryerror: String? = nil)
     {
         self.id = id
+        self.declarationkey = declarationkey
+        self.displayname = displayname
+        self.owner = owner
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.name = name
@@ -6151,10 +6658,23 @@ public struct CronJob: Codable, Sendable {
         self.delivery = delivery
         self.failurealert = failurealert
         self.state = state
+        self.nextrunatms = nextrunatms
+        self.lastrunatms = lastrunatms
+        self.lastrunstatus = lastrunstatus
+        self.lastrunerror = lastrunerror
+        self.lastdelivered = lastdelivered
+        self.lastdeliverystatus = lastdeliverystatus
+        self.lastdeliveryerror = lastdeliveryerror
+        self.lastfailurenotificationdelivered = lastfailurenotificationdelivered
+        self.lastfailurenotificationdeliverystatus = lastfailurenotificationdeliverystatus
+        self.lastfailurenotificationdeliveryerror = lastfailurenotificationdeliveryerror
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case declarationkey = "declarationKey"
+        case displayname = "displayName"
+        case owner
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case name
@@ -6170,6 +6690,16 @@ public struct CronJob: Codable, Sendable {
         case delivery
         case failurealert = "failureAlert"
         case state
+        case nextrunatms = "nextRunAtMs"
+        case lastrunatms = "lastRunAtMs"
+        case lastrunstatus = "lastRunStatus"
+        case lastrunerror = "lastRunError"
+        case lastdelivered = "lastDelivered"
+        case lastdeliverystatus = "lastDeliveryStatus"
+        case lastdeliveryerror = "lastDeliveryError"
+        case lastfailurenotificationdelivered = "lastFailureNotificationDelivered"
+        case lastfailurenotificationdeliverystatus = "lastFailureNotificationDeliveryStatus"
+        case lastfailurenotificationdeliveryerror = "lastFailureNotificationDeliveryError"
     }
 }
 
@@ -6231,6 +6761,9 @@ public struct CronStatusParams: Codable, Sendable {}
 
 public struct CronAddParams: Codable, Sendable {
     public let name: String
+    public let declarationkey: String?
+    public let displayname: String?
+    public let owner: [String: AnyCodable]?
     public let agentid: AnyCodable?
     public let sessionkey: AnyCodable?
     public let description: String?
@@ -6245,6 +6778,9 @@ public struct CronAddParams: Codable, Sendable {
 
     public init(
         name: String,
+        declarationkey: String? = nil,
+        displayname: String? = nil,
+        owner: [String: AnyCodable]? = nil,
         agentid: AnyCodable? = nil,
         sessionkey: AnyCodable?,
         description: String?,
@@ -6258,6 +6794,9 @@ public struct CronAddParams: Codable, Sendable {
         failurealert: AnyCodable?)
     {
         self.name = name
+        self.declarationkey = declarationkey
+        self.displayname = displayname
+        self.owner = owner
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.description = description
@@ -6273,6 +6812,9 @@ public struct CronAddParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case name
+        case declarationkey = "declarationKey"
+        case displayname = "displayName"
+        case owner
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case description
@@ -6284,6 +6826,28 @@ public struct CronAddParams: Codable, Sendable {
         case payload
         case delivery
         case failurealert = "failureAlert"
+    }
+}
+
+public struct CronDeclarativeAddResult: Codable, Sendable {
+    public let created: Bool
+    public let updated: Bool?
+    public let job: CronJob
+
+    public init(
+        created: Bool,
+        updated: Bool?,
+        job: CronJob)
+    {
+        self.created = created
+        self.updated = updated
+        self.job = job
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case created
+        case updated
+        case job
     }
 }
 
@@ -7033,6 +7597,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let alloweddecisions: [String]?
     public let agentid: String?
     public let sessionkey: String?
+    public let approvalreviewerdeviceids: [String]?
     public let turnsourcechannel: String?
     public let turnsourceto: String?
     public let turnsourceaccountid: String?
@@ -7050,6 +7615,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         alloweddecisions: [String]?,
         agentid: String? = nil,
         sessionkey: String?,
+        approvalreviewerdeviceids: [String]? = nil,
         turnsourcechannel: String?,
         turnsourceto: String?,
         turnsourceaccountid: String?,
@@ -7066,6 +7632,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.alloweddecisions = alloweddecisions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.approvalreviewerdeviceids = approvalreviewerdeviceids
         self.turnsourcechannel = turnsourcechannel
         self.turnsourceto = turnsourceto
         self.turnsourceaccountid = turnsourceaccountid
@@ -7084,6 +7651,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case alloweddecisions = "allowedDecisions"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case approvalreviewerdeviceids = "approvalReviewerDeviceIds"
         case turnsourcechannel = "turnSourceChannel"
         case turnsourceto = "turnSourceTo"
         case turnsourceaccountid = "turnSourceAccountId"
@@ -7397,6 +7965,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let setupcode: String
     public let qrdataurl: String?
     public let gatewayurl: String
+    public let gatewayurls: [String]?
     public let auth: AnyCodable
     public let urlsource: String
 
@@ -7404,12 +7973,14 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         setupcode: String,
         qrdataurl: String?,
         gatewayurl: String,
+        gatewayurls: [String]? = nil,
         auth: AnyCodable,
         urlsource: String)
     {
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
         self.gatewayurl = gatewayurl
+        self.gatewayurls = gatewayurls
         self.auth = auth
         self.urlsource = urlsource
     }
@@ -7418,6 +7989,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case setupcode = "setupCode"
         case qrdataurl = "qrDataUrl"
         case gatewayurl = "gatewayUrl"
+        case gatewayurls = "gatewayUrls"
         case auth
         case urlsource = "urlSource"
     }
@@ -7930,6 +8502,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
     public let seq: Int
     public let state: String
     public let message: AnyCodable?
+    public let errormessage: String?
     public let stopreason: String?
 
     public init(
@@ -7940,6 +8513,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         seq: Int,
         state: String,
         message: AnyCodable?,
+        errormessage: String? = nil,
         stopreason: String?)
     {
         self.runid = runid
@@ -7949,6 +8523,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         self.seq = seq
         self.state = state
         self.message = message
+        self.errormessage = errormessage
         self.stopreason = stopreason
     }
 
@@ -7960,6 +8535,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         case seq
         case state
         case message
+        case errormessage = "errorMessage"
         case stopreason = "stopReason"
     }
 }

@@ -97,6 +97,7 @@ import {
 import {
   buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
+  mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
@@ -107,7 +108,11 @@ import { parseIMessageNotification } from "./parse-notification.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
-import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
+import {
+  advanceIMessageRecoveryCursor,
+  loadIMessageRecoveryCursor,
+  resolveIMessageRecoveryCursorDbIdentity,
+} from "./recovery-cursor.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -466,9 +471,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
+  // Mirror the runtime gate's effective sender allowlist so the startup
+  // warning fires only for configs where every group message actually drops.
+  const effectiveGroupAllowFrom = mergeIMessageGroupAllowFromWithLegacyChatTargets({
+    groupAllowFrom,
+    allowFrom,
+    allowLegacyConversationTargets: allowLegacyConversationAllowFromForGroup,
+  });
   warnGroupAllowlistMisconfigOnce({
     groupPolicy,
-    groups: imessageCfg.groups,
+    hasGroupAllowFrom: effectiveGroupAllowFrom.length > 0,
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
@@ -534,9 +546,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const recoveryBoundaryRowid = watchSourceDbPath
     ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
     : null;
-  const recoveryCursorRowid = loadIMessageRecoveryCursor(accountInfo.accountId, {
-    migrateLegacyCatchup: !catchupCfg.enabled,
+  // Scope the cursor to the resolved database so a dbPath/remoteHost change
+  // starts from the new DB's watermark instead of a stale high-water (#99638).
+  const recoveryCursorDbIdentity = resolveIMessageRecoveryCursorDbIdentity({
+    cliPath,
+    dbPath,
+    remoteHost,
   });
+  const recoveryCursorRowid = loadIMessageRecoveryCursor(
+    accountInfo.accountId,
+    recoveryCursorDbIdentity,
+    { migrateLegacyCatchup: !catchupCfg.enabled },
+  );
   const watchSinceRowid = catchupCfg.enabled
     ? null
     : recoveryCursorRowid !== null
@@ -647,7 +668,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       holdFloor !== null && maxHandledRowid >= holdFloor ? holdFloor - 1 : maxHandledRowid;
 
     if (nextCursorRowid >= 0 && nextCursorRowid > latestAdvancedRecoveryCursorRowid) {
-      advanceIMessageRecoveryCursor(accountInfo.accountId, nextCursorRowid);
+      advanceIMessageRecoveryCursor(
+        accountInfo.accountId,
+        recoveryCursorDbIdentity,
+        nextCursorRowid,
+      );
       latestAdvancedRecoveryCursorRowid = nextCursorRowid;
       for (const rowid of handledRecoveryCursorRowids) {
         if (rowid <= nextCursorRowid) {
@@ -1064,6 +1089,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       await createChannelPairingChallengeIssuer({
         channel: "imessage",
+        accountId: accountInfo.accountId,
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({
             channel: "imessage",

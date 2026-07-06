@@ -128,7 +128,8 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"]
+    "speechProviders": ["xiaomi"],
+    "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthEnvVars": {
     "xiaomi": ["XIAOMI_API_KEY"],

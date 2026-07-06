@@ -290,14 +290,15 @@ describe("qa suite gateway helpers", () => {
     });
     const { env } = createConfigMutationEnv(gatewayCall);
 
-    await expect(
-      patchConfig({
-        env,
-        patch: { tools: { deny: ["read"] } },
-        replacePaths: ["tools.deny"],
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true });
+    const mutation = patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      replacePaths: ["tools.deny"],
+      restartDelayMs: 0,
+      restartSettleBufferMs: 1,
+    });
+
+    await expect(mutation).resolves.toEqual({ ok: true });
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "config.patch",

@@ -79,4 +79,138 @@ describe("exec approvals gateway methods", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      method: "exec.approvals.node.get" as const,
+      command: "system.execApprovals.get",
+      params: { nodeId: "node-1" },
+      commands: [],
+      config: {},
+    },
+    {
+      method: "exec.approvals.node.set" as const,
+      command: "system.execApprovals.set",
+      params: {
+        nodeId: "node-1",
+        file: { version: 1, agents: {} },
+        baseHash: "base-hash",
+      },
+      commands: ["system.execApprovals.set"],
+      config: { gateway: { nodes: { denyCommands: ["system.execApprovals.set"] } } },
+    },
+  ])("blocks $method outside the effective command policy", async (testCase) => {
+    const invoke = vi.fn();
+    const respond = vi.fn();
+
+    await execApprovalsHandlers[testCase.method]({
+      req: {
+        type: "req",
+        id: "req-node-blocked",
+        method: testCase.method,
+        params: testCase.params,
+      },
+      params: testCase.params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => testCase.config,
+        nodeRegistry: {
+          get: () => ({
+            nodeId: "node-1",
+            connId: "conn-1",
+            platform: "windows",
+            deviceFamily: "Windows",
+            declaredCommands: [testCase.command],
+            commands: testCase.commands,
+          }),
+          invoke,
+        },
+      } as never,
+    });
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: expect.objectContaining({ command: testCase.command }),
+      }),
+    );
+  });
+
+  it("relays approved exec-approval commands", async () => {
+    const command = "system.execApprovals.get";
+    const invoke = vi.fn().mockResolvedValue({ ok: true, payload: { exists: true } });
+    const respond = vi.fn();
+
+    await execApprovalsHandlers["exec.approvals.node.get"]({
+      req: {
+        type: "req",
+        id: "req-node-allowed",
+        method: "exec.approvals.node.get",
+        params: { nodeId: "node-1" },
+      },
+      params: { nodeId: "node-1" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        nodeRegistry: {
+          get: () => ({
+            nodeId: "node-1",
+            connId: "conn-1",
+            platform: "windows",
+            deviceFamily: "Windows",
+            declaredCommands: [command],
+            commands: [command],
+          }),
+          invoke,
+        },
+      } as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith({ nodeId: "node-1", command, params: {} });
+    expect(respond).toHaveBeenCalledWith(true, { exists: true }, undefined);
+  });
+
+  it("preserves unavailable details for unknown nodes", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: "NOT_CONNECTED", message: "node not connected" },
+    });
+    const respond = vi.fn();
+
+    await execApprovalsHandlers["exec.approvals.node.get"]({
+      req: {
+        type: "req",
+        id: "req-node-missing",
+        method: "exec.approvals.node.get",
+        params: { nodeId: "missing-node" },
+      },
+      params: { nodeId: "missing-node" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        nodeRegistry: { get: () => undefined, invoke },
+      } as never,
+    });
+
+    expect(invoke).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: {
+          nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+        },
+      }),
+    );
+  });
 });

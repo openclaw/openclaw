@@ -2034,10 +2034,20 @@ describe("plugin sdk alias helpers", () => {
     const options = buildPluginLoaderJitiOptions({});
 
     expect(options.tryNative).toBe(true);
+    expect(options.nativeModules).toEqual(["openclaw"]);
     expect(options.interopDefault).toBe(true);
     expect(options.extensions).toContain(".js");
     expect(options.extensions).toContain(".ts");
     expect("alias" in options).toBe(false);
+  });
+
+  it("preserves configured jiti native modules while adding openclaw", () => {
+    const options = withEnv(
+      { JITI_NATIVE_MODULES: JSON.stringify(["native-addon", "openclaw"]) },
+      () => buildPluginLoaderJitiOptions({}),
+    );
+
+    expect(options.nativeModules).toEqual(["native-addon", "openclaw"]);
   });
 
   it("uses transpiled module loads for source TypeScript plugin entries", () => {

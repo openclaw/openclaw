@@ -303,6 +303,7 @@ export class CronPage extends LitElement {
             open: this.quickCreateOpen,
             step: this.quickCreateStep,
             draft: this.quickCreateDraft ?? createDefaultDraft(),
+            modelSuggestions: suggestions.modelSuggestions,
             onCancel: () => this.closeQuickCreate(),
             onStepChange: (step) => (this.quickCreateStep = step),
             onDraftChange: (patch) => {

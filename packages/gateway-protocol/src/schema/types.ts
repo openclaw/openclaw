@@ -31,6 +31,17 @@ export type EnvironmentsListParams = SchemaType<"EnvironmentsListParams">;
 export type EnvironmentsListResult = SchemaType<"EnvironmentsListResult">;
 export type EnvironmentsStatusParams = SchemaType<"EnvironmentsStatusParams">;
 export type EnvironmentsStatusResult = SchemaType<"EnvironmentsStatusResult">;
+export type SystemInfoParams = SchemaType<"SystemInfoParams">;
+export type SystemInfoResult = SchemaType<"SystemInfoResult">;
+export type WorktreeRecord = SchemaType<"WorktreeRecord">;
+export type WorktreesListParams = SchemaType<"WorktreesListParams">;
+export type WorktreesListResult = SchemaType<"WorktreesListResult">;
+export type WorktreesCreateParams = SchemaType<"WorktreesCreateParams">;
+export type WorktreesRemoveParams = SchemaType<"WorktreesRemoveParams">;
+export type WorktreesRemoveResult = SchemaType<"WorktreesRemoveResult">;
+export type WorktreesRestoreParams = SchemaType<"WorktreesRestoreParams">;
+export type WorktreesGcParams = SchemaType<"WorktreesGcParams">;
+export type WorktreesGcResult = SchemaType<"WorktreesGcResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;
@@ -83,7 +94,9 @@ export type SessionsCompactionListResult = SchemaType<"SessionsCompactionListRes
 export type SessionsCompactionGetResult = SchemaType<"SessionsCompactionGetResult">;
 export type SessionsCompactionBranchResult = SchemaType<"SessionsCompactionBranchResult">;
 export type SessionsCompactionRestoreResult = SchemaType<"SessionsCompactionRestoreResult">;
+export type SessionWorktreeInfo = SchemaType<"SessionWorktreeInfo">;
 export type SessionsCreateParams = SchemaType<"SessionsCreateParams">;
+export type SessionsCreateResult = SchemaType<"SessionsCreateResult">;
 export type SessionsSendParams = SchemaType<"SessionsSendParams">;
 export type SessionsMessagesSubscribeParams = SchemaType<"SessionsMessagesSubscribeParams">;
 export type SessionsMessagesUnsubscribeParams = SchemaType<"SessionsMessagesUnsubscribeParams">;
@@ -115,6 +128,14 @@ export type ConfigSchemaLookupParams = SchemaType<"ConfigSchemaLookupParams">;
 export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;
 export type ConfigSchemaLookupResult = SchemaType<"ConfigSchemaLookupResult">;
 export type UpdateStatusParams = SchemaType<"UpdateStatusParams">;
+
+/** Crestodian chat payloads exchanged by clients and the gateway. */
+export type CrestodianChatParams = SchemaType<"CrestodianChatParams">;
+export type CrestodianChatResult = SchemaType<"CrestodianChatResult">;
+export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParams">;
+export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
+export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
+export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
 
 /** Wizard setup flow payloads exchanged by CLI, UI, and gateway. */
 export type WizardStartParams = SchemaType<"WizardStartParams">;
@@ -258,6 +279,8 @@ export type CronListParams = SchemaType<"CronListParams">;
 export type CronStatusParams = SchemaType<"CronStatusParams">;
 export type CronGetParams = SchemaType<"CronGetParams">;
 export type CronAddParams = SchemaType<"CronAddParams">;
+export type CronAddResult = SchemaType<"CronAddResult">;
+export type CronDeclarativeAddResult = SchemaType<"CronDeclarativeAddResult">;
 export type CronUpdateParams = SchemaType<"CronUpdateParams">;
 export type CronRemoveParams = SchemaType<"CronRemoveParams">;
 export type CronRunParams = SchemaType<"CronRunParams">;
