@@ -571,6 +571,25 @@ function isEphemeralNodeManagedNpmPrefix(prefix: string): boolean {
   );
 }
 
+/**
+ * Returns true when a probed `npm root -g` result is safe to adopt as the
+ * install target. A probe that lands in an ephemeral per-Node prefix (Homebrew
+ * Cellar, nvm/fnm/asdf/volta version dirs) means npm's PATH/node pairing is
+ * skewed — for example an nvm npm shim executed by a Homebrew node derives its
+ * default prefix from the foreign node's realpathed Cellar path. Installing
+ * there would create a tree that no stable entrypoint loads from and that a
+ * `brew upgrade node` silently deletes.
+ */
+function isAdoptableProbedGlobalRoot(probedGlobalRoot: string | null): boolean {
+  if (!probedGlobalRoot) {
+    return false;
+  }
+  const probedPrefix = resolveNpmGlobalPrefixLayoutFromGlobalRoot(probedGlobalRoot, {
+    allowDirectNodeModulesRoot: true,
+  })?.prefix;
+  return !probedPrefix || !isEphemeralNodeManagedNpmPrefix(probedPrefix);
+}
+
 function resolveNpmCommandBesidePackageRoot(pkgRoot?: string | null): string | null {
   const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
   if (!prefix) {
@@ -796,11 +815,21 @@ export async function resolveGlobalInstallTarget(params: {
     params.pkgRoot,
   );
   const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
+  // Self-updates must mutate the tree the resolved package root lives in.
+  // `npm root -g` only decides the target when no package root is known: in a
+  // skewed environment (e.g. a service PATH whose npm does not belong to the
+  // running install's Node tree) the probe can point at a different — or
+  // brand-new — global root, leaving the running install stale after a
+  // reported-successful update.
+  const pkgRootDerivedGlobalRoot =
+    command.manager === "npm" ? inferGlobalRootFromPackageRoot(params.pkgRoot) : null;
+  const probedGlobalRoot = isAdoptableProbedGlobalRoot(globalRoot) ? globalRoot : null;
   const targetGlobalRoot =
     (command.manager === "bun" ? bunPackageRootGlobalRoot : null) ??
     pkgRootGlobalRoot ??
     (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
-    globalRoot;
+    pkgRootDerivedGlobalRoot ??
+    probedGlobalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,
