@@ -800,19 +800,16 @@ async function readClawHubResponseBytes(params: {
   resourceLabel: string;
 }): Promise<Uint8Array> {
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
-  return await readResponseWithLimit(
-    params.response,
-    params.maxBytes ?? CLAWHUB_ARCHIVE_MAX_BYTES,
-    {
-      chunkTimeoutMs: timeoutMs,
-      onOverflow: ({ size, maxBytes }) =>
-        new Error(
-          `ClawHub ${params.resourceLabel} exceeded ${maxBytes} bytes (${size} bytes received)`,
-        ),
-      onIdleTimeout: ({ chunkTimeoutMs }) =>
-        new Error(`ClawHub ${params.resourceLabel} body stalled after ${chunkTimeoutMs}ms`),
-    },
-  );
+  const maxBytes = params.maxBytes ?? CLAWHUB_ARCHIVE_MAX_BYTES;
+  return await readResponseWithLimit(params.response, maxBytes, {
+    chunkTimeoutMs: timeoutMs,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `ClawHub ${params.resourceLabel} exceeded ${maxBytes} bytes (${size} bytes received)`,
+      ),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`ClawHub ${params.resourceLabel} body stalled after ${chunkTimeoutMs}ms`),
+  });
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
