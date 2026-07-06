@@ -42,6 +42,7 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -83,6 +84,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
@@ -121,6 +123,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1373,6 +1376,7 @@ private fun AboutSettingsScreen(
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
 
   SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
+    AboutHeroPanel()
     SettingsMetricPanel(
       rows =
         listOf(
@@ -1398,6 +1402,66 @@ private fun AboutSettingsScreen(
     ClawPanel {
       Text(text = aboutUpdateText(latestVersion = latestVersion), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
+    AboutLinksPanel()
+    Text(
+      text = "© 2026 OpenClaw Foundation — MIT License.",
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textSubtle,
+      modifier = Modifier.fillMaxWidth(),
+      textAlign = TextAlign.Center,
+    )
+  }
+}
+
+@Composable
+private fun AboutHeroPanel() {
+  ClawPanel {
+    Column(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      OpenClawMascot(contentDescription = "OpenClaw logo", modifier = Modifier.size(96.dp))
+      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = "OpenClaw", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Personal AI on your devices", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
+/** External project links; static first-party URLs matching the iOS and macOS About screens. */
+private data class AboutLink(
+  val title: String,
+  val subtitle: String,
+  val url: String,
+)
+
+private val aboutLinks =
+  listOf(
+    AboutLink("Website", "openclaw.ai", "https://openclaw.ai"),
+    AboutLink("Docs", "docs.openclaw.ai", "https://docs.openclaw.ai"),
+    AboutLink("GitHub", "github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw"),
+    AboutLink("Discord", "discord.gg/clawd", "https://discord.gg/clawd"),
+  )
+
+@Composable
+private fun AboutLinksPanel() {
+  val uriHandler = LocalUriHandler.current
+  ClawListPanel(items = aboutLinks) { link ->
+    ClawListItem(
+      title = link.title,
+      subtitle = link.subtitle,
+      onClick = { uriHandler.openUri(link.url) },
+      trailing = {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+          contentDescription = null,
+          tint = ClawTheme.colors.textSubtle,
+          modifier = Modifier.size(16.dp),
+        )
+      },
+    )
   }
 }
 
