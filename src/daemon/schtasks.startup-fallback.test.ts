@@ -138,6 +138,7 @@ function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyn
 
 function mockWindowsNodeHostProcess(processId = 5151): void {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  let processAlive = true;
   spawnSync.mockImplementation((command, args) => {
     if (
       command === getWindowsPowerShellExePath() &&
@@ -145,13 +146,21 @@ function mockWindowsNodeHostProcess(processId = 5151): void {
       args.includes(NODE_PROCESS_QUERY)
     ) {
       return makeSpawnSyncResult({
-        stdout: JSON.stringify([
-          {
-            ProcessId: processId,
-            CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
-          },
-        ]),
+        stdout: JSON.stringify(
+          processAlive
+            ? [
+                {
+                  ProcessId: processId,
+                  CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
+                },
+                { ProcessId: 9999, CommandLine: "powershell.exe" },
+              ]
+            : [{ ProcessId: 9999, CommandLine: "powershell.exe" }],
+        ),
       });
+    }
+    if (command.endsWith("taskkill.exe")) {
+      processAlive = false;
     }
     return makeSpawnSyncResult();
   });
@@ -452,6 +461,7 @@ describe("Windows startup fallback", () => {
       );
       env.OPENCLAW_GATEWAY_PORT = "19433";
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      let processAlive = true;
       spawnSync.mockImplementation((command, args) => {
         if (
           command === getWindowsPowerShellExePath() &&
@@ -459,13 +469,21 @@ describe("Windows startup fallback", () => {
           args.includes(NODE_PROCESS_QUERY)
         ) {
           return makeSpawnSyncResult({
-            stdout: JSON.stringify([
-              {
-                ProcessId: 4242,
-                CommandLine: '"C:\\bin\\openclaw-doppler.exe" gateway --port 18789',
-              },
-            ]),
+            stdout: JSON.stringify(
+              processAlive
+                ? [
+                    {
+                      ProcessId: 4242,
+                      CommandLine: '"C:\\bin\\openclaw-doppler.exe" gateway --port 18789',
+                    },
+                    { ProcessId: 9999, CommandLine: "powershell.exe" },
+                  ]
+                : [{ ProcessId: 9999, CommandLine: "powershell.exe" }],
+            ),
           });
+        }
+        if (command.endsWith("taskkill.exe")) {
+          processAlive = false;
         }
         return makeSpawnSyncResult();
       });
@@ -498,9 +516,10 @@ describe("Windows startup fallback", () => {
       await writeGatewayScript(env);
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       spawnSync.mockImplementation((command, args) =>
-        command === getWindowsPowerShellExePath() &&
-        Array.isArray(args) &&
-        args.includes(NODE_PROCESS_QUERY)
+        (command === getWindowsPowerShellExePath() &&
+          Array.isArray(args) &&
+          args.includes(NODE_PROCESS_QUERY)) ||
+        command.endsWith("tasklist.exe")
           ? makeSpawnSyncResult({ status: 1 })
           : makeSpawnSyncResult(),
       );
@@ -521,20 +540,33 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("forces takeover when graceful taskkill fails and the PID probe is unavailable", async () => {
+  it("uses tasklist to force takeover when CIM inspection is unavailable", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        throw Object.assign(new Error("pid probe unavailable"), { code: "EPERM" });
-      });
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      spawnSync.mockImplementation((command, args) =>
-        makeSpawnSyncResult({
+      let processAlive = true;
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command === getWindowsPowerShellExePath() &&
+          Array.isArray(args) &&
+          args.includes(NODE_PROCESS_QUERY)
+        ) {
+          return makeSpawnSyncResult({ status: 1 });
+        }
+        if (command.endsWith("tasklist.exe")) {
+          return makeSpawnSyncResult({
+            stdout: processAlive ? '"node.exe","4242","Console","1","1,024 K"' : "",
+          });
+        }
+        if (command.endsWith("taskkill.exe") && Array.isArray(args) && args.includes("/F")) {
+          processAlive = false;
+        }
+        return makeSpawnSyncResult({
           status:
             command.endsWith("taskkill.exe") && Array.isArray(args) && !args.includes("/F") ? 1 : 0,
-        }),
-      );
+        });
+      });
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
@@ -561,13 +593,19 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        throw Object.assign(new Error("process not found"), { code: "ESRCH" });
-      });
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      spawnSync.mockImplementation((command) =>
-        makeSpawnSyncResult({ status: command.endsWith("taskkill.exe") ? 128 : 0 }),
-      );
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command === getWindowsPowerShellExePath() &&
+          Array.isArray(args) &&
+          args.includes(NODE_PROCESS_QUERY)
+        ) {
+          return makeSpawnSyncResult({
+            stdout: JSON.stringify([{ ProcessId: 9999, CommandLine: "powershell.exe" }]),
+          });
+        }
+        return makeSpawnSyncResult({ status: command.endsWith("taskkill.exe") ? 128 : 0 });
+      });
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },

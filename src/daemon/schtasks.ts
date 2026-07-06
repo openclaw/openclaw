@@ -766,6 +766,23 @@ async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): P
 }
 
 function probeProcessState(pid: number): "alive" | "missing" | "unknown" {
+  if (process.platform === "win32") {
+    const snapshot = readWindowsProcessSnapshot();
+    if (snapshot) {
+      return snapshot.some((entry) => getSnapshotProcessId(entry) === pid) ? "alive" : "missing";
+    }
+    const tasklist = spawnSync(
+      getWindowsSystem32ExePath("tasklist.exe"),
+      ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+      { encoding: "utf8", timeout: 1_500, windowsHide: true },
+    );
+    if (tasklist.error || tasklist.status !== 0) {
+      return "unknown";
+    }
+    return tasklist.stdout.split(/\r?\n/).some((line) => line.includes(`,"${pid}",`))
+      ? "alive"
+      : "missing";
+  }
   try {
     process.kill(pid, 0);
     return "alive";
@@ -876,9 +893,12 @@ function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | null {
     return null;
   }
 
-  return (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
+  const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
     (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
   );
+  // A healthy CIM snapshot includes at least the querying PowerShell process.
+  // Empty output cannot prove a target exited, so keep termination fail-closed.
+  return entries.length > 0 ? entries : null;
 }
 
 async function resolveFallbackRuntime(
