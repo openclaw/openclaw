@@ -201,6 +201,7 @@ describe("qa scenario catalog", () => {
       "matrix-restart-resume",
       "slack-restart-resume",
       "subagent-stale-child-links",
+      "telegram-repeated-command-authorization",
       "whatsapp-restart-resume",
     ]);
     expect(

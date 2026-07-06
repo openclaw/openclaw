@@ -1,3 +1,4 @@
+import { WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS } from "../shared/canonical-scenarios.js";
 // Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
@@ -24,7 +25,7 @@ export const whatsappQaAdapterFactory: NonNullable<
   LiveTransportQaCliRegistration["adapterFactory"]
 > = {
   id: "whatsapp",
-  scenarioIds: ["dm-chat-baseline"],
+  scenarioIds: ["dm-chat-baseline", ...WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS],
   matches: ({ channelId, driver }) => driver === "live" && channelId === "whatsapp",
   async create(context) {
     return await (await loadWhatsAppQaAdapterRuntime()).createWhatsAppQaTransportAdapter(context);
