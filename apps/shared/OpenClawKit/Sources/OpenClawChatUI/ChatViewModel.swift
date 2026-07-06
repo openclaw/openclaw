@@ -11,6 +11,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 public final class OpenClawChatViewModel {
     public nonisolated static let defaultModelSelectionID = "__default__"
     static let maxAttachmentBytes = 5_000_000
+    static let sessionListFetchLimit = 200
 
     public internal(set) var messages: [OpenClawChatMessage] = []
 
@@ -1403,16 +1404,147 @@ public final class OpenClawChatViewModel {
 
     private func fetchSessions(limit: Int?, sessionSnapshot: SessionSnapshot? = nil) async {
         do {
-            let res = try await transport.listSessions(limit: limit)
+            let res = try await transport.listSessions(limit: limit, search: nil, archived: false)
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
-            self.sessions = res.sessions
+            let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
+            self.sessions = organized
             self.sessionDefaults = res.defaults
             self.hasAppliedLiveSessions = true
             self.syncSelectedModel()
             syncThinkingLevelOptions()
-            persistSessionsToCache(res.sessions)
+            persistSessionsToCache(organized)
         } catch {
             // Best-effort.
+        }
+    }
+
+    /// One-shot session list fetch for search and archived browsing. Falls back
+    /// to locally filtering the cached active list when the gateway is
+    /// unreachable; archived rows exist only server-side, so archived mode
+    /// returns empty offline.
+    public func fetchSessionList(search: String?, archived: Bool) async -> [OpenClawChatSessionEntry] {
+        let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = normalizedSearch?.isEmpty == false ? normalizedSearch : nil
+        do {
+            let res = try await self.transport.listSessions(
+                limit: Self.sessionListFetchLimit,
+                search: query,
+                archived: archived)
+            return OpenClawChatSessionListOrganizer.organize(res.sessions)
+        } catch {
+            // A superseded (cancelled) fetch must not produce fallback rows;
+            // the newer task owns the scoped list. Callers also guard on
+            // Task.isCancelled before applying results.
+            guard !(error is CancellationError), !Task.isCancelled else { return [] }
+            guard !archived else { return [] }
+            guard let query else { return self.sessions }
+            return OpenClawChatSessionListOrganizer.filter(self.sessions, search: query)
+        }
+    }
+
+    public func renameSession(key: String, label: String) {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let previous = self.sessions
+        if let index = self.sessions.firstIndex(where: { $0.key == key }) {
+            self.sessions[index].label = trimmed
+            self.sessions[index].displayName = trimmed
+        }
+        Task {
+            do {
+                try await self.transport.patchSession(
+                    key: key,
+                    label: trimmed,
+                    category: nil,
+                    pinned: nil,
+                    archived: nil,
+                    unread: nil)
+                self.refreshSessions()
+            } catch {
+                self.sessions = previous
+                self.errorText = error.localizedDescription
+                chatUILogger.error(
+                    "sessions.patch(label) failed \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    public func setSessionPinned(key: String, pinned: Bool) {
+        let previous = self.sessions
+        if let index = self.sessions.firstIndex(where: { $0.key == key }) {
+            self.sessions[index].pinned = pinned
+            self.sessions[index].pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
+            self.sessions = OpenClawChatSessionListOrganizer.organize(self.sessions)
+        }
+        Task {
+            do {
+                try await self.transport.patchSession(
+                    key: key,
+                    label: nil,
+                    category: nil,
+                    pinned: pinned,
+                    archived: nil,
+                    unread: nil)
+                self.refreshSessions()
+            } catch {
+                self.sessions = previous
+                self.errorText = error.localizedDescription
+                chatUILogger.error(
+                    "sessions.patch(pinned) failed \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    public func setSessionArchived(key: String, archived: Bool) {
+        guard archived else {
+            Task { await self.restoreSession(key: key) }
+            return
+        }
+        let previous = self.sessions
+        self.sessions.removeAll { $0.key == key }
+        Task {
+            do {
+                try await self.transport.patchSession(
+                    key: key,
+                    label: nil,
+                    category: nil,
+                    pinned: nil,
+                    archived: true,
+                    unread: nil)
+                if key == self.sessionKey {
+                    // The archived session rejects new sends; move the user back
+                    // to the main session instead of leaving a dead composer.
+                    self.switchSession(to: self.resolvedMainSessionKey)
+                }
+                self.refreshSessions()
+            } catch {
+                self.sessions = previous
+                self.errorText = error.localizedDescription
+                chatUILogger.error(
+                    "sessions.patch(archived) failed \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Restores an archived session. Returns false (with `errorText` set) on
+    /// failure so open-flows can avoid switching into a still-archived session.
+    @discardableResult
+    public func restoreSession(key: String) async -> Bool {
+        do {
+            try await self.transport.patchSession(
+                key: key,
+                label: nil,
+                category: nil,
+                pinned: nil,
+                archived: false,
+                unread: nil)
+            self.refreshSessions()
+            return true
+        } catch {
+            self.errorText = error.localizedDescription
+            chatUILogger.error(
+                "sessions.patch(archived=false) failed \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -1803,38 +1935,7 @@ public final class OpenClawChatViewModel {
 
     private func updateCurrentSessionThinkingLevel(_ thinkingLevel: String?, sessionKey: String) {
         guard let index = sessions.firstIndex(where: { $0.key == sessionKey }) else { return }
-        let current = self.sessions[index]
-        self.sessions[index] = OpenClawChatSessionEntry(
-            key: current.key,
-            kind: current.kind,
-            displayName: current.displayName,
-            surface: current.surface,
-            subject: current.subject,
-            room: current.room,
-            space: current.space,
-            updatedAt: current.updatedAt,
-            sessionId: current.sessionId,
-            systemSent: current.systemSent,
-            abortedLastRun: current.abortedLastRun,
-            thinkingLevel: thinkingLevel,
-            verboseLevel: current.verboseLevel,
-            inputTokens: current.inputTokens,
-            outputTokens: current.outputTokens,
-            totalTokens: current.totalTokens,
-            totalTokensFresh: current.totalTokensFresh,
-            modelProvider: current.modelProvider,
-            model: current.model,
-            contextTokens: current.contextTokens,
-            thinkingLevels: current.thinkingLevels,
-            thinkingOptions: current.thinkingOptions,
-            thinkingDefault: current.thinkingDefault,
-            label: current.label,
-            category: current.category,
-            pinned: current.pinned,
-            archived: current.archived,
-            unread: current.unread,
-            lastReadAt: current.lastReadAt,
-            lastActivityAt: current.lastActivityAt)
+        self.sessions[index].thinkingLevel = thinkingLevel
     }
 
     private func updateCurrentSessionModel(
@@ -1843,69 +1944,25 @@ public final class OpenClawChatViewModel {
         sessionKey: String,
         syncSelection: Bool)
     {
+        var updated = self.sessions.first(where: { $0.key == sessionKey })
+            ?? self.placeholderSession(key: sessionKey)
+        // Thinking metadata follows model identity; stale options must not survive a model change.
+        let preservesThinkingMetadata =
+            Self.normalizedModelIdentityComponent(updated.model) ==
+            Self.normalizedModelIdentityComponent(modelID) &&
+            Self.normalizedModelIdentityComponent(updated.modelProvider) ==
+            Self.normalizedModelIdentityComponent(modelProvider)
+        updated.modelProvider = modelProvider
+        updated.model = modelID
+        if !preservesThinkingMetadata {
+            updated.thinkingLevels = nil
+            updated.thinkingOptions = nil
+            updated.thinkingDefault = nil
+        }
         if let index = sessions.firstIndex(where: { $0.key == sessionKey }) {
-            let current = self.sessions[index]
-            let preservesThinkingMetadata =
-                Self.normalizedModelIdentityComponent(current.model) ==
-                Self.normalizedModelIdentityComponent(modelID) &&
-                Self.normalizedModelIdentityComponent(current.modelProvider) ==
-                Self.normalizedModelIdentityComponent(modelProvider)
-            // Thinking metadata follows model identity; stale options must not survive a model change.
-            self.sessions[index] = OpenClawChatSessionEntry(
-                key: current.key,
-                kind: current.kind,
-                displayName: current.displayName,
-                surface: current.surface,
-                subject: current.subject,
-                room: current.room,
-                space: current.space,
-                updatedAt: current.updatedAt,
-                sessionId: current.sessionId,
-                systemSent: current.systemSent,
-                abortedLastRun: current.abortedLastRun,
-                thinkingLevel: current.thinkingLevel,
-                verboseLevel: current.verboseLevel,
-                inputTokens: current.inputTokens,
-                outputTokens: current.outputTokens,
-                totalTokens: current.totalTokens,
-                totalTokensFresh: current.totalTokensFresh,
-                modelProvider: modelProvider,
-                model: modelID,
-                contextTokens: current.contextTokens,
-                thinkingLevels: preservesThinkingMetadata ? current.thinkingLevels : nil,
-                thinkingOptions: preservesThinkingMetadata ? current.thinkingOptions : nil,
-                thinkingDefault: preservesThinkingMetadata ? current.thinkingDefault : nil,
-                label: current.label,
-                category: current.category,
-                pinned: current.pinned,
-                archived: current.archived,
-                unread: current.unread,
-                lastReadAt: current.lastReadAt,
-                lastActivityAt: current.lastActivityAt)
+            self.sessions[index] = updated
         } else {
-            let placeholder = self.placeholderSession(key: sessionKey)
-            self.sessions.append(
-                OpenClawChatSessionEntry(
-                    key: placeholder.key,
-                    kind: placeholder.kind,
-                    displayName: placeholder.displayName,
-                    surface: placeholder.surface,
-                    subject: placeholder.subject,
-                    room: placeholder.room,
-                    space: placeholder.space,
-                    updatedAt: placeholder.updatedAt,
-                    sessionId: placeholder.sessionId,
-                    systemSent: placeholder.systemSent,
-                    abortedLastRun: placeholder.abortedLastRun,
-                    thinkingLevel: placeholder.thinkingLevel,
-                    verboseLevel: placeholder.verboseLevel,
-                    inputTokens: placeholder.inputTokens,
-                    outputTokens: placeholder.outputTokens,
-                    totalTokens: placeholder.totalTokens,
-                    totalTokensFresh: placeholder.totalTokensFresh,
-                    modelProvider: modelProvider,
-                    model: modelID,
-                    contextTokens: placeholder.contextTokens))
+            self.sessions.append(updated)
         }
         if syncSelection {
             self.syncSelectedModel()

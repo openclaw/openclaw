@@ -1469,6 +1469,7 @@
                   "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
+                  "providers/featherless",
                   "providers/fireworks",
                   "providers/github-copilot",
                   "providers/gmi",

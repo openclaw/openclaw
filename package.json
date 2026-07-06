@@ -98,6 +98,7 @@
     "!dist/extensions/discord/**",
     "!dist/extensions/exa/**",
     "!dist/extensions/feishu/**",
+    "!dist/extensions/featherless/**",
     "!dist/extensions/firecrawl/**",
     "!dist/extensions/fireworks/**",
     "!dist/extensions/google-meet/**",

@@ -86,6 +86,11 @@ private func historyPayload(
 private func sessionEntry(
     key: String,
     updatedAt: Double,
+    displayName: String? = nil,
+    label: String? = nil,
+    pinned: Bool = false,
+    pinnedAt: Double? = nil,
+    archived: Bool = false,
     totalTokens: Int? = nil,
     totalTokensFresh: Bool? = nil,
     contextTokens: Int? = nil) -> OpenClawChatSessionEntry
@@ -93,7 +98,7 @@ private func sessionEntry(
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
-        displayName: nil,
+        displayName: displayName,
         surface: nil,
         subject: nil,
         room: nil,
@@ -110,7 +115,21 @@ private func sessionEntry(
         totalTokensFresh: totalTokensFresh,
         modelProvider: nil,
         model: nil,
-        contextTokens: contextTokens)
+        contextTokens: contextTokens,
+        label: label,
+        pinned: pinned ? true : nil,
+        pinnedAt: pinnedAt ?? (pinned ? updatedAt : nil),
+        archived: archived ? true : nil,
+        archivedAt: archived ? updatedAt : nil)
+}
+
+private func sessionsListResponse(_ sessions: [OpenClawChatSessionEntry]) -> OpenClawChatSessionsListResponse {
+    OpenClawChatSessionsListResponse(
+        ts: nil,
+        path: nil,
+        count: sessions.count,
+        defaults: nil,
+        sessions: sessions)
 }
 
 private func thinkingOption(_ id: String, label: String? = nil) -> OpenClawChatThinkingLevelOption {
@@ -211,6 +230,11 @@ private func makeViewModel(
     compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+    renameSessionHook: (@Sendable (String, String) async throws -> Void)? = nil,
+    setSessionPinnedHook: (@Sendable (String, Bool) async throws -> Void)? = nil,
+    setSessionArchivedHook: (@Sendable (String, Bool) async throws -> Void)? = nil,
+    listSessionsHook: (
+        @Sendable (TestSessionListQuery) async throws -> OpenClawChatSessionsListResponse?)? = nil,
     sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
     sendMessageStatus: String = "ok",
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
@@ -240,6 +264,10 @@ private func makeViewModel(
         compactSessionHook: compactSessionHook,
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook,
+        renameSessionHook: renameSessionHook,
+        setSessionPinnedHook: setSessionPinnedHook,
+        setSessionArchivedHook: setSessionArchivedHook,
+        listSessionsHook: listSessionsHook,
         sendMessageHook: sendMessageHook,
         sendMessageStatus: sendMessageStatus,
         waitForRunCompletionHook: waitForRunCompletionHook,
@@ -453,6 +481,12 @@ private func weakReference<Value: AnyObject>(to value: Value?) throws -> WeakRef
     return WeakReference(value)
 }
 
+struct TestSessionListQuery: Equatable, Sendable {
+    var limit: Int?
+    var search: String?
+    var archived: Bool
+}
+
 private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
@@ -475,6 +509,10 @@ private actor TestChatTransportState {
     var waitCompletionRunIds: [String] = []
     var patchedModels: [String?] = []
     var patchedThinkingLevels: [String] = []
+    var listSessionsQueries: [TestSessionListQuery] = []
+    var renamedLabelsByKey: [(key: String, label: String)] = []
+    var pinnedChanges: [(key: String, pinned: Bool)] = []
+    var archivedChanges: [(key: String, archived: Bool)] = []
 }
 
 private final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
@@ -492,6 +530,11 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let compactSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
+    private let renameSessionHook: (@Sendable (String, String) async throws -> Void)?
+    private let setSessionPinnedHook: (@Sendable (String, Bool) async throws -> Void)?
+    private let setSessionArchivedHook: (@Sendable (String, Bool) async throws -> Void)?
+    private let listSessionsHook:
+        (@Sendable (TestSessionListQuery) async throws -> OpenClawChatSessionsListResponse?)?
     private let sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)?
     private let sendMessageStatus: String
     private let waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)?
@@ -513,6 +556,11 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+        renameSessionHook: (@Sendable (String, String) async throws -> Void)? = nil,
+        setSessionPinnedHook: (@Sendable (String, Bool) async throws -> Void)? = nil,
+        setSessionArchivedHook: (@Sendable (String, Bool) async throws -> Void)? = nil,
+        listSessionsHook: (
+            @Sendable (TestSessionListQuery) async throws -> OpenClawChatSessionsListResponse?)? = nil,
         sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
         sendMessageStatus: String = "ok",
         waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
@@ -530,6 +578,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.compactSessionHook = compactSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
+        self.renameSessionHook = renameSessionHook
+        self.setSessionPinnedHook = setSessionPinnedHook
+        self.setSessionArchivedHook = setSessionArchivedHook
+        self.listSessionsHook = listSessionsHook
         self.sendMessageHook = sendMessageHook
         self.sendMessageStatus = sendMessageStatus
         self.waitForRunCompletionHook = waitForRunCompletionHook
@@ -627,8 +679,18 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.abortedRunIdsAppend(runId)
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
-        let idx = await state.nextSessionsCallIndex()
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        let query = TestSessionListQuery(limit: limit, search: search, archived: archived)
+        // Single actor hop: bootstrap assertions in older tests race the
+        // post-health sync, so this fake must not add suspension points.
+        let idx = await state.recordSessionsCall(query)
+        if let listSessionsHook, let response = try await listSessionsHook(query) {
+            return response
+        }
         if idx < self.sessionsResponses.count {
             return self.sessionsResponses[idx]
         }
@@ -638,6 +700,34 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             count: 0,
             defaults: nil,
             sessions: [])
+    }
+
+    func patchSession(
+        key: String,
+        label: String??,
+        category _: String??,
+        pinned: Bool?,
+        archived: Bool?,
+        unread _: Bool?) async throws
+    {
+        if let label, let label {
+            await self.state.renamedLabelsAppend(key: key, label: label)
+            if let renameSessionHook {
+                try await renameSessionHook(key, label)
+            }
+        }
+        if let pinned {
+            await self.state.pinnedChangesAppend(key: key, pinned: pinned)
+            if let setSessionPinnedHook {
+                try await setSessionPinnedHook(key, pinned)
+            }
+        }
+        if let archived {
+            await self.state.archivedChangesAppend(key: key, archived: archived)
+            if let setSessionArchivedHook {
+                try await setSessionArchivedHook(key, archived)
+            }
+        }
     }
 
     func listModels() async throws -> [OpenClawChatModelChoice] {
@@ -779,6 +869,22 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func createdParentSessionKeys() async -> [String?] {
         await self.state.createdParentSessionKeys
     }
+
+    func listSessionsQueries() async -> [TestSessionListQuery] {
+        await self.state.listSessionsQueries
+    }
+
+    func renamedLabels() async -> [(key: String, label: String)] {
+        await self.state.renamedLabelsByKey
+    }
+
+    func pinnedChanges() async -> [(key: String, pinned: Bool)] {
+        await self.state.pinnedChanges
+    }
+
+    func archivedChanges() async -> [(key: String, archived: Bool)] {
+        await self.state.archivedChanges
+    }
 }
 
 extension TestChatTransportState {
@@ -790,6 +896,11 @@ extension TestChatTransportState {
     fileprivate func nextSessionsCallIndex() -> Int {
         defer { self.sessionsCallCount += 1 }
         return self.sessionsCallCount
+    }
+
+    fileprivate func recordSessionsCall(_ query: TestSessionListQuery) -> Int {
+        self.listSessionsQueries.append(query)
+        return self.nextSessionsCallIndex()
     }
 
     fileprivate func nextModelsCallIndex() -> Int {
@@ -869,6 +980,19 @@ extension TestChatTransportState {
 
     fileprivate func sentMessagesAppend(_ v: String) {
         self.sentMessages.append(v)
+    }
+
+
+    fileprivate func renamedLabelsAppend(key: String, label: String) {
+        self.renamedLabelsByKey.append((key: key, label: label))
+    }
+
+    fileprivate func pinnedChangesAppend(key: String, pinned: Bool) {
+        self.pinnedChanges.append((key: key, pinned: pinned))
+    }
+
+    fileprivate func archivedChangesAppend(key: String, archived: Bool) {
+        self.archivedChanges.append((key: key, archived: archived))
     }
 }
 
@@ -7332,5 +7456,196 @@ struct ChatViewModelTests {
                     errorMessage: nil)))
 
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
+    }
+}
+
+@Suite(.serialized)
+struct ChatViewModelSessionManagementTests {
+    @Test @MainActor func `session list organizer orders pinned first with key tiebreak`() {
+        let organized = OpenClawChatSessionListOrganizer.organize([
+            sessionEntry(key: "c-tie", updatedAt: 100),
+            sessionEntry(key: "a-tie", updatedAt: 100),
+            sessionEntry(key: "recent", updatedAt: 500),
+            sessionEntry(key: "pinned-old", updatedAt: 10, pinned: true, pinnedAt: 1),
+            sessionEntry(key: "pinned-new", updatedAt: 5, pinned: true, pinnedAt: 2),
+        ])
+        #expect(organized.map(\.key) == ["pinned-new", "pinned-old", "recent", "a-tie", "c-tie"])
+    }
+
+    @Test @MainActor func `session list organizer filters across display fields`() {
+        let sessions = [
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 2, displayName: "Trip planning"),
+            sessionEntry(key: "agent:main:topic-b", updatedAt: 1, displayName: "Groceries"),
+            sessionEntry(key: "agent:main:trip-notes", updatedAt: 3, displayName: "Notes"),
+        ]
+        let matched = OpenClawChatSessionListOrganizer.filter(sessions, search: "TRIP")
+        #expect(matched.map(\.key) == ["agent:main:topic-a", "agent:main:trip-notes"])
+        #expect(OpenClawChatSessionListOrganizer.filter(sessions, search: "  ") == sessions)
+    }
+
+    @Test func `pin patches transport and reorders optimistically`() async throws {
+        let initial = sessionsListResponse([
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
+            sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
+        ])
+        let pinned = sessionsListResponse([
+            sessionEntry(key: "agent:main:topic-b", updatedAt: 100, pinned: true, pinnedAt: 300),
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
+        ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [initial, pinned])
+
+        await MainActor.run { vm.refreshSessions() }
+        try await waitUntil("initial sessions applied") {
+            await MainActor.run { vm.sessions.map(\.key) == ["agent:main:topic-a", "agent:main:topic-b"] }
+        }
+
+        await MainActor.run { vm.setSessionPinned(key: "agent:main:topic-b", pinned: true) }
+        // Optimistic reorder happens before the transport call settles.
+        #expect(await MainActor.run { vm.sessions.first?.key } == "agent:main:topic-b")
+
+        try await waitUntil("pin patch sent") {
+            let changes = await transport.pinnedChanges()
+            return changes.count == 1 && changes[0].key == "agent:main:topic-b" && changes[0].pinned
+        }
+        try await waitUntil("refresh keeps pinned order") {
+            await MainActor.run { vm.sessions.first?.isPinned == true }
+        }
+    }
+
+    @Test func `rename patches label optimistically and reverts on failure`() async throws {
+        let initial = sessionsListResponse([
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 200, displayName: "Old name"),
+        ])
+        // The post-rename refresh must return the renamed row; otherwise the
+        // refetch legitimately repaints the old name and races the assertions.
+        let renamed = sessionsListResponse([
+            sessionEntry(
+                key: "agent:main:topic-a",
+                updatedAt: 200,
+                displayName: "Trip planning",
+                label: "Trip planning"),
+        ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [initial, renamed],
+            renameSessionHook: { _, label in
+                if label == "Bad name" {
+                    throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "rename failed"])
+                }
+            })
+
+        await MainActor.run { vm.refreshSessions() }
+        try await waitUntil("initial sessions applied") {
+            await MainActor.run { !vm.sessions.isEmpty }
+        }
+
+        await MainActor.run { vm.renameSession(key: "agent:main:topic-a", label: " Trip planning ") }
+        #expect(await MainActor.run { vm.sessions.first?.displayName } == "Trip planning")
+        try await waitUntil("rename sent trimmed label") {
+            let renames = await transport.renamedLabels()
+            return renames.count == 1 && renames[0].label == "Trip planning"
+        }
+        // Let the post-rename refresh settle so the failing rename below
+        // captures a deterministic pre-mutation snapshot to revert to.
+        try await waitUntil("post-rename refresh applied") {
+            await transport.listSessionsQueries().count >= 2
+        }
+
+        await MainActor.run { vm.renameSession(key: "agent:main:topic-a", label: "Bad name") }
+        try await waitUntil("failed rename reverts") {
+            await MainActor.run {
+                vm.sessions.first?.displayName == "Trip planning" && vm.errorText == "rename failed"
+            }
+        }
+    }
+
+    @Test func `archive removes the session from the active list`() async throws {
+        let initial = sessionsListResponse([
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
+            sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
+        ])
+        let afterArchive = sessionsListResponse([
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
+        ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [initial, afterArchive])
+
+        await MainActor.run { vm.refreshSessions() }
+        try await waitUntil("initial sessions applied") {
+            await MainActor.run { vm.sessions.count == 2 }
+        }
+
+        await MainActor.run { vm.setSessionArchived(key: "agent:main:topic-b", archived: true) }
+        #expect(await MainActor.run { vm.sessions.map(\.key) } == ["agent:main:topic-a"])
+        try await waitUntil("archive patch sent") {
+            let changes = await transport.archivedChanges()
+            return changes.count == 1 && changes[0].key == "agent:main:topic-b" && changes[0].archived
+        }
+    }
+
+    @Test func `fetchSessionList sends search and archived to the server`() async throws {
+        let archivedEntry = sessionEntry(key: "agent:main:old", updatedAt: 10, archived: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            listSessionsHook: { query in
+                query.archived == true ? sessionsListResponse([archivedEntry]) : nil
+            })
+
+        let archivedRows = await vm.fetchSessionList(search: nil, archived: true)
+        #expect(archivedRows.map(\.key) == ["agent:main:old"])
+
+        _ = await vm.fetchSessionList(search: "  trip  ", archived: false)
+        let queries = await transport.listSessionsQueries()
+        #expect(queries.contains(TestSessionListQuery(limit: 200, search: nil, archived: true)))
+        #expect(queries.contains(TestSessionListQuery(limit: 200, search: "trip", archived: false)))
+    }
+
+    @Test func `restore session only reports success when the patch lands`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            setSessionArchivedHook: { key, archived in
+                if !archived, key == "agent:main:broken" {
+                    throw NSError(domain: "test", code: 9, userInfo: [NSLocalizedDescriptionKey: "restore failed"])
+                }
+            })
+
+        let restored = await vm.restoreSession(key: "agent:main:old")
+        #expect(restored)
+        let failed = await vm.restoreSession(key: "agent:main:broken")
+        #expect(!failed)
+        #expect(await MainActor.run { vm.errorText } == "restore failed")
+        let changes = await transport.archivedChanges()
+        #expect(changes.map(\.key) == ["agent:main:old", "agent:main:broken"])
+        #expect(changes.allSatisfy { !$0.archived })
+    }
+
+    @Test func `fetchSessionList falls back to local filtering when the server is unreachable`() async throws {
+        let cached = sessionsListResponse([
+            sessionEntry(key: "agent:main:topic-a", updatedAt: 2, displayName: "Trip planning"),
+            sessionEntry(key: "agent:main:topic-b", updatedAt: 1, displayName: "Groceries"),
+        ])
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [cached],
+            listSessionsHook: { query in
+                if query.search != nil || query.archived == true {
+                    throw NSError(domain: "test", code: 7, userInfo: [NSLocalizedDescriptionKey: "offline"])
+                }
+                return nil
+            })
+
+        await MainActor.run { vm.refreshSessions() }
+        try await waitUntil("cached sessions applied") {
+            await MainActor.run { vm.sessions.count == 2 }
+        }
+
+        let filtered = await vm.fetchSessionList(search: "trip", archived: false)
+        #expect(filtered.map(\.key) == ["agent:main:topic-a"])
+        // Archived rows only exist server-side; offline archived mode is empty.
+        let archivedRows = await vm.fetchSessionList(search: nil, archived: true)
+        #expect(archivedRows.isEmpty)
     }
 }

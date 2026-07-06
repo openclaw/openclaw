@@ -207,6 +207,12 @@ function expectGatewayTermination(pid: number) {
   expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 
+function useListenerBackedFallbackOwnership(): void {
+  // These orchestration cases exercise the portable listener-owner path.
+  // Native Windows process-snapshot ownership has dedicated coverage below.
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+}
+
 function addStartupFallbackMissingResponses(
   extraResponses: Array<{ code: number; stdout: string; stderr: string }> = [],
 ) {
@@ -398,6 +404,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("removes an old Startup-folder launcher after migrating to a Scheduled Task", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
@@ -427,6 +434,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("takes over from a running Startup-folder fallback before removing its launcher", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
@@ -651,6 +659,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("refuses migration when the busy port owner is not a verified gateway", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       inspectPortUsage.mockResolvedValue({
@@ -720,6 +729,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("relaunches the verified fallback when Scheduled Task takeover fails", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env);
@@ -747,6 +757,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("probes the old fallback port before replacing a drifted task script", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env, 18789);
@@ -1121,6 +1132,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("re-probes the captured fallback port after a transient config reload", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env, 18789);
@@ -1783,6 +1795,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("refuses to stop a Startup fallback with an unverified busy port owner", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(env);
@@ -1853,6 +1866,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("restarts the Startup fallback by killing the current pid and relaunching the entry", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
@@ -1883,6 +1897,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("refuses to restart a Startup fallback with an unverified busy port owner", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(env);
@@ -1933,6 +1948,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("kills the Startup fallback runtime even when the CLI env omits the gateway port", async () => {
+    useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
       await writeGatewayScript(env);
