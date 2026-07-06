@@ -2249,6 +2249,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
+    const replyDone = waitForReplyCalls(1);
 
     loadConfig.mockReturnValue({
       agents: {
@@ -2321,6 +2322,7 @@ describe("createTelegramBot", () => {
       expect(replySpy).not.toHaveBeenCalled();
 
       await clearContinuationTimer()?.();
+      await replyDone;
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = mockMsgContextArg(

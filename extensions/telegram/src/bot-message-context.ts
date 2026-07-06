@@ -488,9 +488,29 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
+  const replyFenceLaneKey = getTelegramSequentialKey({
+    message: msg,
+    ...(primaryCtx.me ? { me: primaryCtx.me } : {}),
+  });
+  const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+    accountId: route.accountId,
+    sequentialKey: replyFenceLaneKey,
+  });
+  const canShowPreContextStatusCue = bodyResult.inboundEventKind !== "room_event";
+  const suppressVisibleAckWhileReplyActive =
+    canShowPreContextStatusCue &&
+    !shouldSupersedeTelegramReplyFence({
+      Body: bodyResult.bodyText,
+      RawBody: bodyResult.rawBody,
+      CommandBody: bodyResult.rawBody,
+      CommandAuthorized: bodyResult.commandAuthorized,
+      ChatType: isGroup ? "group" : "direct",
+    }) &&
+    hasActiveTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+
   // Send the first typing cue before expensive context/session construction,
   // but only after intake has accepted the message as a non-room-event turn.
-  if (bodyResult.inboundEventKind !== "room_event") {
+  if (canShowPreContextStatusCue && !suppressVisibleAckWhileReplyActive) {
     initialTypingCueSent = true;
     void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
@@ -540,18 +560,6 @@ export const buildTelegramMessageContext = async ({
   });
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const canShowStatusReaction = !isRoomEvent;
-  const replyFenceLaneKey = getTelegramSequentialKey({
-    message: msg,
-    ...(primaryCtx.me ? { me: primaryCtx.me } : {}),
-  });
-  const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
-    accountId: route.accountId,
-    sequentialKey: replyFenceLaneKey,
-  });
-  const suppressVisibleAckWhileReplyActive =
-    canShowStatusReaction &&
-    !shouldSupersedeTelegramReplyFence(ctxPayload) &&
-    hasActiveTelegramReplyFenceLane(scopedReplyFenceLaneKey);
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
