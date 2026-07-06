@@ -3233,6 +3233,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Secret providers config
   - H2: Auth storage
   - H3: auth.cooldowns
+  - H2: Audit
   - H2: Logging
   - H2: Diagnostics
   - H2: Update

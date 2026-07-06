@@ -549,6 +549,10 @@ tool name. The `redaction` field is always `"metadata_only"`: the ledger does
 not store prompts, messages, tool arguments, tool results, command output, or
 raw error text.
 
+Recording is on by default and controlled by
+[`audit.enabled`](/gateway/configuration-reference#audit); when disabled,
+`audit.list` keeps serving records written earlier until they expire.
+
 Use [`openclaw audit`](/cli/audit) for text queries and bounded JSON exports.
 
 ## Task ledger RPCs

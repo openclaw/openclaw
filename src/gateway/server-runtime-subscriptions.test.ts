@@ -28,6 +28,29 @@ const mockLog: SubsystemLogger = {
   child: () => mockLog,
 };
 
+const auditTestState = vi.hoisted(() => ({
+  enabled: true,
+  created: 0,
+  stopped: 0,
+}));
+
+vi.mock("../audit/audit-config.js", () => ({
+  isAuditLedgerEnabled: () => auditTestState.enabled,
+}));
+
+vi.mock("../audit/agent-event-audit.js", () => ({
+  createAgentEventAuditRecorder: () => {
+    auditTestState.created += 1;
+    return {
+      record: vi.fn(),
+      recordTool: vi.fn(),
+      stop: vi.fn(async () => {
+        auditTestState.stopped += 1;
+      }),
+    };
+  },
+}));
+
 vi.mock("./server-chat.js", () => {
   throw new Error("server-chat lazy load failure");
 });
@@ -69,6 +92,9 @@ describe("startGatewayEventSubscriptions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    auditTestState.enabled = true;
+    auditTestState.created = 0;
+    auditTestState.stopped = 0;
   });
 
   afterEach(() => {
@@ -77,6 +103,24 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
     resetAgentEventsForTest();
+  });
+
+  it("records audit events by default and stops the recorder on unsubscribe", async () => {
+    unsubs = startGatewayEventSubscriptions(createParams());
+
+    expect(auditTestState.created).toBe(1);
+    await unsubs.agentUnsub();
+    expect(auditTestState.stopped).toBe(1);
+  });
+
+  it("creates no audit recorder when audit.enabled is false", async () => {
+    auditTestState.enabled = false;
+    unsubs = startGatewayEventSubscriptions(createParams());
+
+    expect(auditTestState.created).toBe(0);
+    // Disabled wiring must still unsubscribe cleanly.
+    await unsubs.agentUnsub();
+    expect(auditTestState.stopped).toBe(0);
   });
 
   it("logs lazy agent event module failures", async () => {

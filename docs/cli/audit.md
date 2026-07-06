@@ -9,6 +9,9 @@ title: "Audit records"
 # `openclaw audit`
 
 Query the Gateway's metadata-only audit ledger for agent runs and tool actions.
+
+Recording is on by default; set [`audit.enabled: false`](/gateway/configuration-reference#audit)
+to stop new writes. Existing records stay queryable until they expire (30 days).
 The ledger is separate from conversation transcripts: it records identity,
 ordering, provenance, action, status, and normalized error codes, but never
 stores prompts, messages, tool arguments, tool results, command output, or raw

@@ -1,6 +1,7 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createAgentEventAuditRecorder } from "../audit/agent-event-audit.js";
+import { isAuditLedgerEnabled } from "../audit/audit-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
@@ -56,9 +57,18 @@ export function startGatewayEventSubscriptions(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
 }) {
-  const auditRecorder = createAgentEventAuditRecorder();
-  const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
-  const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
+  // audit.enabled=false stops ledger writes entirely; reads over existing
+  // records keep working. Resolved once at gateway startup like the other
+  // runtime subscriptions.
+  const auditRecorder = isAuditLedgerEnabled(getRuntimeConfig())
+    ? createAgentEventAuditRecorder()
+    : undefined;
+  const unsubscribePrivateAuditEvents = auditRecorder
+    ? onAgentAuditEvent(auditRecorder.record)
+    : undefined;
+  const unsubscribeToolAuditEvents = auditRecorder
+    ? onTrustedToolExecutionEvent(auditRecorder.recordTool)
+    : undefined;
   const getAgentEventHandler = createLazyPromise(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -224,7 +234,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   const unsubscribeAgentEvents = onAgentEvent((evt) => {
-    auditRecorder.record(evt);
+    auditRecorder?.record(evt);
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
@@ -277,9 +287,9 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
-    unsubscribePrivateAuditEvents();
-    unsubscribeToolAuditEvents();
-    await auditRecorder.stop();
+    unsubscribePrivateAuditEvents?.();
+    unsubscribeToolAuditEvents?.();
+    await auditRecorder?.stop();
   };
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
