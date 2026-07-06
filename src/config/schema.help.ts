@@ -201,6 +201,14 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
   "talk.realtime.transport":
     "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
+  "talk.realtime.vadThreshold":
+    "Realtime voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive).",
+  "talk.realtime.silenceDurationMs":
+    "Milliseconds of silence before a realtime Talk user turn is committed.",
+  "talk.realtime.prefixPaddingMs":
+    "Milliseconds of audio retained before realtime voice activity is detected.",
+  "talk.realtime.reasoningEffort":
+    "Provider-specific reasoning effort for realtime Talk sessions, such as minimal, low, medium, or high.",
   "talk.realtime.brain":
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
@@ -414,9 +422,9 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy.hostnameAllowlist":
     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
   "browser.remoteCdpTimeoutMs":
-    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
+    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. The larger of this value and remoteCdpHandshakeTimeoutMs also bounds persistent remote tab enumeration. Increase for high-latency tunnels, or lower for faster failure detection.",
   "browser.remoteCdpHandshakeTimeoutMs":
-    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
+    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. The larger of this value and remoteCdpTimeoutMs also bounds persistent remote tab enumeration. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:
@@ -2004,7 +2012,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
-    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used.",
+    "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":

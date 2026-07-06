@@ -46,7 +46,7 @@ const buildSessionLookup = (
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
-const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+const loadOrCreateProcessDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(() => ({
     deviceId: "gateway-device-1",
     publicKeyPem: "public",
@@ -83,7 +83,7 @@ const runtimeMocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
-  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
+  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   canonicalizeSessionEntryAliases: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
@@ -265,7 +265,7 @@ describe("node exec events", () => {
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
     registerApnsRegistrationVi.mockClear();
-    loadOrCreateDeviceIdentityMock.mockClear();
+    loadOrCreateProcessDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();

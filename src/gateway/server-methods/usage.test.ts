@@ -329,6 +329,31 @@ describe("gateway usage helpers", () => {
     });
   });
 
+  it("keeps cost usage cache entries scoped by daily timezone offset", async () => {
+    const config = {} as OpenClawConfig;
+
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: 0,
+      config,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: -300,
+      config,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: 0,
+      config,
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
   it("passes usage.cost agentId through to the cost summary loader", async () => {
     const respond = vi.fn();
 
@@ -341,6 +366,25 @@ describe("gateway usage helpers", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
+    );
+  });
+
+  it("buckets usage.cost daily rows with the requested UTC offset", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: {
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+        utcOffset: "UTC-5",
+      },
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ dailyUtcOffsetMinutes: -300 }),
     );
   });
 

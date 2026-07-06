@@ -24,6 +24,13 @@ import { formatSessionTokens } from "../../lib/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import {
+  groupSessionRows,
+  SESSION_GROUP_MODES,
+  type SessionRowGroup,
+  type SessionsGroupBy,
+  UNGROUPED_ID,
+} from "../../lib/sessions/grouping.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
@@ -47,6 +54,8 @@ export type SessionsProps = {
   agentIdentityById: Record<string, AgentIdentityResult>;
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
+  groupBy: SessionsGroupBy;
+  knownCategories: string[];
   page: number;
   pageSize: number;
   selectedKeys: Set<string>;
@@ -66,6 +75,9 @@ export type SessionsProps = {
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
+  onGroupByChange: (mode: SessionsGroupBy) => void;
+  onAssignCategory: (key: string, category: string | null) => void;
+  onRequestNewCategory: (sessionKey?: string) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -73,6 +85,7 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      category?: string | null;
       archived?: boolean;
       pinned?: boolean;
       thinkingLevel?: string | null;
@@ -249,6 +262,7 @@ function filterRows(
   return rows.filter((row) => {
     const key = normalizeLowercaseStringOrEmpty(row.key);
     const label = normalizeLowercaseStringOrEmpty(row.label);
+    const category = normalizeLowercaseStringOrEmpty(row.category);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
@@ -268,6 +282,7 @@ function filterRows(
     if (
       key.includes(q) ||
       label.includes(q) ||
+      category.includes(q) ||
       kind.includes(q) ||
       displayName.includes(q) ||
       runtime.includes(q) ||
@@ -433,6 +448,7 @@ function sessionDetailItems(params: {
       details.push({ label, value: normalized });
     }
   };
+  add(t("sessionsView.group"), row.category);
   add(t("sessionsView.status"), row.status);
   if (row.goal) {
     details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
@@ -465,6 +481,159 @@ function sessionDetailItems(params: {
     });
   }
   return details;
+}
+
+const NEW_GROUP_OPTION = "__new-group__";
+// Private MIME so stray text/file drags never become sessions.patch calls.
+const SESSION_DRAG_MIME = "application/x-openclaw-session-key";
+
+function sessionsTableColumnCount(props: SessionsProps): number {
+  return props.groupBy === "category" ? 15 : 14;
+}
+
+function groupModeLabel(mode: SessionsGroupBy): string {
+  switch (mode) {
+    case "category":
+      return t("sessionsView.groupByCategory");
+    case "channel":
+      return t("sessionsView.groupByChannel");
+    case "kind":
+      return t("sessionsView.groupByKind");
+    case "agent":
+      return t("sessionsView.groupByAgent");
+    case "date":
+      return t("sessionsView.groupByDate");
+    default:
+      return t("sessionsView.groupByNone");
+  }
+}
+
+function sessionGroupLabel(id: string, props: SessionsProps): string {
+  if (props.groupBy === "date") {
+    switch (id) {
+      case "today":
+        return t("sessionsView.dateToday");
+      case "yesterday":
+        return t("sessionsView.dateYesterday");
+      case "week":
+        return t("sessionsView.dateThisWeek");
+      case "older":
+        return t("sessionsView.dateOlder");
+      default:
+        return t("sessionsView.dateNoActivity");
+    }
+  }
+  if (id === UNGROUPED_ID) {
+    return t("sessionsView.ungrouped");
+  }
+  if (props.groupBy === "agent") {
+    const identity = getAgentIdentity(props.agentIdentityById, id);
+    const name = normalizeOptionalString(identity?.name);
+    if (name) {
+      const emoji = normalizeOptionalString(identity?.emoji);
+      return emoji ? `${emoji} ${name}` : name;
+    }
+  }
+  return id;
+}
+
+// Drag-over highlighting toggles a class directly on the target row instead of
+// re-rendering per dragover event; lit re-renders mid-drag would cancel the drag.
+function setDropTargetActive(event: DragEvent, active: boolean) {
+  (event.currentTarget as HTMLElement | null)?.classList.toggle(
+    "session-drop-target--active",
+    active,
+  );
+}
+
+function categoryDropHandlers(props: SessionsProps, category: string | null) {
+  if (props.groupBy !== "category") {
+    return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
+  }
+  const carriesSessionKey = (event: DragEvent) =>
+    event.dataTransfer?.types.includes(SESSION_DRAG_MIME) === true;
+  return {
+    dragover: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      setDropTargetActive(event, true);
+    },
+    dragleave: (event: DragEvent) => setDropTargetActive(event, false),
+    drop: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
+      event.preventDefault();
+      setDropTargetActive(event, false);
+      const key = event.dataTransfer?.getData(SESSION_DRAG_MIME);
+      if (key) {
+        props.onAssignCategory(key, category);
+      }
+    },
+  } as const;
+}
+
+function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
+  const label = sessionGroupLabel(group.id, props);
+  const count =
+    group.rows.length === 1
+      ? t("sessionsView.groupRowCountOne", { count: "1" })
+      : t("sessionsView.groupRowCount", { count: String(group.rows.length) });
+  const drop = categoryDropHandlers(props, group.id === UNGROUPED_ID ? null : group.id);
+  return html`
+    <tr
+      class="session-group-row"
+      @dragover=${drop.dragover}
+      @dragleave=${drop.dragleave}
+      @drop=${drop.drop}
+    >
+      <td colspan=${sessionsTableColumnCount(props)}>
+        <div class="session-group-row__header">
+          <span class="session-group-row__icon" aria-hidden="true">${icons.folder}</span>
+          <span class="session-group-row__label">${label}</span>
+          <span class="session-group-row__count">${count}</span>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderCategoryCell(row: GatewaySessionRow, props: SessionsProps) {
+  const current = normalizeOptionalString(row.category) ?? "";
+  const options = [...props.knownCategories];
+  if (current && !options.includes(current)) {
+    options.push(current);
+  }
+  return html`
+    <td>
+      <select
+        ?disabled=${props.loading}
+        aria-label=${t("sessionsView.moveToGroup")}
+        style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 110px;"
+        @change=${(e: Event) => {
+          const select = e.target as HTMLSelectElement;
+          if (select.value === NEW_GROUP_OPTION) {
+            // The page prompts for a name and patches; restore until the refresh lands.
+            select.value = current;
+            props.onRequestNewCategory(row.key);
+            return;
+          }
+          props.onAssignCategory(row.key, select.value || null);
+        }}
+      >
+        <option value="" ?selected=${!current}>${t("sessionsView.ungrouped")}</option>
+        ${options.map(
+          (name) => html`<option value=${name} ?selected=${current === name}>${name}</option>`,
+        )}
+        <option value=${NEW_GROUP_OPTION}>${t("sessionsView.newGroup")}</option>
+      </select>
+    </td>
+  `;
 }
 
 function isRowControlTarget(target: EventTarget | null): boolean {
@@ -514,7 +683,16 @@ export function renderSessions(props: SessionsProps) {
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
-  const paginated = paginateRows(sorted, page, props.pageSize);
+  // Grouping shows all rows in their sections; pagination would split groups confusingly.
+  const groupingActive = props.groupBy !== "none";
+  const groups = groupingActive
+    ? groupSessionRows({
+        rows: sorted,
+        mode: props.groupBy,
+        knownCategories: props.knownCategories,
+      })
+    : null;
+  const paginated = groupingActive ? sorted : paginateRows(sorted, page, props.pageSize);
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
   const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
@@ -692,6 +870,28 @@ export function renderSessions(props: SessionsProps) {
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
           </div>
+          <label class="session-groupby">
+            <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
+            <select
+              class="session-groupby__select"
+              @change=${(e: Event) =>
+                props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
+            >
+              ${SESSION_GROUP_MODES.map(
+                (mode) =>
+                  html`<option value=${mode} ?selected=${props.groupBy === mode}>
+                    ${groupModeLabel(mode)}
+                  </option>`,
+              )}
+            </select>
+          </label>
+          ${props.groupBy === "category"
+            ? html`
+                <button class="btn btn--sm" @click=${() => props.onRequestNewCategory()}>
+                  ${icons.plus} ${t("sessionsView.newGroup")}
+                </button>
+              `
+            : nothing}
         </div>
 
         ${props.selectedKeys.size > 0
@@ -740,6 +940,9 @@ export function renderSessions(props: SessionsProps) {
                 </th>
                 ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
                 <th>${t("sessionsView.label")}</th>
+                ${props.groupBy === "category"
+                  ? html`<th>${t("sessionsView.group")}</th>`
+                  : nothing}
                 ${sortHeader("kind", t("sessionsView.kind"))}
                 <th class="session-status-col">${t("sessionsView.status")}</th>
                 <th>${t("agents.context.runtime")}</th>
@@ -757,7 +960,7 @@ export function renderSessions(props: SessionsProps) {
               ${paginated.length === 0
                 ? html`
                     <tr>
-                      <td colspan="14" class="data-table-empty-cell">
+                      <td colspan=${sessionsTableColumnCount(props)} class="data-table-empty-cell">
                         ${emptyBecauseFiltered
                           ? html`
                               <div class="data-table-empty-state" role="status" aria-live="polite">
@@ -771,12 +974,18 @@ export function renderSessions(props: SessionsProps) {
                       </td>
                     </tr>
                   `
-                : paginated.flatMap((row) => renderRows(row, props))}
+                : groups
+                  ? groups.flatMap((group) => {
+                      const section = group.rows.flatMap((row) => renderRows(row, props));
+                      section.unshift(renderGroupHeaderRow(group, props));
+                      return section;
+                    })
+                  : paginated.flatMap((row) => renderRows(row, props))}
             </tbody>
           </table>
         </div>
 
-        ${totalRows > 0
+        ${totalRows > 0 && !groupingActive
           ? html`
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
@@ -892,6 +1101,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       props.onToggleCheckpointDetails(row.key);
     }
   };
+  const categoryMode = props.groupBy === "category";
+  // Dropping on a row targets that row's group so the whole section area accepts drops.
+  const rowDrop = categoryDropHandlers(props, normalizeOptionalString(row.category) ?? null);
 
   return [
     html`<tr
@@ -899,6 +1111,19 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       tabindex=${hasCheckpoints ? "0" : nothing}
       aria-expanded=${hasCheckpoints ? String(isExpanded) : nothing}
       aria-controls=${hasCheckpoints ? detailsId : nothing}
+      draggable=${categoryMode ? "true" : nothing}
+      aria-description=${categoryMode ? t("sessionsView.dragSessionHint") : nothing}
+      @dragstart=${categoryMode
+        ? (e: DragEvent) => {
+            e.dataTransfer?.setData(SESSION_DRAG_MIME, row.key);
+            if (e.dataTransfer) {
+              e.dataTransfer.effectAllowed = "move";
+            }
+          }
+        : nothing}
+      @dragover=${rowDrop.dragover}
+      @dragleave=${rowDrop.dragleave}
+      @drop=${rowDrop.drop}
       @click=${(e: MouseEvent) => {
         if (!hasCheckpoints || isRowControlTarget(e.target)) {
           return;
@@ -967,6 +1192,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           }}
         />
       </td>
+      ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
@@ -1137,7 +1363,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     ...(isExpanded && hasCheckpoints
       ? [
           html`<tr id=${detailsId} class="session-checkpoint-details-row">
-            <td colspan="14">
+            <td colspan=${sessionsTableColumnCount(props)}>
               <div class="session-details-panel">
                 <div class="session-details-panel__hero">
                   <div>

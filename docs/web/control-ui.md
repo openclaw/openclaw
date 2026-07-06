@@ -92,6 +92,10 @@ The assistant avatar override follows the same browser-local pattern: uploaded o
 
 The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
 
+## Gateway host status
+
+Open **Settings** in Simple view to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
+
 ## Language support
 
 The Control UI localizes itself on first load based on your browser locale. To override it later, open **Overview -> Gateway Access -> Language** (the picker lives in the Gateway Access card, not under Appearance).
@@ -111,12 +115,19 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a browser-local Text size setting, stored with the rest of Control UI preferences. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
+## Sidebar navigation
+
+The sidebar keeps sessions first, split into **Pinned** and **Sessions** groups. Every pinned session stays visible, while unpinned sessions keep an independent nine-item recent budget. **Overview** is the only destination pinned by default; expand **More** to reach every other destination. Select **Customize sidebar** under More, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set and More expansion state are stored in the current browser profile and survive reloads.
+
+The compact footer keeps connection status, **Settings**, **Docs**, and mobile pairing together. On desktop, use the topbar button next to the terminal control to collapse or expand the sidebar. At drawer breakpoints, the hamburger button replaces that control.
+
 ## What it can do (today)
 
 <AccordionGroup>
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
     - Chat history refreshes request a bounded recent window with per-message text caps, so large sessions do not force the browser to render a full transcript payload before chat becomes usable.
+    - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. The Gateway uses `GH_TOKEN` or `GITHUB_TOKEN` when available, after confirming the repository is public; otherwise it uses GitHub's anonymous API with a longer cache.
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`.
     - Stream tool calls and live tool output cards in Chat (agent events).
     - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
@@ -127,6 +138,7 @@ Appearance also has a browser-local Text size setting, stored with the rest of C
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and label partial snapshots when a probe or audit exceeds its UI budget.
     - Instances: presence list and refresh (`system-presence`).
     - Sessions: list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts.
+    - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
 
   </Accordion>
@@ -227,15 +239,15 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows explicit `models.providers.*.models` entries plus providers with usable auth. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
-    - When fresh Gateway session usage reports include current context tokens, the chat composer toolbar shows a small context usage ring with the used percentage; full token detail lives in its tooltip. The ring switches to warning styling at high context pressure and, at recommended compaction levels, shows a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
+    - When fresh Gateway session usage reports include current context tokens, the chat composer toolbar shows a small context usage ring with the used percentage. Open the ring for the current context window, latest-run token counts and estimated total cost, provider/model identity, and the latest provider response's input/output/cache cost breakdown when reported. The ring switches to warning styling at high context pressure and, at recommended compaction levels, shows a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
 
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
     Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.realtime.provider: "openai"` plus an `openai` API-key auth profile, `talk.realtime.providers.openai.apiKey`, or `OPENAI_API_KEY`; OpenAI OAuth profiles do not configure Realtime voice. Configure Google with `talk.realtime.provider: "google"` plus `talk.realtime.providers.google.apiKey`. The browser never receives a standard provider API key: OpenAI receives an ephemeral Realtime client secret for WebRTC, and Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.client.create` does not accept caller-provided instruction overrides.
 
-    The Chat composer includes a Talk options button next to the Talk start/stop button. Options apply to the next Talk session and can override provider, transport, model, voice, reasoning effort, VAD threshold, silence duration, and prefix padding. A blank option falls back to configured defaults or the provider default. Selecting Gateway relay forces the backend relay path; selecting WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
+    The Chat composer includes a Talk options caret next to the Talk start/stop button. Its compact panel keeps only Voice, Model, and Sensitivity for the next Talk session. **More in Settings** opens **Settings → Communications → Talk**, where persistent provider, transport, reasoning effort, exact VAD threshold, silence duration, and prefix padding defaults live; changing those defaults requires `operator.admin` access. Blank composer values fall back to those configured defaults or the provider default. Configuring Gateway relay forces the backend relay path; configuring WebRTC keeps the session client-owned and fails instead of silently falling back to relay if the provider cannot create a browser session.
 
-    The Talk control itself is the waves button next to the microphone dictation button. When Talk starts, the composer status row shows `Connecting Talk...`, then `Talk live` while audio is connected, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`.
+    The Talk control itself is the microphone button in the composer toolbar, with a small caret beside it that opens Talk options. When Talk starts, the composer status row shows `Connecting Talk...`, then `Talk live` while audio is connected, or `Asking OpenClaw...` while a realtime tool call is consulting the configured larger model through `talk.client.toolCall`.
 
     Maintainer live smoke: `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts` verifies the OpenAI backend WebSocket bridge, OpenAI browser WebRTC SDP exchange, Google Live constrained-token browser WebSocket setup, and the Gateway relay browser adapter with fake microphone media. The command prints provider status only and does not log secrets.
 
@@ -254,6 +266,17 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
 
   </Accordion>
 </AccordionGroup>
+
+## Connection loss and reconnect
+
+Once a session is established, a dropped Gateway connection does not log you out. The dashboard
+stays visible with an amber "Gateway connection lost — reconnecting…" banner while the client
+retries automatically with backoff (800 ms up to 15 s). Live updates and actions pause until the
+connection returns; **Retry now** in the banner forces an immediate attempt.
+
+The login gate only appears when there is no established session yet (first open, page reload
+before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
+pairing) — states that need your input rather than waiting.
 
 ## PWA install and web push
 
@@ -432,6 +455,7 @@ In practice:
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
 - Local `blob:` URLs created by the Control UI still render.
+- GitHub link preview avatars are fetched by the Gateway from GitHub's fixed avatar host and returned as bounded `data:` URLs; the operator browser never contacts the remote avatar host.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
 This is always on and not configurable.

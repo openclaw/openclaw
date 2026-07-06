@@ -151,6 +151,8 @@ import {
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -300,6 +302,7 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
 import {
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
@@ -358,6 +361,8 @@ export const ProtocolSchemas = {
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResult: EnvironmentsStatusResultSchema,
+  SystemInfoParams: SystemInfoParamsSchema,
+  SystemInfoResult: SystemInfoResultSchema,
   AgentEvent: AgentEventSchema,
   MessageActionParams: MessageActionParamsSchema,
   SendParams: SendParamsSchema,
@@ -582,6 +587,8 @@ export const ProtocolSchemas = {
   CronStatusParams: CronStatusParamsSchema,
   CronGetParams: CronGetParamsSchema,
   CronAddParams: CronAddParamsSchema,
+  CronAddResult: CronAddResultSchema,
+  CronDeclarativeAddResult: CronDeclarativeAddResultSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,
   CronRunParams: CronRunParamsSchema,

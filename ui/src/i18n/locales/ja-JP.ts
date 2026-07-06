@@ -269,6 +269,26 @@ export const ja_JP: TranslationMap = {
     unpinSession: "セッションのピン留めを解除",
     archiveSession: "セッションをアーカイブ",
     restoreSession: "セッションを復元",
+    groupBy: "グループ化",
+    groupByNone: "なし",
+    groupByCategory: "カスタムグループ",
+    groupByChannel: "チャンネル",
+    groupByKind: "種類",
+    groupByAgent: "エージェント",
+    groupByDate: "日付",
+    group: "グループ",
+    ungrouped: "未グループ化",
+    newGroup: "新しいグループ…",
+    newGroupPrompt: "新しいグループ名",
+    moveToGroup: "セッションをグループに移動",
+    dragSessionHint: "ドラッグしてグループ間を移動",
+    dateToday: "今日",
+    dateYesterday: "昨日",
+    dateThisWeek: "今週",
+    dateOlder: "以前",
+    dateNoActivity: "アクティビティなし",
+    groupRowCount: "{count} 件のセッション",
+    groupRowCountOne: "{count} 件のセッション",
     loadingCheckpoints: "チェックポイントを読み込み中…",
     noCheckpoints: "このセッションには圧縮チェックポイントが記録されていません。",
     noSummary: "要約は取得されていません。",
@@ -424,12 +444,13 @@ export const ja_JP: TranslationMap = {
   },
   nav: {
     chat: "チャット",
-    control: "コントロール",
-    agent: "エージェント",
     settings: "設定",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
     resize: "サイドバーのサイズを変更",
+    more: "その他",
+    customize: "サイドバーをカスタマイズ",
+    customizeReset: "デフォルトに戻す",
   },
   terminal: {
     title: "Terminal",
@@ -473,6 +494,7 @@ export const ja_JP: TranslationMap = {
     debug: "デバッグ",
     logs: "ログ",
     dreams: "Dreaming",
+    plugin: "プラグイン",
   },
   subtitles: {
     agents: "ワークスペース、ツール、ID。",
@@ -498,6 +520,7 @@ export const ja_JP: TranslationMap = {
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
     dreams: "スリープ中のメモリ統合。",
+    plugin: "プラグインが提供するパネル。",
   },
   skillWorkshop: {
     header: {
@@ -557,6 +580,66 @@ export const ja_JP: TranslationMap = {
     file: "File: {file}",
     truncated: "Log output truncated; showing latest chunk.",
     empty: "No log entries.",
+  },
+  pluginTabs: {
+    unavailableTitle: "Plugin panel unavailable",
+    unavailableSubtitle:
+      "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  logbook: {
+    duration: {
+      minutes: "{minutes}m",
+      hours: "{hours}h {minutes}m",
+    },
+    nav: {
+      previousDay: "Previous day",
+      nextDay: "Next day",
+      today: "Today",
+    },
+    status: {
+      capturing: "Capturing every {seconds}s",
+      paused: "Capture paused",
+      disabled: "Capture off",
+      nodeHelp: "Node providing screen snapshots.",
+      pending: "{count} frames queued",
+      pendingHelp: "Snapshots waiting for the next analysis batch.",
+      analyzing: "Analyzing…",
+      captureError: "Capture error",
+      batchError: "Analysis error",
+      modelMissing: "No vision model",
+      modelMissingHelp:
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+    },
+    actions: {
+      pause: "Pause",
+      resume: "Resume",
+      analyzeNow: "Analyze now",
+    },
+    empty: {
+      title: "Nothing on the timeline yet.",
+      subtitle:
+        "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
+    },
+    card: {
+      keyframeAlt: "Screen snapshot from this activity",
+      distractions: "Distractions",
+    },
+    stats: {
+      title: "Day at a glance",
+      focus: "{pct}% focus",
+      tracked: "{duration} tracked",
+    },
+    standup: {
+      title: "Daily standup",
+      generate: "Generate",
+      refresh: "Regenerate",
+      empty: "Turn today's timeline into a ready-to-paste standup update.",
+    },
+    ask: {
+      title: "Ask your day",
+      placeholder: "When did I review the gateway PR?",
+      submit: "Ask",
+    },
   },
   workboard: {
     disabledHelpStart: "Workboard は無効になっています。有効にするには",
@@ -1130,6 +1213,14 @@ export const ja_JP: TranslationMap = {
       byType: "種類別",
       tokensTitle: "日別トークン使用量",
       costTitle: "日別コスト",
+      compressedScaleHint: "平方根スケールにより、使用量の少ない日も見やすく表示されます。",
+    },
+    costWindows: {
+      title: "コスト期間",
+      subtitle: "{date} までのカレンダー期間",
+      selectedRange: "選択した期間",
+      lastDays: "過去 {count} 日間",
+      perDay: "/ 日",
     },
     breakdown: {
       output: "出力",
@@ -1177,6 +1268,7 @@ export const ja_JP: TranslationMap = {
       cached: "キャッシュ済み",
       prompt: "プロンプト",
       calls: "呼び出し",
+      costShare: "コストの {percent}%",
       topModels: "上位モデル",
       topProviders: "上位プロバイダー",
       topTools: "上位ツール",
@@ -1374,6 +1466,12 @@ export const ja_JP: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway 接続が失われました",
+    reconnecting: "再接続中…",
+    offlineHint: "接続が復旧するまで、ライブ更新と操作は一時停止されます。",
+    retryNow: "今すぐ再試行",
+  },
   chat: {
     disconnected: "Gateway から切断されました。",
     archivedSessionDisabled: "メッセージを送信するには、このセッションを復元してください。",
@@ -1437,7 +1535,7 @@ export const ja_JP: TranslationMap = {
       badge: "期限切れ",
     },
     composer: {
-      placeholder: "Message {name} (Enter to send)",
+      placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
@@ -1447,6 +1545,7 @@ export const ja_JP: TranslationMap = {
         summary: "セッションのコンテキスト使用量: {used}/{limit} ({pct}%)",
         contextWindow: "コンテキストウィンドウ",
         latestRunTokens: "最新実行のトークン",
+        estimatedCost: "推定コスト",
       },
       dismissTalkError: "Talkエラーを閉じる",
       startTalk: "Start Talk",

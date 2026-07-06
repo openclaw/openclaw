@@ -116,9 +116,9 @@ Switching channels with `openclaw update` also syncs plugin sources:
   their bundled (git checkout) source.
 - `stable` and `beta` restore npm-installed or ClawHub-installed plugin
   packages.
-- `extended-stable` currently uses the existing stable/latest plugin line
-  after the core package succeeds. Official plugin `@extended-stable`
-  selectors are not queried yet.
+- `extended-stable` resolves eligible official npm plugins with bare/default
+  or `latest` intent to the exact installed core version. It does not query
+  plugin `@extended-stable` tags at runtime.
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status

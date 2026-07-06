@@ -2160,6 +2160,7 @@ export function buildGatewaySessionRow(params: {
     subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
+    category: entry?.category,
     displayName,
     derivedTitle,
     lastMessagePreview,

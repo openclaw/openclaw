@@ -318,6 +318,10 @@ const TalkRealtimeSchema = z
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    vadThreshold: z.number().min(0).max(1).optional(),
+    silenceDurationMs: z.number().int().positive().optional(),
+    prefixPaddingMs: z.number().int().nonnegative().optional(),
+    reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
@@ -326,7 +330,7 @@ const TalkRealtimeSchema = z
     const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
     const providers = realtime.providers ? Object.keys(realtime.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],
@@ -362,7 +366,7 @@ const TalkSchema = z
     const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in talk.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(talk.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],

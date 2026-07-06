@@ -1951,6 +1951,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     "tool",
     "run",
     "settings",
+    "tab",
   ]);
 
   const registerSessionExtension = (
@@ -2260,6 +2261,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const icon = normalizeOptionalHostHookString(descriptor.icon);
+    const tabPath = normalizeOptionalHostHookString(descriptor.path);
+    // Single leading slash only: "//host" and "/\\host" are protocol-relative
+    // URLs in browsers, which would let a descriptor iframe external content.
+    const isLocalAbsolutePath =
+      tabPath === undefined ||
+      (tabPath.startsWith("/") && !tabPath.startsWith("//") && !tabPath.startsWith("/\\"));
+    if (!isLocalAbsolutePath) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI descriptor path must be a gateway-local absolute path: ${id}`,
+      });
+      return;
+    }
+    // Tab placement/order are projected to hello clients; keep junk values out.
+    const group =
+      descriptor.group === "control" || descriptor.group === "agent" ? descriptor.group : undefined;
+    const order =
+      typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
+        ? descriptor.order
+        : undefined;
     (registry.controlUiDescriptors ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -2273,6 +2297,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
+        icon,
+        path: tabPath,
+        group,
+        order,
       },
       source: record.source,
       rootDir: record.rootDir,

@@ -1968,6 +1968,157 @@ describe("SessionManager.open", () => {
     expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
   });
 
+  it("accepts an unowned side leaf only when it preserves the active branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const sideEntry = {
+      type: "message" as const,
+      id: "unowned-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      sideEntry,
+      {
+        type: "prompt_released_opaque",
+        preserveActiveLeaf: true,
+        record: {
+          type: "leaf",
+          id: "unowned-side-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-07-05T00:00:02.000Z",
+          targetId: activeLeafId,
+          appendParentId: sideEntry.id,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(JSON.stringify(sessionManager.buildSessionContext())).not.toContain("side delivery");
+  });
+
+  it("rejects an unowned side leaf that moves the active branch before mutating state", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const olderLeafId = sessionManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "hostile-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("hostile side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "hostile-side-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: olderLeafId,
+            appendParentId: sideEntry.id,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("rejects an unowned side leaf that resets a non-root side cursor", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery-before-root-reset",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-reset-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("accepts an explicit root side cursor when it matches the current side branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "prompt_released_opaque",
+        record: {
+          type: "leaf",
+          id: "owned-root-side-leaf",
+          parentId: activeLeafId,
+          timestamp: "2026-07-05T00:00:01.000Z",
+          targetId: activeLeafId,
+          appendParentId: null,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-side-leaf",
+            parentId: null,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).not.toThrow();
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+  });
+
   it("applies merged leaf controls across separate callbacks", async () => {
     const dir = await makeTempDir();
     const sessionManager = SessionManager.create(dir, dir);

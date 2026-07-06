@@ -343,6 +343,12 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  declarationKey?: string;
+  displayName?: string;
+  owner?: {
+    agentId?: string;
+    sessionKey?: string;
+  };
   state: CronJobState;
 };
 
@@ -354,13 +360,26 @@ export type CronStoreFile = {
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
+  id?: string;
   state?: Partial<CronJobState>;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
 export type CronJobPatch = Partial<
-  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery">
+  Omit<
+    CronJob,
+    | "id"
+    | "createdAtMs"
+    | "state"
+    | "payload"
+    | "delivery"
+    | "declarationKey"
+    | "displayName"
+    | "owner"
+  >
 > & {
+  displayName?: string | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

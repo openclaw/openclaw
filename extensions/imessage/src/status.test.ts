@@ -23,6 +23,7 @@ const getIMessageSetupStatus = createPluginSetupWizardStatus({
 const spawnMock = vi.hoisted(() => vi.fn());
 const setupToolsMocks = vi.hoisted(() => ({
   detectBinary: vi.fn(async () => false),
+  formatDocsLink: vi.fn((path: string) => path),
 }));
 
 vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => ({

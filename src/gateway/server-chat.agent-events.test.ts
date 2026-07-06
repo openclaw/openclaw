@@ -102,6 +102,7 @@ describe("agent event handler", () => {
     trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
     resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
     updateRunToolErrorSummary?: AgentEventHandlerOptions["updateRunToolErrorSummary"];
+    resolveSessionActiveRunState?: AgentEventHandlerOptions["resolveSessionActiveRunState"];
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -136,6 +137,7 @@ describe("agent event handler", () => {
       trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
       resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
       updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
+      resolveSessionActiveRunState: params?.resolveSessionActiveRunState,
     });
 
     return {
@@ -2063,8 +2065,13 @@ describe("agent event handler", () => {
       runtimeMs: 800,
       abortedLastRun: false,
     });
+    const resolveSessionActiveRunState = vi
+      .fn<NonNullable<AgentEventHandlerOptions["resolveSessionActiveRunState"]>>()
+      .mockReturnValueOnce({ active: true, runIds: ["run-finished"] })
+      .mockReturnValue({ active: false, runIds: [] });
     const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-finished",
+      resolveSessionActiveRunState,
     });
 
     sessionEventSubscribers.subscribe("conn-session");
@@ -2104,15 +2111,27 @@ describe("agent event handler", () => {
       ([event]) => event === "sessions.changed",
     );
     expect(sessionsChangedCalls).toHaveLength(2);
+    expectPayloadFields(sessionsChangedCalls[0]?.[1], {
+      sessionKey: "session-finished",
+      phase: "start",
+      hasActiveRun: true,
+      activeRunIds: ["run-finished"],
+    });
     expectPayloadFields(sessionsChangedCalls[1]?.[1], {
       sessionKey: "session-finished",
       phase: "end",
+      hasActiveRun: false,
+      activeRunIds: [],
       status: "done",
       startedAt: 900,
       endedAt: 1_700,
       runtimeMs: 800,
       updatedAt: 1_700,
       abortedLastRun: false,
+    });
+    expect(resolveSessionActiveRunState).toHaveBeenCalledWith({
+      requestedKey: "session-finished",
+      canonicalKey: "session-finished",
     });
     const persistParams = requireRecord(
       persistGatewaySessionLifecycleEventMock.mock.calls
@@ -3392,6 +3411,32 @@ describe("agent event handler", () => {
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
+    );
+  });
+
+  it("logs when start session persistence fails", async () => {
+    const { chatRunState, handler, sessionEventSubscribers } = createHarness();
+    sessionEventSubscribers.subscribe("conn-1");
+    chatRunState.registry.add("run-global-work", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-work",
+    });
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("start disk full"));
+
+    handler({
+      runId: "run-global-work",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+    });
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway: start session persistence failed session=global run=run-global-work error=Error: start disk full",
     );
   });
 

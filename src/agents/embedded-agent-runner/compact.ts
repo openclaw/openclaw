@@ -907,52 +907,54 @@ async function compactEmbeddedAgentSessionDirectOnce(
       skillsSnapshot: skillsSnapshotForRun,
       sandboxToolPolicy: sandbox?.tools,
     });
-    const toolsRaw = createOpenClawCodingTools({
-      exec: {
-        ...params.execOverrides,
-        config: params.config,
-        elevated: params.bashElevated,
-      },
-      sandbox,
-      messageProvider: resolvedMessageProvider,
-      chatType: params.chatType,
-      agentAccountId: params.agentAccountId,
-      sessionKey: sandboxSessionKey,
-      runSessionKey:
-        params.sessionKey && params.sessionKey !== sandboxSessionKey
-          ? params.sessionKey
-          : undefined,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      oneShotCliRun: params.oneShotCliRun,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-      agentDir,
-      cwd: effectiveCwd,
-      workspaceDir: effectiveWorkspace,
-      spawnWorkspaceDir,
-      config: params.config,
-      abortSignal: runAbortController.signal,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      modelProvider: model.provider,
-      modelId,
-      modelCompat: extractModelCompat(effectiveModel),
-      modelApi: model.api,
-      modelContextWindowTokens: contextTokenBudget,
-      skillsSnapshot: skillsSnapshotForRun,
-      conversationCapabilityProfile: runtimeCapabilityProfile,
-      modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
-        workspaceDir: effectiveWorkspace,
-      }),
-    });
     const toolsEnabled = supportsModelTools(runtimeModel);
+    const toolsRaw = toolsEnabled
+      ? createOpenClawCodingTools({
+          exec: {
+            ...params.execOverrides,
+            config: params.config,
+            elevated: params.bashElevated,
+          },
+          sandbox,
+          messageProvider: resolvedMessageProvider,
+          chatType: params.chatType,
+          agentAccountId: params.agentAccountId,
+          sessionKey: sandboxSessionKey,
+          runSessionKey:
+            params.sessionKey && params.sessionKey !== sandboxSessionKey
+              ? params.sessionKey
+              : undefined,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          oneShotCliRun: params.oneShotCliRun,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+          agentDir,
+          cwd: effectiveCwd,
+          workspaceDir: effectiveWorkspace,
+          spawnWorkspaceDir,
+          config: params.config,
+          abortSignal: runAbortController.signal,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          modelProvider: model.provider,
+          modelId,
+          modelCompat: extractModelCompat(effectiveModel),
+          modelApi: model.api,
+          modelContextWindowTokens: contextTokenBudget,
+          skillsSnapshot: skillsSnapshotForRun,
+          conversationCapabilityProfile: runtimeCapabilityProfile,
+          modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
+            workspaceDir: effectiveWorkspace,
+          }),
+        })
+      : [];
     const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
       modelApi: model.api,

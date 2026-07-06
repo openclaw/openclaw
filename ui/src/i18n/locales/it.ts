@@ -267,6 +267,26 @@ export const it: TranslationMap = {
     unpinSession: "Rimuovi sessione fissata",
     archiveSession: "Archivia sessione",
     restoreSession: "Ripristina sessione",
+    groupBy: "Raggruppa per",
+    groupByNone: "Nessuno",
+    groupByCategory: "Gruppi personalizzati",
+    groupByChannel: "Canale",
+    groupByKind: "Tipo",
+    groupByAgent: "Agente",
+    groupByDate: "Data",
+    group: "Gruppo",
+    ungrouped: "Non raggruppate",
+    newGroup: "Nuovo gruppo…",
+    newGroupPrompt: "Nome del nuovo gruppo",
+    moveToGroup: "Sposta sessione in un gruppo",
+    dragSessionHint: "Trascina per spostare tra gruppi",
+    dateToday: "Oggi",
+    dateYesterday: "Ieri",
+    dateThisWeek: "Questa settimana",
+    dateOlder: "Meno recenti",
+    dateNoActivity: "Nessuna attività",
+    groupRowCount: "{count} sessioni",
+    groupRowCountOne: "{count} sessione",
     loadingCheckpoints: "Caricamento checkpoint…",
     noCheckpoints: "Nessun checkpoint di compattazione registrato per questa sessione.",
     noSummary: "Nessun riepilogo acquisito.",
@@ -424,12 +444,13 @@ export const it: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Controllo",
-    agent: "Agente",
     settings: "Impostazioni",
     expand: "Espandi barra laterale",
     collapse: "Comprimi barra laterale",
     resize: "Ridimensiona barra laterale",
+    more: "Altro",
+    customize: "Personalizza barra laterale",
+    customizeReset: "Ripristina impostazioni predefinite",
   },
   terminal: {
     title: "Terminal",
@@ -473,6 +494,7 @@ export const it: TranslationMap = {
     debug: "Debug",
     logs: "Log",
     dreams: "Sogni",
+    plugin: "Plugin",
   },
   subtitles: {
     agents: "Spazi di lavoro, strumenti, identità.",
@@ -498,6 +520,7 @@ export const it: TranslationMap = {
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
     dreams: "Sogni della memoria, consolidamento e riflessione.",
+    plugin: "Pannello fornito dal plugin.",
   },
   skillWorkshop: {
     header: {
@@ -557,6 +580,66 @@ export const it: TranslationMap = {
     file: "File: {file}",
     truncated: "Log output truncated; showing latest chunk.",
     empty: "No log entries.",
+  },
+  pluginTabs: {
+    unavailableTitle: "Plugin panel unavailable",
+    unavailableSubtitle:
+      "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  logbook: {
+    duration: {
+      minutes: "{minutes}m",
+      hours: "{hours}h {minutes}m",
+    },
+    nav: {
+      previousDay: "Previous day",
+      nextDay: "Next day",
+      today: "Today",
+    },
+    status: {
+      capturing: "Capturing every {seconds}s",
+      paused: "Capture paused",
+      disabled: "Capture off",
+      nodeHelp: "Node providing screen snapshots.",
+      pending: "{count} frames queued",
+      pendingHelp: "Snapshots waiting for the next analysis batch.",
+      analyzing: "Analyzing…",
+      captureError: "Capture error",
+      batchError: "Analysis error",
+      modelMissing: "No vision model",
+      modelMissingHelp:
+        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.5) or configure tools.media models.",
+    },
+    actions: {
+      pause: "Pause",
+      resume: "Resume",
+      analyzeNow: "Analyze now",
+    },
+    empty: {
+      title: "Nothing on the timeline yet.",
+      subtitle:
+        "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
+    },
+    card: {
+      keyframeAlt: "Screen snapshot from this activity",
+      distractions: "Distractions",
+    },
+    stats: {
+      title: "Day at a glance",
+      focus: "{pct}% focus",
+      tracked: "{duration} tracked",
+    },
+    standup: {
+      title: "Daily standup",
+      generate: "Generate",
+      refresh: "Regenerate",
+      empty: "Turn today's timeline into a ready-to-paste standup update.",
+    },
+    ask: {
+      title: "Ask your day",
+      placeholder: "When did I review the gateway PR?",
+      submit: "Ask",
+    },
   },
   workboard: {
     disabledHelpStart: "Workboard è disabilitata. Abilita",
@@ -1130,6 +1213,15 @@ export const it: TranslationMap = {
       byType: "Per tipo",
       tokensTitle: "Utilizzo giornaliero dei token",
       costTitle: "Costo giornaliero",
+      compressedScaleHint:
+        "La scala a radice quadrata mantiene visibili i giorni con utilizzo ridotto.",
+    },
+    costWindows: {
+      title: "Intervalli di costo",
+      subtitle: "Intervalli di calendario fino al {date}",
+      selectedRange: "Intervallo selezionato",
+      lastDays: "Ultimi {count} giorni",
+      perDay: "/ giorno",
     },
     breakdown: {
       output: "Output",
@@ -1177,6 +1269,7 @@ export const it: TranslationMap = {
       cached: "in cache",
       prompt: "prompt",
       calls: "chiamate",
+      costShare: "{percent}% del costo",
       topModels: "Modelli principali",
       topProviders: "Provider principali",
       topTools: "Strumenti principali",
@@ -1377,6 +1470,13 @@ export const it: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Connessione al Gateway persa",
+    reconnecting: "Riconnessione…",
+    offlineHint:
+      "Gli aggiornamenti in tempo reale e le azioni sono in pausa finché la connessione non viene ripristinata.",
+    retryNow: "Riprova ora",
+  },
   chat: {
     disconnected: "Disconnesso dal gateway.",
     archivedSessionDisabled: "Ripristina questa sessione per inviare messaggi.",
@@ -1440,7 +1540,7 @@ export const it: TranslationMap = {
       badge: "Scaduto",
     },
     composer: {
-      placeholder: "Message {name} (Enter to send)",
+      placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
@@ -1450,6 +1550,7 @@ export const it: TranslationMap = {
         summary: "Uso del contesto della sessione: {used} di {limit} ({pct}%)",
         contextWindow: "Finestra di contesto",
         latestRunTokens: "Token dell'ultima esecuzione",
+        estimatedCost: "Costo stim.",
       },
       dismissTalkError: "Ignora errore Talk",
       startTalk: "Start Talk",

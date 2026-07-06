@@ -876,13 +876,17 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   const raw = turn.rawLines.join("\n");
-  const output = parseCliOutput({
-    raw,
-    backend: turn.backend,
-    providerId: session.providerId,
-    outputMode: "jsonl",
-    fallbackSessionId: turn.sessionId,
-  });
+  // Reuse the parser that classified pre-tool text as commentary. Reparsing the
+  // transcript loses that boundary when Claude's terminal result is empty.
+  const output =
+    turn.streamingParser.getOutput() ??
+    parseCliOutput({
+      raw,
+      backend: turn.backend,
+      providerId: session.providerId,
+      outputMode: "jsonl",
+      fallbackSessionId: turn.sessionId,
+    });
   if (output.errorText) {
     failTurn(session, createParsedOutputError(session, output));
     scheduleIdleClose(session);

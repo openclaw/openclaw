@@ -338,6 +338,18 @@ describe("resolveInitialTuiAgentId", () => {
       }),
     ).toBe("main");
   });
+
+  it("falls back when the working directory was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {

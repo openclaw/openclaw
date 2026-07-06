@@ -530,6 +530,30 @@ export function normalizeCronJobInput(
   const base = raw;
   const next: UnknownRecord = { ...base };
 
+  for (const field of ["declarationKey", "displayName"] as const) {
+    if (field in base && typeof base[field] === "string") {
+      const trimmed = base[field].trim();
+      if (trimmed) {
+        next[field] = trimmed;
+      } else {
+        delete next[field];
+      }
+    }
+  }
+
+  if (isRecord(base.owner)) {
+    const agentId = normalizeOptionalString(base.owner.agentId);
+    const sessionKey = normalizeOptionalString(base.owner.sessionKey);
+    if (agentId || sessionKey) {
+      next.owner = {
+        ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+    } else {
+      delete next.owner;
+    }
+  }
+
   if ("agentId" in base) {
     const agentId = base.agentId;
     if (agentId === null) {
