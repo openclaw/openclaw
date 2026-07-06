@@ -287,4 +287,28 @@ describe("Discord model picker preference migration", () => {
       "legacy Discord thread bindings store must have version 1 bindings",
     );
   });
+
+  it("reports clear error for corrupted thread-bindings JSON", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "not valid json content");
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    const plan = plans?.[0];
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(() => plan.readEntries()).toThrow(
+      "Corrupted legacy Discord thread bindings store: file is not valid JSON",
+    );
+  });
 });

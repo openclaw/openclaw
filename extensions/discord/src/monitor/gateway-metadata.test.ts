@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordGatewayInfo,
+  parseDiscordGatewayInfoBody,
   resolveDiscordGatewayInfoTimeoutMs,
   resolveGatewayInfoWithFallback,
 } from "./gateway-metadata.js";
@@ -50,6 +51,12 @@ describe("Discord gateway metadata", () => {
     const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
     expect(logs).toBe(
       "discord: gateway metadata lookup failed transiently; using default gateway url (Failed to get gateway information from Discord: fetch failed | Discord API /gateway/bot failed (429): Error 1015 rate limited)",
+    );
+  });
+
+  it("rejects malformed gateway metadata body with clear error", () => {
+    expect(() => parseDiscordGatewayInfoBody("not json")).toThrow(
+      "Discord gateway metadata response is not valid JSON",
     );
   });
 });

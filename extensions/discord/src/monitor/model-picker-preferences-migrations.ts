@@ -51,7 +51,13 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
 }
 
 function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore {
-  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  const raw = fs.readFileSync(filePath, "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("Corrupted legacy Discord thread bindings store: file is not valid JSON");
+  }
   if (!parsed || typeof parsed !== "object") {
     throw new Error("legacy Discord thread bindings store must be an object");
   }
