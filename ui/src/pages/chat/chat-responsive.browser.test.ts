@@ -594,10 +594,33 @@ describeBrowserLayout("chat responsive browser layout", () => {
 
       const details = page.locator("details.msg-meta");
       const context = page.locator(".msg-meta__details");
+      const initialLayout = await page.evaluate(() => {
+        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+        const group = document.querySelector<HTMLElement>(".chat-group")!;
+        return {
+          footerHeight: footer.getBoundingClientRect().height,
+          groupHeight: group.getBoundingClientRect().height,
+        };
+      });
       expect(await context.isVisible()).toBe(false);
 
       await page.locator(".msg-meta__summary").hover();
       expect(await context.isVisible()).toBe(true);
+      const hoverLayout = await page.evaluate(() => {
+        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+        const group = document.querySelector<HTMLElement>(".chat-group")!;
+        const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        const context = document.querySelector<HTMLElement>(".msg-meta__details")!;
+        return {
+          contextBottom: context.getBoundingClientRect().bottom,
+          footerHeight: footer.getBoundingClientRect().height,
+          groupHeight: group.getBoundingClientRect().height,
+          summaryTop: summary.getBoundingClientRect().top,
+        };
+      });
+      expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
+      expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
+      expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
       await page.mouse.move(0, 0);
       expect(await context.isVisible()).toBe(false);
@@ -1257,8 +1280,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
         }
 
         if (width >= 1600) {
-          expect(shell.width).toBeGreaterThanOrEqual(1099);
-          expect(shell.width).toBeLessThanOrEqual(1101);
+          expect(shell.width).toBeGreaterThanOrEqual(767);
+          expect(shell.width).toBeLessThanOrEqual(769);
           expect(
             Math.abs(shell.x + shell.width / 2 - (chat.x + chat.width / 2)),
           ).toBeLessThanOrEqual(1);

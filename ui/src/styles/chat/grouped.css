@@ -423,7 +423,7 @@ img.chat-avatar {
   font-size: 12px; /* was 11px */
   line-height: 1;
   color: var(--muted);
-  flex-wrap: wrap;
+  position: relative;
 }
 
 .msg-meta__summary {
@@ -475,10 +475,23 @@ details.msg-meta:not([open]) .msg-meta__details {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  position: absolute;
+  right: auto;
+  bottom: 100%;
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: min(28rem, calc(100vw - 32px));
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--card);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 30%, transparent);
+}
+
+.chat-group.user .msg-meta__details {
+  right: 0;
+  left: auto;
 }
 
 .msg-meta__tokens,

@@ -85,10 +85,16 @@ describe("createSessionCapability", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce(
-        sessionsResult([{ key, updatedAt: 1, hasActiveRun: true, status: "running" }], 1),
+        sessionsResult(
+          [{ key, kind: "direct", updatedAt: 1, hasActiveRun: true, status: "running" }],
+          1,
+        ),
       )
       .mockResolvedValueOnce(
-        sessionsResult([{ key, updatedAt: 2, hasActiveRun: false, status: "done" }], 2),
+        sessionsResult(
+          [{ key, kind: "direct", updatedAt: 2, hasActiveRun: false, status: "done" }],
+          2,
+        ),
       );
     let eventListener: ((event: GatewayEventFrame) => void) | undefined;
     const client = { request } as unknown as GatewayBrowserClient;

@@ -678,10 +678,12 @@ export class ChatPage extends LitElement {
           sessionKey: state.sessionKey,
           sessionsResult: state.sessionsResult,
           stream: state.chatStream,
-          onFastModeSelect: (next) => switchChatFastMode(state, next),
-          onModelSelect: (next) => switchChatModel(state, next),
+          onFastModeSelect: (next, targetSessionKey) =>
+            switchChatFastMode(state, next, targetSessionKey),
+          onModelSelect: (next, targetSessionKey) => switchChatModel(state, next, targetSessionKey),
           onRequestUpdate: () => state.requestUpdate?.(),
-          onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
+          onThinkingSelect: (next, targetSessionKey) =>
+            switchChatThinkingLevel(state, next, targetSessionKey),
         },
         onboarding: state.onboarding,
         runId: state.chatRunId,

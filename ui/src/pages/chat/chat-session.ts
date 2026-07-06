@@ -247,11 +247,11 @@ function patchSessionRow(
 export async function switchChatFastMode(
   host: ChatModelSettingsHost,
   nextFastMode: "" | "on" | "off" | "auto",
+  targetSessionKey = host.sessionKey,
 ) {
   if (!host.client || !host.connected) {
     return;
   }
-  const targetSessionKey = host.sessionKey;
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
   const next: FastMode | undefined =
@@ -280,6 +280,7 @@ export async function switchChatFastMode(
 export async function switchChatModel(
   host: ChatModelSettingsHost,
   nextModel: string,
+  targetSessionKey = host.sessionKey,
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
     return false;
@@ -287,13 +288,12 @@ export async function switchChatModel(
   const currentOverride = resolveChatModelOverrideValue({
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
-    sessionKey: host.sessionKey,
+    sessionKey: targetSessionKey,
     sessionsResult: host.sessionsResult ?? null,
   });
   if (currentOverride === nextModel) {
     return true;
   }
-  const targetSessionKey = host.sessionKey;
   const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
@@ -337,11 +337,11 @@ export async function switchChatModel(
 export async function switchChatThinkingLevel(
   host: ChatModelSettingsHost,
   nextThinkingLevel: string,
+  targetSessionKey = host.sessionKey,
 ) {
   if (!host.client || !host.connected) {
     return;
   }
-  const targetSessionKey = host.sessionKey;
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
@@ -355,7 +355,9 @@ export async function switchChatThinkingLevel(
   }
   setChatError(host, null, true);
   patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-  host.chatThinkingLevel = normalizedNext ?? null;
+  if (host.sessionKey === targetSessionKey) {
+    host.chatThinkingLevel = normalizedNext ?? null;
+  }
   try {
     await host.sessions.patch(
       targetSessionKey,
@@ -366,10 +368,14 @@ export async function switchChatThinkingLevel(
     );
     await refreshCurrentChatSessionList(host);
     patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-    host.chatThinkingLevel = normalizedNext ?? null;
+    if (host.sessionKey === targetSessionKey) {
+      host.chatThinkingLevel = normalizedNext ?? null;
+    }
   } catch (err) {
     patchSessionRow(host, targetSessionKey, { thinkingLevel: previousThinkingLevel });
-    host.chatThinkingLevel = normalizedPrev ?? null;
+    if (host.sessionKey === targetSessionKey) {
+      host.chatThinkingLevel = normalizedPrev ?? null;
+    }
     setChatError(host, `Failed to set thinking level: ${String(err)}`, true);
   }
 }

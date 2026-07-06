@@ -35,10 +35,10 @@ export type ChatModelControlsProps = {
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
-  onFastModeSelect?: (value: ChatFastModeSelectValue) => unknown;
-  onModelSelect?: (value: string) => unknown;
+  onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
+  onModelSelect?: (value: string, sessionKey: string) => unknown;
   onRequestUpdate?: () => void;
-  onThinkingSelect?: (value: string) => unknown;
+  onThinkingSelect?: (value: string, sessionKey: string) => unknown;
 };
 
 type ChatModelProviderOption = ChatModelSelectOption & {
@@ -234,8 +234,8 @@ function resolveChatModelTarget(params: {
 }): { model: string | undefined; provider: string | undefined } {
   if (!params.value) {
     return {
-      model: params.sessionsResult.defaults?.model,
-      provider: params.sessionsResult.defaults?.modelProvider,
+      model: params.sessionsResult.defaults?.model ?? undefined,
+      provider: params.sessionsResult.defaults?.modelProvider ?? undefined,
     };
   }
   const option = params.modelOptions.find((entry) => entry.value === params.value);
@@ -292,22 +292,24 @@ function applyChatModelPickerDraft(params: {
   if (!params.draft || !params.sessionsResult) {
     return params.sessionsResult;
   }
+  const draft = params.draft;
+  const sessionsResult = params.sessionsResult;
   const target = resolveChatModelTarget({
     catalog: params.catalog,
     modelOptions: params.modelOptions,
-    sessionsResult: params.sessionsResult,
-    value: params.draft.modelValue,
+    sessionsResult,
+    value: draft.modelValue,
   });
-  const fastMode = resolveDraftFastMode(params.draft.fastModeValue);
+  const fastMode = resolveDraftFastMode(draft.fastModeValue);
   return {
-    ...params.sessionsResult,
-    sessions: params.sessionsResult.sessions.map((row) =>
+    ...sessionsResult,
+    sessions: sessionsResult.sessions.map((row) =>
       row.key === params.sessionKey
         ? {
             ...row,
             model: target.model,
             modelProvider: target.provider,
-            thinkingLevel: params.draft.thinkingValue || undefined,
+            thinkingLevel: draft.thinkingValue || undefined,
             fastMode,
             effectiveFastMode: fastMode,
           }
@@ -514,12 +516,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     busy ||
     !props.gatewayAvailable ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
-  const selectedThinkingLabel =
-    thinking.currentOverride === ""
-      ? thinking.defaultLabel
-      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
-        thinking.currentOverride);
-
   return renderChatModelReasoningSelect({
     disabled,
     fastMode,
@@ -529,7 +525,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     initialThinkingValue: committedThinking.currentOverride,
     onRequestUpdate: props.onRequestUpdate,
     selectedModelValue,
-    selectedThinkingLabel,
     selectedThinkingValue: thinking.currentOverride,
     sessionKey: props.sessionKey,
     thinkingDefaultValue: thinking.defaultValue,
@@ -537,9 +532,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
     triggerModelLabel: committedModelLabel,
     triggerThinkingLabel: committedThinkingLabel,
-    onFastModeSelect: async (next) => props.onFastModeSelect?.(next),
-    onModelSelect: async (next) => props.onModelSelect?.(next),
-    onThinkingSelect: async (next) => props.onThinkingSelect?.(next),
+    onFastModeSelect: async (next, targetSessionKey) =>
+      props.onFastModeSelect?.(next, targetSessionKey),
+    onModelSelect: async (next, targetSessionKey) => props.onModelSelect?.(next, targetSessionKey),
+    onThinkingSelect: async (next, targetSessionKey) =>
+      props.onThinkingSelect?.(next, targetSessionKey),
   });
 }
 
@@ -557,7 +554,7 @@ function formatCombinedPickerModelOptionLabel(
   const providerPrefixes = [
     formatRawChatModelProviderLabel(option.provider),
     formatChatModelProviderLabel(option.provider),
-  ].sort((left, right) => right.length - left.length);
+  ].toSorted((left, right) => right.length - left.length);
   for (const prefix of providerPrefixes) {
     if (label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
       return label.slice(prefix.length + 1);
@@ -578,7 +575,6 @@ function renderChatModelReasoningSelect(params: {
   initialThinkingValue: string;
   modelOptions: ChatModelProviderOption[];
   selectedModelValue: string;
-  selectedThinkingLabel: string;
   selectedThinkingValue: string;
   sessionKey: string;
   thinkingDefaultValue: string;
@@ -586,10 +582,10 @@ function renderChatModelReasoningSelect(params: {
   thinkingOptions: ChatModelSelectOption[];
   triggerModelLabel: string;
   triggerThinkingLabel: string;
-  onFastModeSelect: (value: ChatFastModeSelectValue) => Promise<unknown>;
-  onModelSelect: (value: string) => Promise<unknown>;
+  onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
+  onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
   onRequestUpdate?: () => void;
-  onThinkingSelect: (value: string) => Promise<unknown>;
+  onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
 }) {
   const {
     disabled,
@@ -599,7 +595,6 @@ function renderChatModelReasoningSelect(params: {
     initialThinkingValue,
     modelOptions,
     selectedModelValue,
-    selectedThinkingLabel,
     selectedThinkingValue,
     sessionKey,
     thinkingDefaultValue,
@@ -686,6 +681,15 @@ function renderChatModelReasoningSelect(params: {
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
   const showReasoningPanel = showReasoning || fastMode.options.length > 0;
+  const shouldDisableSave = () => {
+    const draft = chatModelPickerDrafts.get(sessionKey);
+    return Boolean(
+      disabled ||
+      draft?.saving ||
+      (draft && draft.thinkingValue !== draft.initialThinkingValue && thinkingDisabled) ||
+      (draft && draft.fastModeValue !== draft.initialFastModeValue && fastMode.disabled),
+    );
+  };
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -1042,10 +1046,13 @@ function renderChatModelReasoningSelect(params: {
           <button
             class="btn btn--sm primary"
             type="button"
-            ?disabled=${chatModelPickerDrafts.get(sessionKey)?.saving}
+            ?disabled=${shouldDisableSave()}
             @click=${async (event: MouseEvent) => {
               event.preventDefault();
               event.stopPropagation();
+              if (shouldDisableSave()) {
+                return;
+              }
               const details = (event.currentTarget as HTMLElement).closest("details");
               const draft = ensureChatModelPickerDraft({
                 fastModeValue: initialFastModeValue,
@@ -1061,16 +1068,16 @@ function renderChatModelReasoningSelect(params: {
               onRequestUpdate?.();
               try {
                 if (draft.modelValue !== draft.initialModelValue) {
-                  const switched = await onModelSelect(draft.modelValue);
+                  const switched = await onModelSelect(draft.modelValue, sessionKey);
                   if (switched === false) {
                     return;
                   }
                 }
                 if (draft.thinkingValue !== draft.initialThinkingValue) {
-                  await onThinkingSelect(draft.thinkingValue);
+                  await onThinkingSelect(draft.thinkingValue, sessionKey);
                 }
                 if (draft.fastModeValue !== draft.initialFastModeValue) {
-                  await onFastModeSelect(draft.fastModeValue);
+                  await onFastModeSelect(draft.fastModeValue, sessionKey);
                 }
                 chatModelPickerDrafts.delete(sessionKey);
               } finally {

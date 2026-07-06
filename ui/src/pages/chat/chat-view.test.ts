@@ -493,14 +493,23 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     sessionKey: state.sessionKey,
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
-    onFastModeSelect: (value) =>
-      switchChatFastMode(state as unknown as Parameters<typeof switchChatFastMode>[0], value),
-    onModelSelect: (value) =>
-      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], value),
-    onThinkingSelect: (value) =>
+    onFastModeSelect: (value, targetSessionKey) =>
+      switchChatFastMode(
+        state as unknown as Parameters<typeof switchChatFastMode>[0],
+        value,
+        targetSessionKey,
+      ),
+    onModelSelect: (value, targetSessionKey) =>
+      switchChatModel(
+        state as unknown as Parameters<typeof switchChatModel>[0],
+        value,
+        targetSessionKey,
+      ),
+    onThinkingSelect: (value, targetSessionKey) =>
       switchChatThinkingLevel(
         state as unknown as Parameters<typeof switchChatThinkingLevel>[0],
         value,
+        targetSessionKey,
       ),
   };
 }
@@ -2846,6 +2855,34 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("disables staged model settings when a run starts before save", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+    const modelOption = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find((button) => button.getAttribute("aria-selected") === "false");
+    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
+    modelOption?.click();
+
+    state.chatRunId = "run-123";
+    state.chatStream = "Working";
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")
+        ?.disabled,
+    ).toBe(true);
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .btn")?.click();
+  });
+
   it("groups models by provider and switches the visible provider section", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -3151,6 +3188,76 @@ describe("chat model controls", () => {
     expect(
       container.querySelector('.chat-controls__model-option-icon [data-provider-icon="codex"]'),
     ).not.toBeNull();
+  });
+
+  it("keeps staged model settings bound to the session that opened the picker", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    });
+    let resolveModelSwitch: (value: boolean) => void = () => undefined;
+    const modelSwitch = new Promise<boolean>((resolve) => {
+      resolveModelSwitch = resolve;
+    });
+    const onModelSelect = vi.fn(() => modelSwitch);
+    const onThinkingSelect = vi.fn();
+    const onFastModeSelect = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        onFastModeSelect,
+        onModelSelect,
+        onThinkingSelect,
+      }),
+      container,
+    );
+
+    const modelOption = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find((button) => button.getAttribute("aria-selected") === "false");
+    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
+    modelOption?.click();
+
+    const slider = getThinkingSlider(container);
+    expect(slider).toBeInstanceOf(HTMLInputElement);
+    if (slider) {
+      slider.value = "0";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    const fastButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+    ).find((button) => button.textContent?.trim() === "Fast");
+    expect(fastButton).toBeInstanceOf(HTMLButtonElement);
+    fastButton?.click();
+
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
+    await vi.waitFor(() => {
+      expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+    });
+
+    state.sessionKey = "other";
+    resolveModelSwitch(true);
+
+    await vi.waitFor(() => {
+      expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
+      expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
+    });
   });
 
   it("keeps speed choices visible and disabled for unsupported providers", () => {

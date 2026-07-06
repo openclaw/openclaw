@@ -9497,6 +9497,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Storage
   - H2: Limits
   - H2: Troubleshooting
+  - H3: Tool-policy diagnostic
   - H2: Related
 
 ## tools/skills-config.md
