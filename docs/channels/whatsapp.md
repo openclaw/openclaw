@@ -674,6 +674,54 @@ Example:
 
 Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
+### Per-conversation debounce
+
+Use `debounceMs` inside `groups` or `direct` entries when one WhatsApp
+conversation needs a different inbound batching window from the channel default.
+This controls how long OpenClaw waits after a message arrives before it starts
+the agent turn for that conversation. A longer window gives contacts time to
+send several short messages before the agent sees the batch; `0` disables the
+wait for that conversation.
+
+```ts
+export default {
+  channels: {
+    whatsapp: {
+      debounceMs: 3000,
+      direct: {
+        // Owner/admin chats can start immediately.
+        "+15551234567": { debounceMs: 0 },
+        // Other direct chats wait up to three minutes for a message burst.
+        "*": { debounceMs: 180000 },
+      },
+      groups: {
+        // This group has its own batching window.
+        "120363406415684625@g.us": { debounceMs: 30000 },
+        // Other groups fall back to one minute.
+        "*": { debounceMs: 60000 },
+      },
+      accounts: {
+        work: {
+          direct: {
+            // Account entries replace the root direct map for this account.
+            // Re-add "*" here if this account still needs a wildcard.
+            "*": { debounceMs: 120000 },
+          },
+        },
+      },
+    },
+  },
+};
+```
+
+Precedence is:
+
+1. specific account conversation entry
+2. account wildcard entry
+3. specific root conversation entry
+4. root wildcard entry
+5. existing WhatsApp channel debounce default
+
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
@@ -682,6 +730,7 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Operations       | `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`       |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |
+| Debounce         | `groups.<id>.debounceMs`, `groups["*"].debounceMs`, `direct.<id>.debounceMs`, `direct["*"].debounceMs`         |
 
 ## Related
 
