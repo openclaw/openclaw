@@ -963,7 +963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 208,
+      "line": 206,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Open ${row.title}",
       "surface": "android",
@@ -971,7 +971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 262,
+      "line": 246,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Open session",
       "surface": "android",
@@ -979,7 +979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 297,
+      "line": 304,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Connect Gateway to view providers",
       "surface": "android",
@@ -987,7 +987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 299,
+      "line": 306,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "$readyProviderCount providers ready",
       "surface": "android",
@@ -995,7 +995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 300,
+      "line": 307,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "No ready providers",
       "surface": "android",
@@ -1003,7 +1003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 304,
+      "line": 311,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Main session",
       "surface": "android",
