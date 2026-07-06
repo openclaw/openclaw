@@ -9,11 +9,15 @@ const storeState = vi.hoisted(() => {
   const state = {
     store: {} as Record<string, SessionEntry>,
     stores: {} as Record<string, Record<string, SessionEntry>>,
-    listSessionEntries: vi.fn((scope: { storePath?: string }) =>
-      Object.entries(state.stores[scope.storePath ?? ""] ?? state.store).map(
-        ([sessionKey, entry]) => ({ sessionKey, entry }),
-      ),
-    ),
+    // Mirrors the accessor view contract: raw exact-key get, enumeration only via entries().
+    openSessionEntryReadView: vi.fn((scope: { storePath?: string }) => {
+      const store = state.stores[scope.storePath ?? ""] ?? state.store;
+      return {
+        get: (sessionKey: string) =>
+          Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined,
+        entries: () => Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+      };
+    }),
   };
   return state;
 });
@@ -28,7 +32,7 @@ vi.mock("./paths.js", () => ({
 }));
 
 vi.mock("./session-accessor.js", () => ({
-  listSessionEntries: storeState.listSessionEntries,
+  openSessionEntryReadView: storeState.openSessionEntryReadView,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -55,7 +59,7 @@ beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
   storeState.stores = {};
-  storeState.listSessionEntries.mockClear();
+  storeState.openSessionEntryReadView.mockClear();
 });
 
 describe("extractDeliveryInfo", () => {
@@ -95,7 +99,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("reads borrowed accessor entry lists for direct session keys", () => {
+  it("reads borrowed accessor views for direct session keys", () => {
     const sessionKey = "agent:main:webchat:dm:user-123";
     storeState.store[sessionKey] = buildEntry({
       channel: "webchat",
@@ -106,9 +110,40 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result.deliveryContext?.to).toBe("webchat:user-123");
-    expect(storeState.listSessionEntries).toHaveBeenCalledWith({
+    expect(storeState.openSessionEntryReadView).toHaveBeenCalledWith({
       storePath: "/tmp/sessions.json",
-      clone: false,
+    });
+  });
+
+  it("does not enumerate the store when an exact routable key is present", () => {
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    // Enumeration trap: the accessor-view mock lists rows via Object.entries, so
+    // building the normalized fallback index on this cheap path throws here and
+    // extractDeliveryInfo would return no delivery context.
+    storeState.store = new Proxy(
+      {
+        [sessionKey]: buildEntry({
+          channel: "webchat",
+          to: "webchat:user-123",
+          accountId: "default",
+        }),
+      },
+      {
+        ownKeys() {
+          throw new Error("normalized index should not be built");
+        },
+      },
+    );
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-123",
+        accountId: "default",
+      },
+      threadId: undefined,
     });
   });
 

@@ -261,6 +261,13 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+export type SessionEntryReadView = {
+  /** Row stored under the exact persisted key; no alias or canonical-key resolution. */
+  get(sessionKey: string): SessionEntry | undefined;
+  /** Every persisted row; call only when exact-key probes cannot settle the lookup. */
+  entries(): SessionEntrySummary[];
+};
+
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
 
@@ -928,14 +935,29 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
-    return Object.entries(
-      loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
-        clone: false,
-        ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
-      }),
-    ).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    return openSessionEntryReadView(scope).entries();
   }
   return listFileSessionEntries(scope);
+}
+
+/**
+ * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
+ * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
+ * or canonical-key resolution and no row scans, so large stores stay cheap until
+ * `entries` is called. Rows are borrowed, not cloned: callers must not mutate them
+ * and must drop the view before any await.
+ */
+export function openSessionEntryReadView(
+  scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
+): SessionEntryReadView {
+  const store = loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
+    clone: false,
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  return {
+    get: (sessionKey) => (Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined),
+    entries: () => Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+  };
 }
 
 /** Reads the last activity timestamp for one session entry, or undefined when absent. */

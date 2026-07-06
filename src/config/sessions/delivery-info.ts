@@ -9,7 +9,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { listSessionEntries } from "./session-accessor.js";
+import { openSessionEntryReadView, type SessionEntryReadView } from "./session-accessor.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
@@ -93,18 +93,7 @@ function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string
   return [...paths];
 }
 
-/** Borrowed read-only view keyed by persisted session key; dropped before any await. */
-type DeliverySessionEntries = ReadonlyMap<string, SessionEntry>;
-
-function loadDeliverySessionEntries(storePath: string): DeliverySessionEntries {
-  const entries = new Map<string, SessionEntry>();
-  for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
-    entries.set(sessionKey, entry);
-  }
-  return entries;
-}
-
-function findSessionEntryInStore(store: DeliverySessionEntries, keys: readonly string[]) {
+function findSessionEntryInStore(store: SessionEntryReadView, keys: readonly string[]) {
   let normalizedIndex: Map<string, SessionEntry> | undefined;
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
@@ -139,37 +128,28 @@ function findSessionEntryInStore(store: DeliverySessionEntries, keys: readonly s
     const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalized);
     const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
-    if (
-      store.has(normalized) &&
-      !hasMismatchedCaseSensitiveDeliveryProof(store.get(normalized), normalized)
-    ) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(store.get(normalized)),
-      );
-      acceptCandidate(store.get(normalized), exactKeyWins);
+    // Exact and alias probes are raw keyed reads; the store is never enumerated here.
+    const exactEntry = store.get(normalized);
+    if (exactEntry && !hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalized)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(deliveryContextFromSession(exactEntry));
+      acceptCandidate(exactEntry, exactKeyWins);
     }
     for (const foldedLegacyKey of foldedLegacyKeys) {
-      if (
-        !store.has(foldedLegacyKey) ||
-        !isConfirmedLowercasedLegacyAlias(store.get(foldedLegacyKey), normalized)
-      ) {
+      const foldedLegacyEntry = store.get(foldedLegacyKey);
+      if (!foldedLegacyEntry || !isConfirmedLowercasedLegacyAlias(foldedLegacyEntry, normalized)) {
         continue;
       }
-      const foldedLegacyEntry = store.get(foldedLegacyKey);
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(foldedLegacyEntry),
       );
       acceptCandidate(foldedLegacyEntry);
     }
-    if (
-      trimmed !== normalized &&
-      store.has(trimmed) &&
-      !hasMismatchedCaseSensitiveDeliveryProof(store.get(trimmed), normalized)
-    ) {
+    const trimmedEntry = trimmed !== normalized ? store.get(trimmed) : undefined;
+    if (trimmedEntry && !hasMismatchedCaseSensitiveDeliveryProof(trimmedEntry, normalized)) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(store.get(trimmed)),
+        deliveryContextFromSession(trimmedEntry),
       );
-      acceptCandidate(store.get(trimmed));
+      acceptCandidate(trimmedEntry);
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
       // Build the normalized index only after direct/exact probes fail; large session stores can
@@ -190,9 +170,9 @@ function findSessionEntryInStore(store: DeliverySessionEntries, keys: readonly s
   return bestEntry;
 }
 
-function buildFreshestSessionEntryIndex(store: DeliverySessionEntries): Map<string, SessionEntry> {
+function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
-  for (const [key, entry] of store) {
+  for (const { sessionKey: key, entry } of store.entries()) {
     if (!entry) {
       continue;
     }
@@ -252,7 +232,9 @@ function loadDeliverySessionEntry(params: {
       }
     | undefined;
   for (const storePath of resolveDeliveryStorePaths(params.cfg, agentId)) {
-    const store = loadDeliverySessionEntries(storePath);
+    // Borrowed keyed view over this store's rows; exact probes stay cheap keyed reads and the
+    // borrowed rows are dropped before any await (this lookup is fully synchronous).
+    const store = openSessionEntryReadView({ storePath });
     const entry = findSessionEntryInStore(store, sessionKeys);
     const baseEntry = findSessionEntryInStore(store, baseKeys);
     if (!entry && !baseEntry) {
