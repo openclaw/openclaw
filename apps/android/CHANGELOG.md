@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
+
 Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
 
 Android chat messages now expose long-press actions for whole-message copy, selective text copy, sharing, and quoted replies.
