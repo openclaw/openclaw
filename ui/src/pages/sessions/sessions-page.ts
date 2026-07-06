@@ -44,7 +44,7 @@ export type SessionsRouteData = {
   connected: boolean;
   result: SessionsListResult | null;
   error: string | null;
-  expandedCheckpointKey: string | null;
+  expandedSessionKey: string | null;
   showArchived: boolean;
 };
 
@@ -67,7 +67,6 @@ class SessionsPage extends LitElement {
   @state() private includeGlobal = true;
   @state() private includeUnknown = false;
   @state() private showArchived = false;
-  @state() private filtersCollapsed = false;
   @state() private searchQuery = "";
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
@@ -76,7 +75,7 @@ class SessionsPage extends LitElement {
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
-  @state() private expandedCheckpointKey: string | null = null;
+  @state() private expandedSessionKey: string | null = null;
   @state() private checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
   @state() private checkpointLoadingKey: string | null = null;
   @state() private checkpointBusyKey: string | null = null;
@@ -212,7 +211,7 @@ class SessionsPage extends LitElement {
       this.error = null;
       this.loading = false;
       this.selectedKeys = new Set();
-      this.expandedCheckpointKey = null;
+      this.expandedSessionKey = null;
       this.checkpointItemsByKey = {};
       this.checkpointLoadingKey = null;
       this.checkpointBusyKey = null;
@@ -246,7 +245,7 @@ class SessionsPage extends LitElement {
       return;
     }
     this.showArchived = data.showArchived;
-    if (data.expandedCheckpointKey) {
+    if (data.expandedSessionKey) {
       this.activeMinutes = "";
       this.limit = "";
       this.includeGlobal = true;
@@ -260,13 +259,13 @@ class SessionsPage extends LitElement {
       this.includeGlobal = true;
       this.includeUnknown = false;
     }
-    this.expandedCheckpointKey = data.expandedCheckpointKey;
+    this.expandedSessionKey = data.expandedSessionKey;
     const gateway = context.gateway.snapshot;
     if (data.client !== gateway.client || data.connected !== gateway.connected) {
       this.routeDataEnabled = false;
       void this.loadSessions();
-      if (data.expandedCheckpointKey) {
-        void this.loadCheckpoint(data.expandedCheckpointKey);
+      if (data.expandedSessionKey) {
+        void this.loadCheckpoint(data.expandedSessionKey);
       }
       return;
     }
@@ -278,8 +277,8 @@ class SessionsPage extends LitElement {
     const sharedSessions = context.sessions.state;
     this.ignorePendingSharedRefresh = sharedSessions.loading;
     this.ensureAgentIdentities(this.result);
-    if (data.expandedCheckpointKey) {
-      void this.loadCheckpoint(data.expandedCheckpointKey);
+    if (data.expandedSessionKey) {
+      void this.loadCheckpoint(data.expandedSessionKey);
     }
   }
 
@@ -320,7 +319,7 @@ class SessionsPage extends LitElement {
   }
 
   private sessionListOptions() {
-    const checkpointKey = this.expandedCheckpointKey;
+    const checkpointKey = this.expandedSessionKey;
     return {
       activeMinutes:
         checkpointKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
@@ -424,7 +423,7 @@ class SessionsPage extends LitElement {
       ) {
         delete nextItems[key];
         delete nextErrors[key];
-        if (this.expandedCheckpointKey === key) {
+        if (this.expandedSessionKey === key) {
           checkpointKey = key;
         }
       }
@@ -490,8 +489,8 @@ class SessionsPage extends LitElement {
           sessions,
         };
       }
-      if (this.expandedCheckpointKey && deleted.has(this.expandedCheckpointKey)) {
-        this.expandedCheckpointKey = null;
+      if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
+        this.expandedSessionKey = null;
       }
     }
     if (result.errors.length > 0) {
@@ -608,18 +607,23 @@ class SessionsPage extends LitElement {
     }
   }
 
-  private async toggleCheckpointDetails(sessionKey: string) {
+  private async toggleSessionDetails(sessionKey: string) {
     const context = this.context;
     if (!context) {
       return;
     }
-    if (this.expandedCheckpointKey === sessionKey) {
+    if (this.expandedSessionKey === sessionKey) {
       this.checkpointRequestId += 1;
-      this.expandedCheckpointKey = null;
+      this.expandedSessionKey = null;
       return;
     }
-    this.expandedCheckpointKey = sessionKey;
-    if (this.checkpointItemsByKey[sessionKey]) {
+    this.expandedSessionKey = sessionKey;
+    // Every row opens the details drawer; only fetch compaction history when
+    // the row reports checkpoints, so plain sessions skip the round-trip.
+    const row = this.result?.sessions.find((session) => session.key === sessionKey);
+    const hasCheckpoints =
+      (row?.compactionCheckpointCount ?? 0) > 0 || Boolean(row?.latestCompactionCheckpoint);
+    if (!hasCheckpoints || this.checkpointItemsByKey[sessionKey]) {
       return;
     }
     await this.loadCheckpoint(sessionKey);
@@ -738,7 +742,6 @@ class SessionsPage extends LitElement {
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
         }),
-        filtersCollapsed: this.filtersCollapsed,
         basePath: context.basePath,
         searchQuery: this.searchQuery,
         agentIdentityById: this.sessionAgentIdentityById(this.result),
@@ -755,15 +758,12 @@ class SessionsPage extends LitElement {
             .filter((key): key is string => typeof key === "string" && key.length > 0),
         ),
         workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
-        expandedCheckpointKey: this.expandedCheckpointKey,
+        expandedSessionKey: this.expandedSessionKey,
         checkpointItemsByKey: this.checkpointItemsByKey,
         checkpointLoadingKey: this.checkpointLoadingKey,
         checkpointBusyKey: this.checkpointBusyKey,
         checkpointErrorByKey: this.checkpointErrorByKey,
         onFiltersChange: (next) => this.updateFilters(next),
-        onToggleFiltersCollapsed: () => {
-          this.filtersCollapsed = !this.filtersCollapsed;
-        },
         onClearFilters: () => {
           this.activeMinutes = "";
           this.limit = "";
@@ -825,7 +825,7 @@ class SessionsPage extends LitElement {
         onAddToWorkboard: canCapture
           ? (session: GatewaySessionRow) => this.addToWorkboard(session)
           : undefined,
-        onToggleCheckpointDetails: (sessionKey) => void this.toggleCheckpointDetails(sessionKey),
+        onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
         onBranchFromCheckpoint: (sessionKey, checkpointId) =>
           void this.branchCheckpoint(sessionKey, checkpointId),
         onRestoreCheckpoint: (sessionKey, checkpointId) =>
