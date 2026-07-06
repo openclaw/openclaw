@@ -16,7 +16,7 @@ function withCdpHostnameAllowed(
   if (!ssrfPolicy || !profile.cdpHost) {
     return ssrfPolicy;
   }
-  if (isPrivateNetworkAllowedByPolicy(ssrfPolicy)) {
+  if (isPrivateNetworkAllowedByPolicy(ssrfPolicy) && !ssrfPolicy.hostnameAllowlist?.length) {
     return ssrfPolicy;
   }
   return withAllowedHostname(ssrfPolicy, profile.cdpHost);
