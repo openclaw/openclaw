@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - **Android network recovery:** reconnect Gateway sessions immediately when Android regains a validated network instead of waiting for the current reconnect backoff. (#100347) Thanks @ly85206559.
 - **Android Voice layout:** keep Voice settings controls within their intended width so nested cards do not overflow or clip on constrained screens. (#100491) Thanks @IWhatsskill.
 - **Android camera logging:** remove release-path camera clip diagnostics that exposed temporary file details and added noisy invoke logs. (#99484) Thanks @NianJiuZst.
+- **Agent final replies:** prefer the current attempt's terminal assistant across incomplete-turn classification and success metadata so a stale pre-tool snapshot cannot replace a completed post-tool answer with an error. (#94637) Thanks @LiuwqGit.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
@@ -36,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI coalesced updates:** show a clear queued-restart completion banner when an update joins an already-running Gateway restart. (#93082) Thanks @goutamadwant.
 - **Control UI connection errors:** preserve structured pairing and authentication failures for pending RPC callers while keeping generic disconnect behavior unchanged. (#54758) Thanks @ruanrrn.
 - **TUI startup status:** show `starting up` during post-connect initialization without overwriting active-run or reconnect state. (#93999) Thanks @ml12580.
+- **Exec output Unicode safety:** preserve complete Unicode scalar values across bounded exec output, background completion notifications, polls, and node/gateway approval follow-ups. (#98721) Thanks @ZengWen-DT.
 - **Control UI restart recovery:** recover stale bundle pages through a bounded whole-document refresh after Gateway updates or restarts. (#99111) Thanks @ZengWen-DT.
 - **TUI active Gateway ports:** follow the verified active local Gateway port when no explicit URL, port, or remote target is configured. (#73338, #42461) Thanks @haishmg and @vincentkoc.
 - **Apple chat run recovery:** restore active responses from canonical Gateway history after reconnects, foreground resumes, and event gaps, while preserving gateway user-turn identity across Codex and Copilot transcript mirrors to prevent duplicate rows. (#100277)
