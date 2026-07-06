@@ -10,6 +10,8 @@ export function buildSkillWorkshopPromptSection(): string[] {
     "## Skill Workshop",
     "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
     "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
+    'Corrections and standing preferences are durable even when phrased reactively ("that\'s not what I asked", "stop doing X", "you\'re still doing Y", "I don\'t want to repeat myself") — not only when the user explicitly says to save something. When the user corrects how an existing skill\'s work should be done, propose the fix into that skill with `action=update` in the same turn; do not wait for a follow-up like "save that to the skill".',
+    "After proposing a captured correction, tell the user which skill proposal it landed in so the capture is verifiable rather than a promise.",
     "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations. The final proposal artifact must go through `skill_workshop`.",
     "Use `action=create` for a new skill, `action=update` for an existing approved/live skill, and `action=revise` for an existing pending proposal; keep `description` under 160 bytes and `proposal_content` within the configured body limit.",
     "For `action=update`, pass a concise `description` when the existing live skill description should be shortened in the proposal listing.",

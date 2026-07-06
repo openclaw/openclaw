@@ -755,6 +755,12 @@ describe("buildAgentSystemPrompt", () => {
       "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
     );
     expect(withTool).toContain(
+      "Corrections and standing preferences are durable even when phrased reactively",
+    );
+    expect(withTool).toContain(
+      "propose the fix into that skill with `action=update` in the same turn",
+    );
+    expect(withTool).toContain(
       "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations.",
     );
     expect(withTool).toContain("keep `description` under 160 bytes");
