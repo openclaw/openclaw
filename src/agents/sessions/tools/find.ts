@@ -279,9 +279,6 @@ export function createFindToolDefinition(
 
             const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
             const rl = createInterface({ input: child.stdout });
-            // Suppress readline-internal re-throws of input stream errors; the real
-            // stream error is handled by the child.stdout error listener below.
-            rl.on("error", () => {});
             let stderr = "";
             const lines: string[] = [];
 
@@ -294,20 +291,23 @@ export function createFindToolDefinition(
             const cleanup = () => {
               rl.close();
             };
+            const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+              if (settled) {
+                return;
+              }
+              stopChild?.();
+              cleanup();
+              settle(() => reject(new Error(`fd ${stream} error: ${error.message}`)));
+            };
 
             child.stderr?.on("data", (chunk) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
-            child.stdout?.on("error", (error) => {
-              stopChild?.();
-              cleanup();
-              settle(() => reject(new Error(`fd stdout error: ${error.message}`)));
-            });
-            child.stderr?.on("error", (error) => {
-              stopChild?.();
-              cleanup();
-              settle(() => reject(new Error(`fd stderr error: ${error.message}`)));
-            });
+            // Readline re-emits input failures, while the stream listener also catches
+            // implementations that do not. settle() keeps the shared failure path one-shot.
+            rl.on("error", (error) => onStreamError("stdout", error));
+            child.stdout?.on("error", (error) => onStreamError("stdout", error));
+            child.stderr?.on("error", (error) => onStreamError("stderr", error));
 
             rl.on("line", (line) => {
               lines.push(line);
