@@ -311,6 +311,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+      - path: Sources/Services/WatchSessionActivationGate.swift
+        group: Sources/Services
       - path: Sources/Fonts
         buildPhase: resources
       - path: Resources/Localizable.xcstrings

@@ -22,6 +22,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
 import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
@@ -59,6 +60,8 @@ import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
+import ai.openclaw.app.voice.TalkPttOnceStart
+import ai.openclaw.app.voice.TalkPttStopPayload
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
 import android.Manifest
@@ -71,6 +74,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -81,6 +85,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -93,6 +100,7 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
 private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
@@ -397,7 +405,6 @@ class NodeRuntime private constructor(
       camera = camera,
       externalAudioCaptureActive = externalAudioCaptureActive,
       showCameraHud = ::showCameraHud,
-      triggerCameraFlash = ::triggerCameraFlash,
       invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
     )
 
@@ -591,9 +598,6 @@ class NodeRuntime private constructor(
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
   val cameraHud: StateFlow<CameraHudState?> = _cameraHud.asStateFlow()
 
-  private val _cameraFlashToken = MutableStateFlow(0L)
-  val cameraFlashToken: StateFlow<Long> = _cameraFlashToken.asStateFlow()
-
   private val _canvasA2uiHydrated = MutableStateFlow(false)
   val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
   private val _canvasRehydratePending = MutableStateFlow(false)
@@ -637,6 +641,9 @@ class NodeRuntime private constructor(
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
   private val _cronErrorText = MutableStateFlow<String?>(null)
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
+  val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
+  private val cronJobDetailRequestGuard = CronJobDetailRequestGuard()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -694,6 +701,21 @@ class NodeRuntime private constructor(
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
+  private data class TalkPttOwnership(
+    val captureId: String,
+    val epoch: Long,
+  )
+
+  private val voiceLifecycleEpoch = AtomicLong()
+  private val voiceCaptureOwnershipEpoch = AtomicLong()
+  private val talkPttCommandEpoch = AtomicLong()
+  private val talkPttOwnership = AtomicReference<TalkPttOwnership?>()
+
+  // Keep ownership epochs and their service/capture state transitions atomic.
+  // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
+  private val voiceCaptureOwnershipLock = Any()
+  private val voiceCapturePreparationMutex = Mutex()
+
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
 
@@ -749,6 +771,9 @@ class NodeRuntime private constructor(
         _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
+        cronJobDetailRequestGuard.cancel {
+          _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+        }
         _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
         _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
         _nodesDevicesSummary.value =
@@ -848,6 +873,18 @@ class NodeRuntime private constructor(
       },
     )
 
+  /**
+   * Triggers an immediate gateway reconnect when Android reports a validated transport
+   * restore, instead of waiting for the time-based backoff slot in [GatewaySession].
+   * Each session keeps ownership of desired-connection and auth-pause decisions.
+   */
+  private val networkMonitor = NetworkMonitor(appContext, ::retryGatewaySessionsAfterNetworkRestore)
+
+  private fun retryGatewaySessionsAfterNetworkRestore() {
+    operatorSession.retryAfterNetworkRestore()
+    nodeSession.retryAfterNetworkRestore()
+  }
+
   private val notificationOutbox: NotificationNodeEventOutbox by lazy {
     NotificationNodeEventOutbox(
       isAuthorized = ::isNotificationEventStillAuthorized,
@@ -920,7 +957,9 @@ class NodeRuntime private constructor(
       if (host.isEmpty() || port !in 1..65535) return null
       return GatewayEndpoint.manual(host = host, port = port).stableId
     }
-    return prefs.lastDiscoveredStableId.value.trim().takeIf { it.isNotEmpty() }
+    return prefs.lastDiscoveredStableId.value
+      .trim()
+      .takeIf { it.isNotEmpty() }
   }
 
   private fun chatCacheScope(): ChatCacheScope? =
@@ -1194,6 +1233,20 @@ class NodeRuntime private constructor(
     }
   }
 
+  fun loadCronJobDetail(id: String) {
+    val request = cronJobDetailRequestGuard.begin(id) ?: return
+    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
+    scope.launch {
+      loadCronJobDetailFromGateway(request)
+    }
+  }
+
+  fun clearCronJobDetail() {
+    cronJobDetailRequestGuard.cancel {
+      _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+    }
+  }
+
   fun refreshUsage() {
     scope.launch {
       refreshUsageFromGateway()
@@ -1441,6 +1494,9 @@ class NodeRuntime private constructor(
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+    if (!value) {
+      voiceLifecycleEpoch.incrementAndGet()
+    }
     if (value) {
       reconnectPreferredGatewayOnForeground()
       scope.launch {
@@ -1675,44 +1731,125 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
+      talkMode.finishingPushToTalkCaptureId?.let {
+        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+          code = "PTT_BUSY",
+          message = "PTT_BUSY: previous push-to-talk turn is still finishing",
+        )
+      }
+      val lifecycleEpoch = voiceLifecycleEpoch.get()
+      val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
         val payload = talkMode.beginPushToTalk(allowNewCapture = false)
         return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
       }
-      runPreparedTalkPttCommand {
-        val payload = talkMode.beginPushToTalk(allowNewCapture = true)
-        GatewaySession.InvokeResult.ok(payload.toJson())
-      }
+      val payload =
+        withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
+          val started =
+            talkMode.beginPushToTalk(
+              allowNewCapture = true,
+              canStartCapture = {
+                _isForeground.value &&
+                  voiceLifecycleEpoch.get() == lifecycleEpoch &&
+                  talkPttCommandEpoch.get() == commandEpoch &&
+                  voiceCaptureOwnershipEpoch.get() == ownershipEpoch
+              },
+            )
+          recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          started
+        }
+      GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
   private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      val payload = talkMode.endPushToTalk()
-      finishTalkCaptureIfIdle()
+      val payload = stopPreparedTalkPttCapture { talkMode.endPushToTalk() }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
   private suspend fun handleTalkPttCancel(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      val payload = talkMode.cancelPushToTalk()
-      finishTalkCaptureIfIdle()
+      val payload = stopPreparedTalkPttCapture { talkMode.cancelPushToTalk() }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
-    runPreparedTalkPttCommand {
-      val payload = talkMode.runPushToTalkOnce()
-      finishTalkCaptureIfIdle()
+    runTalkPttCommand {
+      currentTalkPttOnceBusy()?.let { busy ->
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
+      }
+      val lifecycleEpoch = voiceLifecycleEpoch.get()
+      val commandEpoch = talkPttCommandEpoch.get()
+      val start =
+        withPreparedTalkPttCommand(
+          lifecycleEpoch = lifecycleEpoch,
+          commandEpoch = commandEpoch,
+          beforePrepare = ::currentTalkPttOnceBusy,
+        ) { ownershipEpoch ->
+          val started =
+            talkMode.beginPushToTalkOnce(
+              canStartCapture = {
+                _isForeground.value &&
+                  voiceLifecycleEpoch.get() == lifecycleEpoch &&
+                  talkPttCommandEpoch.get() == commandEpoch &&
+                  voiceCaptureOwnershipEpoch.get() == ownershipEpoch
+              },
+            )
+          when (started) {
+            is TalkPttOnceStart.Busy -> cleanupFailedTalkCapture(ownershipEpoch)
+            is TalkPttOnceStart.Started ->
+              recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          }
+          started
+        }
+      val payload =
+        try {
+          talkMode.awaitPushToTalkOnce(start)
+        } finally {
+          if (start is TalkPttOnceStart.Started) {
+            finishTalkCaptureIfIdleAfterPreparation(start.captureId)
+          }
+        }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
-  private suspend fun runPreparedTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
-    runTalkPttCommand {
-      prepareTalkCapture()
+  private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
+    val captureId = talkMode.activePushToTalkCaptureId ?: talkMode.finishingPushToTalkCaptureId ?: return null
+    return TalkPttOnceStart.Busy(
+      TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy"),
+    )
+  }
+
+  private suspend fun <T> withPreparedTalkPttCommand(
+    lifecycleEpoch: Long,
+    commandEpoch: Long,
+    beforePrepare: () -> T? = { null },
+    block: suspend (ownershipEpoch: Long) -> T,
+  ): T =
+    voiceCapturePreparationMutex.withLock {
+      // Preparation suspends while gateway config loads. Serialize ownership so
+      // a stale command cannot clean up a newer command before capture starts.
+      if (
+        !_isForeground.value ||
+        voiceLifecycleEpoch.get() != lifecycleEpoch ||
+        talkPttCommandEpoch.get() != commandEpoch
+      ) {
+        throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+      }
+      beforePrepare()?.let { return@withLock it }
+      val ownershipEpoch = prepareTalkCapture(lifecycleEpoch, commandEpoch)
       try {
-        block()
+        if (
+          !_isForeground.value ||
+          voiceLifecycleEpoch.get() != lifecycleEpoch ||
+          talkPttCommandEpoch.get() != commandEpoch ||
+          voiceCaptureOwnershipEpoch.get() != ownershipEpoch
+        ) {
+          throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+        }
+        block(ownershipEpoch)
       } catch (err: Throwable) {
-        cleanupFailedTalkCapture()
+        cleanupFailedTalkCapture(ownershipEpoch)
         throw err
       }
     }
@@ -1725,30 +1862,104 @@ class NodeRuntime private constructor(
       GatewaySession.InvokeResult.error(code = code, message = message)
     }
 
-  private suspend fun prepareTalkCapture() {
-    if (!_isForeground.value) {
-      throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+  private suspend fun prepareTalkCapture(
+    lifecycleEpoch: Long,
+    commandEpoch: Long,
+  ): Long {
+    // Publish preparation on Main with lifecycle shutdown. After this block
+    // yields, preparation must not write capture state that backgrounding cleared.
+    val ownershipEpoch =
+      withContext(Dispatchers.Main) {
+        synchronized(voiceCaptureOwnershipLock) {
+          if (
+            !_isForeground.value ||
+            voiceLifecycleEpoch.get() != lifecycleEpoch ||
+            talkPttCommandEpoch.get() != commandEpoch
+          ) {
+            throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          }
+          if (!hasRecordAudioPermission()) {
+            throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+          }
+          val epoch = voiceCaptureOwnershipEpoch.incrementAndGet()
+          micCapture.setMicEnabled(false)
+          stopVoicePlayback()
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+          talkMode.ttsOnAllResponses = true
+          talkMode.setPlaybackEnabled(speakerEnabled.value)
+          externalAudioCaptureActive.value = true
+          epoch
+        }
+      }
+    try {
+      talkMode.refreshConfig()
+      return ownershipEpoch
+    } catch (err: Throwable) {
+      cleanupFailedTalkCapture(ownershipEpoch)
+      throw err
     }
-    if (!hasRecordAudioPermission()) {
-      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-    }
-    micCapture.setMicEnabled(false)
-    stopVoicePlayback()
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-    talkMode.ttsOnAllResponses = true
-    talkMode.setPlaybackEnabled(speakerEnabled.value)
-    talkMode.refreshConfig()
-    externalAudioCaptureActive.value = true
   }
 
-  private suspend fun cleanupFailedTalkCapture() {
-    runCatching { talkMode.cancelPushToTalk() }
-    talkMode.ttsOnAllResponses = false
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    externalAudioCaptureActive.value = false
+  private fun cleanupFailedTalkCapture(ownershipEpoch: Long) {
+    synchronized(voiceCaptureOwnershipLock) {
+      // TalkModeManager owns capture-scoped cancellation. A stale invoke must not
+      // tear down a newer capture after a background/foreground transition.
+      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
+        talkMode.activePushToTalkCaptureId?.let { captureId ->
+          // An idempotent retry can fail while the original capture remains live.
+          // Transfer preparation ownership so its eventual stop still cleans up.
+          talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+          return
+        }
+      }
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
+    }
   }
 
-  private fun finishTalkCaptureIfIdle() {
+  private fun recordTalkPttOwnership(
+    captureId: String,
+    ownershipEpoch: Long,
+  ) {
+    synchronized(voiceCaptureOwnershipLock) {
+      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
+        talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+      }
+    }
+  }
+
+  private suspend fun finishTalkCaptureIfIdleAfterPreparation(captureId: String) {
+    withContext(NonCancellable) {
+      voiceCapturePreparationMutex.withLock {
+        finishTalkCaptureIfIdleLocked(captureId)
+      }
+    }
+  }
+
+  private suspend fun stopPreparedTalkPttCapture(
+    stopCapture: suspend () -> TalkPttStopPayload,
+  ): TalkPttStopPayload {
+    // Preparation can suspend on gateway config. Invalidate it before waiting,
+    // while later starts queue behind this stop with the new command epoch.
+    talkPttCommandEpoch.incrementAndGet()
+    return withContext(NonCancellable) {
+      voiceCapturePreparationMutex.withLock {
+        val payload = stopCapture()
+        finishTalkCaptureIfIdleLocked(payload.captureId)
+        payload
+      }
+    }
+  }
+
+  private fun finishTalkCaptureIfIdleLocked(captureId: String) {
+    synchronized(voiceCaptureOwnershipLock) {
+      val ownership = talkPttOwnership.get()
+      if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
+    }
+  }
+
+  private fun finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch: Long) {
+    if (ownershipEpoch == 0L || voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return
     if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
       talkMode.ttsOnAllResponses = false
       NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
@@ -1757,11 +1968,15 @@ class NodeRuntime private constructor(
   }
 
   private fun finishTalkModeAfterRelayClose() {
-    if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
-    _voiceCaptureMode.value = VoiceCaptureMode.Off
-    talkMode.ttsOnAllResponses = false
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    externalAudioCaptureActive.value = false
+    synchronized(voiceCaptureOwnershipLock) {
+      if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      talkMode.ttsOnAllResponses = false
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      externalAudioCaptureActive.value = false
+    }
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -1889,52 +2104,55 @@ class NodeRuntime private constructor(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
   ) {
-    if (mode.requiresMicrophonePermission && !hasRecordAudioPermission()) {
-      _voiceCaptureMode.value = VoiceCaptureMode.Off
-      prefs.setVoiceMicEnabled(false)
-      externalAudioCaptureActive.value = false
-      return
-    }
-    if (_voiceCaptureMode.value == mode) return
-    _voiceCaptureMode.value = mode
-    when (mode) {
-      VoiceCaptureMode.Off -> {
-        talkMode.ttsOnAllResponses = false
-        talkMode.setEnabled(false)
-        stopVoicePlayback()
-        micCapture.setMicEnabled(false)
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(false)
+    synchronized(voiceCaptureOwnershipLock) {
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
+      val captureMode = if (permissionDenied) VoiceCaptureMode.Off else mode
+      if (permissionDenied) prefs.setVoiceMicEnabled(false)
+      if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
+      talkPttOwnership.set(null)
+      _voiceCaptureMode.value = captureMode
+      when (captureMode) {
+        VoiceCaptureMode.Off -> {
+          talkMode.ttsOnAllResponses = false
+          talkMode.stopAllCapture()
+          stopVoicePlayback()
+          micCapture.setMicEnabled(false)
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(false)
+          }
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+          externalAudioCaptureActive.value = false
         }
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-        externalAudioCaptureActive.value = false
-      }
 
-      VoiceCaptureMode.ManualMic -> {
-        talkMode.ttsOnAllResponses = false
-        talkMode.setEnabled(false)
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(true)
+        VoiceCaptureMode.ManualMic -> {
+          talkMode.ttsOnAllResponses = false
+          talkMode.stopAllCapture()
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(true)
+          }
+          // Tapping mic on interrupts any active TTS (barge-in).
+          stopVoicePlayback()
+          scope.launch { talkMode.refreshConfig() }
+          micCapture.setMicEnabled(true)
+          externalAudioCaptureActive.value = true
         }
-        // Tapping mic on interrupts any active TTS (barge-in).
-        stopVoicePlayback()
-        scope.launch { talkMode.refreshConfig() }
-        micCapture.setMicEnabled(true)
-        externalAudioCaptureActive.value = true
-      }
 
-      VoiceCaptureMode.TalkMode -> {
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(false)
+        VoiceCaptureMode.TalkMode -> {
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(false)
+          }
+          micCapture.setMicEnabled(false)
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+          talkMode.ttsOnAllResponses = true
+          talkMode.setPlaybackEnabled(speakerEnabled.value)
+          scope.launch { talkMode.refreshConfig() }
+          talkMode.stopAllCapture()
+          talkMode.setEnabled(true)
+          externalAudioCaptureActive.value = true
         }
-        micCapture.setMicEnabled(false)
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-        talkMode.ttsOnAllResponses = true
-        talkMode.setPlaybackEnabled(speakerEnabled.value)
-        scope.launch { talkMode.refreshConfig() }
-        talkMode.setEnabled(true)
-        externalAudioCaptureActive.value = true
       }
     }
   }
@@ -1945,14 +2163,19 @@ class NodeRuntime private constructor(
   }
 
   private fun stopActiveVoiceSession() {
-    talkMode.ttsOnAllResponses = false
-    talkMode.stopAllCapture()
-    stopVoicePlayback()
-    micCapture.setMicEnabled(false)
-    prefs.setVoiceMicEnabled(false)
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    _voiceCaptureMode.value = VoiceCaptureMode.Off
-    externalAudioCaptureActive.value = false
+    synchronized(voiceCaptureOwnershipLock) {
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      talkPttOwnership.set(null)
+      talkMode.ttsOnAllResponses = false
+      talkMode.stopAllCapture()
+      stopVoicePlayback()
+      micCapture.setMicEnabled(false)
+      prefs.setVoiceMicEnabled(false)
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      externalAudioCaptureActive.value = false
+    }
   }
 
   private fun stopVoicePlayback() {
@@ -1964,6 +2187,25 @@ class NodeRuntime private constructor(
 
   private val VoiceCaptureMode.requiresMicrophonePermission: Boolean
     get() = this == VoiceCaptureMode.ManualMic || this == VoiceCaptureMode.TalkMode
+
+  private fun isVoiceCaptureModeActive(mode: VoiceCaptureMode): Boolean =
+    when (mode) {
+      VoiceCaptureMode.Off ->
+        !externalAudioCaptureActive.value &&
+          !micCapture.micEnabled.value &&
+          !talkMode.isEnabled.value &&
+          talkMode.activePushToTalkCaptureId == null
+      VoiceCaptureMode.ManualMic ->
+        externalAudioCaptureActive.value &&
+          micCapture.micEnabled.value &&
+          !talkMode.isEnabled.value &&
+          talkMode.activePushToTalkCaptureId == null
+      VoiceCaptureMode.TalkMode ->
+        externalAudioCaptureActive.value &&
+          !micCapture.micEnabled.value &&
+          talkMode.isEnabled.value &&
+          talkMode.activePushToTalkCaptureId == null
+    }
 
   fun refreshGatewayConnection() {
     val endpoint = connectedEndpoint
@@ -2409,9 +2651,40 @@ class NodeRuntime private constructor(
     chat.refresh()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    chat.refreshSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    chat.refreshSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    chat.patchSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    chat.deleteSession(key)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = chat.forkSession(parentKey)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
@@ -2425,8 +2698,8 @@ class NodeRuntime private constructor(
     chat.abort()
   }
 
-  fun startNewChat() {
-    chat.startNewChat()
+  fun startNewChat(worktree: Boolean = false) {
+    chat.startNewChat(worktree = worktree)
   }
 
   fun sendChat(
@@ -2561,6 +2834,7 @@ class NodeRuntime private constructor(
             id = id,
             name = name?.takeIf { it.isNotEmpty() },
             emoji = emoji?.takeIf { it.isNotEmpty() },
+            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
           )
         } ?: emptyList()
 
@@ -2637,6 +2911,28 @@ class NodeRuntime private constructor(
       _cronErrorText.value = "Could not load cron jobs."
     } finally {
       _cronRefreshing.value = false
+    }
+  }
+
+  private suspend fun loadCronJobDetailFromGateway(request: CronJobDetailRequest) {
+    if (!operatorConnected) {
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Connect the gateway to inspect cron jobs.")
+      }
+      return
+    }
+    try {
+      val res = operatorSession.request("cron.get", cronJobGetParams(request.id))
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value =
+          parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
+            ?: GatewayCronJobDetailState.Error(request.id, "Gateway returned an invalid cron job.")
+      }
+    } catch (_: Throwable) {
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+      }
     }
   }
 
@@ -3245,11 +3541,6 @@ class NodeRuntime private constructor(
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
-  private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
-    nodes
-      ?.mapNotNull(::parseGatewayNodeSummary)
-      .orEmpty()
-
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
       ?.mapNotNull { item ->
@@ -3448,7 +3739,7 @@ class NodeRuntime private constructor(
   private fun cronScheduleLabel(schedule: JsonObject?): String =
     when (schedule?.get("kind").asStringOrNull()) {
       "at" -> "One time"
-      "every" -> schedule.long("everyMs")?.let(::formatEverySchedule) ?: "Repeating"
+      "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
       "cron" ->
         schedule
           ?.get("expr")
@@ -3466,18 +3757,6 @@ class NodeRuntime private constructor(
         else -> null
       }
     return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
-  }
-
-  private fun formatEverySchedule(everyMs: Long): String {
-    val minutes = everyMs / 60_000L
-    val hours = minutes / 60L
-    val days = hours / 24L
-    return when {
-      days >= 1 && hours % 24L == 0L -> "Every ${days}d"
-      hours >= 1 && minutes % 60L == 0L -> "Every ${hours}h"
-      minutes >= 1 -> "Every ${minutes}m"
-      else -> "Repeating"
-    }
   }
 
   private fun updateHomeCanvasState() {
@@ -3616,11 +3895,6 @@ class NodeRuntime private constructor(
     return trimmed.ifEmpty { null }
   }
 
-  private fun triggerCameraFlash() {
-    // Token is used as a pulse trigger; value doesn't matter as long as it changes.
-    _cameraFlashToken.value = SystemClock.elapsedRealtimeNanos()
-  }
-
   private fun showCameraHud(
     message: String,
     kind: CameraHudKind,
@@ -3751,6 +4025,7 @@ data class GatewayAgentSummary(
   val id: String,
   val name: String?,
   val emoji: String?,
+  val workspaceGit: Boolean = false,
 )
 
 data class GatewayModelSummary(

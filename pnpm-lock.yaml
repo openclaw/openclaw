@@ -1087,6 +1087,9 @@ importers:
 
   extensions/memory-wiki:
     dependencies:
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1984,6 +1987,9 @@ importers:
       dompurify:
         specifier: 3.4.11
         version: 3.4.11
+      ghostty-web:
+        specifier: 0.4.0
+        version: 0.4.0
       highlight.js:
         specifier: 11.11.1
         version: 11.11.1

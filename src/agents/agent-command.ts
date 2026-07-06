@@ -54,8 +54,8 @@ import {
   repairProviderWrappedModelOverride,
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -143,6 +143,7 @@ import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -957,9 +958,7 @@ async function agentCommandInternal(
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
-        const entry = isSessionRollover
-          ? clearRotatedSessionMetadata(initialEntry)
-          : initialEntry;
+        const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
         currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
           cfg,
           opts,
@@ -1000,21 +999,26 @@ async function agentCommandInternal(
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
+        const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
         const startedAt = Date.now();
-        registerAgentRunContext(
+        registerAgentRunContext(runId, {
+          sessionKey,
+          sessionId,
+          agentId: sessionAgentId,
+          lifecycleGeneration,
+          ...(suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
+        });
+        attemptExecutionRuntime.emitAcpLifecycleStart({
           runId,
-          suppressVisibleSessionEffects
-            ? { isControlUiVisible: false, lifecycleGeneration }
-            : {
-                sessionKey,
-                sessionId,
-                lifecycleGeneration,
-              },
-        );
-        attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt, lifecycleGeneration });
+          startedAt,
+          agentId: sessionAgentId,
+          lifecycleGeneration,
+        });
 
         const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
         let stopReason: string | undefined;
+        let resultStatus: "completed" | "cancelled" | undefined;
+        let terminalOutcome: "blocked" | undefined;
         try {
           const {
             resolveAcpAgentPolicyError,
@@ -1026,6 +1030,7 @@ async function agentCommandInternal(
               ? resolveAcpExplicitTurnPolicyError(cfg)
               : resolveAcpDispatchPolicyError(cfg);
           if (turnPolicyError) {
+            terminalOutcome = "blocked";
             throw turnPolicyError;
           }
           const acpAgent = normalizeAgentId(
@@ -1033,6 +1038,7 @@ async function agentCommandInternal(
           );
           const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
           if (agentPolicyError) {
+            terminalOutcome = "blocked";
             throw agentPolicyError;
           }
 
@@ -1059,12 +1065,16 @@ async function agentCommandInternal(
               if (event.type !== "text_delta") {
                 attemptExecutionRuntime.emitAcpRuntimeEvent({
                   runId,
+                  toolTracker: acpToolTracker,
                   sessionKey,
+                  agentId: sessionAgentId,
+                  abortSignal: opts.abortSignal,
                   event,
                 });
               }
               if (event.type === "done") {
                 stopReason = event.stopReason;
+                resultStatus = event.status;
                 return;
               }
               if (event.type !== "text_delta") {
@@ -1099,10 +1109,13 @@ async function agentCommandInternal(
           });
           attemptExecutionRuntime.emitAcpLifecycleError({
             runId,
+            toolTracker: acpToolTracker,
             error: acpError,
             sessionKey,
+            agentId: sessionAgentId,
             lifecycleGeneration,
             abortSignal: opts.abortSignal,
+            ...(terminalOutcome ? { terminalOutcome } : {}),
           });
           throw acpError;
         }
@@ -1167,8 +1180,10 @@ async function agentCommandInternal(
         if (isAgentRunRestartAbortReason(restartAbortReason)) {
           attemptExecutionRuntime.emitAcpLifecycleError({
             runId,
+            toolTracker: acpToolTracker,
             error: restartAbortReason,
             sessionKey,
+            agentId: sessionAgentId,
             lifecycleGeneration,
             abortSignal: opts.abortSignal,
           });
@@ -1176,8 +1191,12 @@ async function agentCommandInternal(
         }
         attemptExecutionRuntime.emitAcpLifecycleEnd({
           runId,
+          toolTracker: acpToolTracker,
+          agentId: sessionAgentId,
           lifecycleGeneration,
           abortSignal: opts.abortSignal,
+          stopReason,
+          resultStatus,
         });
 
         const result = applyAgentRunAbortMetadata(
@@ -1185,6 +1204,7 @@ async function agentCommandInternal(
             payloadText: finalText,
             startedAt,
             stopReason,
+            resultStatus,
             abortSignal: opts.abortSignal,
           }),
           opts.abortSignal,
@@ -1215,7 +1235,8 @@ async function agentCommandInternal(
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       if (sessionKey || suppressVisibleSessionEffects) {
         registerAgentRunContext(runId, {
-          ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey, sessionId } : {}),
+          ...(sessionKey ? { sessionKey, sessionId } : {}),
+          agentId: sessionAgentId,
           lifecycleGeneration,
           verboseLevel: resolvedVerboseLevel,
           isControlUiVisible: !suppressVisibleSessionEffects,
@@ -1742,27 +1763,27 @@ async function agentCommandInternal(
         lifecycleEnded: false,
       };
       const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
-    const suppressUserTurnPersistence =
-      opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
-    const recorderTranscriptText = transcriptBody || undefined;
-    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-      ...(!suppressUserTurnPersistence && recorderTranscriptText
-        ? { input: { text: recorderTranscriptText } }
-        : {}),
-      target: {
-        transcriptPath: attemptSessionFile,
-        sessionId,
-        agentId: sessionAgentId,
-        ...(sessionKey ? { sessionKey } : {}),
-        cwd: cwd ?? workspaceDir,
-        config: cfg,
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      errorContext: "agent command user turn transcript",
-    });
-    if (suppressUserTurnPersistence) {
-      userTurnTranscriptRecorder.markBlocked();
-    }
+      const suppressUserTurnPersistence =
+        opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
+      const recorderTranscriptText = transcriptBody || undefined;
+      const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        ...(!suppressUserTurnPersistence && recorderTranscriptText
+          ? { input: { text: recorderTranscriptText } }
+          : {}),
+        target: {
+          transcriptPath: attemptSessionFile,
+          sessionId,
+          agentId: sessionAgentId,
+          ...(sessionKey ? { sessionKey } : {}),
+          cwd: cwd ?? workspaceDir,
+          config: cfg,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        errorContext: "agent command user turn transcript",
+      });
+      if (suppressUserTurnPersistence) {
+        userTurnTranscriptRecorder.markBlocked();
+      }
       let lifecycleFinishingEmitted = false;
       const emitLifecycleFinishing = (runResult: AgentAttemptResult) => {
         if (
@@ -1873,7 +1894,7 @@ async function agentCommandInternal(
             startedAt,
             endedAt: Date.now(),
             error: error instanceof Error ? error.message : "Agent run failed",
-            ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
+            ...resolveAgentRunErrorLifecycleFields(error, opts.abortSignal),
           },
         });
       };
@@ -1917,7 +1938,7 @@ async function agentCommandInternal(
           });
 
           let fallbackAttemptIndex = 0;
-        const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
+          const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
           attemptLifecycleState.currentTurnUserMessagePersisted = false;
           const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
             cfg,
@@ -2211,9 +2232,9 @@ async function agentCommandInternal(
             continue;
           }
           if (!attemptLifecycleState.lifecycleEnded) {
-            const abortLifecycleFields = isAgentRunDirectAbortReason(err)
+            const errorLifecycleFields = isAgentRunDirectAbortReason(err)
               ? { aborted: true as const, stopReason: "aborted" as const }
-              : resolveAgentRunAbortLifecycleFields(opts.abortSignal);
+              : resolveAgentRunErrorLifecycleFields(err, opts.abortSignal);
             emitAgentEvent({
               runId,
               lifecycleGeneration,
@@ -2223,7 +2244,7 @@ async function agentCommandInternal(
                 startedAt,
                 endedAt: Date.now(),
                 error: err instanceof Error ? err.message : "Agent run failed",
-                ...abortLifecycleFields,
+                ...errorLifecycleFields,
               },
             });
           }
@@ -2260,6 +2281,9 @@ async function agentCommandInternal(
               opts.bootstrapContextRunKind !== "cron" &&
               !isHeartbeatLifecycleRun &&
               !opts.internalEvents?.length,
+            // Cron output counts as unread-worthy activity; heartbeat and
+            // internal-event turns must not re-flag the session unread.
+            touchActivity: !isHeartbeatLifecycleRun && !opts.internalEvents?.length,
             preserveRuntimeModel:
               fallbackExhausted || isHeartbeatLifecycleRun || preserveUserFacingSessionModelState,
             preserveUserFacingSessionModelState,

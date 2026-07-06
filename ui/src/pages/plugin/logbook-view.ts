@@ -22,7 +22,7 @@ import {
   type LogbookUiState,
 } from "./logbook-controller.ts";
 
-export type LogbookProps = {
+type LogbookProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;

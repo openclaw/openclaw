@@ -8,6 +8,7 @@ import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
@@ -940,7 +941,10 @@ async function callTelegramApi<T>(
     capture: false,
   });
   try {
-    const payload = (await response.json()) as TelegramApiEnvelope<T>;
+    const payload = await readProviderJsonResponse<TelegramApiEnvelope<T>>(
+      response,
+      `qa-lab-telegram-live.${method}`,
+    );
     if (!response.ok || !payload.ok || payload.result === undefined) {
       throw new Error(
         payload.description?.trim() || `${method} failed with status ${response.status}`,

@@ -42,6 +42,7 @@ describe("navigationIconForRoute", () => {
       sessions: "fileText",
       usage: "barChart",
       cron: "loader",
+      tasks: "loader",
       agents: "folder",
       skills: "zap",
       "skill-workshop": "wrench",
@@ -81,6 +82,7 @@ describe("titleForRoute", () => {
       sessions: "Sessions",
       usage: "Usage",
       cron: "Cron Jobs",
+      tasks: "Tasks",
       agents: "Agents",
       skills: "Skills",
       "skill-workshop": "Skill Workshop",
@@ -114,6 +116,7 @@ describe("subtitleForRoute", () => {
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Wakeups and recurring runs.",
+      tasks: "Background tasks: subagents, cron runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
@@ -174,6 +177,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("worktrees")).toBe("/worktrees");
   });
 
   it("prepends base path", () => {
@@ -187,6 +191,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");

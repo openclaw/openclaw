@@ -43,7 +43,7 @@ type EmbeddedRunAttemptBase = Omit<
   | "sessionFile"
 >;
 
-export type EmbeddedRunContextWindowInfo = {
+type EmbeddedRunContextWindowInfo = {
   tokens: number;
   referenceTokens?: number;
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";

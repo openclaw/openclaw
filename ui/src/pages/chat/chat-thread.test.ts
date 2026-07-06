@@ -791,6 +791,99 @@ describe("buildChatItems", () => {
     expect(streamItems).toHaveLength(1);
   });
 
+  it("keeps a live tool card after the stream segment that introduced it", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "I will inspect the file.", ts: 2_000, toolCallId: "call-read" }],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "file contents",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "I will inspect the file.",
+    });
+    expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+  });
+
+  it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
+          { text: "First tool. Second tool.", ts: 2_000, toolCallId: "call-list" },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "file contents",
+            timestamp: 1_000,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-list",
+            toolName: "list",
+            content: "file list",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(4);
+    expect(items[0]).toMatchObject({ kind: "stream", text: "First tool." });
+    expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+    expect(items[2]).toMatchObject({ kind: "stream", text: "Second tool." });
+    expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
+  });
+
+  it("keeps a live tool card after its stream segment when an unkeyed preamble shifts indexes", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Checking workspace", ts: 1_500 },
+          {
+            text: "Checking workspace I will inspect the file.",
+            ts: 2_000,
+            toolCallId: "call-read",
+          },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: "file contents",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Checking workspace",
+      startedAt: 1_500,
+    });
+    expect(items[1]).toMatchObject({
+      kind: "stream",
+      text: "I will inspect the file.",
+    });
+    expect(messageRecord(requireGroup(items[2])).toolCallId).toBe("call-read");
+  });
+
   it("suppresses metadata-only history messages before grouping", () => {
     const groups = messageGroups({
       messages: [

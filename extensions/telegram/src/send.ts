@@ -1438,7 +1438,7 @@ export async function sendTypingTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
   });
   const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
   await requestWithDiag(
@@ -1807,8 +1807,7 @@ export async function editMessageTelegram(
     retry: opts.retry,
     verbose: opts.verbose,
     shouldRetry: (err) =>
-      isRecoverableTelegramNetworkError(err, { allowMessageMatch: true }) ||
-      isTelegramServerError(err),
+      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
   });
   const requestWithEditShouldLog = <T>(
     fn: () => Promise<T>,

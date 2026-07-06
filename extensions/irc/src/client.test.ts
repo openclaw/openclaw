@@ -9,6 +9,14 @@ type LoopbackIrcServer = {
   close(): Promise<void>;
 };
 
+type HangingIrcServer = {
+  port: number;
+  acceptedCount: number;
+  closedCount: number;
+  openSocketCount(): number;
+  close(): Promise<void>;
+};
+
 async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
   const lines: string[] = [];
   const sockets = new Set<net.Socket>();
@@ -43,6 +51,69 @@ async function startLoopbackIrcServer(): Promise<LoopbackIrcServer> {
   return {
     port: address.port,
     lines,
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function waitForIrcCondition(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 1000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(message);
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+}
+
+async function startHangingIrcServer(): Promise<HangingIrcServer> {
+  const sockets = new Set<net.Socket>();
+  let acceptedCount = 0;
+  let closedCount = 0;
+  const server = net.createServer((socket) => {
+    acceptedCount += 1;
+    sockets.add(socket);
+    socket.setEncoding("utf8");
+    socket.on("data", () => {});
+    socket.on("close", () => {
+      sockets.delete(socket);
+      closedCount += 1;
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected loopback IRC server to bind a TCP port");
+  }
+  return {
+    port: address.port,
+    get acceptedCount() {
+      return acceptedCount;
+    },
+    get closedCount() {
+      return closedCount;
+    },
+    openSocketCount: () => sockets.size,
     close: async () => {
       for (const socket of sockets) {
         socket.destroy();
@@ -98,6 +169,33 @@ describe("irc client nickserv", () => {
         password: "secret\r\nJOIN #bad",
       }),
     ).toEqual(["PRIVMSG NickServ :IDENTIFY secret JOIN #bad"]);
+  });
+});
+
+describe("irc client readiness timeout", () => {
+  it("closes the socket when registration never becomes ready", async () => {
+    const server = await startHangingIrcServer();
+    try {
+      await expect(
+        connectIrcClient({
+          host: "127.0.0.1",
+          port: server.port,
+          tls: false,
+          nick: "bot",
+          username: "bot",
+          realname: "OpenClaw Bot",
+          connectTimeoutMs: 50,
+        }),
+      ).rejects.toThrow(/IRC connect/);
+
+      expect(server.acceptedCount).toBeGreaterThanOrEqual(1);
+      await waitForIrcCondition(
+        () => server.closedCount >= 1 && server.openSocketCount() === 0,
+        `expected timed-out IRC connect socket to close; accepted=${server.acceptedCount} closed=${server.closedCount} open=${server.openSocketCount()}`,
+      );
+    } finally {
+      await server.close();
+    }
   });
 });
 

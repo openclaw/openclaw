@@ -26,6 +26,44 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
   ON diagnostic_events(scope, created_at, event_key);
 
+CREATE TABLE IF NOT EXISTS audit_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  source_id TEXT NOT NULL UNIQUE,
+  source_sequence INTEGER NOT NULL,
+  occurred_at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_key TEXT,
+  session_id TEXT,
+  run_id TEXT NOT NULL,
+  tool_call_id TEXT,
+  tool_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_time
+  ON audit_events(occurred_at DESC, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_agent_sequence
+  ON audit_events(agent_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_session_sequence
+  ON audit_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_run_sequence
+  ON audit_events(run_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
+  ON audit_events(kind, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
+  ON audit_events(status, sequence DESC);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,
@@ -542,6 +580,19 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
+
+CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
+  boot_id TEXT NOT NULL PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  outcome TEXT,
+  startup_reason TEXT,
+  reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
+  ON gateway_boot_lifecycle(started_at_ms);
 
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,

@@ -3,6 +3,7 @@ import { html } from "lit";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import {
   normalizeChatAutoScrollMode,
+  normalizeChatSendShortcut,
   type ChatAutoScrollMode,
   type UiSettings,
 } from "../../../app/settings.ts";
@@ -96,6 +97,33 @@ function renderChatAutoScrollToggle(props: {
         <span class="chat-settings-action__text">${t("chat.autoScrollMode")}</span>
       </button>
     </openclaw-tooltip>
+  `;
+}
+
+function renderChatSendShortcutPreference(props: {
+  settings: UiSettings;
+  onSettingsChange: (next: UiSettings) => void;
+}) {
+  const shortcut = normalizeChatSendShortcut(props.settings.chatSendShortcut);
+  return html`
+    <label class="chat-settings-popover__preference">
+      <span>${t("chat.sendShortcut")}</span>
+      <select
+        data-chat-send-shortcut="true"
+        .value=${shortcut}
+        @change=${(event: Event) => {
+          props.onSettingsChange({
+            ...props.settings,
+            chatSendShortcut: normalizeChatSendShortcut(
+              (event.currentTarget as HTMLSelectElement).value,
+            ),
+          });
+        }}
+      >
+        <option value="enter">${t("chat.sendShortcutEnter")}</option>
+        <option value="modifier-enter">${t("chat.sendShortcutModifierEnter")}</option>
+      </select>
+    </label>
   `;
 }
 
@@ -313,6 +341,7 @@ export function renderChatControls(props: ChatControlsProps) {
               </button>
             </openclaw-tooltip>
           </div>
+          ${renderChatSendShortcutPreference(props)}
         </div>
       </div>
     </div>

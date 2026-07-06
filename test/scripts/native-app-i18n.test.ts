@@ -74,6 +74,38 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Search OpenClaw",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Message actions",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Reply",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatMessageActions.kt") &&
+          entry.kind === "ui-chooser" &&
+          entry.source === "Share message",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
     expect(entries.some((entry) => entry.source === "Check OpenClaw status")).toBe(true);
     expect(entries.some((entry) => entry.source === "What can I control here?")).toBe(true);

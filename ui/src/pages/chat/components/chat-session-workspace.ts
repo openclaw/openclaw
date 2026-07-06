@@ -55,7 +55,7 @@ type OpenRequest = {
   sessionKey: string;
 };
 
-export type SessionWorkspaceOpenRequest = OpenRequest;
+type SessionWorkspaceOpenRequest = OpenRequest;
 
 export type SessionWorkspaceHost = {
   sessionKey: string;

@@ -36,7 +36,6 @@ vi.mock("../agents/model-selection.js", () => ({
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
-let shouldSkipProviderAuthStartupPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipProviderAuthStartupPrewarm;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipStartupModelPrewarm;
 
 function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
@@ -56,11 +55,7 @@ describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({
-      testing: {
-        prewarmConfiguredPrimaryModel,
-        shouldSkipProviderAuthStartupPrewarm,
-        shouldSkipStartupModelPrewarm,
-      },
+      testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
     } = await import("./server-startup-post-attach.js"));
   });
 
@@ -109,20 +104,6 @@ describe("gateway startup primary model warmup", () => {
     expect(
       shouldSkipStartupModelPrewarm({
         OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "true",
-      }),
-    ).toBe(true);
-  });
-
-  it("honors the provider auth prewarm skip env", () => {
-    expect(shouldSkipProviderAuthStartupPrewarm({})).toBe(false);
-    expect(
-      shouldSkipProviderAuthStartupPrewarm({
-        OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM: "1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipProviderAuthStartupPrewarm({
-        OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM: "true",
       }),
     ).toBe(true);
   });

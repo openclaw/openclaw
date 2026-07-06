@@ -18,7 +18,6 @@ import {
 import { SessionManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import {
-  persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
   type TranscriptPersistedEntry,
@@ -475,74 +474,6 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
           `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
           `bytesFreed=${result.bytesFreed} ` +
           `sessionKey=${target.sessionKey}`,
-      );
-    }
-    return result;
-  } catch (err) {
-    const reason = formatErrorMessage(err);
-    log.warn(`[transcript-rewrite] failed: ${reason}`);
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason,
-    };
-  } finally {
-    await sessionLock?.release();
-  }
-}
-
-/**
- * Rewrites a named transcript file artifact. Runtime callers should prefer
- * rewriteTranscriptEntriesInRuntimeTranscript with agent/session scope.
- */
-export async function rewriteTranscriptEntriesInSessionFile(params: {
-  sessionFile: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  request: TranscriptRewriteRequest;
-  config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<TranscriptRewriteResult> {
-  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
-  try {
-    sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      ...resolveSessionWriteLockOptions(params.config),
-    });
-    const state = await readTranscriptFileState(params.sessionFile);
-    const result = rewriteTranscriptEntriesInState({
-      state,
-      replacements: params.request.replacements,
-      ...(params.request.allowedRewriteSuffixEntryIds
-        ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
-        : {}),
-    });
-    if (result.changed) {
-      await persistTranscriptStateMutation({
-        sessionFile: params.sessionFile,
-        state,
-        appendedEntries: result.appendedEntries,
-      });
-      emitSessionTranscriptUpdate({
-        sessionFile: params.sessionFile,
-        sessionKey: params.sessionKey,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionId && params.sessionKey && params.agentId
-          ? {
-              target: {
-                agentId: params.agentId,
-                sessionId: params.sessionId,
-                sessionKey: params.sessionKey,
-              },
-            }
-          : {}),
-      });
-      log.info(
-        `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
-          `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
-          `bytesFreed=${result.bytesFreed} ` +
-          `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
       );
     }
     return result;

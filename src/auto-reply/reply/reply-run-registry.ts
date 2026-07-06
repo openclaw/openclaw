@@ -858,6 +858,19 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
   return true;
 }
 
+export function clearReplyRunForResetBySessionId(sessionId: string): void {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation || operation.phase === "queued") {
+    return;
+  }
+  operation.abortForRestart();
+  // Backend cancellation may synchronously retire this operation and admit a
+  // replacement. Only clear the exact archived operation resolved above.
+  if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
+    operation.complete();
+  }
+}
+
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
   timeoutMs: number,

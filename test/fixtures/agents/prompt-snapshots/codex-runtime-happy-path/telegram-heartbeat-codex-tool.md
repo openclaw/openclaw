@@ -228,8 +228,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 52849,
-    "roughTokens": 13213
+    "chars": 53086,
+    "roughTokens": 13272
   },
   "openClawDeveloperInstructions": {
     "chars": 1955,
@@ -240,8 +240,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6749
   },
   "totalWithDynamicToolsJson": {
-    "chars": 79846,
-    "roughTokens": 19962
+    "chars": 80083,
+    "roughTokens": 20021
   },
   "userInputText": {
     "chars": 1271,

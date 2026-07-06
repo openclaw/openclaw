@@ -1884,6 +1884,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("marks directive-tagged durable finals with the transcript prompt-context timestamp", async () => {
+    const transcriptTimestamp = Date.now() + 1_000;
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: "[[reply_to_current]]Final answer",
+      timestamp: transcriptTimestamp,
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["2001"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context, streamMode: "off" });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      payload: expect.objectContaining({ text: "Final answer" }),
+    });
+    expectRecordFields(expectRecordFields(outbound.payload, {}).channelData, {
+      telegram: { promptContextTimestampMs: transcriptTimestamp },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("keeps the Telegram edit cap for non-block previews regardless of chunk config", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);

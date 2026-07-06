@@ -5,71 +5,62 @@ import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
-type SidebarSection = {
-  label: string;
-  routes: readonly NavigationRouteId[];
-};
-
 type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
-export const SIDEBAR_SECTIONS = [
-  { label: "chat", routes: ["chat"] },
-  {
-    label: "control",
-    routes: [
-      "overview",
-      "activity",
-      "workboard",
-      "worktrees",
-      "instances",
-      "sessions",
-      "usage",
-      "cron",
-    ],
-  },
-  { label: "agent", routes: ["agents", "skills", "skill-workshop", "nodes", "dreams"] },
-  { label: "settings", routes: ["config"] },
-] as const satisfies readonly SidebarSection[];
+// The sidebar shows a small user-customizable pinned set; every other nav route
+// lives in the collapsed "More" section. Chat is reachable through the session
+// list and Settings/Docs live in the sidebar footer, so neither is listed here.
+export const SIDEBAR_NAV_ROUTES = [
+  "overview",
+  "activity",
+  "workboard",
+  "worktrees",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "tasks",
+  "agents",
+  "skills",
+  "skill-workshop",
+  "nodes",
+  "dreams",
+] as const satisfies readonly NavigationRouteId[];
 
-type SidebarSectionRouteId = (typeof SIDEBAR_SECTIONS)[number]["routes"][number];
+export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
-export type SidebarNavRoute = Exclude<SidebarSectionRouteId, "chat" | "config">;
-
-export const SIDEBAR_NAV_ROUTES = SIDEBAR_SECTIONS.flatMap((section) =>
-  section.label === "control" || section.label === "agent" ? section.routes : [],
-) as readonly SidebarNavRoute[];
-
+// Sessions are the sidebar's core content; Overview is the only page pinned by
+// default. Users pin more via the customize menu.
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
   "overview",
 ] as const satisfies readonly SidebarNavRoute[];
 
-const SIDEBAR_NAV_ROUTE_SET = new Set<NavigationRouteId>(SIDEBAR_NAV_ROUTES);
-
-function isSidebarNavRoute(value: unknown): value is SidebarNavRoute {
-  return typeof value === "string" && SIDEBAR_NAV_ROUTE_SET.has(value as NavigationRouteId);
-}
-
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | undefined {
+/**
+ * Normalize a persisted pinned-route list. Returns null when the value is not a
+ * list (caller falls back to defaults); unknown or duplicate entries are dropped
+ * so prefs survive route renames/removals without a migration.
+ */
+export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
   if (!Array.isArray(value)) {
-    return undefined;
+    return null;
   }
-  const seen = new Set<SidebarNavRoute>();
-  const routes: SidebarNavRoute[] = [];
-  for (const routeId of value) {
-    if (!isSidebarNavRoute(routeId) || seen.has(routeId)) {
-      continue;
+  const pinned: SidebarNavRoute[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry === "string" &&
+      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
+      !pinned.includes(entry as SidebarNavRoute)
+    ) {
+      pinned.push(entry as SidebarNavRoute);
     }
-    seen.add(routeId);
-    routes.push(routeId);
   }
-  return routes;
+  return pinned;
 }
 
-export function sidebarMoreRoutes(pinnedRoutes: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  const pinned = new Set(pinnedRoutes);
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.has(routeId));
+export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
 export const SETTINGS_NAVIGATION_ROUTES = [
@@ -96,6 +87,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   sessions: "fileText",
   usage: "barChart",
   cron: "loader",
+  tasks: "loader",
   skills: "zap",
   "skill-workshop": "wrench",
   nodes: "monitor",
@@ -115,16 +107,6 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
-}
-
-export function isRouteInSidebarSection(
-  section: SidebarSection,
-  routeId: NavigationRouteId,
-): boolean {
-  if (section.label === "settings") {
-    return isSettingsNavigationRoute(routeId);
-  }
-  return section.routes.includes(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -190,6 +172,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
+  tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",

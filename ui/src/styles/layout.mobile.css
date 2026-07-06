@@ -175,7 +175,10 @@
 
   .sidebar-nav,
   .sidebar--collapsed .sidebar-nav {
-    flex: 1 1 auto;
+    /* Match the desktop pinned-nav layout so the session list keeps the
+       remaining drawer height. */
+    flex: 0 0 auto;
+    max-height: 60%;
     display: block;
     padding: 0;
     overflow-x: hidden;

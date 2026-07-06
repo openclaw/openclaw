@@ -94,6 +94,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var connectAuth: [String: Any]?
     private var connectDevice: [String: Any]?
     private var sentRequestMethods: [String] = []
+    private var sentRequestPayloads: [[String: Any]] = []
     private var receivePhase = 0
     private var pendingReceiveHandler:
         (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
@@ -142,7 +143,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
            obj["type"] as? String == "req",
            let method = obj["method"] as? String
         {
-            self.lock.withLock { self.sentRequestMethods.append(method) }
+            self.lock.withLock {
+                self.sentRequestMethods.append(method)
+                self.sentRequestPayloads.append(obj)
+            }
             guard method == "connect", let id = obj["id"] as? String else { return }
             let params = obj["params"] as? [String: Any]
             let auth = (params?["auth"] as? [String: Any]) ?? [:]
@@ -165,6 +169,16 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
 
     func sentRequestCount(method: String) -> Int {
         self.lock.withLock { self.sentRequestMethods.count(where: { $0 == method }) }
+    }
+
+    func sentRequests(method: String) -> [[String: Any]] {
+        self.lock.withLock {
+            self.sentRequestPayloads.filter { $0["method"] as? String == method }
+        }
+    }
+
+    func hasPendingReceiveHandler() -> Bool {
+        self.lock.withLock { self.pendingReceiveHandler != nil }
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
@@ -215,6 +229,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func emitInvokeRequest(id: String, command: String) {
+        self.emitInvokeRequest(id: id, command: command, paramsJSON: "{}")
+    }
+
+    func emitInvokeRequest(id: String, command: String, paramsJSON: String?) {
         let handler = self.lock.withLock { () -> (@Sendable (Result<
             URLSessionWebSocketTask.Message,
             Error,
@@ -222,7 +240,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             defer { self.pendingReceiveHandler = nil }
             return self.pendingReceiveHandler
         }
-        handler?(.success(.data(Self.invokeRequestData(id: id, command: command))))
+        handler?(.success(.data(Self.invokeRequestData(
+            id: id,
+            command: command,
+            paramsJSON: paramsJSON))))
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
@@ -284,7 +305,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 
-    private static func invokeRequestData(id: String, command: String) -> Data {
+    private static func invokeRequestData(id: String, command: String, paramsJSON: String?) -> Data {
         let frame: [String: Any] = [
             "type": "event",
             "event": "node.invoke.request",
@@ -292,7 +313,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 "id": id,
                 "nodeId": "test-node",
                 "command": command,
-                "paramsJSON": "{}",
+                "paramsJSON": paramsJSON ?? (NSNull() as Any),
             ],
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
@@ -617,6 +638,86 @@ struct GatewayNodeSessionTests {
 
         #expect(firstTask.sentRequestCount(method: "node.invoke.result") == 0)
         #expect(replacementTask.sentRequestCount(method: "node.invoke.result") == 0)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `node invoke requests keep receiving while system run is blocked`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let systemRunStarted = AsyncStream<Void>.makeStream()
+        var startedIterator = systemRunStarted.stream.makeAsyncIterator()
+        let systemRunRelease = AsyncStream<Void>.makeStream()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: ["system.run"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in
+                if request.id == "system-run-blocked" {
+                    systemRunStarted.continuation.yield()
+                    for await _ in systemRunRelease.stream {
+                        return BridgeInvokeResponse(
+                            id: request.id,
+                            ok: false,
+                            error: OpenClawNodeError(
+                                code: .unavailable,
+                                message: "UNSUPPORTED: system.run unavailable"))
+                    }
+                }
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"ok":true}"#)
+            })
+        let task = try #require(session.latestTask())
+
+        task.emitInvokeRequest(
+            id: "system-run-blocked",
+            command: "system.run",
+            paramsJSON: #"{"command":["/bin/echo","ok"]}"#)
+        _ = await startedIterator.next()
+        try await waitUntil("receive loop rearmed during system.run") {
+            task.hasPendingReceiveHandler()
+        }
+        task.emitInvokeRequest(id: "camera-after-system-run", command: "camera.snap")
+
+        try await waitUntil("second invoke result while system.run is blocked") {
+            task.sentRequestCount(method: "node.invoke.result") == 1
+        }
+        let earlyResults = task.sentRequests(method: "node.invoke.result")
+        #expect(earlyResults.count == 1)
+        let earlyParams = try #require(earlyResults.first?["params"] as? [String: Any])
+        #expect(earlyParams["id"] as? String == "camera-after-system-run")
+        #expect(earlyParams["ok"] as? Bool == true)
+
+        systemRunRelease.continuation.yield()
+        systemRunRelease.continuation.finish()
+        try await waitUntil("blocked system.run result") {
+            task.sentRequestCount(method: "node.invoke.result") == 2
+        }
+        let finalResults = task.sentRequests(method: "node.invoke.result")
+        #expect(finalResults.count == 2)
+        let blockedResult = try #require(finalResults.first {
+            ($0["params"] as? [String: Any])?["id"] as? String == "system-run-blocked"
+        })
+        let blockedParams = try #require(blockedResult["params"] as? [String: Any])
+        #expect(blockedParams["ok"] as? Bool == false)
+        let error = try #require(blockedParams["error"] as? [String: Any])
+        #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
+
         await gateway.disconnect()
     }
 

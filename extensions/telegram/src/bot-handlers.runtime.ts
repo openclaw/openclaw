@@ -48,6 +48,7 @@ import {
   resolveAmbientTranscriptWatermarkKey,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -187,13 +188,17 @@ type TelegramPromptContextMessageForDedupe = {
 function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
 ): string | undefined {
-  if (typeof message.body !== "string" || !message.body.trim()) {
+  if (typeof message.body !== "string") {
+    return undefined;
+  }
+  const visibleBody = stripInlineDirectiveTagsForDelivery(message.body).text.trim();
+  if (!visibleBody) {
     return undefined;
   }
   if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
     return undefined;
   }
-  return `${message.timestamp_ms}:${message.body.trim()}`;
+  return `${message.timestamp_ms}:${visibleBody}`;
 }
 
 export const registerTelegramHandlers = ({

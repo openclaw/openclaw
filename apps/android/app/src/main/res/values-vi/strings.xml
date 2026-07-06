@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Tin cậy cổng này?</string>
     <string name="trust_and_continue">Tin cậy và tiếp tục</string>
     <string name="cancel">Hủy</string>
+    <string name="new_chat_in_worktree">Trò chuyện mới trong worktree</string>
     <string name="endpoint">Điểm cuối</string>
     <string name="status">Trạng thái</string>
     <string name="connected_gateway_ready">Cổng của bạn đang hoạt động và sẵn sàng.</string>
