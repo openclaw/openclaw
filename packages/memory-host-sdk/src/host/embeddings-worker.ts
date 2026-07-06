@@ -1,5 +1,7 @@
 // Memory Host SDK module implements embeddings worker behavior.
+import { accessSync, constants } from "node:fs";
 import { fork, type ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
@@ -63,6 +65,62 @@ type PendingRequest = {
   reject: (err: unknown) => void;
   abort?: () => void;
 };
+
+/** Resolve a stable Node executable path for worker forking.
+ *
+ * After a Homebrew Node upgrade the resolved `process.execPath` (e.g.
+ * `/opt/homebrew/Cellar/node/26.3.0/bin/node`) may no longer exist on disk.
+ * This function tries, in order:
+ *  1. `process.execPath` (fast path — normally works)
+ *  2. `process.argv[0]` (the symlink the gateway was launched with, e.g.
+ *     `/opt/homebrew/opt/node/bin/node`)
+ *  3. `node` resolved from PATH
+ *  4. Falls back to `process.execPath` (will produce the original ENOENT)
+ */
+function resolveWorkerNodeExecPath(): string {
+  // 1. Fast path — process.execPath still exists
+  try {
+    accessSync(process.execPath, constants.X_OK);
+    return process.execPath;
+  } catch {
+    // execPath points to a deleted binary
+  }
+
+  // 2. Try process.argv[0] — on macOS Homebrew this is the stable symlink
+  if (process.argv[0] && process.argv[0] !== process.execPath) {
+    try {
+      accessSync(process.argv[0], constants.X_OK);
+      return process.argv[0];
+    } catch {
+      // argv[0] also not accessible
+    }
+  }
+
+  // 3. Resolve "node" from PATH — catches brew upgrades that kept the symlink
+  //    or a different Node installed elsewhere
+  try {
+    const whichCmd = process.platform === "win32" ? "where" : "which";
+    const resolvedPath = execFileSync(whichCmd, ["node"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+    })
+      .split(/\r?\n/)[0]
+      .trim();
+    if (resolvedPath) {
+      try {
+        accessSync(resolvedPath, constants.X_OK);
+        return resolvedPath;
+      } catch {
+        // resolved path not accessible
+      }
+    }
+  } catch {
+    // which/where failed
+  }
+
+  // 4. Fall back to process.execPath (will produce ENOENT)
+  return process.execPath;
+}
 
 /** Resolve the worker child script for source, package, and bundled runtime layouts. */
 function resolveDefaultWorkerScriptPath(): string {
@@ -234,6 +292,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath: resolveWorkerNodeExecPath(),
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
