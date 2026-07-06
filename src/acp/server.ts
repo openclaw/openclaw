@@ -91,7 +91,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     mode: GATEWAY_CLIENT_MODES.CLI,
     caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
-      void agent?.handleGatewayEvent(evt);
+      void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
+        agent?.log(`handleGatewayEvent failed: ${String(err)}`);
+      });
     },
     onHelloOk: () => {
       resolveGatewayReady();
