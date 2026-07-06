@@ -318,6 +318,55 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies Ollama incomplete stream error payloads as fallback-worthy", () => {
+    const rawError = "Ollama API stream ended without a final response";
+
+    for (const provider of ["ollama", "ollama-remote"]) {
+      const result = classifyEmbeddedAgentRunResultForModelFallback({
+        provider,
+        model: "gpt-oss:20b",
+        result: {
+          payloads: [
+            {
+              isError: true,
+              text: rawError,
+            },
+          ],
+          meta: {
+            durationMs: 42,
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        message: `${provider}/gpt-oss:20b ended with a provider error: ${rawError}`,
+        reason: "timeout",
+        code: "embedded_error_payload",
+        rawError,
+      });
+    }
+  });
+
+  it("does not classify generic timeout payloads as fallback-worthy", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "ollama",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "socket hang up",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("does not retry unclassified non-GPT error payloads", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",

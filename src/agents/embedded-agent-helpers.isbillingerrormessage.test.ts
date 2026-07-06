@@ -1666,6 +1666,18 @@ describe("classifyProviderRuntimeFailureKind", () => {
     );
   });
 
+  it("classifies Ollama incomplete stream failures as timeout", () => {
+    const message = "Ollama API stream ended without a final response";
+    expect(classifyFailoverReason(message, { provider: "ollama" })).toBe("timeout");
+    expect(classifyFailoverReason(message, { provider: "ollama-remote" })).toBe("timeout");
+    expect(classifyProviderRuntimeFailureKind({ provider: "ollama", message })).toBe("timeout");
+    expect(classifyProviderRuntimeFailureKind({ provider: "ollama-remote", message })).toBe(
+      "timeout",
+    );
+    expect(classifyProviderRuntimeFailureKind(message)).toBe("timeout");
+    expect(classifyFailoverReason(message, { provider: "openai" })).toBeNull();
+  });
+
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {
     expect(
       classifyProviderRuntimeFailureKind(

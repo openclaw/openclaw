@@ -3,7 +3,10 @@
  */
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
+import {
+  classifyFailoverReason,
+  isOllamaIncompleteStreamErrorMessage,
+} from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
@@ -15,7 +18,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 type ProviderErrorPayloadFailoverReason = Extract<
   FailoverReason,
-  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded"
+  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded" | "timeout"
 >;
 
 /**
@@ -167,6 +170,8 @@ function classifyProviderErrorPayloadReason(
     case "server_error":
     case "overloaded":
       return failoverReason;
+    case "timeout":
+      return isOllamaIncompleteStreamErrorMessage(errorText, provider) ? failoverReason : null;
     default:
       return null;
   }

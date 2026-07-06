@@ -1611,6 +1611,58 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("continues fallback after Ollama incomplete stream error payloads", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "ollama-remote/gpt-oss:20b",
+            fallbacks: ["google/gemini-2.5-flash"],
+          },
+        },
+      },
+    });
+    const rawError = "Ollama API stream ended without a final response";
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        payloads: [{ text: rawError, isError: true }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult)
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+
+    const result = await runWithModelFallback<EmbeddedAgentRunResult>({
+      cfg,
+      provider: "ollama-remote",
+      model: "gpt-oss:20b",
+      run,
+      classifyResult: ({ provider, model, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: resultLocal,
+        }),
+    });
+
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "google",
+      "gemini-2.5-flash",
+      { isFinalFallbackAttempt: true },
+    ]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "ollama-remote",
+      model: "gpt-oss:20b",
+      reason: "timeout",
+      code: "embedded_error_payload",
+      error: rawError,
+    });
+  });
+
   it("surfaces classified terminal results when no fallback remains", async () => {
     const cfg = makeCfg({
       agents: {

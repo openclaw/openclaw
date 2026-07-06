@@ -1000,6 +1000,20 @@ export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 
+export function isOllamaIncompleteStreamErrorMessage(raw: string, provider?: string): boolean {
+  const normalizedProvider = normalizeOptionalLowercaseString(provider)?.trim();
+  const providerMatches =
+    !normalizedProvider ||
+    normalizedProvider === "ollama" ||
+    normalizedProvider.startsWith("ollama/") ||
+    normalizedProvider.startsWith("ollama-");
+  return (
+    providerMatches &&
+    normalizeOptionalLowercaseString(raw)?.trim() ===
+      "ollama api stream ended without a final response"
+  );
+}
+
 function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
   return (
     isProvider(provider, "openrouter") &&
@@ -1099,6 +1113,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
+  }
+  if (isOllamaIncompleteStreamErrorMessage(raw, provider)) {
+    return toReasonClassification("timeout");
   }
   if (isGenericUnknownStreamErrorMessage(raw)) {
     return toReasonClassification("timeout");
