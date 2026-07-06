@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -27,6 +28,7 @@ import {
   purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
+  recordInboundSessionMeta,
   replaceSessionEntry,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntryAccessTarget,
@@ -37,6 +39,7 @@ import {
   trimSessionTranscriptForManualCompact,
   updateResolvedSessionEntry,
   updateSessionEntry,
+  updateSessionLastRoute,
   upsertSessionEntry,
 } from "./session-accessor.js";
 import * as sessionStore from "./store.js";
@@ -116,6 +119,95 @@ describe("session accessor file-backed seam", () => {
       mixedKey,
       lowerKey,
     ]);
+  });
+
+  it("records inbound session meta as a createIfMissing upsert returning a detached entry", async () => {
+    const sessionKey = "agent:main:webchat:dm:user-1";
+    const ctx: MsgContext = {
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+      From: "webchat:user-1",
+      To: "webchat:agent",
+      SessionKey: sessionKey,
+      OriginatingTo: "webchat:user-1",
+    };
+
+    const recorded = await recordInboundSessionMeta({ storePath, sessionKey, ctx });
+    expect(recorded?.origin?.provider).toBe("webchat");
+
+    // Detached result: caller mutations must never leak into cached store state.
+    if (recorded) {
+      recorded.origin = { provider: "mutated" };
+    }
+    expect(loadSessionEntry({ sessionKey, storePath })?.origin?.provider).toBe("webchat");
+  });
+
+  it("does not create sessions when inbound meta recording opts out of upsert", async () => {
+    const sessionKey = "agent:main:webchat:dm:absent";
+    const recorded = await recordInboundSessionMeta({
+      storePath,
+      sessionKey,
+      ctx: { Provider: "webchat", From: "webchat:absent", OriginatingTo: "webchat:absent" },
+      createIfMissing: false,
+    });
+
+    expect(recorded).toBeNull();
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("preserves activity timestamps across inbound meta and last-route updates", async () => {
+    const sessionKey = "agent:main:webchat:dm:user-2";
+    const anchorUpdatedAt = Date.now() - 60_000;
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "session-2", updatedAt: anchorUpdatedAt },
+    );
+
+    await recordInboundSessionMeta({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        ChatType: "direct",
+        From: "webchat:user-2",
+        To: "webchat:agent",
+        SessionKey: sessionKey,
+        OriginatingTo: "webchat:user-2",
+      },
+    });
+    const afterMeta = loadSessionEntry({ sessionKey, storePath });
+    expect(afterMeta?.origin?.provider).toBe("webchat");
+    // Inbound metadata must not count as activity; idle reset relies on
+    // updatedAt moving only for real session turns.
+    expect(afterMeta?.updatedAt).toBe(anchorUpdatedAt);
+
+    const routed = await updateSessionLastRoute({
+      storePath,
+      sessionKey,
+      channel: "webchat",
+      to: "webchat:user-2",
+    });
+    expect(routed?.lastChannel).toBe("webchat");
+    const afterRoute = loadSessionEntry({ sessionKey, storePath });
+    expect(afterRoute?.lastTo).toBe("webchat:user-2");
+    expect(afterRoute?.route).toEqual({ channel: "webchat", target: { to: "webchat:user-2" } });
+    expect(afterRoute?.updatedAt).toBe(anchorUpdatedAt);
+  });
+
+  it("returns null from last-route updates for missing sessions when createIfMissing is false", async () => {
+    const sessionKey = "agent:main:webchat:dm:ghost";
+    const routed = await updateSessionLastRoute({
+      storePath,
+      sessionKey,
+      channel: "webchat",
+      to: "webchat:ghost",
+      createIfMissing: false,
+    });
+
+    expect(routed).toBeNull();
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
   it("marks abort targets while canonicalizing legacy session keys", async () => {
