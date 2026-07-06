@@ -147,42 +147,47 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("truncates text-only fallback at byte boundaries when maxBytes is set", async () => {
-    // Foreign Response without a body stream or arrayBuffer — only .text()
-    // is available.  Truncation must be byte-accurate so multi-byte UTF-8
-    // content is not corrupted (naive text.slice would cut mid-codepoint).
-    const prefix = "x".repeat(50) + "中文";
-    const longText = prefix + "🔥" + "y".repeat(50);
-    const fullBytes = new TextEncoder().encode(longText);
-    const CAP = new TextEncoder().encode(prefix).byteLength; // clean codepoint boundary
-    expect(fullBytes.byteLength).toBeGreaterThan(CAP);
+  it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
+    const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
+    const text = vi.fn(async () => "hello");
     const response = {
-      body: null as unknown,
+      arrayBuffer,
       headers: new Headers(),
-      async text() {
-        return longText;
-      },
+      text,
     } as unknown as Response;
 
-    // With maxBytes → byte-level truncation
-    const capped = await readResponseText(response, { maxBytes: CAP });
-    expect(capped.truncated).toBe(true);
-    expect(capped.bytesRead).toBe(CAP);
-    const expected = new TextDecoder().decode(fullBytes.slice(0, CAP));
-    expect(capped.text).toBe(expected);
-    expect(capped.text).not.toContain("�");
+    await expect(readResponseText(response, { maxBytes: 4 })).resolves.toEqual({
+      text: "",
+      truncated: true,
+      bytesRead: 0,
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+  });
 
-    // Without maxBytes → passes through (regression)
-    const noCapResponse = {
-      body: null as unknown,
+  it("treats a native bodyless response as empty when maxBytes is set", async () => {
+    await expect(
+      readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
+    ).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("preserves uncapped text-only fallback byte accounting", async () => {
+    const value = "中文🔥";
+    const text = vi.fn(async () => value);
+    const response = {
       headers: new Headers(),
-      async text() {
-        return longText;
-      },
+      text,
     } as unknown as Response;
-    const full = await readResponseText(noCapResponse);
-    expect(full.text).toBe(longText);
-    expect(full.truncated).toBe(false);
-    expect(full.bytesRead).toBe(fullBytes.byteLength);
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: value,
+      truncated: false,
+      bytesRead: new TextEncoder().encode(value).byteLength,
+    });
+    expect(text).toHaveBeenCalledTimes(1);
   });
 });

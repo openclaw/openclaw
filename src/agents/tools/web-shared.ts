@@ -297,6 +297,15 @@ export async function readResponseText(
     return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
   }
 
+  if (maxBytes) {
+    if (res instanceof Response && res.body === null) {
+      return { text: "", truncated: false, bytesRead: 0 };
+    }
+    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
+    // Fail closed instead of making maxBytes a returned-text limit only.
+    return { text: "", truncated: true, bytesRead: 0 };
+  }
+
   const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
   if (typeof readBytes === "function") {
     try {
@@ -314,10 +323,6 @@ export async function readResponseText(
   try {
     const text = await res.text();
     const bytes = new TextEncoder().encode(text);
-    if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
-      const truncated = new TextDecoder().decode(bytes.slice(0, maxBytes));
-      return { text: truncated, truncated: true, bytesRead: maxBytes };
-    }
     return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
