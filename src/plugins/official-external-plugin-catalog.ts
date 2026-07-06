@@ -674,14 +674,6 @@ function bundledFallbackResult(
   };
 }
 
-function emptyBundledFallbackResult(error: unknown): HostedOfficialExternalPluginCatalogLoadResult {
-  return {
-    source: "bundled-fallback",
-    entries: [],
-    error: formatHostedCatalogError(error),
-  };
-}
-
 function loadHostedCatalogSnapshotResult(params: {
   snapshot: HostedOfficialExternalPluginCatalogSnapshot;
   error: unknown;
@@ -852,9 +844,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   }
   const { url } = source;
   if (source.verification?.mode === "signed") {
-    return emptyBundledFallbackResult(
-      new Error("hosted catalog signed feed verification is not wired yet"),
-    );
+    throw new Error("hosted catalog signed feed verification is not wired yet");
   }
   const snapshotStore = await resolveHostedCatalogSnapshotStore({
     snapshotStore: params?.snapshotStore,

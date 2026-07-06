@@ -555,32 +555,31 @@ describe("official external plugin catalog", () => {
   it("fails closed for signed feed profiles until envelope enforcement is wired", async () => {
     const fetchImpl = vi.fn();
 
-    const result = await loadHostedOfficialExternalPluginCatalogEntries({
-      feedProfile: "acme",
-      catalogConfig: {
-        feeds: {
-          acme: {
-            url: "https://packages.acme.example/openclaw/feed",
-            verification: {
-              mode: "signed",
-              keys: [
-                {
-                  keyId: "acme-root",
-                  publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                },
-              ],
+    await expect(
+      loadHostedOfficialExternalPluginCatalogEntries({
+        feedProfile: "acme",
+        catalogConfig: {
+          feeds: {
+            acme: {
+              url: "https://packages.acme.example/openclaw/feed",
+              verification: {
+                mode: "signed",
+                keys: [
+                  {
+                    keyId: "acme-root",
+                    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                  },
+                ],
+              },
             },
           },
         },
-      },
-      fetchImpl,
-      snapshotStore: null,
-    });
+        fetchImpl,
+        snapshotStore: null,
+      }),
+    ).rejects.toThrow("signed feed verification is not wired yet");
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result.source).toBe("bundled-fallback");
-    expect(result.entries).toEqual([]);
-    expect(result.error).toContain("signed feed verification is not wired yet");
   });
 
   it("keeps direct hosted feed URL overrides constrained to the public allowlist", async () => {
