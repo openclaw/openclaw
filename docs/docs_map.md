@@ -9503,6 +9503,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Proposal content
   - H2: Support files
   - H2: Agent tool
+  - H2: Suggested skills
   - H2: Approval and autonomy
   - H2: Gateway methods
   - H2: Storage
