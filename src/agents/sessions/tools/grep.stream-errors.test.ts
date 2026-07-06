@@ -36,43 +36,42 @@ function createChild(): MockChild {
 }
 
 describe("grep tool stream errors", () => {
-  it("rejects when stdout emits an error", async () => {
+  it.each(["stdout", "stderr"] as const)(
+    "rejects and terminates ripgrep when %s fails",
+    async (stream) => {
+      const child = createChild();
+      vi.mocked(spawn).mockReturnValue(child);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+
+      const tool = createGrepToolDefinition(process.cwd());
+      const resultPromise = tool.execute(
+        "call-1",
+        { pattern: "foo" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+      child[stream].emit("error", new Error(`${stream} EPIPE`));
+
+      await expect(resultPromise).rejects.toThrow(`${stream} EPIPE`);
+      expect(child.killed).toBe(true);
+    },
+  );
+
+  it("keeps stdout guarded after a stderr failure closes readline", async () => {
     const child = createChild();
     vi.mocked(spawn).mockReturnValue(child);
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const tool = createGrepToolDefinition(process.cwd());
-    const resultPromise = tool.execute(
-      "call-1",
-      { pattern: "foo" },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
-    child.stdout.emit("error", new Error("stdout EPIPE"));
 
-    await expect(resultPromise).rejects.toThrow("stdout EPIPE");
-    expect(child.killed).toBe(true);
-  });
-
-  it("rejects when stderr emits an error", async () => {
-    const child = createChild();
-    vi.mocked(spawn).mockReturnValue(child);
-    vi.mocked(ensureTool).mockResolvedValue("rg");
-
-    const tool = createGrepToolDefinition(process.cwd());
-    const resultPromise = tool.execute(
-      "call-1",
-      { pattern: "foo" },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
-    child.stderr.emit("error", new Error("stderr EPIPE"));
-
-    await expect(resultPromise).rejects.toThrow("stderr EPIPE");
-    expect(child.killed).toBe(true);
+    expect(() => {
+      child.stderr.emit("error", new Error("stderr first"));
+      child.stdout.emit("error", new Error("stdout later"));
+    }).not.toThrow();
+    await expect(result).rejects.toThrow("stderr first");
   });
 });
