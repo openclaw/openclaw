@@ -212,11 +212,6 @@ final class NodeAppModel {
     private var mainSessionBaseKey: String = "main"
     private var gatewaySessionScope: String?
     private var focusedChatSessionKey: String?
-    // Two-part unread guard mirroring Android: the opened key survives read
-    // confirmations so later unread episodes on the same open chat re-acknowledge;
-    // the acknowledged key is the per-episode pending flag.
-    @ObservationIgnored private var openedChatSessionKey: String?
-    @ObservationIgnored private var readAcknowledgedChatSessionKey: String?
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
@@ -304,6 +299,7 @@ final class NodeAppModel {
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
+    private var apnsLastRegisteredGatewayStableID: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     var operatorSession: GatewayNodeSession {
@@ -344,7 +340,7 @@ final class NodeAppModel {
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
-    /// connection's stableID, or the keychain-persisted last connection on
+    /// connection's stableID, or the keychain-persisted active gateway on
     /// cold open before the gateway session is up. Nil for fixture transports
     /// and unpaired installs so demo or foreign rows can never leak into a
     /// real gateway's transcript.
@@ -352,7 +348,7 @@ final class NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled else { return nil }
         let stableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
-            ?? GatewaySettingsStore.loadLastGatewayConnection()?.stableID
+            ?? GatewaySettingsStore.activeGatewayEntry()?.stableID
         guard let stableID, !stableID.isEmpty else { return nil }
         return stableID
     }
@@ -384,7 +380,7 @@ final class NodeAppModel {
         if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
             return cache
         }
-        guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
+        guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
         let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
         self.chatTranscriptCachesByGatewayID[gatewayID] = cache
         return cache
@@ -428,7 +424,7 @@ final class NodeAppModel {
     /// drops that gateway's queued commands.
     func purgeChatTranscriptCache(gatewayID: String? = nil) async {
         if let gatewayID, !gatewayID.isEmpty {
-            guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
+            guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
             if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
                 await cache.retire()
             }
@@ -443,7 +439,7 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
-        if let directoryURL = self.chatTranscriptCacheDirectoryURL() {
+        if let directoryURL = Self.chatTranscriptCacheDirectoryURL() {
             try? FileManager.default.removeItem(at: directoryURL)
         }
         self.chatTranscriptCachesByGatewayID.removeAll()
@@ -453,22 +449,22 @@ final class NodeAppModel {
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
-        guard let directoryURL = self.chatTranscriptCacheDirectoryURL() else { return }
+        guard let directoryURL = Self.chatTranscriptCacheDirectoryURL() else { return }
         try? FileManager.default.removeItem(at: directoryURL)
         self.chatTranscriptCachesByGatewayID.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
     }
 
-    private func chatTranscriptCacheDirectoryURL() -> URL? {
+    private static func chatTranscriptCacheDirectoryURL() -> URL? {
         try? OpenClawNodeStorage.appSupportDir()
             .appendingPathComponent("chat-cache", isDirectory: true)
     }
 
-    private func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
+    static func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
         let digest = SHA256.hash(data: Data(gatewayID.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
-        return self.chatTranscriptCacheDirectoryURL()?
+        return Self.chatTranscriptCacheDirectoryURL()?
             .appendingPathComponent("\(digest).sqlite", isDirectory: false)
     }
 
@@ -2337,57 +2333,9 @@ extension NodeAppModel {
         self.mainSessionKey
     }
 
-    func openChat(sessionKey: String?, unread: Bool = false) {
+    func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
-        let activeKey = self.chatSessionKey
-        self.openedChatSessionKey = activeKey
-        if self.readAcknowledgedChatSessionKey != activeKey {
-            self.readAcknowledgedChatSessionKey = nil
-        }
-        if unread {
-            self.acknowledgeChatSessionReadIfNeeded(activeKey)
-        }
         self.openChatRequestID &+= 1
-    }
-
-    /// One acknowledgement per unread episode: the pending flag clears when a fresh
-    /// snapshot confirms the read (unread != true), so a run finishing while the
-    /// session stays open re-acknowledges without patch loops (the gateway stamps
-    /// lastReadAt server-side, which makes the exchange convergent).
-    func reconcileChatSessionReadState(_ entries: [OpenClawChatSessionEntry]) {
-        guard let openedKey = self.openedChatSessionKey,
-              let entry = entries.first(where: { $0.key == openedKey })
-        else { return }
-        if entry.unread != true {
-            if self.readAcknowledgedChatSessionKey == openedKey {
-                self.readAcknowledgedChatSessionKey = nil
-            }
-            return
-        }
-        // Only the currently open chat auto-acknowledges fresh unread episodes.
-        guard openedKey == self.chatSessionKey else { return }
-        self.acknowledgeChatSessionReadIfNeeded(openedKey)
-    }
-
-    private func acknowledgeChatSessionReadIfNeeded(_ sessionKey: String) {
-        guard self.readAcknowledgedChatSessionKey != sessionKey else { return }
-        self.readAcknowledgedChatSessionKey = sessionKey
-        let transport = self.makeChatTransport()
-        Task { @MainActor in
-            do {
-                try await transport.patchSession(
-                    key: sessionKey,
-                    label: nil,
-                    category: nil,
-                    pinned: nil,
-                    archived: nil,
-                    unread: false)
-            } catch {
-                if self.readAcknowledgedChatSessionKey == sessionKey {
-                    self.readAcknowledgedChatSessionKey = nil
-                }
-            }
-        }
     }
 
     func focusChatSession(_ sessionKey: String?) {
@@ -2678,17 +2626,30 @@ extension NodeAppModel {
     }
 
     func disconnectGateway() {
-        self.disconnectGateway(disablePersistedAutoConnect: true)
+        self.disconnectGateway(disablePersistedAutoConnect: true, invalidateConnectAttempts: true)
     }
 
     func suspendGatewayForTargetReview() {
         // Target review pauses live reconnects without changing the user's launch preference.
-        self.disconnectGateway(disablePersistedAutoConnect: false)
+        self.disconnectGateway(disablePersistedAutoConnect: false, invalidateConnectAttempts: true)
     }
 
-    private func disconnectGateway(disablePersistedAutoConnect: Bool) {
+    /// A replacement target may already own the connect generation while the forgotten route is live.
+    /// Preserve that generation so teardown cannot strand the replacement offline.
+    func disconnectForgottenGateway(preservingPendingConnectAttempt: Bool) {
+        self.disconnectGateway(
+            disablePersistedAutoConnect: !preservingPendingConnectAttempt,
+            invalidateConnectAttempts: !preservingPendingConnectAttempt)
+    }
+
+    private func disconnectGateway(
+        disablePersistedAutoConnect: Bool,
+        invalidateConnectAttempts: Bool)
+    {
         invalidateExecApprovalSurfacesForGatewayChange()
-        self.invalidateGatewayConnectAttempts()
+        if invalidateConnectAttempts {
+            self.invalidateGatewayConnectAttempts()
+        }
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         if disablePersistedAutoConnect {
@@ -2770,6 +2731,7 @@ extension NodeAppModel {
         self.focusedChatSessionKey = nil
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
+        self.apnsLastRegisteredGatewayStableID = nil
         Task { [weak self] in
             await self?.restoreChatSessionRoutingIdentityIfNeeded()
         }
@@ -2959,12 +2921,13 @@ extension NodeAppModel {
         else { return nil }
         let instanceID = GatewaySettingsStore.currentInstanceID()
         let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
-        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID),
-           metadata.gatewayStableID == deviceAuthGatewayID,
-           metadata.suppressStoredDeviceAuth,
-           !GatewaySettingsStore.completeGatewayCredentialHandoff(
-               instanceId: instanceID,
-               gatewayStableID: deviceAuthGatewayID)
+        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: deviceAuthGatewayID),
+            metadata.suppressStoredDeviceAuth,
+            !GatewaySettingsStore.completeGatewayCredentialHandoff(
+                instanceId: instanceID,
+                gatewayStableID: deviceAuthGatewayID)
         {
             return nil
         }
@@ -3170,6 +3133,9 @@ extension NodeAppModel {
         self.gatewayStatusText = "Connected"
         self.gatewayServerName = url.host ?? "gateway"
         self.gatewayConnected = true
+        _ = GatewaySettingsStore.markGatewayConnected(
+            stableID: stableID,
+            atMs: Int(Date().timeIntervalSince1970 * 1000))
         self.screen.errorText = nil
         UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
         LiveActivityManager.shared.handleReconnect()
@@ -5736,7 +5702,16 @@ extension NodeAppModel {
             }
             return
         }
-        if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
+        let gatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? self.connectedGatewayID
+            ?? ""
+        if !usesRelayTransport,
+           !Self.shouldPublishDirectAPNsRegistration(
+               token: token,
+               gatewayStableID: gatewayStableID,
+               lastToken: self.apnsLastRegisteredTokenHex,
+               lastGatewayStableID: self.apnsLastRegisteredGatewayStableID)
+        {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -5776,6 +5751,7 @@ extension NodeAppModel {
                 ifCurrentRoute: nodeRoute)
             guard published, shouldContinue() else { return }
             self.apnsLastRegisteredTokenHex = token
+            self.apnsLastRegisteredGatewayStableID = gatewayStableID
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.stage("gateway registration event published")
             }
@@ -5803,6 +5779,15 @@ extension NodeAppModel {
             return false
         }
         return true
+    }
+
+    nonisolated static func shouldPublishDirectAPNsRegistration(
+        token: String,
+        gatewayStableID: String,
+        lastToken: String?,
+        lastGatewayStableID: String?) -> Bool
+    {
+        token != lastToken || gatewayStableID != lastGatewayStableID
     }
 
     private func fetchPushRelayGatewayIdentity(
