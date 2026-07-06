@@ -92,10 +92,21 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toContain("Logbook");
       await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
+      // Workboard ships disabled, so it stays hidden from navigation entirely.
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
+        )
+        .not.toContain("Workboard");
 
       const customizeButton = sidebar.getByRole("button", { name: "Customize sidebar" });
       await customizeButton.click();
       const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
+      await expect
+        .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
+        .not.toContain("Workboard");
       const overviewItem = menu.getByRole("menuitemcheckbox", { name: "Overview" });
       await expect.poll(() => overviewItem.getAttribute("aria-checked")).toBe("true");
       const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
@@ -157,6 +168,37 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toBe(0);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows the Workboard route when the plugin is enabled in config", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: { plugins: { entries: { workboard: { enabled: true } } } },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}overview`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "More" }).click();
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
+        )
+        .toContain("Workboard");
     } finally {
       await context.close();
     }

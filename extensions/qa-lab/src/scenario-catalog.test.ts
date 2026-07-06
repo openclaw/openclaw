@@ -799,6 +799,24 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProviderMode).toBe("mock-openai");
   });
 
+  it("marks channel-owned access gates with their required channel driver", () => {
+    const liveScenarioIds = [
+      "whatsapp-access-control-dm-disabled",
+      "whatsapp-access-control-dm-open",
+      "whatsapp-access-control-group-disabled",
+      "whatsapp-access-control-group-open",
+      "whatsapp-pairing-block",
+      "matrix-allowlist-hot-reload",
+    ];
+
+    for (const scenarioId of liveScenarioIds) {
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+      expect(config?.requiredChannelDriver, scenarioId).toBe("live");
+    }
+  });
+
   it("adds a dreaming shadow trial report scenario", () => {
     const scenario = readQaScenarioById("dreaming-shadow-trial-report");
     const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as

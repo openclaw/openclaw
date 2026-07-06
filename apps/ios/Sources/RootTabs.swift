@@ -1250,7 +1250,7 @@ extension RootTabs {
         } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectLastKnown() }
+            Task { await self.gatewayController.connectActiveGateway() }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1286,7 +1286,7 @@ extension RootTabs {
 
     private func hasExistingGatewayConfig() -> Bool {
         if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
 
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }

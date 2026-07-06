@@ -9,6 +9,8 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.MessageSpeechPhase
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
@@ -49,12 +51,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
@@ -70,6 +74,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -126,6 +131,7 @@ fun ChatScreen(
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
+  val messageSpeechState by viewModel.chatMessageSpeech.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
@@ -145,6 +151,10 @@ fun ChatScreen(
   val scope = rememberCoroutineScope()
   val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
+
+  DisposableEffect(viewModel) {
+    onDispose(viewModel::stopChatMessageSpeech)
+  }
   val modelSections =
     remember(modelCatalog, modelFavorites, modelRecents) {
       chatModelPickerSections(
@@ -287,6 +297,8 @@ fun ChatScreen(
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onStarterPrompt = { prompt -> input = prompt },
       onReplyMessage = viewModel::setChatReplyDraft,
+      speechState = messageSpeechState,
+      onToggleListen = viewModel::toggleChatMessageSpeech,
       modifier = Modifier.weight(1f),
     )
 
@@ -604,6 +616,8 @@ private fun ChatMessageList(
   onDeleteOutbox: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
+  speechState: MessageSpeechState?,
+  onToggleListen: (String, String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
@@ -641,6 +655,8 @@ private fun ChatMessageList(
               content = item.message.content,
               timestampMs = item.message.timestampMs,
               onReplyMessage = onReplyMessage,
+              speechState = speechState,
+              onToggleListen = onToggleListen,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -657,6 +673,8 @@ private fun ChatMessageList(
               content = listOf(ChatMessageContent(text = item.text)),
               timestampMs = null,
               onReplyMessage = onReplyMessage,
+              speechState = null,
+              onToggleListen = onToggleListen,
             )
           ChatTimelineItem.Thinking -> ChatThinkingBubble()
         }
@@ -819,6 +837,8 @@ private fun ChatBubble(
   content: List<ChatMessageContent>,
   timestampMs: Long?,
   onReplyMessage: (String) -> Unit,
+  speechState: MessageSpeechState?,
+  onToggleListen: (String, String) -> Unit,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -832,15 +852,26 @@ private fun ChatBubble(
     }
   if (displayableContent.isEmpty()) return
 
+  val messageText = chatMessagePlainText(displayableContent)
+  val messageSpeech = speechState?.takeIf { it.messageId == messageId }
+  val canListen = !live && messageId != null && normalizedRole == "assistant" && messageText.isNotBlank()
+  val toggleListen: (() -> Unit)? =
+    if (canListen) {
+      { onToggleListen(checkNotNull(messageId), messageText) }
+    } else {
+      null
+    }
+
   Row(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
-    val messageText = chatMessagePlainText(displayableContent)
     ChatMessageActionHost(
       text = messageText,
       onReply = onReplyMessage,
       enabled = !live,
+      listenActive = messageSpeech != null,
+      onToggleListen = toggleListen,
       modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
     ) {
       Surface(
@@ -874,6 +905,12 @@ private fun ChatBubble(
           if (messageId != null) {
             ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent)
           }
+          messageSpeech?.let { speech ->
+            FullChatSpeechIndicator(
+              phase = speech.phase,
+              onStop = { onToggleListen(checkNotNull(messageId), messageText) },
+            )
+          }
           timestampMs?.let {
             Text(
               text = formatChatTimestamp(it),
@@ -884,6 +921,41 @@ private fun ChatBubble(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun FullChatSpeechIndicator(
+  phase: MessageSpeechPhase,
+  onStop: () -> Unit,
+) {
+  Surface(
+    onClick = onStop,
+    shape = RoundedCornerShape(999.dp),
+    color = ClawTheme.colors.surfacePressed,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector =
+          if (phase == MessageSpeechPhase.Preparing) {
+            Icons.Default.HourglassEmpty
+          } else {
+            Icons.AutoMirrored.Filled.VolumeUp
+          },
+        contentDescription = null,
+        modifier = Modifier.size(14.dp),
+        tint = ClawTheme.colors.textMuted,
+      )
+      Text(
+        text = if (phase == MessageSpeechPhase.Preparing) "Preparing audio…" else "Speaking…",
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
     }
   }
 }

@@ -17,7 +17,7 @@ import type {
 } from "./context.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
-export type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
+type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 

@@ -19,7 +19,7 @@ import {
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
-export type ChatControlsProps = {
+type ChatControlsProps = {
   paneId: string;
   agentsList: AgentsListResult | null;
   connected: boolean;

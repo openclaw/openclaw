@@ -1,7 +1,7 @@
 // Control UI module implements public assets behavior.
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 
-export type ControlUiPublicAsset =
+type ControlUiPublicAsset =
   | "apple-touch-icon.png"
   | "favicon-32.png"
   | "favicon.ico"

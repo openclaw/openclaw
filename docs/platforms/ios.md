@@ -196,6 +196,15 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 
 In Settings, enable **Manual Host** and enter the gateway host + port (default `18789`).
 
+## Multiple gateways
+
+The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+
+- **Settings -> Gateway** shows a **Paired Gateways** list with the active gateway marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway. A quick-switch menu appears next to the connection row when more than one gateway is paired.
+- Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per gateway. Switching never mixes state between gateways, and push registration follows the active gateway.
+- Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
+- Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
+
 ## Canvas + A2UI
 
 The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:

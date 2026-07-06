@@ -1255,6 +1255,70 @@ describe("processDiscordMessage ack reactions", () => {
       removeAckAfterReply: true,
     });
   });
+
+  it.each([
+    {
+      outcome: "done",
+      timingKey: "doneHoldMs",
+      configuredHoldMs: 2_000,
+      terminalEmoji: DEFAULT_EMOJIS.done,
+    },
+    {
+      outcome: "error",
+      timingKey: "errorHoldMs",
+      configuredHoldMs: 4_000,
+      terminalEmoji: DEFAULT_EMOJIS.error,
+    },
+  ] as const)(
+    "uses configured statusReactions.timing.$timingKey for $outcome cleanup",
+    async ({ outcome, timingKey, configuredHoldMs, terminalEmoji }) => {
+      vi.useFakeTimers();
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        if (outcome === "done") {
+          await params?.replyOptions?.onReasoningStream?.();
+          return createNoQueuedDispatchResult();
+        }
+        return {
+          queuedFinal: false,
+          counts: { final: 0, tool: 0, block: 0 },
+          failedCounts: { final: 1 },
+        };
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            removeAckAfterReply: true,
+            statusReactions: {
+              timing: { [timingKey]: configuredHoldMs, debounceMs: 0 },
+            },
+          },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+      expect(getReactionEmojis()).toContain(terminalEmoji);
+
+      await vi.advanceTimersByTimeAsync(configuredHoldMs - 1);
+      expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        terminalEmoji,
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTimersAsync();
+      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        terminalEmoji,
+        expect.anything(),
+      );
+    },
+  );
 });
 
 describe("processDiscordMessage session routing", () => {
