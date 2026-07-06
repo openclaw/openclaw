@@ -438,7 +438,7 @@ describe("argv helpers", () => {
     },
     {
       name: "terminator cuts parsing",
-      argv: ["node", "openclaw", "status", "--", "ignored"],
+      argv: ["node", "openclaw", "status", FLAG_TERMINATOR, "ignored"],
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
