@@ -1,0 +1,32 @@
+{
+  "id": "dashboard",
+  "name": "Dashboard",
+  "description": "Composable dashboard workspace document and control-plane RPC backend.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "contracts": {
+    "tools": [
+      "dashboard_workspace_get",
+      "dashboard_tab_create",
+      "dashboard_tab_update",
+      "dashboard_tab_delete",
+      "dashboard_tabs_reorder",
+      "dashboard_widget_add",
+      "dashboard_widget_update",
+      "dashboard_widget_move",
+      "dashboard_widget_remove",
+      "dashboard_layout_set",
+      "dashboard_workspace_replace",
+      "dashboard_widget_scaffold",
+      "dashboard_undo",
+      "dashboard_data_read"
+    ]
+  }
+}
