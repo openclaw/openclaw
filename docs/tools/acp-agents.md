@@ -823,9 +823,9 @@ login, `XAI_API_KEY` handling, and native model selection.
 
 ## acpx harness, plugin setup, and permissions
 
-For acpx harness configuration (Claude Code / Codex / Gemini CLI aliases),
-the plugin-tools and OpenClaw-tools MCP bridges, and ACP permission modes,
-see [ACP agents - setup](/tools/acp-agents-setup).
+For acpx harness configuration (Claude Code / Codex / Gemini CLI / Grok Build
+aliases), the plugin-tools and OpenClaw-tools MCP bridges, and ACP permission
+modes, see [ACP agents - setup](/tools/acp-agents-setup).
 
 ## Troubleshooting
 
