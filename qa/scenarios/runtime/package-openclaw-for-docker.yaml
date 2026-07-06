@@ -3,6 +3,7 @@ title: Docker package artifact QA evidence
 scenario:
   id: package-openclaw-for-docker
   surface: docker-podman-hosting
+  category: docker-podman-hosting.image-release-and-validation
   coverage:
     secondary:
       - docker.package-artifact-generation
