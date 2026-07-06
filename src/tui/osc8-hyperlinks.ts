@@ -32,7 +32,8 @@ function trimUnbalancedTrailingParens(url: string): string {
 }
 
 function hasUrlContent(url: string): boolean {
-  return url !== "http://" && url !== "https://";
+  const authority = url.slice(url.indexOf("://") + 3).split(/[/?#]/, 1)[0];
+  return /[\p{L}\p{N}]/u.test(authority) || /^\[[0-9a-f:.]+\](?::\d+)?$/i.test(authority);
 }
 
 /**
@@ -49,12 +50,14 @@ export function extractUrls(markdown: string): string[] {
   );
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
-    urls.add(m[1]);
+    if (hasUrlContent(m[1])) {
+      urls.add(m[1]);
+    }
   }
 
   // Bare URLs (remove markdown links first to avoid double-matching)
   const stripped = markdown.replace(mdLinkRe, "");
-  const bareRe = /https?:\/\/[^\s\]>]+/g;
+  const bareRe = /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>]*|[^\s[\]>]+)/gi;
   while ((m = bareRe.exec(stripped)) !== null) {
     const url = trimUnbalancedTrailingParens(m[0]);
     if (hasUrlContent(url)) {
@@ -83,6 +86,7 @@ function findUrlRanges(
   visibleText: string,
   knownUrls: string[],
   pending: { url: string; consumed: number } | null,
+  nextVisibleText?: string,
 ): { ranges: UrlRange[]; pending: { url: string; consumed: number } | null } {
   const ranges: UrlRange[] = [];
   let newPending: { url: string; consumed: number } | null = null;
@@ -118,26 +122,52 @@ function findUrlRanges(
   }
 
   // Find new URL starts in visible text
-  const urlRe = /https?:\/\/[^\s\]>]+/g;
+  const urlRe = /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>]*|[^\s[\]>]*)/gi;
   urlRe.lastIndex = searchFrom;
   let match: RegExpExecArray | null;
 
   while ((match = urlRe.exec(visibleText)) !== null) {
     const fragment = trimUnbalancedTrailingParens(match[0]);
-    if (!hasUrlContent(fragment)) {
-      continue;
-    }
     const start = match.index;
 
     // Resolve fragment to a known URL (exact > prefix > superstring)
     let resolvedUrl = fragment;
     let found = false;
 
-    for (const known of knownUrls) {
-      if (known === fragment) {
-        resolvedUrl = known;
-        found = true;
-        break;
+    // A wrap may split immediately after the scheme. Only accept that fragment
+    // when the next line actually continues a known URL; otherwise a stray
+    // `https://` could inherit an unrelated target from the URL list.
+    if (!hasUrlContent(fragment)) {
+      const hasUnpunctuatedSchemeAtLineEnd =
+        fragment === match[0] && visibleText.slice(start + match[0].length).trim().length === 0;
+      if (!hasUnpunctuatedSchemeAtLineEnd) {
+        continue;
+      }
+      const nextToken = nextVisibleText?.trimStart().match(/^[^\s\]>]+/)?.[0] ?? "";
+      const nextFragment = trimUnbalancedTrailingParens(nextToken);
+      for (const known of knownUrls) {
+        if (!known.startsWith(fragment)) {
+          continue;
+        }
+        const remaining = known.slice(fragment.length);
+        const continuesKnownUrl = nextFragment.length > 0 && remaining.startsWith(nextFragment);
+        if (continuesKnownUrl && known.length > resolvedUrl.length) {
+          resolvedUrl = known;
+          found = true;
+        }
+      }
+      if (!found) {
+        continue;
+      }
+    }
+
+    if (!found) {
+      for (const known of knownUrls) {
+        if (known === fragment) {
+          resolvedUrl = known;
+          found = true;
+          break;
+        }
       }
     }
     if (!found) {
@@ -251,10 +281,10 @@ export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
   }
 
   let pending: { url: string; consumed: number } | null = null;
+  const visibleLines = lines.map(stripAnsi);
 
-  return lines.map((line) => {
-    const visible = stripAnsi(line);
-    const result = findUrlRanges(visible, urls, pending);
+  return lines.map((line, index) => {
+    const result = findUrlRanges(visibleLines[index], urls, pending, visibleLines[index + 1]);
     pending = result.pending;
     return applyOsc8Ranges(line, result.ranges);
   });
