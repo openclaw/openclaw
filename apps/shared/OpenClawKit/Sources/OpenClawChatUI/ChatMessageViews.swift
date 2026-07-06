@@ -618,8 +618,6 @@ struct ChatTypingIndicatorBubble: View {
     }
 }
 
-/// Status footer for a user bubble backed by the durable offline outbox.
-@MainActor
 /// Inline playback state under an assistant bubble while Listen is active;
 /// tapping it stops speech.
 struct ChatSpeechStatusChip: View {
@@ -642,6 +640,8 @@ struct ChatSpeechStatusChip: View {
     }
 }
 
+/// Status footer for a user bubble backed by the durable offline outbox.
+@MainActor
 struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
 
