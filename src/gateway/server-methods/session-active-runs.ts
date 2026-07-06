@@ -58,6 +58,7 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
   canonicalKey: string;
+  sessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
   scopeUnknownByAgent?: boolean;
@@ -68,24 +69,25 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
     return { hasActiveRun: false, runs };
   }
   const now = params.now ?? Date.now();
+  const targetSessionId = params.sessionId?.trim() || undefined;
   for (const [runId, active] of params.context.chatAbortControllers.entries()) {
     const sessionKey = active.sessionKey?.trim();
     const sessionId = active.sessionId?.trim();
     if (
       active.projectSessionActive === false ||
       active.controlUiVisible === false ||
-      !sessionKey ||
-      !sessionId
+      (!sessionKey && !sessionId)
     ) {
       continue;
     }
     const projected: TrackedActiveSessionRun = {
       runId,
-      sessionKey,
-      sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(sessionId ? { sessionId } : {}),
       agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
     };
     const matches =
+      (targetSessionId !== undefined && sessionId === targetSessionId) ||
       isTrackedActiveSessionRunForKey(
         projected,
         params.canonicalKey,
@@ -103,10 +105,14 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
     if (!matches) {
       continue;
     }
+    const visibleSessionId = sessionId ?? targetSessionId;
+    if (!visibleSessionId) {
+      continue;
+    }
     runs.push({
       runId,
-      sessionId,
-      sessionKey,
+      sessionId: visibleSessionId,
+      sessionKey: sessionKey ?? params.canonicalKey,
       ...(projected.agentId ? { agentId: projected.agentId } : {}),
       ...(active.ownerConnId ? { ownerConnId: active.ownerConnId } : {}),
       ...(active.kind ? { kind: active.kind } : {}),

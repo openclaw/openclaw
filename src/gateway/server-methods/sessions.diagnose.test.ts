@@ -148,6 +148,69 @@ test("sessions.diagnose picks a visible active session beyond the bounded newest
   });
 });
 
+test("sessions.diagnose picks a session-id-only active session beyond the bounded newest scan", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  const entries: Record<string, SessionEntry> = {
+    "agent:main:stuck": sessionStoreEntry("sess-stuck", {
+      status: "running",
+      updatedAt: 1,
+    }),
+  };
+  for (let index = 0; index < 105; index += 1) {
+    entries[`agent:main:newer-${index}`] = sessionStoreEntry(`sess-newer-${index}`, {
+      updatedAt: now + index,
+    });
+  }
+  await writeSessionStore({ entries });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>(
+    "sessions.diagnose",
+    {},
+    {
+      context: {
+        chatAbortControllers: new Map([
+          [
+            "run-stuck",
+            {
+              controller: new AbortController(),
+              sessionId: "sess-stuck",
+              agentId: "main",
+              startedAtMs: now - 1_000,
+              expiresAtMs: now + 60_000,
+              kind: "agent",
+            },
+          ],
+        ]),
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "highest live or contradictory evidence score",
+    session: {
+      key: "agent:main:stuck",
+      sessionId: "sess-stuck",
+      hasActiveRun: true,
+    },
+    live: {
+      gatewayRun: {
+        hasActiveRun: true,
+        runs: [
+          {
+            runId: "run-stuck",
+            sessionId: "sess-stuck",
+            sessionKey: "agent:main:stuck",
+            agentId: "main",
+          },
+        ],
+      },
+    },
+  });
+});
+
 test("sessions.diagnose picks an embedded active session beyond the bounded newest scan", async () => {
   await createSessionStoreDir();
   const now = Date.now();

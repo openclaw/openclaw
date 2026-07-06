@@ -254,10 +254,14 @@ function buildNotFoundDiagnosis(
 function hasDiagnoseTrackedActiveRun(params: {
   activeRuns: readonly TrackedActiveSessionRun[];
   key: string;
+  sessionId: string;
   agentId?: string;
   defaultAgentId: string;
 }): boolean {
   return params.activeRuns.some((active) => {
+    if (active.sessionId === params.sessionId) {
+      return true;
+    }
     if (active.sessionKey !== params.key) {
       return false;
     }
@@ -296,6 +300,7 @@ function scoreDiagnoseCandidatePreselect(params: {
     hasDiagnoseTrackedActiveRun({
       activeRuns: params.activeRuns,
       key: params.key,
+      sessionId: params.entry.sessionId,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       defaultAgentId: params.defaultAgentId,
     }) ||
@@ -470,6 +475,7 @@ function scoreDiagnoseCandidate(params: {
     context: params.context,
     requestedKey: params.row.key,
     canonicalKey: params.row.key,
+    sessionId: params.row.sessionId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     defaultAgentId,
     scopeUnknownByAgent: true,
@@ -816,6 +822,7 @@ async function buildDiagnoseResult(params: {
     context,
     requestedKey: p.key ?? target.key,
     canonicalKey: target.key,
+    sessionId: target.entry.sessionId,
     ...(target.agentId ? { agentId: target.agentId } : {}),
     defaultAgentId,
     scopeUnknownByAgent: true,

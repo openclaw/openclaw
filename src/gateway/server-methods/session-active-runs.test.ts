@@ -156,6 +156,66 @@ describe("collectTrackedActiveSessionRunSnapshot", () => {
     });
   });
 
+  it("projects visible runs that only carry the diagnosed session id", () => {
+    const snapshot = collectTrackedActiveSessionRunSnapshot({
+      context: contextWithRuns([
+        [
+          "run-id-only",
+          {
+            sessionId: "session-1",
+            agentId: "main",
+          },
+        ],
+      ]),
+      requestedKey: "agent:main:main",
+      canonicalKey: "agent:main:main",
+      sessionId: "session-1",
+      now: 6_000,
+    });
+
+    expect(snapshot).toMatchObject({
+      hasActiveRun: true,
+      runs: [
+        {
+          runId: "run-id-only",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        },
+      ],
+    });
+  });
+
+  it("projects visible runs that only carry the diagnosed session key", () => {
+    const snapshot = collectTrackedActiveSessionRunSnapshot({
+      context: contextWithRuns([
+        [
+          "run-key-only",
+          {
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          },
+        ],
+      ]),
+      requestedKey: "agent:main:main",
+      canonicalKey: "agent:main:main",
+      sessionId: "session-1",
+      now: 6_000,
+    });
+
+    expect(snapshot).toMatchObject({
+      hasActiveRun: true,
+      runs: [
+        {
+          runId: "run-key-only",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        },
+      ],
+    });
+  });
+
   it("matches global sessions by requested agent id", () => {
     const context = contextWithRuns([
       [
