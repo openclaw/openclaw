@@ -1439,11 +1439,9 @@ async function changeScheduledTaskEnabledState(params: {
   if (!params.enabled) {
     const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);
     if (query.code !== 0) {
-      if (await isStartupEntryInstalled(params.env)) {
-        const taskExists = probeScheduledTaskExists(taskName);
-        if (taskExists === false) {
-          return false;
-        }
+      const taskExists = probeScheduledTaskExists(taskName);
+      if (taskExists === false) {
+        return false;
       }
       const detail = (query.stderr || query.stdout).trim() || "unknown error";
       throw new Error(`schtasks XML query failed: ${detail}`);

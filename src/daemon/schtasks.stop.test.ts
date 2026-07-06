@@ -173,7 +173,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("fails closed when the task XML cannot be read", async () => {
+  it("fails closed when task absence cannot be confirmed", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
       schtasksResponses.push({
         code: 1,
@@ -186,6 +186,30 @@ describe("Scheduled Task stop/restart cleanup", () => {
       );
 
       expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+      expect(spawnSync).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("ignores a stale task script when COM proves the task is absent", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({
+        code: 1,
+        stdout: "",
+        stderr: "FEHLER: Die angegebene Datei wurde nicht gefunden.",
+      });
+      spawnSync.mockReturnValueOnce({
+        pid: 0,
+        output: [null, "-2147024894", ""],
+        stdout: "-2147024894",
+        stderr: "",
+        status: 1,
+        signal: null,
+      });
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+      expect(spawnSync).toHaveBeenCalledOnce();
     });
   });
 
