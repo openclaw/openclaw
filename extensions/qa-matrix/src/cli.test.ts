@@ -10,7 +10,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaMatrixCommand,
 }));
 
-import { matrixQaCliRegistration } from "./cli.js";
+import { matrixQaAdapterFactory, matrixQaCliRegistration } from "./cli.js";
 
 function mockProcessWrite(
   _chunk: string | Uint8Array,
@@ -49,6 +49,18 @@ describe("matrix qa cli registration", () => {
     exitSpy.mockRestore();
     stderrSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  it("assigns migrated shared-flow scenarios to the Matrix adapter", () => {
+    expect(matrixQaAdapterFactory.scenarioIds).toEqual([
+      "channel-chat-baseline",
+      "thread-follow-up",
+      "thread-isolation",
+      "thread-reply-override",
+      "subagent-thread-spawn",
+      "dm-shared-session",
+      "dm-per-room-session",
+    ]);
   });
 
   it("keeps disposable Matrix lane flags focused", () => {

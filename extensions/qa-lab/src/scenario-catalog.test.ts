@@ -771,7 +771,6 @@ describe("qa scenario catalog", () => {
       "group-message-tool-unavailable-fallback",
       "qa-channel-reconnect-dedupe",
       "reaction-edit-delete",
-      "thread-follow-up",
       "image-generation-roundtrip",
       "image-understanding-attachment",
       "native-image-generation",

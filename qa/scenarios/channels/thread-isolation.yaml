@@ -1,18 +1,17 @@
-title: Thread follow-up and native relation
+title: Thread and top-level session isolation
 
 scenario:
-  id: thread-follow-up
+  id: thread-isolation
   surface: channels
   coverage:
     primary:
       - channels.threading
-    secondary:
-      - runtime.delivery
-  objective: Verify a follow-up sent inside a thread receives one reply in the same thread.
+      - runtime.sessions
+  objective: Verify a fresh top-level prompt does not inherit the prior thread relation.
   successCriteria:
-    - The transport accepts a normalized threaded inbound message.
-    - The visible reply carries the same normalized thread id.
-    - No matching reply leaks into the top-level conversation.
+    - A threaded prompt receives a threaded reply.
+    - A later top-level prompt receives a top-level reply.
+    - The top-level marker never appears in the earlier thread.
   docsRefs:
     - docs/channels/qa-channel.md
     - docs/concepts/qa-e2e-automation.md
@@ -22,14 +21,14 @@ scenario:
     - extensions/qa-matrix/src/adapter.runtime.ts
   execution:
     kind: flow
-    summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
+    summary: Establish a thread, then require a fresh top-level reply without stale relation metadata.
     config:
-      rootMarker: QA-THREAD-ROOT-OK
-      replyMarker: QA-THREAD-FOLLOW-UP-OK
+      threadMarker: QA-THREAD-ISOLATION-THREAD-OK
+      topLevelMarker: QA-THREAD-ISOLATION-TOPLEVEL-OK
 
 flow:
   steps:
-    - name: replies inside the originating thread
+    - name: keeps a fresh top-level reply outside the prior thread
       actions:
         - resetTransport: true
         - set: conversationId
@@ -53,7 +52,7 @@ flow:
                     args:
                       channelId:
                         ref: conversationId
-                      title: QA thread follow-up
+                      title: QA thread isolation
               - set: threadId
                 value:
                   expr: threadPayload?.thread?.id
@@ -67,8 +66,7 @@ flow:
                   senderId:
                     ref: senderId
                   senderName: QA Driver
-                  text:
-                    expr: "`@openclaw Reply exactly: ${config.rootMarker}`"
+                  text: "@openclaw Reply exactly: QA-THREAD-ISOLATION-ROOT-OK"
                 saveAs: rootInbound
               - waitForOutbound:
                   conversation:
@@ -76,17 +74,38 @@ flow:
                       ref: conversationId
                     kind:
                       ref: conversationKind
-                  textIncludes:
-                    ref: config.rootMarker
+                  textIncludes: QA-THREAD-ISOLATION-ROOT-OK
                   timeoutMs:
                     expr: liveTurnTimeoutMs(env, 45000)
               - set: threadId
                 value:
                   expr: rootInbound.id
-        - assert:
-            expr: Boolean(threadId)
-            message: missing thread id
-        - set: outboundStartIndex
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind:
+                ref: conversationKind
+            senderId:
+              ref: senderId
+            senderName: QA Driver
+            text:
+              expr: "`${transport.id === 'qa-channel' ? '' : '@openclaw '}Reply exactly: ${config.threadMarker}`"
+            threadId:
+              ref: threadId
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind:
+                ref: conversationKind
+            textIncludes:
+              ref: config.threadMarker
+            threadId:
+              ref: threadId
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+        - set: topLevelStartIndex
           value:
             expr: state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length
         - sendInbound:
@@ -99,9 +118,7 @@ flow:
               ref: senderId
             senderName: QA Driver
             text:
-              expr: "`${transport.id === 'qa-channel' ? '' : '@openclaw '}Reply exactly: ${config.replyMarker}`"
-            threadId:
-              ref: threadId
+              expr: "`${transport.id === 'qa-channel' ? '' : '@openclaw '}Reply exactly: ${config.topLevelMarker}`"
         - waitForOutbound:
             conversation:
               id:
@@ -109,16 +126,18 @@ flow:
               kind:
                 ref: conversationKind
             sinceIndex:
-              ref: outboundStartIndex
+              ref: topLevelStartIndex
             textIncludes:
-              ref: config.replyMarker
-            threadId:
-              ref: threadId
+              ref: config.topLevelMarker
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
-          saveAs: outbound
+          saveAs: topLevelOutbound
         - assert:
-            expr: "!state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.replyMarker) && candidate.threadId !== threadId)"
+            expr: "!topLevelOutbound.threadId"
             message:
-              expr: "`thread reply leaked outside ${threadId}; transcript=${formatTransportTranscript(state, { conversationId })}`"
-      detailsExpr: "`${outbound.threadId}: ${outbound.text}`"
+              expr: "`expected top-level reply without a thread id, got ${topLevelOutbound.threadId}`"
+        - assert:
+            expr: "!state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.topLevelMarker) && candidate.threadId)"
+            message:
+              expr: "`top-level reply leaked into prior thread; transcript=${formatTransportTranscript(state, { conversationId })}`"
+      detailsExpr: topLevelOutbound.text

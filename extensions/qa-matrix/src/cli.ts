@@ -59,7 +59,15 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
 export const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> =
   {
     id: "matrix",
-    scenarioIds: ["channel-chat-baseline"],
+    scenarioIds: [
+      "channel-chat-baseline",
+      "thread-follow-up",
+      "thread-isolation",
+      "thread-reply-override",
+      "subagent-thread-spawn",
+      "dm-shared-session",
+      "dm-per-room-session",
+    ],
     matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
     async create(context) {
       return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
