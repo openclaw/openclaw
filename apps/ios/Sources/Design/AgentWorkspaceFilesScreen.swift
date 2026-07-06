@@ -193,9 +193,10 @@ struct AgentWorkspaceDirectoryList: View {
                 path: self.path.isEmpty ? nil : self.path,
                 offset: offset == 0 ? nil : offset,
                 limit: nil)
+            let paramsJSON = try Self.encodeParams(params)
             let data = try await self.appModel.operatorSession.request(
                 method: "agents.workspace.list",
-                paramsJSON: Self.encodeParams(params),
+                paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
             return try JSONDecoder().decode(AgentsWorkspaceListResult.self, from: data)
         } catch {
@@ -330,9 +331,10 @@ struct AgentWorkspaceFilePreview: View {
         defer { self.loading = false }
         do {
             let params = AgentsWorkspaceGetParams(agentid: self.agentId, path: self.path)
+            let paramsJSON = try AgentWorkspaceDirectoryList.encodeParams(params)
             let data = try await self.appModel.operatorSession.request(
                 method: "agents.workspace.get",
-                paramsJSON: AgentWorkspaceDirectoryList.encodeParams(params),
+                paramsJSON: paramsJSON,
                 timeoutSeconds: 20)
             self.file = try JSONDecoder().decode(AgentsWorkspaceGetResult.self, from: data).file
         } catch {
