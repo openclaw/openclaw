@@ -854,7 +854,16 @@ describe("feishuOutbound.sendPayload native cards", () => {
         title: { tag: "plain_text", content: "Legacy JSON card" },
         template: "green",
       },
-      elements: [{ tag: "markdown", content: "Legacy body" }],
+      elements: [
+        {
+          tag: "div",
+          text: { tag: "lark_md", content: "**Legacy body**" },
+        },
+        {
+          tag: "plain_text",
+          content: "Literal *text*",
+        },
+      ],
     });
 
     const result = await feishuOutbound.sendPayload?.({
@@ -870,8 +879,88 @@ describe("feishuOutbound.sendPayload native cards", () => {
       title: { tag: "plain_text", content: "Legacy JSON card" },
       template: "green",
     });
-    expect(card.body.elements).toEqual([{ tag: "markdown", content: "Legacy body" }]);
+    expect(card.body.elements).toEqual([
+      { tag: "markdown", content: "**Legacy body**" },
+      { tag: "markdown", content: "Literal \\*text\\*" },
+    ]);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expectFeishuResult(result, "native_card_msg");
+  });
+
+  it("keeps unsupported legacy element shapes on the text fallback path", async () => {
+    const text = JSON.stringify({
+      elements: [
+        {
+          tag: "div",
+          text: { tag: "unsupported", content: "Not a supported legacy text element" },
+        },
+      ],
+    });
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toBe(text);
+    expectFeishuResult(result, "text_msg");
+  });
+
+  it("prefers structured presentation over raw card JSON payload text", async () => {
+    const text = JSON.stringify({
+      header: { title: { tag: "plain_text", content: "Raw card" } },
+      elements: [{ tag: "markdown", content: "Raw body" }],
+    });
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: {
+        text,
+        presentation: {
+          title: "Structured card",
+          blocks: [{ type: "text", text: "Structured body" }],
+        },
+      },
+    });
+
+    const card = sendCardCall()?.card;
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Structured card" },
+      template: "blue",
+    });
+    expect(card.body.elements).toEqual([{ tag: "markdown", content: "Structured body" }]);
+    expectFeishuResult(result, "native_card_msg");
+  });
+
+  it("prefers structured interactive input over raw card JSON payload text", async () => {
+    const text = JSON.stringify({
+      header: { title: { tag: "plain_text", content: "Raw card" } },
+      elements: [{ tag: "markdown", content: "Raw body" }],
+    });
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: {
+        text,
+        interactive: {
+          blocks: [{ type: "text", text: "Interactive body" }],
+        },
+      },
+    });
+
+    const card = sendCardCall()?.card;
+    expect(card.header).toBeUndefined();
+    expect(card.body.elements).toEqual([{ tag: "markdown", content: "Interactive body" }]);
     expectFeishuResult(result, "native_card_msg");
   });
 

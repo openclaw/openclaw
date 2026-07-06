@@ -128,23 +128,23 @@ function buildFeishuPayloadCard(params: {
   if (nativeCard) {
     return nativeCard;
   }
-  const textCard = readNativeFeishuCardJson(params.text ?? params.payload.text);
-  if (textCard) {
-    return markRenderedFeishuCard(textCard);
-  }
 
+  const rawText = params.text ?? params.payload.text;
+  const textCard = readNativeFeishuCardJson(rawText);
   const interactive = normalizeInteractiveReply(params.payload.interactive);
   const presentation =
     normalizeMessagePresentation(params.payload.presentation) ??
     (interactive ? interactiveReplyToPresentation(interactive) : undefined);
   if (!presentation && !interactive) {
-    return undefined;
+    return textCard ? markRenderedFeishuCard(textCard) : undefined;
   }
 
-  const text = resolveInteractiveTextFallback({
-    text: params.text ?? params.payload.text,
-    interactive,
-  });
+  const text = textCard
+    ? undefined
+    : resolveInteractiveTextFallback({
+        text: rawText,
+        interactive,
+      });
   const elements = presentation
     ? buildFeishuPresentationCardElements({ presentation, fallbackText: text })
     : [

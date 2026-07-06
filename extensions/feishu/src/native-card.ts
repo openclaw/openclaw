@@ -43,6 +43,10 @@ function escapeFeishuCardMarkdownText(text: string): string {
   });
 }
 
+function escapeFeishuCardPlainText(text: string): string {
+  return escapeFeishuCardMarkdownText(text).replace(/([\\`*_{}[\]()#+\-!|>~])/g, "\\$1");
+}
+
 function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
   const trimmed = typeof url === "string" ? url.trim() : "";
   if (!trimmed) {
@@ -120,13 +124,44 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
   if (element.tag === "hr") {
     return [{ tag: "hr" }];
   }
-  if (element.tag === "markdown" && typeof element.content === "string") {
+  if (
+    (element.tag === "markdown" || element.tag === "lark_md") &&
+    typeof element.content === "string"
+  ) {
     return [
       {
         tag: "markdown",
         content: escapeFeishuCardMarkdownText(element.content),
       },
     ];
+  }
+  if (element.tag === "plain_text" && typeof element.content === "string") {
+    return [
+      {
+        tag: "markdown",
+        content: escapeFeishuCardPlainText(element.content),
+      },
+    ];
+  }
+  if (element.tag === "div" && isRecord(element.text)) {
+    const text = element.text;
+    if (text.tag === "lark_md" && typeof text.content === "string") {
+      return [
+        {
+          tag: "markdown",
+          content: escapeFeishuCardMarkdownText(text.content),
+        },
+      ];
+    }
+    if (text.tag === "plain_text" && typeof text.content === "string") {
+      return [
+        {
+          tag: "markdown",
+          content: escapeFeishuCardPlainText(text.content),
+        },
+      ];
+    }
+    return [];
   }
   if (element.tag === "button") {
     const button = sanitizeNativeFeishuCardButton(element);
@@ -182,8 +217,18 @@ export function sanitizeNativeFeishuCard(
 
 export function readNativeFeishuCardJson(
   text: string | undefined,
+  options?: { responsePrefix?: string },
 ): Record<string, unknown> | undefined {
-  const trimmed = text?.trim();
+  let trimmed = text?.trim();
+  const responsePrefix = options?.responsePrefix;
+  if (trimmed && responsePrefix && trimmed.startsWith(responsePrefix)) {
+    const suffix = trimmed.slice(responsePrefix.length);
+    // The runner inserts one separator before the original message. Requiring it
+    // avoids treating arbitrary prose before a JSON object as a native card.
+    if (/^\s+\{/.test(suffix)) {
+      trimmed = suffix.trimStart();
+    }
+  }
   if (!trimmed?.startsWith("{") || !trimmed.endsWith("}")) {
     return undefined;
   }
