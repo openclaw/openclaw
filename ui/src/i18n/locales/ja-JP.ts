@@ -305,6 +305,12 @@ export const ja_JP: TranslationMap = {
     moveToGroup: "セッションをグループに移動",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "{group} のグループオプション",
+    renameGroupMenu: "グループ名を変更…",
+    renameGroupPrompt: "グループ名を変更",
+    deleteGroupMenu: "グループを削除…",
+    deleteGroupConfirm:
+      "グループ「{group}」を削除しますか？そのセッションは未グループに移動します。",
     dragSessionHint: "ドラッグしてグループ間を移動",
     dateToday: "今日",
     dateYesterday: "昨日",
@@ -1596,6 +1602,7 @@ export const ja_JP: TranslationMap = {
     sidebar: {
       allSessions: "すべてのセッション",
       openSessionMenu: "Open session menu",
+      sortBy: "並べ替え",
       sortCreated: "作成日時",
       sortSessions: "セッションを並べ替え",
       sortUpdated: "最終更新",

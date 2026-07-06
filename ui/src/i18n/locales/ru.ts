@@ -302,6 +302,12 @@ export const ru: TranslationMap = {
     moveToGroup: "Переместить сеанс в группу",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Параметры группы {group}",
+    renameGroupMenu: "Переименовать группу…",
+    renameGroupPrompt: "Переименовать группу",
+    deleteGroupMenu: "Удалить группу…",
+    deleteGroupConfirm:
+      "Удалить группу «{group}»? Ее сеансы будут перемещены в раздел «Без группы».",
     dragSessionHint: "Перетащите, чтобы переместить между группами",
     dateToday: "Сегодня",
     dateYesterday: "Вчера",
@@ -1602,6 +1608,7 @@ export const ru: TranslationMap = {
     sidebar: {
       allSessions: "Все сеансы",
       openSessionMenu: "Open session menu",
+      sortBy: "Сортировать по",
       sortCreated: "Создано",
       sortSessions: "Сортировать сеансы",
       sortUpdated: "Последнее обновление",

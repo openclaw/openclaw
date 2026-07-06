@@ -302,6 +302,12 @@ export const nl: TranslationMap = {
     moveToGroup: "Sessie naar een groep verplaatsen",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Groepsopties voor {group}",
+    renameGroupMenu: "Groep hernoemen…",
+    renameGroupPrompt: "Groep hernoemen",
+    deleteGroupMenu: "Groep verwijderen…",
+    deleteGroupConfirm:
+      'Groep "{group}" verwijderen? De sessies worden verplaatst naar Niet gegroepeerd.',
     dragSessionHint: "Sleep om tussen groepen te verplaatsen",
     dateToday: "Vandaag",
     dateYesterday: "Gisteren",
@@ -1595,6 +1601,7 @@ export const nl: TranslationMap = {
     sidebar: {
       allSessions: "Alle sessies",
       openSessionMenu: "Open session menu",
+      sortBy: "Sorteren op",
       sortCreated: "Aangemaakt",
       sortSessions: "Sessies sorteren",
       sortUpdated: "Laatst bijgewerkt",

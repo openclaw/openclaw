@@ -32,10 +32,16 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
+  dissolveSessionGroup,
   loadStoredSessionCustomGroups,
+  renameSessionGroup,
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
-import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
+import {
+  groupSidebarSessionRows,
+  normalizeSidebarSessionsGrouping,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   resolveSessionNavigation,
@@ -53,6 +59,7 @@ import {
   resolveSessionAgentFilterOptions,
 } from "../lib/sessions/session-options.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
 
@@ -76,7 +83,21 @@ type SidebarSessionMenuState = {
   submenuLeft: boolean;
 };
 
+type SidebarSessionGroupMenuState = {
+  group: string;
+  x: number;
+  y: number;
+};
+
 type SidebarSessionSortMode = "created" | "updated";
+
+const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+
+function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
+  return normalizeSidebarSessionsGrouping(
+    getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
+  );
+}
 
 const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
@@ -127,7 +148,9 @@ export class AppSidebar extends LitElement {
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   @state() private sessionGroupSubmenuOpen = false;
+  @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
+  @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
@@ -140,6 +163,7 @@ export class AppSidebar extends LitElement {
   private stopGatewaySubscription: (() => void) | undefined;
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
+  private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
@@ -158,6 +182,7 @@ export class AppSidebar extends LitElement {
   override disconnectedCallback() {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
@@ -443,6 +468,7 @@ export class AppSidebar extends LitElement {
     const menuWidth = 240;
     const menuMaxHeight = 420;
     this.closeSessionMenu();
+    this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.customizeMenuTrigger = trigger;
     this.customizeMenuPosition = {
@@ -476,6 +502,7 @@ export class AppSidebar extends LitElement {
     const menuWidth = 240;
     const menuMaxHeight = 460;
     this.closeCustomizeMenu();
+    this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionGroupSubmenuOpen = false;
@@ -505,11 +532,44 @@ export class AppSidebar extends LitElement {
     }
   }
 
-  private openSessionSortMenu(x: number, y: number, trigger: HTMLElement | null = null) {
-    const menuWidth = 180;
-    const menuMaxHeight = 180;
+  private openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
+    const menuWidth = 224;
+    const menuMaxHeight = 160;
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
+    this.sessionGroupMenuTrigger = trigger;
+    this.sessionGroupMenu = {
+      group,
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(
+        ".sidebar-session-group-menu .sidebar-session-menu__item",
+      )?.focus();
+    });
+  }
+
+  private closeSessionGroupMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.sessionGroupMenuTrigger;
+    this.sessionGroupMenuTrigger = null;
+    this.sessionGroupMenu = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private openSessionSortMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+    const menuWidth = 200;
+    const menuMaxHeight = 280;
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
     this.sessionSortMenuTrigger = trigger;
     this.sessionSortMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -557,13 +617,50 @@ export class AppSidebar extends LitElement {
     void this.patchSession(session, { label: normalizeOptionalString(nextLabel) ?? null });
   }
 
-  private createSessionGroup(session: SidebarRecentSession) {
+  private createSessionGroup(session?: SidebarRecentSession) {
     const name = window.prompt(t("sessionsView.newGroupPrompt"))?.trim();
     if (!name) {
       return;
     }
     this.rememberSessionGroup(name);
-    void this.patchSession(session, { category: name });
+    if (session) {
+      void this.patchSession(session, { category: name });
+    } else {
+      // Header-created groups start empty; re-render so the section shows up.
+      this.requestUpdate();
+    }
+  }
+
+  private renameSessionGroupFromMenu(group: string) {
+    const context = this.context;
+    if (!context || !this.connected) {
+      return;
+    }
+    const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
+    if (!next || next === group) {
+      return;
+    }
+    void renameSessionGroup(context.sessions, group, next).finally(() => this.requestUpdate());
+  }
+
+  private deleteSessionGroupFromMenu(group: string) {
+    const context = this.context;
+    if (!context || !this.connected) {
+      return;
+    }
+    if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
+      return;
+    }
+    void dissolveSessionGroup(context.sessions, group).finally(() => this.requestUpdate());
+  }
+
+  private setSessionsGrouping(grouping: SidebarSessionsGrouping) {
+    this.sessionsGrouping = grouping;
+    try {
+      getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
+    } catch {
+      // ignore storage failures
+    }
   }
 
   private async forkSession(session: SidebarRecentSession) {
@@ -625,6 +722,7 @@ export class AppSidebar extends LitElement {
     }
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
   };
 
@@ -633,6 +731,7 @@ export class AppSidebar extends LitElement {
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
       this.closeSessionMenu({ restoreFocus: true });
+      this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
     }
   };
@@ -899,11 +998,70 @@ export class AppSidebar extends LitElement {
     `;
   }
 
+  private renderSessionGroupMenu() {
+    const menu = this.sessionGroupMenu;
+    if (!menu) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="sidebar-session-menu sidebar-session-group-menu"
+        role="menu"
+        aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
+        style="left: ${menu.x}px; top: ${menu.y}px;"
+      >
+        <button
+          type="button"
+          class="sidebar-session-menu__item"
+          role="menuitem"
+          ?disabled=${!this.connected}
+          @click=${() => {
+            this.closeSessionGroupMenu();
+            this.renameSessionGroupFromMenu(menu.group);
+          }}
+        >
+          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.edit}</span>
+          <span class="sidebar-session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
+        </button>
+        <button
+          type="button"
+          class="sidebar-session-menu__item"
+          role="menuitem"
+          @click=${() => {
+            this.closeSessionGroupMenu();
+            this.createSessionGroup();
+          }}
+        >
+          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.folder}</span>
+          <span class="sidebar-session-menu__text">${t("sessionsView.newGroup")}</span>
+        </button>
+        <div class="sidebar-session-menu__separator" role="separator"></div>
+        <button
+          type="button"
+          class="sidebar-session-menu__item sidebar-session-menu__item--destructive"
+          role="menuitem"
+          ?disabled=${!this.connected}
+          @click=${() => {
+            this.closeSessionGroupMenu();
+            this.deleteSessionGroupFromMenu(menu.group);
+          }}
+        >
+          <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.trash}</span>
+          <span class="sidebar-session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
+        </button>
+      </div>
+    `;
+  }
+
   private renderSessionSortMenu() {
     const position = this.sessionSortMenuPosition;
     if (!position) {
       return nothing;
     }
+    const groupingOptions = [
+      { grouping: "category", label: t("sessionsView.groupByCategory") },
+      { grouping: "none", label: t("sessionsView.groupByNone") },
+    ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
     return html`
       <div
         class="sidebar-session-sort-menu"
@@ -911,6 +1069,28 @@ export class AppSidebar extends LitElement {
         aria-label=${t("chat.sidebar.sortSessions")}
         style="left: ${position.x}px; top: ${position.y}px;"
       >
+        <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+        ${groupingOptions.map(
+          (option) => html`
+            <button
+              type="button"
+              class="sidebar-session-sort-menu__item"
+              role="menuitemradio"
+              aria-checked=${String(this.sessionsGrouping === option.grouping)}
+              @click=${() => {
+                this.setSessionsGrouping(option.grouping);
+                this.closeSessionSortMenu({ restoreFocus: true });
+              }}
+            >
+              <span class="sidebar-session-menu__check" aria-hidden="true">
+                ${this.sessionsGrouping === option.grouping ? icons.check : nothing}
+              </span>
+              <span class="sidebar-session-menu__text">${option.label}</span>
+            </button>
+          `,
+        )}
+        <div class="sidebar-session-menu__separator" role="separator"></div>
+        <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
         ${SIDEBAR_SESSION_SORT_OPTIONS.map(
           (option) => html`
             <button
@@ -1162,7 +1342,12 @@ export class AppSidebar extends LitElement {
       : newSessionButton;
     // Stable navigation ordering carries through each pinned/category bucket;
     // selecting a visible row only moves the active highlight.
-    const sections = groupSidebarSessionRows(recentSessions);
+    const sections = groupSidebarSessionRows(recentSessions, {
+      grouping: this.sessionsGrouping,
+      // Stored-but-empty groups stay visible as sections so a freshly created
+      // group is usable as a move target before its first session arrives.
+      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+    });
     const hasCategorySections = sections.some((section) => section.category !== undefined);
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
@@ -1177,14 +1362,53 @@ export class AppSidebar extends LitElement {
               <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
                 ${sections.map((section) => {
                   if (section.id === "pinned" || section.category !== undefined) {
+                    const group = section.category;
                     return html`
                       <div class="sidebar-recent-sessions__group">
-                        <div class="sidebar-recent-sessions__head">
+                        <div
+                          class="sidebar-recent-sessions__head"
+                          @contextmenu=${group
+                            ? (event: MouseEvent) => {
+                                event.preventDefault();
+                                this.openSessionGroupMenu(
+                                  group,
+                                  event.clientX,
+                                  event.clientY,
+                                  null,
+                                );
+                              }
+                            : nothing}
+                        >
                           <span class="sidebar-recent-sessions__label-text"
                             >${section.id === "pinned"
                               ? t("sessionsView.pinned")
                               : section.category}</span
                           >
+                          ${group
+                            ? html`
+                                <button
+                                  type="button"
+                                  class="sidebar-session-group-actions"
+                                  title=${t("sessionsView.groupMenu", { group })}
+                                  aria-label=${t("sessionsView.groupMenu", { group })}
+                                  aria-haspopup="menu"
+                                  aria-expanded=${String(this.sessionGroupMenu?.group === group)}
+                                  @click=${(event: MouseEvent) => {
+                                    event.stopPropagation();
+                                    const trigger = event.currentTarget as HTMLElement;
+                                    const rect = trigger.getBoundingClientRect();
+                                    this.openSessionGroupMenu(
+                                      group,
+                                      rect.right,
+                                      rect.bottom + 4,
+                                      trigger,
+                                    );
+                                  }}
+                                >
+                                  ${icons.moreHorizontal}
+                                </button>
+                              `
+                            : nothing}
                         </div>
                         <div class="sidebar-recent-sessions__list">
                           ${section.rows.map((session) => this.renderRecentSession(session))}
@@ -1444,7 +1668,8 @@ export class AppSidebar extends LitElement {
             </div>
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionSortMenu()}
+        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()}
+        ${this.renderSessionSortMenu()}
       </aside>
     `;
   }
