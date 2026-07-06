@@ -231,6 +231,44 @@ describe("Mistral provider", () => {
     });
   });
 
+  it("forwards reasoning options even when the model manifest disables reasoning", async () => {
+    const stream = streamSimpleMistral(makeMistralModel(), context, {
+      apiKey: "sk-mistral-provider",
+      reasoning: "low",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const payload = mistralMockState.payloads[0] as {
+      promptMode?: string;
+      reasoningEffort?: string;
+    };
+    expect(payload.promptMode).toBe("reasoning");
+    expect(payload.reasoningEffort).toBeUndefined();
+  });
+
+  it("forwards reasoningEffort for models that use effort-based reasoning", async () => {
+    const stream = streamSimpleMistral(
+      { ...makeMistralModel(), id: "mistral-small-latest" },
+      context,
+      {
+        apiKey: "sk-mistral-provider",
+        reasoning: "low",
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const payload = mistralMockState.payloads[0] as {
+      promptMode?: string;
+      reasoningEffort?: string;
+    };
+    expect(payload.promptMode).toBeUndefined();
+    expect(payload.reasoningEffort).toBeDefined();
+  });
+
   it("strips the internal cache boundary marker from the system message", async () => {
     const stream = streamSimpleMistral(
       makeMistralModel(),

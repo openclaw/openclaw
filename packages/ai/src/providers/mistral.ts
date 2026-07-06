@@ -195,11 +195,15 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
   }
 
   const base = buildBaseOptions(model, options, apiKey);
-  const clampedReasoning = options?.reasoning
-    ? clampThinkingLevel(model, options.reasoning)
+  const requestedReasoning = options?.reasoning;
+  const clampedReasoning = requestedReasoning
+    ? clampThinkingLevel(model, requestedReasoning)
     : undefined;
-  const reasoning = clampedReasoning === "off" ? undefined : clampedReasoning;
-  const shouldUseReasoning = model.reasoning && reasoning !== undefined;
+  // Honor explicitly-requested reasoning options even when the static model
+  // manifest does not declare reasoning support. Manifests can lag behind
+  // newly-released model capabilities, and the user request should win.
+  const reasoning = clampedReasoning === "off" ? requestedReasoning : clampedReasoning;
+  const shouldUseReasoning = reasoning !== undefined;
 
   return streamMistral(model, context, {
     ...base,
@@ -765,7 +769,7 @@ function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {
 }
 
 function usesPromptModeReasoning(model: Model<"mistral-conversations">): boolean {
-  return model.reasoning && !usesReasoningEffort(model);
+  return !usesReasoningEffort(model);
 }
 
 function mapReasoningEffort(
