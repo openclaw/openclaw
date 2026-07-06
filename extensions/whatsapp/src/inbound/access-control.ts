@@ -141,6 +141,7 @@ export async function checkInboundAccessControl(params: {
       } else {
         await createChannelPairingChallengeIssuer({
           channel: "whatsapp",
+          accountId: policy.account.accountId,
           upsertPairingRequest: async ({ id, meta }) =>
             await upsertChannelPairingRequest({
               channel: "whatsapp",

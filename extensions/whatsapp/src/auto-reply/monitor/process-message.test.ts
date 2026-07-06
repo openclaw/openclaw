@@ -173,7 +173,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-function makeBaseMsg(overrides: { body?: string } = {}) {
+function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
   const body = overrides.body ?? "hi";
   return createTestWebInboundMessage({
     event: {
@@ -182,6 +182,7 @@ function makeBaseMsg(overrides: { body?: string } = {}) {
     },
     payload: {
       body,
+      commandBody: overrides.commandBody,
     },
     platform: {
       chatJid: GROUP_JID,
@@ -325,6 +326,27 @@ describe("processMessage group system prompt wiring", () => {
         body: "/status",
       },
       rawBody: "/status",
+    });
+  });
+
+  it("keeps generated media notices out of command input", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReturnValue(true);
+    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+
+    await callProcessMessage({
+      msg: makeBaseMsg({
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      }),
+    });
+
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
+    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+      bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+      commandBody: "/reset",
+      rawBody: "/reset",
     });
   });
 

@@ -5,6 +5,7 @@
  */
 import type { ImageContent } from "../../llm/types.js";
 import {
+  convertImageToPng,
   createImageProcessor,
   isImageProcessorUnavailableError,
   type ImageProbe,
@@ -25,6 +26,74 @@ interface ResizedImage {
   width: number;
   height: number;
   wasResized: boolean;
+}
+
+export type ProcessImageResult =
+  | { ok: true; image: ImageContent; hints: string[] }
+  | { ok: false; message: string };
+
+const INLINE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+function baseMimeType(mimeType: string | undefined): string {
+  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase();
+  return normalized === "image/jpg" ? "image/jpeg" : (normalized ?? "");
+}
+
+async function normalizeImageForProvider(
+  image: ImageContent,
+): Promise<{ image: ImageContent; convertedFrom?: string } | null> {
+  const mimeType = baseMimeType(image.mimeType);
+  if (INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
+    return { image: { ...image, mimeType } };
+  }
+  try {
+    const output = await convertImageToPng(Buffer.from(image.data, "base64"));
+    return {
+      image: { type: "image", data: output.toString("base64"), mimeType: "image/png" },
+      convertedFrom: mimeType || image.mimeType,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Normalize image formats for model input, then enforce inline size limits when enabled. */
+export async function processImage(
+  image: ImageContent,
+  options: { autoResizeImages: boolean },
+): Promise<ProcessImageResult> {
+  const normalized = await normalizeImageForProvider(image);
+  if (!normalized) {
+    return {
+      ok: false,
+      message: "[Image omitted: could not be converted to a supported inline image format.]",
+    };
+  }
+
+  const hints: string[] = [];
+  if (normalized.convertedFrom) {
+    hints.push(`[Image converted from ${normalized.convertedFrom} to image/png.]`);
+  }
+  if (!options.autoResizeImages) {
+    return { ok: true, image: normalized.image, hints };
+  }
+
+  const resized = await resizeImage(normalized.image);
+  if (!resized) {
+    return {
+      ok: false,
+      message: "[Image omitted: could not be resized below the inline image size limit.]",
+    };
+  }
+  const dimensionNote = formatDimensionNote(resized);
+  if (dimensionNote) {
+    hints.push(dimensionNote);
+  }
+  return {
+    ok: true,
+    image: { type: "image", data: resized.data, mimeType: resized.mimeType },
+    hints,
+  };
 }
 
 // 4.5MB of base64 payload. Provides headroom below Anthropic's 5MB limit.

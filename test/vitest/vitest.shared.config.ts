@@ -242,6 +242,38 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: /^@openclaw\/ai\/internal\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai/diagnostics",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "utils", "diagnostics.ts"),
+      },
+      {
+        find: "@openclaw/ai/event-stream",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "utils", "event-stream.ts"),
+      },
+      {
+        find: "@openclaw/ai/providers",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "providers.ts"),
+      },
+      {
+        find: "@openclaw/ai/types",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "types.ts"),
+      },
+      {
+        find: "@openclaw/ai/validation",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "validation.ts"),
+      },
+      {
+        find: /^@openclaw\/ai\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "index.ts"),
+      },
+      {
         find: "@openclaw/llm-core/diagnostics",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "diagnostics.ts"),
       },
@@ -344,12 +376,36 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/net-policy/url-protocol",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-protocol.ts"),
+      },
+      {
         find: "@openclaw/net-policy/url-userinfo",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
       },
       {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/boolean-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "boolean-coercion.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/error-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "error-coercion.ts",
+        ),
       },
       {
         find: "@openclaw/normalization-core/number-coercion",
@@ -392,9 +448,15 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "@openclaw/normalization-core",
+        find: "@openclaw/normalization-core/utf16-slice",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "utf16-slice.ts"),
+      },
+      {
+        find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
+      sourcePackageAlias("markdown-core", "code-spans"),
+      sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),
@@ -404,7 +466,6 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "media-source-url"),
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
-      sourcePackageAlias("media-core", "read-response-with-limit"),
       sourcePackageAlias("media-core"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
@@ -444,6 +505,7 @@ export const sharedVitestConfig = {
       "package.json",
       "pnpm-lock.yaml",
       "test/setup.ts",
+      "test/setup.env.ts",
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
@@ -548,23 +610,7 @@ export const sharedVitestConfig = {
       BUNDLED_PLUGIN_TEST_GLOB,
       "packages/**/*.test.ts",
       "test/**/*.test.ts",
-      "ui/src/ui/app-chat.test.ts",
-      "ui/src/ui/chat/**/*.test.ts",
-      "ui/src/ui/views/agents-utils.test.ts",
-      "ui/src/ui/views/channels.test.ts",
-      "ui/src/ui/views/chat.test.ts",
-      "ui/src/ui/views/nodes.devices.test.ts",
-      "ui/src/ui/views/skills.test.ts",
-      "ui/src/ui/views/dreaming.test.ts",
-      "ui/src/ui/views/usage-render-details.test.ts",
-      "ui/src/ui/controllers/agents.test.ts",
-      "ui/src/ui/controllers/chat.test.ts",
-      "ui/src/ui/controllers/skills.test.ts",
-      "ui/src/ui/controllers/sessions.test.ts",
-      "ui/src/ui/views/sessions.test.ts",
-      "ui/src/ui/app-tool-stream.node.test.ts",
-      "ui/src/ui/app-gateway.sessions.node.test.ts",
-      "ui/src/ui/chat/slash-command-executor.node.test.ts",
+      "ui/src/pages/chat/tool-stream.node.test.ts",
     ],
     setupFiles: [resolveRepoRootPath("test/setup.ts")],
     exclude: [

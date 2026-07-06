@@ -372,10 +372,26 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const connectivityTimeoutMs = Math.min(timeoutMs, 2_000);
   if (typeof remoteRegistry.checkConnectivity === "function") {
     const preflightConnId = remoteRegistry.get(params.nodeId)?.connId;
-    const connectivity = await remoteRegistry.checkConnectivity(
-      params.nodeId,
-      connectivityTimeoutMs,
-    );
+    let connectivity: Awaited<ReturnType<typeof remoteRegistry.checkConnectivity>>;
+    try {
+      connectivity = await remoteRegistry.checkConnectivity(params.nodeId, connectivityTimeoutMs);
+    } catch (err) {
+      const cleared = clearRemoteNodeBins(params.nodeId);
+      logRemoteBinProbeFailure(
+        params.nodeId,
+        err,
+        {
+          command: "websocket.ping",
+          timeoutMs: connectivityTimeoutMs,
+          requiredBinCount: binsList.length,
+        },
+        "preflight",
+      );
+      if (cleared) {
+        bumpSkillsSnapshotVersion({ reason: "remote-node" });
+      }
+      return;
+    }
     if (!connectivity.ok) {
       const latestSession = remoteRegistry.get(params.nodeId);
       if (preflightConnId && latestSession && latestSession.connId !== preflightConnId) {
@@ -490,12 +506,17 @@ export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
   }
   const connected = remoteRegistry.listConnected();
   for (const node of connected) {
-    await refreshRemoteNodeBins({
-      nodeId: node.nodeId,
-      platform: node.platform,
-      deviceFamily: node.deviceFamily,
-      commands: node.commands,
-      cfg,
-    });
+    try {
+      await refreshRemoteNodeBins({
+        nodeId: node.nodeId,
+        platform: node.platform,
+        deviceFamily: node.deviceFamily,
+        commands: node.commands,
+        cfg,
+      });
+    } catch (err) {
+      // A failed node must not abort refreshes for the remaining connected nodes.
+      log.warn(`failed to refresh remote bins for ${describeNode(node.nodeId)}: ${String(err)}`);
+    }
   }
 }

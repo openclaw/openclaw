@@ -10,6 +10,7 @@ import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { AgentWaitTerminalSnapshot } from "./agent-wait-dedupe.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
+const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 /**
  * Embedded runs can emit transient lifecycle `error` events while auth/model
  * failover is still in progress. Give errors a short grace window so a
@@ -26,7 +27,7 @@ const AGENT_RUN_TIMEOUT_RETRY_GRACE_MS = 15_000;
 
 const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
-const pendingAgentRunErrors = new Map<string, PendingAgentRunError>();
+const pendingAgentRunErrors = new Map<string, PendingAgentRunTerminal>();
 const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
 const agentRunWaiterCounts = new Map<string, number>();
 let agentRunListenerStarted = false;
@@ -41,8 +42,6 @@ type PendingAgentRunTerminal = {
   dueAt: number;
   timer: NodeJS.Timeout;
 };
-
-type PendingAgentRunError = PendingAgentRunTerminal;
 
 function pruneAgentRunCache(now = Date.now()) {
   for (const [runId, entry] of agentRunCache) {
@@ -63,6 +62,28 @@ function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
     return;
   }
   agentRunCache.set(entry.runId, entry);
+  // Time-based prune only fires on the TTL window; under high run fan-out a
+  // burst can add far more entries than the window reclaims. Cap with a FIFO
+  // drop so the cache cannot grow without bound between prunes.
+  enforceAgentRunCacheMaxEntries();
+}
+
+function enforceAgentRunCacheMaxEntries() {
+  if (agentRunCache.size <= AGENT_RUN_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  const toRemove = agentRunCache.size - AGENT_RUN_CACHE_MAX_ENTRIES;
+  let removed = 0;
+  for (const runId of agentRunCache.keys()) {
+    if (removed >= toRemove) {
+      break;
+    }
+    if ((agentRunWaiterCounts.get(runId) ?? 0) > 0) {
+      continue;
+    }
+    agentRunCache.delete(runId);
+    removed += 1;
+  }
 }
 
 function shouldPreserveTerminalSnapshot(
@@ -494,5 +515,12 @@ export const testing = {
   resetWaiters(): void {
     agentRunWaiterCounts.clear();
   },
+  getAgentRunCacheSize(): number {
+    return agentRunCache.size;
+  },
+  resetAgentRunCache(): void {
+    agentRunCache.clear();
+  },
+  agentRunCacheMaxEntries: AGENT_RUN_CACHE_MAX_ENTRIES,
 };
 export { testing as __testing };

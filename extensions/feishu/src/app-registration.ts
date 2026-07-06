@@ -1,5 +1,6 @@
 // Feishu plugin module implements app registration behavior.
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 /**
  * Feishu app registration via OAuth device-code flow.
  *
@@ -338,12 +339,6 @@ export async function getAppOwnerOpenId(params: {
   } catch {
     return undefined;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function sleepRegistrationPollInterval(intervalSeconds: number): Promise<void> {

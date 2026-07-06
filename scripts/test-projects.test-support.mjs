@@ -42,9 +42,9 @@ import {
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
-import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastTestFiles,
+  getUnitFastTimerTestFiles,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -158,7 +158,6 @@ const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-t
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
-const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 
 const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_VITEST_CONFIG, 180],
@@ -212,7 +211,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [COMMANDS_LIGHT_VITEST_CONFIG, 48],
   [PLUGIN_SDK_VITEST_CONFIG, 46],
   [AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG, 45],
-  [UNIT_UI_VITEST_CONFIG, 40],
   [PLUGIN_SDK_LIGHT_VITEST_CONFIG, 38],
   [DAEMON_VITEST_CONFIG, 36],
   [BOUNDARY_VITEST_CONFIG, 34],
@@ -292,6 +290,8 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
+const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
@@ -378,7 +378,6 @@ const VITEST_CONFIG_BY_KIND = {
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
   unitSupport: UNIT_SUPPORT_VITEST_CONFIG,
-  unitUi: UNIT_UI_VITEST_CONFIG,
   runtimeConfig: RUNTIME_CONFIG_VITEST_CONFIG,
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
@@ -1169,10 +1168,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
-  [
-    "scripts/lib/ios-version.ts",
-    ["test/scripts/ios-version.test.ts", "test/scripts/ios-pin-version.test.ts"],
-  ],
+  ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
   ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
@@ -1235,6 +1231,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/package-mac-app.test.ts",
       "test/scripts/package-mac-dist.test.ts",
     ],
+  ],
+  [
+    "scripts/lib/swift-toolchain.sh",
+    ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
   ],
   [
     "scripts/lib/plugin-npm-runtime-build.mjs",
@@ -2078,7 +2078,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
-  ["ui/config/control-ui-chunking.ts", ["ui/src/ui/control-ui-chunking.test.ts"]],
+  ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -2354,6 +2354,21 @@ function listBroadToolingScriptTestTargets(pattern, cwd) {
   return listBroadScriptTestTargets(pattern, cwd).filter(
     (file) => classifyTarget(file, cwd) === "tooling",
   );
+}
+
+function listToolingFullSuiteTestTargets(cwd) {
+  return uniqueOrdered(
+    [path.join(cwd, "test"), path.join(cwd, "src", "scripts")].flatMap((root) =>
+      fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
+    ),
+  )
+    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function listUnitFastFullSuiteTestTargets() {
+  const timerTargets = new Set(getUnitFastTimerTestFiles());
+  return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
 }
 
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
@@ -3023,8 +3038,8 @@ function isVitestConfigTargetForKind(kind, targetArg, cwd) {
 function isControlUiE2eTarget(relative) {
   return (
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
-    relative === "ui/src/ui/e2e" ||
-    relative.startsWith("ui/src/ui/e2e/") ||
+    relative === "ui/src/e2e" ||
+    relative.startsWith("ui/src/e2e/") ||
     (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
   );
 }
@@ -3189,7 +3204,7 @@ function resolveDocsI18nBehaviorTargets(changedPath) {
   if (!/^scripts\/docs-i18n\/testdata\/behavior\/[^/]+\/[^/]+$/u.test(changedPath)) {
     return null;
   }
-  return ["test/scripts/docs-i18n-behavior.test.ts"];
+  return ["test/scripts/docs-i18n.test.ts"];
 }
 
 function resolveDocsI18nGoTargets(changedPath) {
@@ -3305,10 +3320,7 @@ function shouldCombineSiblingTestWithImportGraph(changedPath) {
 }
 
 function shouldRouteChangedTargetWithoutImportGraph(changedPath) {
-  return (
-    changedPath.endsWith(".live.test.ts") ||
-    (changedPath.startsWith("ui/src/") && !changedPath.startsWith("ui/src/ui/"))
-  );
+  return changedPath.endsWith(".live.test.ts") || changedPath.startsWith("ui/src/");
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath) {
@@ -3462,9 +3474,6 @@ function classifyTarget(arg, cwd) {
     return "uiE2e";
   }
   if (isPathAtOrUnder(relative, "ui/src")) {
-    if (isUnitUiTestTarget(relative)) {
-      return "unitUi";
-    }
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-")) {
@@ -3703,7 +3712,7 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   if (isTestFileTarget(relative)) {
     return false;
   }
-  return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
+  return relative.startsWith("ui/src/");
 }
 
 function createVitestArgs(params) {
@@ -3902,7 +3911,6 @@ export function buildVitestRunPlans(
     "unitSrc",
     "unitSecurity",
     "unitSupport",
-    "unitUi",
     "utils",
     "wizard",
     "e2e",
@@ -4028,11 +4036,26 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
-      if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
-        const chunks = splitTargetChunks(
-          resolveGatewayServerFullSuiteTargets(cwd),
-          GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
-        );
+      if (expandShard && targetArgs.length === 0) {
+        let chunks = [];
+        if (config === UNIT_FAST_VITEST_CONFIG) {
+          const targets = listUnitFastFullSuiteTestTargets();
+          const chunkCount = Math.ceil(
+            targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,
+          );
+          chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === TOOLING_VITEST_CONFIG) {
+          // Tooling tests spawn package managers and native helpers. Keep native
+          // process lifetime short enough that unrelated files cannot crash together.
+          const targets = listToolingFullSuiteTestTargets(cwd);
+          const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
+          chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
+          chunks = splitTargetChunks(
+            resolveGatewayServerFullSuiteTargets(cwd),
+            GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+          );
+        }
         if (chunks.length > 0) {
           return chunks.map((targets) => ({
             config,

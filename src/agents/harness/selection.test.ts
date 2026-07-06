@@ -12,6 +12,8 @@ import type {
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
+  agentHarnessBuildsOpenClawTools,
+  agentHarnessExposesOpenClawTools,
   resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
@@ -34,6 +36,17 @@ const compactAuthMocks = vi.hoisted(() => ({
 const providerOwnerMocks = vi.hoisted(() => ({
   resolveProviderRefOwnership: vi.fn(),
 }));
+
+it("identifies harnesses that expose OpenClaw tools", () => {
+  expect(agentHarnessBuildsOpenClawTools("openclaw")).toBe(false);
+  expect(agentHarnessBuildsOpenClawTools("codex")).toBe(true);
+  expect(agentHarnessBuildsOpenClawTools("copilot")).toBe(true);
+  expect(agentHarnessBuildsOpenClawTools("custom")).toBe(false);
+  expect(agentHarnessExposesOpenClawTools("openclaw")).toBe(true);
+  expect(agentHarnessExposesOpenClawTools("codex")).toBe(true);
+  expect(agentHarnessExposesOpenClawTools("copilot")).toBe(true);
+  expect(agentHarnessExposesOpenClawTools("custom")).toBe(false);
+});
 
 vi.mock("./builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: (): AgentHarness => ({

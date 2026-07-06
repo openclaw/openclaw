@@ -552,7 +552,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
+  it("omits device identity for explicit CLI loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -564,6 +564,19 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps CLI device identity when an ambient token is inactive under auth mode none", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+    });
+    setGatewayNetworkDefaults();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "inactive-env-token";
+
+    await callGatewayCli({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("inactive-env-token");
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
@@ -1793,6 +1806,82 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
   });
 
+  it("keeps the startup deadline when the request timeout is disabled", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let err: unknown;
+
+    const promise = callGateway({ method: "health", timeoutMs: null }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({ kind: "timeout", timeoutMs: 10_000 });
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("disables the request and wrapper deadline when timeout is null", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let releaseRequest: (() => void) | undefined;
+
+    testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            await new Promise<void>((resolve) => {
+              releaseRequest = resolve;
+            });
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {},
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    let settled = false;
+    const promise = callGateway({ method: "health", timeoutMs: null }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
+    if (!releaseRequest) {
+      throw new Error("Expected request release callback to be initialized");
+    }
+    releaseRequest();
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
   it("forwards caller abort signal and accepted callback to client requests", async () => {
     setLocalLoopbackGatewayConfig();
     const controller = new AbortController();
@@ -2157,7 +2246,7 @@ describe("callGateway url override auth requirements", () => {
 
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
-    ).rejects.toThrow("explicit credentials");
+    ).rejects.toThrow(/remove --url to use the configured target/i);
   });
 
   it("throws when env URL override is set without env credentials", async () => {
@@ -2169,7 +2258,9 @@ describe("callGateway url override auth requirements", () => {
       },
     });
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      /OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD/i,
+    );
   });
 });
 

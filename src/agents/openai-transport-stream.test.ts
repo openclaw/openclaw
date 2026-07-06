@@ -1,6 +1,8 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import OpenAI from "openai";
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -25,7 +27,6 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
@@ -142,16 +143,57 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 
 describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
-    const model = createAzureResponsesModel();
-    await expect(
-      testing.processResponsesStream(
+    vi.useFakeTimers();
+    try {
+      const model = createAzureResponsesModel();
+      const abortFirstEventStream = vi.fn();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = testing.processResponsesStream(
         neverYieldsStream(),
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
         model,
-        { firstEventTimeoutMs: 1 },
-      ),
-    ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
+        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /did not deliver a first SSE event within 5ms after streaming headers/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = createDeepSeekCompletionsModel();
+      const abortFirstEventStream = vi.fn();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = testing.processOpenAICompletionsStream(
+        neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
+        createAssistantOutput(model),
+        model,
+        { push: vi.fn() },
+        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /did not deliver a first SSE event within 5ms after streaming headers/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {

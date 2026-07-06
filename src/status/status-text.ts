@@ -1,4 +1,3 @@
-// Status text helpers render runtime status summaries for CLI output.
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -40,6 +39,7 @@ import {
 } from "../infra/provider-usage.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
+import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -49,6 +49,8 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+// Status text helpers render runtime status summaries for CLI output.
+import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
   shouldUseCodexSyntheticUsageForRuntime,
@@ -67,7 +69,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
 ]);
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
-function resolveStatusChannelFeatureLine(params: {
+export function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
   statusChannel: string;
   statusAccountId?: string;
@@ -98,52 +100,23 @@ function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
-let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
-  null;
-let agentHarnessSelectionRuntimePromise: Promise<
-  typeof import("../agents/harness/selection.js")
-> | null = null;
-let statusQueueRuntimePromise: Promise<typeof import("./status-queue.runtime.js")> | null = null;
-let statusSubagentsRuntimePromise: Promise<typeof import("./status-subagents.runtime.js")> | null =
-  null;
-let statusPluginHealthRuntimePromise: Promise<
-  typeof import("./status-plugin-health.runtime.js")
-> | null = null;
+const loadStatusMessageRuntime = createLazyPromise(
+  () =>
+    import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
+  { cacheRejections: true },
+);
+const loadAgentHarnessSelectionRuntime = createLazyRuntimeModule(
+  () => import("../agents/harness/selection.js"),
+);
+const loadStatusSubagentsRuntime = createLazyRuntimeModule(
+  () => import("./status-subagents.runtime.js"),
+);
 
-function loadStatusMessageRuntime(): Promise<typeof import("../auto-reply/status.runtime.js")> {
-  const runtimePromise = (statusMessageRuntimePromise ??=
-    import("./status-message.runtime.js").then((module) =>
-      module.loadStatusMessageRuntimeModule(),
-    ));
-  return runtimePromise;
-}
+const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
 
-function loadAgentHarnessSelectionRuntime(): Promise<
-  typeof import("../agents/harness/selection.js")
-> {
-  const runtimePromise = (agentHarnessSelectionRuntimePromise ??=
-    import("../agents/harness/selection.js"));
-  return runtimePromise;
-}
-
-function loadStatusSubagentsRuntime(): Promise<typeof import("./status-subagents.runtime.js")> {
-  const runtimePromise = (statusSubagentsRuntimePromise ??=
-    import("./status-subagents.runtime.js"));
-  return runtimePromise;
-}
-
-function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js")> {
-  const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js"));
-  return runtimePromise;
-}
-
-function loadStatusPluginHealthRuntime(): Promise<
-  typeof import("./status-plugin-health.runtime.js")
-> {
-  const runtimePromise = (statusPluginHealthRuntimePromise ??=
-    import("./status-plugin-health.runtime.js"));
-  return runtimePromise;
-}
+const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
+  () => import("./status-plugin-health.runtime.js"),
+);
 
 // Context lookup stays synchronous/non-refreshing so status output does not
 // trigger provider/catalog IO while rendering a command response.
@@ -180,23 +153,6 @@ function shouldLoadUsageSummary(params: {
     auth?.startsWith("oauth") ||
     auth?.startsWith("token"),
   );
-}
-
-function resolveUsageCredentialType(authLabel?: string): "oauth" | "token" | "api_key" | undefined {
-  const auth = normalizeOptionalLowercaseString(authLabel);
-  if (!auth) {
-    return undefined;
-  }
-  if (auth.startsWith("oauth")) {
-    return "oauth";
-  }
-  if (auth.startsWith("token")) {
-    return "token";
-  }
-  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
-    return "api_key";
-  }
-  return undefined;
 }
 
 function resolveCodexSyntheticUsageAuthProfileId(params: {
@@ -318,7 +274,7 @@ function buildStatusUptimeLine(): string {
   return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
-async function resolveRuntimePluginHealthLine(): Promise<string> {
+async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
     return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
@@ -520,7 +476,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       if (
         usageEntry &&
         !usageEntry.error &&
-        (usageEntry.windows.length > 0 || Boolean(usageEntry.summary?.trim()))
+        (usageEntry.windows.length > 0 ||
+          Boolean(usageEntry.billing?.length) ||
+          Boolean(usageEntry.summary?.trim()))
       ) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),

@@ -872,6 +872,10 @@ CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
   name TEXT NOT NULL,
   description TEXT,
   enabled INTEGER NOT NULL,
@@ -903,6 +907,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
   delivery_completion_mode TEXT,
@@ -1228,4 +1233,25 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
-  ON backup_runs(created_at DESC, id);\n`;
+  ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS worktrees (
+  id TEXT NOT NULL PRIMARY KEY,
+  repo_fingerprint TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_ref TEXT NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
+  owner_id TEXT,
+  snapshot_ref TEXT,
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  removed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
+  ON worktrees(repo_fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
+  ON worktrees(removed_at);\n`;
