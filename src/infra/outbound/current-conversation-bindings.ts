@@ -163,15 +163,39 @@ function writePersistedBindings(): void {
   });
 }
 
+// Runs the durable write and, if it throws, restores the in-memory map to the
+// pre-mutation snapshot before rethrowing. writePersistedBindings rewrites the
+// whole table from the map, and bindingsLoaded is a one-time flag, so a failed
+// write would otherwise leave a runtime-ahead map served until restart while the
+// caller already saw the throw. Records are replaced wholesale (never mutated in
+// place), so a shallow map copy captured before the mutation restores the exact
+// last-persisted state.
+function persistBindingsOrRestore(snapshot: Map<string, SessionBindingRecord>): void {
+  try {
+    writePersistedBindings();
+  } catch (err) {
+    bindingsByConversationKey.clear();
+    for (const [key, record] of snapshot) {
+      bindingsByConversationKey.set(key, record);
+    }
+    throw err;
+  }
+}
+
 function loadBindingsIntoMemory(): void {
   if (bindingsLoaded) {
     return;
   }
-  bindingsLoaded = true;
+  // Read before touching the cache: readPersistedBindings can throw (the durable
+  // expired-row delete, the select, or opening the DB). Clearing the map and
+  // flipping the one-time bindingsLoaded flag first would poison the cache on
+  // failure, serving empty state until restart while the caller saw the error.
+  const records = readPersistedBindings();
   bindingsByConversationKey.clear();
-  for (const record of readPersistedBindings()) {
+  for (const record of records) {
     bindingsByConversationKey.set(buildConversationKey(record.conversation), record);
   }
+  bindingsLoaded = true;
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -183,8 +207,9 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
   if (!isBindingExpired(record)) {
     return record;
   }
+  const snapshot = new Map(bindingsByConversationKey);
   bindingsByConversationKey.delete(key);
-  writePersistedBindings();
+  persistBindingsOrRestore(snapshot);
   return null;
 }
 
@@ -276,8 +301,9 @@ export async function bindGenericCurrentConversation(
       lastActivityAt: now,
     },
   };
+  const snapshot = new Map(bindingsByConversationKey);
   bindingsByConversationKey.set(key, record);
-  writePersistedBindings();
+  persistBindingsOrRestore(snapshot);
   return record;
 }
 
@@ -315,6 +341,7 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
   if (!record) {
     return;
   }
+  const snapshot = new Map(bindingsByConversationKey);
   bindingsByConversationKey.set(key, {
     ...record,
     metadata: {
@@ -322,7 +349,7 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
-  writePersistedBindings();
+  persistBindingsOrRestore(snapshot);
 }
 
 /** Removes generic current-conversation bindings by binding id or target session key. */
@@ -337,26 +364,37 @@ export async function unbindGenericCurrentConversationBindings(
     const key = normalizedBindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
     const record = pruneExpiredBinding(key);
     if (record) {
+      const snapshot = new Map(bindingsByConversationKey);
       bindingsByConversationKey.delete(key);
       removed.push(record);
-      writePersistedBindings();
+      persistBindingsOrRestore(snapshot);
     }
     return removed;
   }
   if (!normalizedTargetSessionKey) {
     return removed;
   }
+  // pruneExpiredBinding inside the scan can persist its own expiry deletes, so
+  // snapshot only after the scan settles: a snapshot taken before it would, on a
+  // later batch-write failure, restore an expired binding the scan already
+  // dropped from disk. Collect matches first, then snapshot, delete, and persist.
+  const matches: Array<{ key: string; record: SessionBindingRecord }> = [];
   for (const key of bindingsByConversationKey.keys()) {
     const record = pruneExpiredBinding(key);
     if (!record || record.targetSessionKey !== normalizedTargetSessionKey) {
       continue;
     }
+    matches.push({ key, record });
+  }
+  if (matches.length === 0) {
+    return removed;
+  }
+  const snapshot = new Map(bindingsByConversationKey);
+  for (const { key, record } of matches) {
     bindingsByConversationKey.delete(key);
     removed.push(record);
   }
-  if (removed.length > 0) {
-    writePersistedBindings();
-  }
+  persistBindingsOrRestore(snapshot);
   return removed;
 }
 

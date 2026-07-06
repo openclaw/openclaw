@@ -10,8 +10,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import * as openClawStateDb from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
+import * as kyselySync from "../kysely-sync.js";
 import {
   testing,
   bindGenericCurrentConversation,
@@ -106,6 +108,33 @@ function setMinimalCurrentConversationRegistry(): void {
       },
     ]),
   );
+}
+
+async function bindWorkspaceConversation(
+  conversationId: string,
+  overrides?: { targetSessionKey?: string; ttlMs?: number; metadata?: Record<string, unknown> },
+): Promise<SessionBindingRecord | null> {
+  return bindGenericCurrentConversation({
+    targetSessionKey: overrides?.targetSessionKey ?? "agent:codex:acp:workspace-dm",
+    targetKind: "session",
+    conversation: { channel: "workspace", accountId: "default", conversationId },
+    ...(overrides?.ttlMs !== undefined ? { ttlMs: overrides.ttlMs } : {}),
+    ...(overrides?.metadata ? { metadata: overrides.metadata } : {}),
+  });
+}
+
+function resolveWorkspaceConversation(conversationId: string): SessionBindingRecord | null {
+  return resolveGenericCurrentConversationBinding({
+    channel: "workspace",
+    accountId: "default",
+    conversationId,
+  });
+}
+
+function throwOnNextStateWrite(): void {
+  vi.spyOn(openClawStateDb, "runOpenClawStateWriteTransaction").mockImplementationOnce(() => {
+    throw new Error("disk full");
+  });
 }
 
 describe("generic current-conversation bindings", () => {
@@ -435,5 +464,173 @@ describe("generic current-conversation bindings", () => {
         lastActivityAt: 1_234_567_890,
       },
     );
+  });
+
+  // A failed durable write must not leave the process-wide map ahead of disk:
+  // bindingsLoaded is one-time, so a runtime-ahead map would be served until
+  // restart. Mirrors the cron rollback proof in src/cron/service/ops.test.ts
+  // ("cron service ops persist rollback", #99960).
+  describe("persist rollback on durable write failure", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("restores the in-memory map when persisting a new bind fails", async () => {
+      await bindWorkspaceConversation("user:U1");
+
+      throwOnNextStateWrite();
+      await expect(
+        bindWorkspaceConversation("user:U2", { targetSessionKey: "agent:codex:acp:other-dm" }),
+      ).rejects.toThrow("disk full");
+
+      // Failed bind is absent from the live map; the prior bind still resolves.
+      expect(resolveWorkspaceConversation("user:U2")).toBeNull();
+      expectBindingFields(resolveWorkspaceConversation("user:U1"), {
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+      });
+
+      // Disk never received the failed bind either.
+      testing.resetCurrentConversationBindingsForTests();
+      expect(resolveWorkspaceConversation("user:U2")).toBeNull();
+    });
+
+    it("restores the in-memory map when persisting a touch fails", async () => {
+      const bound = await bindWorkspaceConversation("user:U1", {
+        metadata: { label: "workspace-dm" },
+      });
+      const boundRecord = expectSessionBinding(bound);
+      const originalActivity = boundRecord.metadata?.lastActivityAt;
+
+      throwOnNextStateWrite();
+      expect(() =>
+        touchGenericCurrentConversationBinding(boundRecord.bindingId, 9_999_999),
+      ).toThrow("disk full");
+
+      // The unpersisted lastActivityAt bump is rolled back in the live map.
+      expectBindingMetadata(resolveWorkspaceConversation("user:U1"), {
+        lastActivityAt: originalActivity,
+      });
+    });
+
+    it("restores the in-memory map when persisting an unbind by binding id fails", async () => {
+      const bound = await bindWorkspaceConversation("user:U1");
+
+      throwOnNextStateWrite();
+      await expect(
+        unbindGenericCurrentConversationBindings({
+          bindingId: expectSessionBinding(bound).bindingId,
+          reason: "test cleanup",
+        }),
+      ).rejects.toThrow("disk full");
+
+      // The binding is still served from memory and still on disk.
+      expectBindingFields(resolveWorkspaceConversation("user:U1"), {
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+      });
+      testing.resetCurrentConversationBindingsForTests();
+      expectBindingFields(resolveWorkspaceConversation("user:U1"), {
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+      });
+    });
+
+    it("restores the in-memory map when persisting an unbind by session key fails", async () => {
+      await bindWorkspaceConversation("user:U1", { targetSessionKey: "agent:codex:acp:shared" });
+      await bindWorkspaceConversation("user:U2", { targetSessionKey: "agent:codex:acp:shared" });
+
+      throwOnNextStateWrite();
+      await expect(
+        unbindGenericCurrentConversationBindings({
+          targetSessionKey: "agent:codex:acp:shared",
+          reason: "test cleanup",
+        }),
+      ).rejects.toThrow("disk full");
+
+      // Every removed binding is restored to the live map.
+      expect(
+        listGenericCurrentConversationBindingsBySession("agent:codex:acp:shared"),
+      ).toHaveLength(2);
+    });
+
+    it("does not resurrect a mid-scan pruned binding when an unbind by session batch fails", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(1_000_000));
+      // One permanent and one expiring binding share the target session key.
+      await bindWorkspaceConversation("user:U1", { targetSessionKey: "agent:codex:acp:shared" });
+      await bindWorkspaceConversation("user:U2", {
+        targetSessionKey: "agent:codex:acp:shared",
+        ttlMs: 1000,
+      });
+
+      // Expire U2 so the by-session scan prunes (and persists) it before the
+      // final batch delete of U1. Let that prune write succeed and fail only the
+      // batch write, so the rollback must not reintroduce the pruned U2.
+      vi.setSystemTime(new Date(1_002_000));
+      const realWrite = openClawStateDb.runOpenClawStateWriteTransaction;
+      let writes = 0;
+      vi.spyOn(openClawStateDb, "runOpenClawStateWriteTransaction").mockImplementation(((
+        operation,
+        options,
+      ) => {
+        writes += 1;
+        if (writes >= 2) {
+          throw new Error("disk full");
+        }
+        return realWrite(operation, options);
+      }) as typeof openClawStateDb.runOpenClawStateWriteTransaction);
+
+      await expect(
+        unbindGenericCurrentConversationBindings({
+          targetSessionKey: "agent:codex:acp:shared",
+          reason: "test cleanup",
+        }),
+      ).rejects.toThrow("disk full");
+
+      // Roll time back so nothing reads as expired, then confirm the live binding
+      // U1 is restored while the already-pruned U2 stays gone (map and disk
+      // agree). Reload from disk to prove the same on the persisted side.
+      vi.setSystemTime(new Date(1_000_500));
+      vi.restoreAllMocks();
+      expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
+      expect(resolveWorkspaceConversation("user:U2")).toBeNull();
+      testing.resetCurrentConversationBindingsForTests();
+      expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
+      expect(resolveWorkspaceConversation("user:U2")).toBeNull();
+    });
+
+    it("restores the in-memory map when persisting an expired prune-on-read fails", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(1_000_000));
+      await bindWorkspaceConversation("user:U1", { ttlMs: 1000 });
+
+      // Expire the binding after it is loaded so resolve triggers prune-on-read.
+      vi.setSystemTime(new Date(1_002_000));
+      throwOnNextStateWrite();
+      expect(() => resolveWorkspaceConversation("user:U1")).toThrow("disk full");
+
+      // The expired binding was restored (not dropped from the map ahead of disk).
+      // Roll time back before expiry and confirm it is still served.
+      vi.setSystemTime(new Date(1_000_500));
+      expectBindingFields(resolveWorkspaceConversation("user:U1"), {
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+      });
+    });
+
+    it("does not poison the one-time cache when the initial load fails", async () => {
+      await bindWorkspaceConversation("user:U1");
+      // Drop the in-memory cache but keep the row on disk so the next access reloads.
+      testing.resetCurrentConversationBindingsForTests();
+
+      vi.spyOn(kyselySync, "executeSqliteQuerySync").mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      // The first access triggers the load; it must throw before marking the
+      // cache loaded, so the failure is not latched until restart.
+      expect(() => resolveWorkspaceConversation("user:U1")).toThrow("disk full");
+
+      // A subsequent access reloads from disk and serves the binding.
+      expectBindingFields(resolveWorkspaceConversation("user:U1"), {
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+      });
+    });
   });
 });
