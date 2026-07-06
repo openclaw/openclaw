@@ -2263,7 +2263,7 @@ describe("runPreparedReply media-only handling", () => {
       role: "user",
       content: "#35676 Keśava: No wtf",
       timestamp: expect.any(Number),
-      __openclaw: { senderIsOwner: false },
+      __openclaw: { senderIsOwner: false, senderName: "Keśava" },
     });
     call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
