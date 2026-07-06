@@ -745,7 +745,8 @@ openclaw-chat-page {
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  width: min(1100px, calc(100% - 36px));
+  width: calc(100% - 36px);
+  max-width: 1100px;
   margin: 8px auto 14px;
 }
 
