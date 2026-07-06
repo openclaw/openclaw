@@ -1607,6 +1607,8 @@ export async function runReplyAgent(params: {
   try {
     await typingSignals.signalRunStart();
 
+    // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
+    // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
     const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
