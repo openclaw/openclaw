@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -641,7 +642,7 @@ export async function runGatewayUpdateCheck(params: {
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
           restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(
-            params.cfg.gateway?.reload?.deferralTimeoutMs,
+            getRuntimeConfig().gateway?.reload?.deferralTimeoutMs,
           ),
           root: root ?? status.root ?? undefined,
         });
