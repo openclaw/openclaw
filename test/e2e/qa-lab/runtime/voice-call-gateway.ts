@@ -1,7 +1,5 @@
 // QA Lab producer exercises Voice Call CLI, Gateway RPC/tool, webhook, and realtime consult.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,8 +12,7 @@ import {
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
-import { testing as gatewayTransportTesting } from "./gateway-mcp-real-transports.js";
+import { getFreePort } from "../../../../src/test-utils/ports.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-voice-call-runtime";
@@ -46,29 +43,6 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
     artifactBase: path.resolve(artifactBase),
     repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
   };
-}
-
-function emptyTransport() {
-  return {
-    requiredPluginIds: [] as string[],
-    createGatewayConfig: () => ({}) as Pick<OpenClawConfig, "channels" | "messages">,
-  };
-}
-
-async function reserveLocalPort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to reserve local Voice Call port"));
-        return;
-      }
-      server.close((error) => (error ? reject(error) : resolve(address.port)));
-    });
-  });
 }
 
 async function createFixturePlugin(root: string) {
@@ -208,31 +182,6 @@ function withVoiceCallConfig(params: {
   };
 }
 
-async function runCli(params: {
-  args: string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-}) {
-  const stdout = createBoundedChildOutput();
-  const stderr = createBoundedChildOutput();
-  const child = spawn(params.command, params.args, {
-    cwd: params.cwd,
-    env: params.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", (chunk) => stdout.append(chunk));
-  child.stderr.on("data", (chunk) => stderr.append(chunk));
-  const exitCode = await new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
-  });
-  if (exitCode !== 0) {
-    throw new Error(`Voice Call CLI exited ${exitCode}: ${stderr.text() || stdout.text()}`);
-  }
-  return stdout.text();
-}
-
 function findStringByKey(value: unknown, key: string): string | undefined {
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -308,17 +257,15 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-gateway-"));
   const fixture = await createFixturePlugin(fixtureRoot);
   const mock = await startQaMockOpenAiServer();
-  const servePort = await reserveLocalPort();
+  const servePort = await getFreePort();
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   let mediaStream: WebSocket | undefined;
   try {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
-      command: gatewayTransportTesting.resolveOpenClawCliInvocation(options.repoRoot)
-        .gatewayCommand,
+      useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
-      transport: emptyTransport(),
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
       enabledPluginIds: ["voice-call"],
@@ -329,23 +276,16 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
       mutateConfig: (config) =>
         withVoiceCallConfig({ config, pluginDir: fixture.pluginDir, servePort }),
     });
-    const invocation = gatewayTransportTesting.resolveOpenClawCliInvocation(options.repoRoot);
-    const cliOutput = await runCli({
-      command: invocation.command,
-      args: [
-        ...invocation.argsPrefix,
-        "voicecall",
-        "start",
-        "--to",
-        "+15550001111",
-        "--message",
-        "CLI fixture",
-        "--mode",
-        "conversation",
-      ],
-      cwd: invocation.cwd,
-      env: { ...gateway.runtimeEnv, OPENCLAW_CLI: "1" },
-    });
+    const cliOutput = await gateway.runCli([
+      "voicecall",
+      "start",
+      "--to",
+      "+15550001111",
+      "--message",
+      "CLI fixture",
+      "--mode",
+      "conversation",
+    ]);
     const cliCallId = findStringByKey(JSON.parse(cliOutput), "callId");
     if (!cliCallId) {
       throw new Error(`Voice Call CLI did not return a callId: ${cliOutput}`);

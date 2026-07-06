@@ -19,7 +19,6 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../../src/utils/message-channel.js";
-import { testing as gatewayTransportTesting } from "./gateway-mcp-real-transports.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-media-talk-runtime";
@@ -87,13 +86,6 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
     artifactBase: path.resolve(artifactBase),
     repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
     scenarioId: scenarioId as ScenarioId,
-  };
-}
-
-function emptyTransport() {
-  return {
-    requiredPluginIds: [] as string[],
-    createGatewayConfig: () => ({}) as Pick<OpenClawConfig, "channels" | "messages">,
   };
 }
 
@@ -323,11 +315,9 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
   try {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
-      command: gatewayTransportTesting.resolveOpenClawCliInvocation(options.repoRoot)
-        .gatewayCommand,
+      useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
-      transport: emptyTransport(),
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: true,
       runtimeEnvPatch: {
@@ -480,11 +470,9 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   try {
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
-      command: gatewayTransportTesting.resolveOpenClawCliInvocation(options.repoRoot)
-        .gatewayCommand,
+      useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
-      transport: emptyTransport(),
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: true,
       runtimeEnvPatch: {
