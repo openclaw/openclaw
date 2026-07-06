@@ -110,7 +110,6 @@ import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -567,7 +566,7 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
   });
 
-  it("keeps the automatic Crabline smoke profile on its default channel", async () => {
+  it("filters QA-channel-pinned scenarios from the Crabline smoke profile", async () => {
     runQaSuite.mockImplementationOnce(async () => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
       return flowSuiteRuntimeResult({
@@ -584,17 +583,6 @@ describe("qa cli runtime", () => {
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
     expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
-    const scenarioChannelById = new Map(
-      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario.execution.channel]),
-    );
-    const selectedChannels = [
-      ...new Set(
-        (suiteArgs.scenarioIds as string[])
-          .map((scenarioId) => scenarioChannelById.get(scenarioId))
-          .filter((channel): channel is string => Boolean(channel)),
-      ),
-    ];
-    expect(selectedChannels).toEqual(["telegram"]);
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",
@@ -623,21 +611,6 @@ describe("qa cli runtime", () => {
         "config-apply-restart-wakeup",
       ]),
     );
-  });
-
-  it("keeps an explicitly requested non-default Crabline channel scenario", async () => {
-    await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      profile: "smoke-ci",
-      scenarioIds: ["slack-restart-resume"],
-    });
-
-    const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.scenarioIds).toEqual(["slack-restart-resume"]);
-    expect(suiteArgs.channelDriverSelection).toMatchObject({
-      channel: "slack",
-      channelDriver: "crabline",
-    });
   });
 
   it("rejects qa profile runs that do not match taxonomy categories", async () => {

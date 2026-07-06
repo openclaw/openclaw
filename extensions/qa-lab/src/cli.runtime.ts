@@ -734,26 +734,14 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
-  // Automatic Crabline profiles share one driver instance, so keep unpinned scenarios plus the
-  // default channel. Explicit scenario requests still infer their declared execution channel.
-  const automaticProfileChannel =
-    requestedScenarioIds.length === 0 && profileReport.channelDriver === "crabline"
-      ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
-      : undefined;
-  const scenarios = taxonomyScenarios.filter((scenario) => {
-    const scenarioChannel = scenario.execution.channel?.trim().toLowerCase();
-    const matchesProfileChannel =
-      !automaticProfileChannel || !scenarioChannel || scenarioChannel === automaticProfileChannel;
-    return (
-      matchesProfileChannel &&
-      scenarioMatchesQaProviderLane({
-        scenario,
-        providerMode: normalizedProviderMode,
-        primaryModel,
-        channelDriver: profileReport.channelDriver,
-      })
-    );
-  });
+  const scenarios = taxonomyScenarios.filter((scenario) =>
+    scenarioMatchesQaProviderLane({
+      scenario,
+      providerMode: normalizedProviderMode,
+      primaryModel,
+      channelDriver: profileReport.channelDriver,
+    }),
+  );
   if (scenarios.length === 0) {
     throw new Error(
       `qa run --qa-profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
