@@ -2,6 +2,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import {
   parseSessionFileEntriesWithWarnings,
   type SessionFileParseWarning,
@@ -12,7 +13,6 @@ import {
   type SessionHeader,
   type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import { pathExists } from "../../infra/fs-safe.js";
@@ -49,11 +49,25 @@ function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boole
   return (
     hasStoredAcpSession ||
     hasNonEmptyString(entry.claudeCliSessionId) ||
-    Object.values(entry.cliSessionBindings ?? {}).some(
-      (binding) => hasNonEmptyString(binding?.sessionId),
+    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
+      hasNonEmptyString(binding?.sessionId),
     ) ||
     Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString)
   );
+}
+
+function hasPersistedAcpSession(params: {
+  sessionKey: string;
+  entry: StoredSessionEntry;
+}): boolean {
+  if (params.entry.acp) {
+    return true;
+  }
+  try {
+    return Boolean(readAcpSessionMetaForEntry(params));
+  } catch {
+    return false;
+  }
 }
 
 function isBackendDelegatedSession(
@@ -300,14 +314,10 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   });
 
   // 4. Prepare session data
-  const hasStoredAcpSession =
-    Boolean(entry.acp) ||
-    Boolean(
-      readAcpSessionMetaForEntry({
-        sessionKey: params.sessionKey,
-        entry,
-      }),
-    );
+  const hasStoredAcpSession = hasPersistedAcpSession({
+    sessionKey: params.sessionKey,
+    entry,
+  });
   const backendWarning = isBackendDelegatedSession(entry, entries, hasStoredAcpSession)
     ? BACKEND_DELEGATED_WARNING
     : undefined;

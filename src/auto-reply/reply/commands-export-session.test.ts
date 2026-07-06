@@ -634,6 +634,27 @@ describe("buildExportSessionReply", () => {
     expect(sessionDataFromHtml(writtenHtml()).warning).toContain("backend runtime");
   });
 
+  it("continues exporting when persisted ACP metadata cannot be read", async () => {
+    hoisted.readAcpSessionMetaForEntryMock.mockImplementation(() => {
+      throw new Error("state database unavailable");
+    });
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("Session exported");
+    expect(reply.text).not.toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+  });
+
   it("does not warn for a normal user-only transcript without backend session metadata", async () => {
     hoisted.sessionTranscriptContent = [
       JSON.stringify({ type: "session", version: 3, id: "session-1" }),
