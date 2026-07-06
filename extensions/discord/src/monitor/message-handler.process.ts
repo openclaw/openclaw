@@ -1,5 +1,6 @@
 // Discord plugin module implements message handler.process behavior.
-import { AllowedMentionsTypes, MessageFlags } from "discord-api-types/v10";
+import { MessageFlags } from "discord-api-types/v10";
+import type { APIAllowedMentions } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -68,6 +69,9 @@ import {
 } from "./timeouts.js";
 
 const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/reply-runtime"));
+const TARGETED_ONLY_ALLOWED_MENTIONS = {
+  parse: ["users", "roles"],
+} as APIAllowedMentions;
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
@@ -923,7 +927,7 @@ async function processDiscordMessageInner(
           // Fresh bot messages parse broadcasts by default. Preserve intended
           // user/role pings without escalating @everyone or @here.
           const allowedMentions = discordTextHasBroadcastMention(fallbackPayload.text ?? "")
-            ? { parse: [AllowedMentionsTypes.User, AllowedMentionsTypes.Role] }
+            ? TARGETED_ONLY_ALLOWED_MENTIONS
             : undefined;
           const replyToId = replyReference.use();
           notifyFinalReplyStart();

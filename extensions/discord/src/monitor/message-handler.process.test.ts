@@ -2074,6 +2074,7 @@ describe("processDiscordMessage draft streaming", () => {
   it("sends a fresh final message for broadcast mentions like @everyone", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "heads up @everyone" });
+      await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -2092,6 +2093,7 @@ describe("processDiscordMessage draft streaming", () => {
   it("sends a fresh final message when a targeted mention is mixed with @everyone", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "heads up @Sentinel @everyone" });
+      await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
