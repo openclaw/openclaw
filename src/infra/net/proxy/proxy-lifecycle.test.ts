@@ -324,7 +324,7 @@ describe("startProxy", () => {
     ).toBe(false);
   });
 
-  it("clears NO_PROXY so internal destinations do not bypass the filtering proxy", async () => {
+  it("preserves user NO_PROXY values when managed proxy activates", async () => {
     process.env["NO_PROXY"] = "127.0.0.1,localhost,corp.example.com";
     process.env["no_proxy"] = "localhost";
 
@@ -333,8 +333,11 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(process.env["no_proxy"]).toBe("");
-    expect(process.env["NO_PROXY"]).toBe("");
+    // NO_PROXY is preserved — Proxyline provides SSRF protection
+    // independently at the transport layer, so clearing NO_PROXY is
+    // not needed and would break legitimate bypasses.
+    expect(process.env["no_proxy"]).toBe("localhost");
+    expect(process.env["NO_PROXY"]).toBe("127.0.0.1,localhost,corp.example.com");
   });
 
   it("installs and stops Proxyline managed routing", async () => {
@@ -442,7 +445,8 @@ describe("startProxy", () => {
 
     const proxyHandle = expectProxyHandle(handle);
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
-    expect(process.env["NO_PROXY"]).toBe("");
+    // NO_PROXY is preserved (not cleared) during proxy activation
+    expect(process.env["NO_PROXY"]).toBe("corp.example.com");
 
     await stopProxy(proxyHandle);
 

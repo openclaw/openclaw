@@ -98,9 +98,12 @@ function applyProxyEnv(
   } else {
     delete process.env["OPENCLAW_PROXY_CA_FILE"];
   }
-  for (const key of NO_PROXY_ENV_KEYS) {
-    process.env[key] = "";
-  }
+  // Preserve the user's NO_PROXY values so the EnvHttpProxyAgent and
+  // OpenClaw's matchesNoProxy can route matching requests directly.
+  // Proxyline provides SSRF protection independently at the transport
+  // layer, so NO_PROXY does not create a security gap here.
+  // Previously NO_PROXY was cleared, which broke legitimate bypasses
+  // such as cos.accelerate.myqcloud.com for qqbot media uploads.
 }
 
 function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
