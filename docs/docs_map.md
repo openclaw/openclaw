@@ -2361,6 +2361,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Layout and names
   - H2: Provision ignored files
   - H2: Run repository setup
+  - H2: Session worktrees
   - H2: Snapshots, cleanup, and restore
   - H2: CLI
   - H2: Gateway methods
@@ -6907,6 +6908,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
+  - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends
   - H2: Compatibility dispatch
