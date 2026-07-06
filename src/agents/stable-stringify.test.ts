@@ -28,6 +28,20 @@ describe("stableStringify", () => {
     expect(stableStringify(items)).toBe('[{"value":"same"},{"value":"same"},"[Circular]"]');
   });
 
+  it("normalizes unpaired surrogates in strings while preserving valid pairs", () => {
+    const high = String.fromCharCode(0xd83d);
+    const low = String.fromCharCode(0xdc00);
+
+    expect(
+      stableStringify({
+        [`key${high}`]: "name",
+        high: `left${high}right`,
+        low: `left${low}right`,
+        valid: "emoji 🙈 ok",
+      }),
+    ).toBe('{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}');
+  });
+
   it("serializes cache-trace edge types deterministically", () => {
     const error = new Error("boom");
     error.stack = "Error: boom\n    at test";

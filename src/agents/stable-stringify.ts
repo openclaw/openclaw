@@ -4,6 +4,7 @@
  * handling for errors, binary data, bigint, non-finite numbers, and cycles.
  */
 import { Buffer } from "node:buffer";
+import { sanitizeSurrogates } from "./sanitize-surrogates.js";
 
 /** Deterministically stringifies unknown values for cache keys and diagnostics. */
 export function stableStringify(value: unknown): string {
@@ -19,6 +20,9 @@ function stringifyStableValue(value: unknown, stack: WeakSet<object>): string {
   }
   if (typeof value === "bigint") {
     return JSON.stringify(value.toString());
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(sanitizeSurrogates(value));
   }
   if (typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
@@ -65,7 +69,9 @@ function stringifyObjectValue(value: object, stack: WeakSet<object>): string {
   const record = value as Record<string, unknown>;
   const serializedFields: string[] = [];
   for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stringifyStableValue(record[key], stack)}`);
+    serializedFields.push(
+      `${JSON.stringify(sanitizeSurrogates(key))}:${stringifyStableValue(record[key], stack)}`,
+    );
   }
   return `{${serializedFields.join(",")}}`;
 }
