@@ -18,12 +18,20 @@ let server: ControlUiE2eServer;
 
 async function installTalkBrowserFixtures(page: Page) {
   await page.addInitScript(() => {
-    const state = { audioContextsClosed: 0, tracksStopped: 0 };
+    const state = { audioContextsClosed: 0, tracksStopped: 0, constraints: [] as unknown[] };
     const track = { stop: () => (state.tracksStopped += 1) };
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: {
-        getUserMedia: async () => ({ getTracks: () => [track] }),
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "built-in", label: "Built-in Microphone" },
+          { kind: "audioinput", deviceId: "usb", label: "USB Audio Interface" },
+          { kind: "videoinput", deviceId: "camera", label: "Camera" },
+        ],
+        getUserMedia: async (constraints: unknown) => {
+          state.constraints.push(constraints);
+          return { getTracks: () => [track] };
+        },
       },
     });
 
@@ -95,10 +103,40 @@ describeControlUiE2e("Control UI browser Talk", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await page.setViewportSize({ width: 320, height: 720 });
+      const microphoneTrigger = page.getByRole("button", { name: "Microphone input" });
+      await microphoneTrigger.click();
+      const microphoneMenu = page.getByRole("group", { name: "Microphone input" });
+      const menuBounds = await microphoneMenu.boundingBox();
+      expect(menuBounds).not.toBeNull();
+      expect(menuBounds?.x ?? 0).toBeGreaterThanOrEqual(8);
+      expect((menuBounds?.x ?? 0) + (menuBounds?.width ?? 0)).toBeLessThanOrEqual(312);
+      await page.getByRole("button", { name: "USB Audio Interface" }).click();
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
+        .toBe("Microphone input");
+      await microphoneTrigger.click();
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
+        .toBe("Microphone input");
+      await expect.poll(() => microphoneMenu.count()).toBe(0);
       await page.getByRole("button", { name: "Start Talk" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
-      expect(createRequest.params).toMatchObject({ sessionKey: "main" });
+      expect(createRequest.params).toEqual({ sessionKey: "main" });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { constraints: unknown[] };
+                }
+              ).openclawTalkE2eState?.constraints,
+          ),
+        )
+        .toEqual([{ audio: { deviceId: { exact: "usb" } } }]);
       await expect
         .poll(async () =>
           (await gateway.getSocketUrls()).filter((url) => url.includes("BidiGenerateContent")),
@@ -125,12 +163,27 @@ describeControlUiE2e("Control UI browser Talk", () => {
             () =>
               (
                 window as Window & {
-                  openclawTalkE2eState?: { audioContextsClosed: number; tracksStopped: number };
+                  openclawTalkE2eState?: {
+                    audioContextsClosed: number;
+                    tracksStopped: number;
+                  };
                 }
-              ).openclawTalkE2eState,
+              ).openclawTalkE2eState?.audioContextsClosed,
           ),
         )
-        .toEqual({ audioContextsClosed: 2, tracksStopped: 1 });
+        .toBe(2);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { tracksStopped: number };
+                }
+              ).openclawTalkE2eState?.tracksStopped,
+          ),
+        )
+        .toBe(1);
 
       await gateway.deliverLatest({ setupComplete: {} });
       await expect

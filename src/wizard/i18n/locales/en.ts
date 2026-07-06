@@ -481,6 +481,7 @@ export const en = {
       tokenHelpCopyToken: "3) Copy the token (looks like 123456:ABC...)",
       tokenHelpNewBot: "2) Run /newbot (or /mybots)",
       tokenHelpOpenBotFather: "1) Open Telegram and chat with @BotFather",
+      tokenHelpWebApp: "Prefer a UI? BotFather's web app: {url} (create a bot, copy its token)",
       tokenInputPrompt: "Enter Telegram bot token",
       tokenKeepPrompt: "Telegram token already configured. Keep it?",
       userIdHelpGetUpdates:

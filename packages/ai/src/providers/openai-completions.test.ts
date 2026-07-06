@@ -24,8 +24,9 @@ const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
   stream?: AsyncIterable<OpenAICompatibleChatCompletionChunk>;
 } = { chunks: [] };
-const mockOpenAIOptionsRef: { options: unknown[]; requests: unknown[] } = {
+const mockOpenAIOptionsRef: { options: unknown[]; payloads: unknown[]; requests: unknown[] } = {
   options: [],
+  payloads: [],
   requests: [],
 };
 
@@ -37,7 +38,8 @@ vi.mock("openai", () => {
 
     chat = {
       completions: {
-        create: (_params: unknown, requestOptions: unknown) => {
+        create: (params: unknown, requestOptions: unknown) => {
+          mockOpenAIOptionsRef.payloads.push(params);
           mockOpenAIOptionsRef.requests.push(requestOptions);
           return {
             withResponse: async () => {
@@ -70,6 +72,7 @@ import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai
 beforeEach(() => {
   mockChunksRef.chunks = [];
   mockChunksRef.stream = undefined;
+  mockOpenAIOptionsRef.payloads = [];
   mockOpenAIOptionsRef.requests = [];
 });
 
@@ -161,6 +164,30 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "longcat",
+      baseUrl: "https://api.longcat.chat/openai",
+      compat: {
+        thinkingFormat: "deepseek" as const,
+        supportsReasoningEffort: false,
+      },
+    } satisfies Model<"openai-completions">;
+
+    const stream = streamOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "high",
+    });
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "enabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
   it("configures the OpenAI SDK client with the host-built model fetch", async () => {
     mockOpenAIOptionsRef.options = [];
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];

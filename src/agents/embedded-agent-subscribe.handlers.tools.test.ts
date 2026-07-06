@@ -33,7 +33,9 @@ type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMeta
 function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
-  onBlockReplyFlush: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  onBlockReplyFlush: ReturnType<
+    typeof vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>
+  >;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
   trace: ReturnType<typeof vi.fn>;
@@ -41,7 +43,7 @@ function createTestContext(): {
 } {
   // Shared tool-handler fixture exposes the callbacks and state maps mutated by
   // start/update/end handlers without booting a full subscription.
-  const onBlockReplyFlush = vi.fn<() => Promise<void>>();
+  const onBlockReplyFlush = vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
@@ -92,6 +94,7 @@ function createTestContext(): {
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
       toolExecutionSinceLastBlockReply: false,
+      assistantMessageIndex: 0,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -254,6 +257,10 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyFlush).toHaveBeenCalledWith({
+      reason: "tool_start",
+      assistantMessageIndex: 0,
+    });
     expect(onExecutionPhase).toHaveBeenCalledWith({
       phase: "tool_execution_started",
       tool: "read",
@@ -1174,6 +1181,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         text: "rewritten delivery",
         mediaUrls: ["/tmp/rewritten.png"],
       },
+    ]);
+  });
+
+  it("records rich-content delivery when visible text is blank", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-rich-content";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-rich",
+          text: "  ",
+          presentation: JSON.stringify({
+            blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+          }),
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { details: { messageId: "message-rich" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-rich",
+        hasRichContent: true,
+      }),
     ]);
   });
 

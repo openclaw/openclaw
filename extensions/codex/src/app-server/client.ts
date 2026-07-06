@@ -468,10 +468,17 @@ export class CodexAppServerClient {
       }
       this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      embeddedAgentLog.warn("codex app-server server request handler failed", {
+        id: request.id,
+        method: request.method,
+        error,
+      });
       this.writeMessage({
         id: request.id,
         error: {
-          message: error instanceof Error ? error.message : String(error),
+          code: -32603,
+          message,
         },
       });
     }

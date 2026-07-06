@@ -163,6 +163,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerSandboxCli",
     },
     {
+      commandNames: ["worktrees"],
+      loadModule: () => import("../worktrees-cli.js"),
+      exportName: "registerWorktreesCli",
+    },
+    {
       commandNames: ["attach"],
       loadModule: () => import("../attach-cli.js"),
       exportName: "registerAttachCli",

@@ -104,10 +104,18 @@ function findMockCall(mock: ReturnType<typeof vi.fn>, predicate: (arg: unknown[]
   return call;
 }
 
-function mockResolvedModel() {
+function mockResolvedModel(params?: { supportsTools?: boolean }) {
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
-    model: { provider: "openai", api: "responses", id: "fake", input: [] },
+    model: {
+      provider: "openai",
+      api: "responses",
+      id: "fake",
+      input: [],
+      ...(params?.supportsTools === undefined
+        ? {}
+        : { compat: { supportsTools: params.supportsTools } }),
+    },
     error: null,
     authStorage: { setRuntimeApiKey: vi.fn() },
     modelRegistry: {},
@@ -472,6 +480,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expectRecordFields(mockCallArg(applyAgentCompactionSettingsFromConfigMock), {
       contextTokenBudget: 64_000,
     });
+  });
+
+  it("skips runtime tool construction when the compaction model does not support tools", async () => {
+    mockResolvedModel({ supportsTools: false });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
   it("quarantines unsupported tool schemas before creating the compaction model session", async () => {

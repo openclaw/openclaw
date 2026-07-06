@@ -87,13 +87,9 @@ import {
 import {
   runHomeserverRestartResumeScenario,
   runInitialCatchupThenIncrementalScenario,
-  runPostRestartRoomContinueScenario,
-  runRestartReplayDedupeScenario,
-  runRestartResumeScenario,
   runStaleSyncReplayDedupeScenario,
 } from "./scenario-runtime-restart.js";
 import {
-  runAllowlistHotReloadScenario,
   runBlockStreamingScenario,
   runMatrixQaCanary,
   runMembershipLossScenario,
@@ -306,14 +302,8 @@ export async function runMatrixQaScenario(
       return await runApprovalThreadTargetScenario(context);
     case "matrix-approval-channel-target-both":
       return await runApprovalChannelTargetBothScenario(context);
-    case "matrix-restart-resume":
-      return await runRestartResumeScenario(context);
-    case "matrix-post-restart-room-continue":
-      return await runPostRestartRoomContinueScenario(context);
     case "matrix-initial-catchup-then-incremental":
       return await runInitialCatchupThenIncrementalScenario(context);
-    case "matrix-restart-replay-dedupe":
-      return await runRestartReplayDedupeScenario(context);
     case "matrix-stale-sync-replay-dedupe":
       return await runStaleSyncReplayDedupeScenario(context);
     case "matrix-room-membership-loss":
@@ -385,8 +375,6 @@ export async function runMatrixQaScenario(
         token,
       });
     }
-    case "matrix-allowlist-hot-reload":
-      return await runAllowlistHotReloadScenario(context);
     case "matrix-multi-actor-ordering":
       return await runMultiActorOrderingScenario(context);
     case "matrix-inbound-edit-ignored":

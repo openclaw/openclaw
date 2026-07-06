@@ -164,9 +164,6 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
   ) {
     return "refusal";
   }
-  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
-    return "timeout";
-  }
   if (
     message.includes("rate limit") ||
     message.includes("too many requests") ||
@@ -174,6 +171,9 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
     code === "429"
   ) {
     return "rate_limit";
+  }
+  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+    return "timeout";
   }
   if (
     message.includes("context length") ||

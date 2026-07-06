@@ -235,7 +235,7 @@ plugins.
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
     | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
-    | `/goal [status\|start\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
+    | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
@@ -248,6 +248,7 @@ plugins.
     | Command | Description |
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
+    | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
     | `/allowlist [list\|add\|remove] ...` | Manage allowlist entries. Text-only |
     | `/approve <id> <decision>` | Resolve exec or plugin approval prompts |
     | `/btw <question>` | Ask a side question without changing session context. Alias: `/side`. See [BTW](/tools/btw) |

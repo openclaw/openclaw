@@ -1071,10 +1071,25 @@ export async function runCopilotAttempt(
   // the user message.
   const syntheticUserText = readString(input.transcriptPrompt) ?? readString(input.prompt);
   const tailUserText = readTailUserText(messages);
+  const tailUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const currentTurnMessages = messages.map((message, index) => {
+    if (syntheticUserText !== tailUserText || index !== tailUserIndex) {
+      return message;
+    }
+    return attachCopilotMirrorIdentity(
+      { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
+      `${input.runId}:prompt`,
+    );
+  });
   const syntheticUser: AgentMessage | undefined =
     syntheticUserText && syntheticUserText !== tailUserText
       ? attachCopilotMirrorIdentity(
-          { role: "user", content: syntheticUserText, timestamp: now() } as AgentMessage,
+          {
+            role: "user",
+            content: syntheticUserText,
+            timestamp: now(),
+            idempotencyKey: `${input.runId}:user`,
+          } as unknown as AgentMessage,
           `${input.runId}:prompt`,
         )
       : undefined;
@@ -1082,7 +1097,7 @@ export async function runCopilotAttempt(
     ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
-    ...messages,
+    ...currentTurnMessages,
     ...(syntheticUser ? [syntheticUser] : []),
     ...(taggedLastAssistant ? [taggedLastAssistant] : []),
   ];

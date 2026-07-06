@@ -193,13 +193,6 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   return null;
 }
 
-export function resolveBundledPluginPublicArtifactPath(params: {
-  dirName: string;
-  artifactBasename: string;
-}): string | null {
-  return resolvePublicSurfaceLocation(params)?.modulePath ?? null;
-}
-
 export function resetBundledPluginPublicArtifactLoaderForTest(): void {
   publicSurfaceModuleCache.clear();
   publicSurfaceLocationCache.clear();

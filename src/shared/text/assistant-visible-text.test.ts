@@ -389,6 +389,51 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("unwraps standalone parameter tags while preserving their content (#98557)", () => {
+      expectVisibleText(
+        'Results: <parameter name="assumptions">some content</parameter> after.',
+        "Results: some content after.",
+      );
+      expectVisibleText(
+        ['<parameter name="assumptions">', "line 1", "line 2", "</parameter>"].join("\n"),
+        "line 1\nline 2",
+      );
+      expectVisibleText('<parameter name="data">{"key":"value"}</parameter>', '{"key":"value"}');
+      expectVisibleText('<parameter name="items">[1,2]</parameter>', "[1,2]");
+      expectVisibleText(
+        'Results:<parameter name="x">\nline\n</parameter>after',
+        "Results:\nline\nafter",
+      );
+    });
+
+    it("keeps truncated tool-call parameters fail-closed", () => {
+      expectVisibleText('<tool_call><parameter name="token">secret</parameter>', "");
+    });
+
+    it("preserves parameter tags in code and literal function examples", () => {
+      expectVisibleText(
+        'Use `<parameter name="path">/tmp</parameter>`.',
+        'Use `<parameter name="path">/tmp</parameter>`.',
+      );
+      expectVisibleText(
+        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
+        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
+      );
+      expectVisibleText(
+        '<schema><parameter name="path">/tmp</parameter></schema>',
+        '<schema><parameter name="path">/tmp</parameter></schema>',
+      );
+      expectVisibleText(
+        '<schema><parameter name="path"/></schema>',
+        '<schema><parameter name="path"/></schema>',
+      );
+      expectVisibleText('<br><parameter name="path">/tmp</parameter>', "<br>/tmp");
+      expectVisibleText(
+        'Use <function> declarations. <parameter name="path">/tmp</parameter>',
+        "Use <function> declarations. /tmp",
+      );
+    });
+
     it("preserves XML-style explanations after lone <tool_call> tags", () => {
       expectVisibleText("Use <tool_call><arg> literally.", "Use <tool_call><arg> literally.");
     });

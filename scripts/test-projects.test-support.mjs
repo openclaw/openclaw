@@ -671,6 +671,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
+  ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
@@ -2076,6 +2077,14 @@ const SOURCE_TEST_TARGETS = new Map([
     "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
     ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
   ],
+  [
+    "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
+    ["test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
+    ["test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts"],
+  ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],
@@ -2340,14 +2349,22 @@ function splitTargetChunks(targets, chunkCount) {
   return chunks;
 }
 
+let cachedBroadScriptTestTargets = null;
+let cachedBroadScriptTestTargetsCwd = null;
+
 function listBroadScriptTestTargets(pattern, cwd) {
   const root = path.join(cwd, "test/scripts");
-  if (!fs.existsSync(root)) {
-    return [];
+  if (cachedBroadScriptTestTargetsCwd !== cwd) {
+    // Broad-target expansion can ask for the same process-stable checkout twice.
+    // Keep one inventory so planning does not repeat the directory walk.
+    cachedBroadScriptTestTargets = fs.existsSync(root)
+      ? listRepoFilesRecursive(root, cwd)
+          .filter((file) => file.endsWith(".test.ts"))
+          .toSorted((left, right) => left.localeCompare(right))
+      : [];
+    cachedBroadScriptTestTargetsCwd = cwd;
   }
-  return listRepoFilesRecursive(root, cwd)
-    .filter((file) => file.endsWith(".test.ts") && path.matchesGlob(file, pattern))
-    .toSorted((left, right) => left.localeCompare(right));
+  return cachedBroadScriptTestTargets.filter((file) => path.matchesGlob(file, pattern));
 }
 
 function listBroadToolingScriptTestTargets(pattern, cwd) {
@@ -2356,14 +2373,24 @@ function listBroadToolingScriptTestTargets(pattern, cwd) {
   );
 }
 
+let cachedToolingFullSuiteTestTargets = null;
+let cachedToolingFullSuiteTestTargetsCwd = null;
+
 function listToolingFullSuiteTestTargets(cwd) {
-  return uniqueOrdered(
+  if (cachedToolingFullSuiteTestTargets && cachedToolingFullSuiteTestTargetsCwd === cwd) {
+    return cachedToolingFullSuiteTestTargets;
+  }
+  // The CLI plans against one process-stable checkout. Reuse its inventory when
+  // callers compare full-suite modes instead of walking the tree for every mode.
+  cachedToolingFullSuiteTestTargets = uniqueOrdered(
     [path.join(cwd, "test"), path.join(cwd, "src", "scripts")].flatMap((root) =>
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
     .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
     .toSorted((left, right) => left.localeCompare(right));
+  cachedToolingFullSuiteTestTargetsCwd = cwd;
+  return cachedToolingFullSuiteTestTargets;
 }
 
 function listUnitFastFullSuiteTestTargets() {
@@ -3729,6 +3756,13 @@ function createVitestArgs(params) {
   ];
 }
 
+export function createVitestPreflightPnpmArgs(config) {
+  if (config !== UI_E2E_VITEST_CONFIG) {
+    return null;
+  }
+  return ["exec", "node", "scripts/ensure-playwright-chromium.mjs"];
+}
+
 export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
@@ -4254,6 +4288,7 @@ export function createVitestRunSpecs(args, params = {}) {
       includeFilePath,
       includePatterns: plan.includePatterns,
       pnpmArgs: createVitestArgs(plan),
+      preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };
   });

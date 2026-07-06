@@ -78,7 +78,7 @@ export function resolveThinkingDefaultForModel(params: {
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
-export type ChatThinkingSelectState = {
+type ChatThinkingSelectState = {
   currentOverride: string;
   defaultLabel: string;
   defaultValue: string;

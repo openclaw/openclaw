@@ -1189,10 +1189,15 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps Crabbox runner script edits on their regression tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/crabbox-wrapper.mjs"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/crabbox-wrapper.test.ts"],
-    });
+    for (const scriptPath of [
+      "scripts/crabbox-wrapper.mjs",
+      "scripts/crabbox-wrapper-providers.mjs",
+    ]) {
+      expect(resolveChangedTestTargetPlan([scriptPath]), scriptPath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/crabbox-wrapper.test.ts"],
+      });
+    }
   });
 
   it("keeps build stamp script edits on the build stamp regression test", () => {
@@ -3386,6 +3391,19 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(spec?.includeFilePath).not.toMatch(new RegExp(`${process.pid}-\\d+-0\\.json$`, "u"));
   });
 
+  it("preflights targeted UI E2E specs with Playwright browser assets", () => {
+    const [spec] = createVitestRunSpecs(["ui/src/pages/tasks/tasks.e2e.test.ts"], {
+      baseEnv: {},
+    });
+
+    expect(spec?.config).toBe("test/vitest/vitest.ui-e2e.config.ts");
+    expect(spec?.preflightPnpmArgs).toEqual([
+      "exec",
+      "node",
+      "scripts/ensure-playwright-chromium.mjs",
+    ]);
+  });
+
   it("routes explicit commands light tests to the lighter commands lane", () => {
     const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
 
@@ -3820,7 +3838,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
-  it("uses the large host-aware local profile on roomy local hosts", () => {
+  it("uses the global host worker budget for roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         61,
@@ -3831,7 +3849,7 @@ describe("scripts/test-projects full-suite sharding", () => {
           totalMemoryBytes: 48 * 1024 ** 3,
         },
       ),
-    ).toBe(10);
+    ).toBe(6);
   });
 
   it("keeps CI full-suite runs serial even on roomy hosts", () => {

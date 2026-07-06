@@ -1605,6 +1605,111 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(3);
   });
 
+  it("allows delivery mirror side appends with leaf controls while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    const timestamp = "2026-07-04T17:03:02.949Z";
+    const firstMirror = {
+      type: "message",
+      id: "delivery-mirror-1",
+      parentId: null,
+      timestamp,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "image-1.jpg" }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        stopReason: "stop",
+        idempotencyKey: "run-message-tool:message-tool:fingerprint:call-1",
+      },
+    };
+    const leaf = {
+      type: "leaf",
+      id: "delivery-leaf",
+      parentId: firstMirror.id,
+      timestamp,
+      targetId: "assistant-tool-call",
+      appendParentId: firstMirror.id,
+      appendMode: "side",
+    };
+    const sideMirrors = [2, 3, 4].map((index) => ({
+      type: "message",
+      id: `delivery-mirror-${index}`,
+      parentId: index === 2 ? firstMirror.id : `delivery-mirror-${index - 1}`,
+      timestamp,
+      appendMode: "side",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `image-${index}.jpg` }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        stopReason: "stop",
+        idempotencyKey: `run-message-tool:message-tool:fingerprint:call-${index}`,
+      },
+    }));
+    await fs.appendFile(
+      sessionFile,
+      [firstMirror, leaf, ...sideMirrors].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: firstMirror.id }),
+      expect.objectContaining({
+        type: "prompt_released_opaque",
+        preserveActiveLeaf: true,
+        record: expect.objectContaining({ type: "leaf", id: leaf.id }),
+      }),
+      ...sideMirrors.map((mirror) => expect.objectContaining({ type: "message", id: mirror.id })),
+    ]);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects active leaf controls while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "leaf",
+        id: "active-leaf-control",
+        parentId: null,
+        timestamp: "2026-07-04T17:03:02.949Z",
+        targetId: null,
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+    expect(mergePromptReleasedSessionEntries).not.toHaveBeenCalled();
+  });
+
   it("allows mixed delivery mirror and global metadata appends", async () => {
     const sessionFile = await createTempSessionFile();
     const mergePromptReleasedSessionEntries = vi.fn();

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerUsageAuthEnvVars": {
+    "anthropic": ["ANTHROPIC_ADMIN_KEY", "ANTHROPIC_ADMIN_API_KEY"]
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "runtimeAugment": true,
@@ -219,6 +222,7 @@
       "provider": "anthropic",
       "method": "setup-token",
       "choiceId": "setup-token",
+      "appGuidedSecret": true,
       "choiceLabel": "Anthropic setup-token",
       "choiceHint": "Manual token path",
       "assistantPriority": 40,
@@ -231,6 +235,7 @@
       "provider": "anthropic",
       "method": "api-key",
       "choiceId": "apiKey",
+      "appGuidedSecret": true,
       "choiceLabel": "Anthropic API key",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
@@ -243,7 +248,8 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["anthropic"]
+    "mediaUnderstandingProviders": ["anthropic"],
+    "usageProviders": ["anthropic"]
   },
   "mediaUnderstandingProviderMetadata": {
     "anthropic": {

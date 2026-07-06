@@ -145,6 +145,72 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
   });
 
+  it("resends unthreaded when the transport cannot deliver a threaded reply (#99638)", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/imsg-plain-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
+    });
+
+    // First attempt carried reply_to and hard-failed on the AppleScript-only
+    // transport; the retry drops reply_to and delivers rather than losing it.
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toHaveProperty("reply_to", "reply-1");
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    expect(result.messageId).toBe("p:0/imsg-plain-fallback");
+    expect(result.sentText).toBe("hello");
+    // The receipt reflects the unthreaded send that was actually delivered.
+    expect(result.receipt.replyToId).toBeUndefined();
+    expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
+  });
+
+  it("resends a media reply unthreaded when threaded replies are unsupported (#99638)", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/media-plain-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    // A media reply (file + reply_to) takes the main send path, not send-attachment.
+    const result = await sendMessageIMessage("chat_id:42", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+    });
+
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toMatchObject({ reply_to: "reply-1", file: "/tmp/image.png" });
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    // The media itself is still delivered on the retry, just unthreaded.
+    expect(sendParams[1]).toHaveProperty("file", "/tmp/image.png");
+    expect(result.messageId).toBe("p:0/media-plain-fallback");
+    expect(result.receipt.replyToId).toBeUndefined();
+  });
+
   it("passes the default RPC send transport", async () => {
     const client = createClient({ guid: "p:0/imsg-transport-default" });
 

@@ -360,7 +360,7 @@ Tool allow/deny policies still apply before sandbox rules. If a tool is denied g
 Debugging:
 
 - `openclaw sandbox list` shows sandbox containers, status, image match, age, idle time, and associated session/agent.
-- `openclaw sandbox explain [--session <key>] [--agent <id>]` inspects effective sandbox mode, tool policy, and fix-it config keys.
+- `openclaw sandbox explain [--session <key>] [--agent <id>]` inspects effective sandbox mode, host workspace, runtime workdir, Docker mounts, tool policy, and fix-it config keys. Its `workspaceRoot` field remains the configured sandbox root; `effectiveHostWorkspaceRoot` shows where the active workspace actually lives.
 - `openclaw sandbox recreate [--all | --session <key> | --agent <id>] [--browser] [--force]` removes containers/environments so they get recreated with current config on next use.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the "why is this blocked?" mental model.
 

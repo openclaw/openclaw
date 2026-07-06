@@ -995,6 +995,34 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.deliver).toBe(false);
   });
 
+  it("uses canonical active-run state when the session row only reports hasActiveRun", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main", { hasActiveRun: true })] };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-active-flag", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "continue with the smaller fix",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(result.pendingCurrentRun).toBe(true);
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload).toMatchObject({
+      sessionKey: "agent:main:main",
+      message: "continue with the smaller fix",
+      deliver: false,
+    });
+  });
+
   it("does not mark the current run pending when chat.send returns terminal ok", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {

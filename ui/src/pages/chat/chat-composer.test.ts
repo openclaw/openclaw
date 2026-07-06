@@ -451,19 +451,29 @@ describe("context notice", () => {
         200_000,
       ),
     ).toBeNull();
-    expect(
-      getContextNoticeViewModel(
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: null,
-          totalTokens: 190_000,
-          totalTokensFresh: false,
-          contextTokens: 200_000,
-        },
-        200_000,
-      ),
-    ).toBeNull();
+    const staleSession: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 190_000,
+      totalTokensFresh: false,
+      contextTokens: 200_000,
+    };
+    expect(getContextNoticeViewModel(staleSession, 200_000)).toMatchObject({
+      pct: 95,
+      detail: "~190k / 200k",
+      approximate: true,
+      warning: false,
+      compactRecommended: false,
+    });
+    render(renderContextNotice(staleSession, 200_000, { onCompact }), container);
+    const staleNotice = container.querySelector<HTMLElement>(".context-ring");
+    expect(staleNotice?.textContent?.trim()).toBe("~95%");
+    expect(staleNotice?.classList.contains("context-ring--warning")).toBe(false);
+    expect(staleNotice?.getAttribute("aria-label")).toBe(
+      "Session context usage: ~190k of 200k (~95%)",
+    );
+    expect(container.querySelector(".context-ring__action")).toBeNull();
   });
 });
 

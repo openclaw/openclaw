@@ -121,6 +121,35 @@ describe("tool-cards", () => {
     ]);
   });
 
+  it("does not repeat the tool identity in expanded details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:4a:call-4a",
+          name: "skill_workshop",
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
+          outputText: "Proposal created",
+        },
+        {
+          expanded: true,
+          onOpenSidebar: vi.fn(),
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
+    const bodyText = container.querySelector(".chat-tool-msg-body")?.textContent ?? "";
+    expect(bodyText).not.toContain("Skill Workshop");
+    expect(bodyText).toContain('"action": "create"');
+    expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
+      HTMLButtonElement,
+    );
+  });
+
   it("renders expanded tool calls without an inline output block when no output is present", () => {
     const container = document.createElement("div");
     render(

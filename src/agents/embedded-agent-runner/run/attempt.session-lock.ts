@@ -248,6 +248,8 @@ type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfo
 type PromptReleasedOpaqueEntry = {
   type: "prompt_released_opaque";
   record: unknown;
+  /** Unowned side-leaf rows may extend only the current delivery side branch. */
+  preserveActiveLeaf?: true;
 };
 
 type PromptReleasedSessionEntry =
@@ -320,6 +322,29 @@ function parsePromptReleasedOpaqueLine(line: string): PromptReleasedOpaqueEntry 
     return !isJsonRecord(record) || record.type !== "message"
       ? { type: "prompt_released_opaque", record }
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePromptReleasedSideLeafControlLine(
+  line: string,
+): PromptReleasedOpaqueEntry | undefined {
+  try {
+    const record = JSON.parse(line) as unknown;
+    if (
+      !isJsonRecord(record) ||
+      record.type !== "leaf" ||
+      !hasSessionEntryBase(record) ||
+      (record.targetId !== null && typeof record.targetId !== "string") ||
+      (record.appendParentId !== undefined &&
+        record.appendParentId !== null &&
+        typeof record.appendParentId !== "string") ||
+      record.appendMode !== "side"
+    ) {
+      return undefined;
+    }
+    return { type: "prompt_released_opaque", record, preserveActiveLeaf: true };
   } catch {
     return undefined;
   }
@@ -430,7 +455,9 @@ function classifyPromptReleasedSessionLines(
       hasGlobalMetadata = true;
       continue;
     }
-    const opaqueEntry = options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined;
+    const opaqueEntry = options?.allowAnyMessage
+      ? parsePromptReleasedOpaqueLine(line)
+      : parsePromptReleasedSideLeafControlLine(line);
     const opaqueId =
       opaqueEntry && isJsonRecord(opaqueEntry.record)
         ? normalizeTranscriptEntryId(opaqueEntry.record.id)
@@ -1149,21 +1176,23 @@ export type EmbeddedAttemptSessionLockController = {
 
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
+  initialAcquireSignal?: AbortSignal;
   lockOptions: LockOptions;
   mergePromptReleasedSessionEntries?: (
     entries: readonly PromptReleasedSessionEntry[],
   ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
   reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
-  const acquireLock = async (): Promise<SessionLock> =>
+  const acquireLock = async (signal?: AbortSignal): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
       sessionFile: params.lockOptions.sessionFile,
       timeoutMs: params.lockOptions.timeoutMs,
       staleMs: params.lockOptions.staleMs,
       maxHoldMs: params.lockOptions.maxHoldMs,
+      ...(signal ? { signal } : {}),
     });
 
-  let heldLock: SessionLock | undefined = await acquireLock();
+  let heldLock: SessionLock | undefined = await acquireLock(params.initialAcquireSignal);
   const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
   let ownedPublicationQueue: Promise<void> = Promise.resolve();
   let fenceFingerprint: SessionFileFingerprint | undefined;

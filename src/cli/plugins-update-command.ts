@@ -24,6 +24,7 @@ import {
   updateNpmInstalledPlugins,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
+import { VERSION } from "../version.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import {
   containsConfigIncludeDirective,
@@ -271,6 +272,7 @@ export async function runPluginUpdateCommand(params: {
             ? (normalizeUpdateChannel(cfg.update?.channel) ?? undefined)
             : undefined,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
+          coreVersion: VERSION,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
           ...resolveClawHubRiskAcknowledgementCliOptions({
             acknowledgeClawHubRisk: params.opts.acknowledgeClawHubRisk,
