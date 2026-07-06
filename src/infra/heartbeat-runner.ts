@@ -1914,32 +1914,37 @@ export async function runHeartbeatOnce(opts: {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
-    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
-    if (heartbeatPlugin?.heartbeat?.checkReady) {
-      const readiness = await heartbeatPlugin.heartbeat.checkReady({
+    try {
+      const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
+      if (heartbeatPlugin?.heartbeat?.checkReady) {
+        const readiness = await heartbeatPlugin.heartbeat.checkReady({
+          cfg,
+          accountId: delivery.accountId,
+          deps: opts.deps,
+        });
+        if (!readiness.ok) {
+          return false;
+        }
+      }
+      const send = await sendDurableMessageBatch({
         cfg,
+        channel: delivery.channel,
+        to: delivery.to,
         accountId: delivery.accountId,
+        threadId: delivery.threadId,
+        payloads: [{ text: resolveHeartbeatOkText() }],
+        session: outboundSession,
+        identity: outboundIdentity,
         deps: opts.deps,
       });
-      if (!readiness.ok) {
-        return false;
+      if (send.status === "failed" || send.status === "partial_failed") {
+        throw send.error;
       }
+      return true;
+    } catch (err) {
+      log.warn(`heartbeat: HEARTBEAT_OK delivery failed: ${formatErrorMessage(err)}`);
+      return false;
     }
-    const send = await sendDurableMessageBatch({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: delivery.accountId,
-      threadId: delivery.threadId,
-      payloads: [{ text: resolveHeartbeatOkText() }],
-      session: outboundSession,
-      identity: outboundIdentity,
-      deps: opts.deps,
-    });
-    if (send.status === "failed" || send.status === "partial_failed") {
-      throw send.error;
-    }
-    return true;
   };
 
   try {
