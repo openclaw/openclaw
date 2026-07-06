@@ -1,14 +1,6 @@
 // Discord tests cover retry plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  getDiscordDeliveryRetryAfterMs,
-  isRetryableDiscordDeliveryError,
-  withDiscordDeliveryRetry,
-} from "./delivery-retry.js";
-import { DiscordError, RateLimitError } from "./internal/discord.js";
-import type { GatewayPlugin } from "./internal/gateway.js";
-import { clearGateways, registerGateway } from "./monitor/gateway-registry.js";
+import { describe, expect, it, vi } from "vitest";
+import { RateLimitError } from "./internal/discord.js";
 import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
@@ -77,86 +69,69 @@ describe("createDiscordRetryRunner", () => {
     await expect(runner(fn, "send")).rejects.toThrow("fetch failed");
     expect(fn).toHaveBeenCalledTimes(2);
   });
-});
 
-describe("isRetryableDiscordDeliveryError", () => {
-  it("retries status-coded errors from injected delivery dependencies", () => {
-    expect(
-      isRetryableDiscordDeliveryError(Object.assign(new Error("bad gateway"), { status: 502 })),
-    ).toBe(true);
-  });
-
-  it("does not retry Discord client errors after the request runner handled them", () => {
-    const err = new DiscordError(new Response("upstream", { status: 502 }), {
-      message: "Bad Gateway",
+  it("adds request retries after observing a gateway disconnect", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
     });
 
-    expect(isRetryableDiscordDeliveryError(err)).toBe(false);
+    await expect(runner(fn, "send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(4);
   });
 
-  it("retries statusless transport errors while the gateway is disconnected", () => {
-    expect(
-      isRetryableDiscordDeliveryError(new TypeError("fetch failed"), {
-        gatewayDisconnected: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps Discord client errors non-retryable while the gateway is disconnected", () => {
-    const err = new DiscordError(new Response("upstream", { status: 404 }), {
-      message: "Unknown Channel",
+  it("remembers a disconnect when the gateway recovers before the baseline attempts end", async () => {
+    const isGatewayDisconnected = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected,
     });
 
-    expect(isRetryableDiscordDeliveryError(err, { gatewayDisconnected: true })).toBe(false);
+    await expect(runner(fn, "send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(3);
   });
 
-  it("does not retry unrelated statusless errors while the gateway is disconnected", () => {
-    expect(
-      isRetryableDiscordDeliveryError(new Error("invalid delivery payload"), {
-        gatewayDisconnected: true,
-      }),
-    ).toBe(false);
-  });
-});
+  it("does not extend retries for unrelated application errors", async () => {
+    const fn = vi.fn().mockRejectedValue(new Error("invalid delivery payload"));
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
+    });
 
-describe("withDiscordDeliveryRetry gateway reconnect window", () => {
-  const cfg = {
-    channels: {
-      discord: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 } },
-    },
-  } as OpenClawConfig;
-
-  afterEach(() => {
-    clearGateways();
+    await expect(runner(fn, "send")).rejects.toThrow("invalid delivery payload");
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("retries transport errors while the registered gateway is disconnected", async () => {
-    registerGateway("default", { isConnected: false } as GatewayPlugin);
-    const fn = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue("ok");
+  it("does not extend HTTP retries beyond the configured attempt count", async () => {
+    const fn = vi.fn().mockRejectedValue(Object.assign(new Error("bad gateway"), { status: 502 }));
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
+    });
 
-    await expect(withDiscordDeliveryRetry({ cfg, fn })).resolves.toBe("ok");
+    await expect(runner(fn, "send")).rejects.toThrow("bad gateway");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry statusless errors while the gateway is connected", async () => {
-    registerGateway("default", { isConnected: true } as GatewayPlugin);
+  it("honors an explicit single-attempt policy during disconnects", async () => {
     const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const runner = createDiscordRetryRunner({
+      retry: { ...ZERO_DELAY_RETRY, attempts: 1 },
+      isGatewayDisconnected: () => true,
+    });
 
-    await expect(withDiscordDeliveryRetry({ cfg, fn })).rejects.toThrow("fetch failed");
+    await expect(runner(fn, "send")).rejects.toThrow("fetch failed");
     expect(fn).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("getDiscordDeliveryRetryAfterMs", () => {
-  it("reads finite retry delays from delivery errors", () => {
-    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 0.25 })).toBe(250);
-    expect(getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "0.25" } })).toBe(250);
-  });
-
-  it("rejects unsafe retry delay magnitudes", () => {
-    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 9_007_199_254_741 })).toBeUndefined();
-    expect(
-      getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "9007199254741" } }),
-    ).toBeUndefined();
   });
 });
