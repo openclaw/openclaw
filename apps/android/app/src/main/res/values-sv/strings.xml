@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">OpenClaw-nod</string>
+    <string name="new_chat_in_worktree">Ny chatt i worktree</string>
     <string name="gateway_connection">Gatewayanslutning</string>
     <string name="connect_gateway">Anslut gateway</string>
     <string name="disconnect">Koppla från</string>

@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
+    <string name="new_chat_in_worktree">worktree에서 새 채팅</string>
     <string name="gateway_connection">게이트웨이 연결</string>
     <string name="connect_gateway">게이트웨이 연결</string>
     <string name="disconnect">연결 해제</string>
