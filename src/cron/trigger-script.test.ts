@@ -252,7 +252,10 @@ describe("cron trigger script evaluator", () => {
       return await new Promise<never>((_resolve, reject) => {
         params.signal?.addEventListener(
           "abort",
-          () => reject(params.signal?.reason ?? new Error("aborted")),
+          () => {
+            const reason = params.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("aborted"));
+          },
           { once: true },
         );
       });
