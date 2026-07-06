@@ -38,35 +38,76 @@ function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
 }
 
+const schemaValueKeywords = new Set([
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+const schemaMapKeywords = new Set([
+  "$defs",
+  "definitions",
+  "dependencies",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
 function normalizeAnthropicJsonSchema(schema: unknown): unknown {
-  if (Array.isArray(schema)) {
-    return schema.map(normalizeAnthropicJsonSchema);
-  }
   if (!isRecord(schema)) {
     return schema;
   }
 
-  const normalized: Record<string, unknown> = {};
+  let changed = false;
+  const normalized: Record<string, unknown> = { ...schema };
   for (const [key, value] of Object.entries(schema)) {
-    if (key === "additionalItems" && Array.isArray(schema.items)) {
+    if (schemaValueKeywords.has(key) && !Array.isArray(value)) {
+      const next = normalizeAnthropicJsonSchema(value);
+      normalized[key] = next;
+      changed ||= next !== value;
       continue;
     }
-    normalized[key] = normalizeAnthropicJsonSchema(value);
+    if (schemaArrayKeywords.has(key) && Array.isArray(value)) {
+      const next = value.map(normalizeAnthropicJsonSchema);
+      normalized[key] = next;
+      changed ||= next.some((entry, index) => entry !== value[index]);
+      continue;
+    }
+    if (schemaMapKeywords.has(key) && isRecord(value)) {
+      const next = Object.fromEntries(
+        Object.entries(value).map(([entryKey, entryValue]) => [
+          entryKey,
+          normalizeAnthropicJsonSchema(entryValue),
+        ]),
+      );
+      normalized[key] = next;
+      changed ||= Object.entries(value).some(
+        ([entryKey, entryValue]) => next[entryKey] !== entryValue,
+      );
+    }
   }
 
   if (Array.isArray(schema.items)) {
     normalized.prefixItems = schema.items.map(normalizeAnthropicJsonSchema);
     const additionalItems = schema.additionalItems;
-    if (additionalItems === false) {
-      normalized.items = false;
-    } else if (isRecord(additionalItems) || Array.isArray(additionalItems)) {
+    if (typeof additionalItems === "boolean" || isRecord(additionalItems)) {
       normalized.items = normalizeAnthropicJsonSchema(additionalItems);
     } else {
       delete normalized.items;
     }
+    delete normalized.additionalItems;
+    changed = true;
   }
 
-  return normalized;
+  return changed ? normalized : schema;
 }
 
 /** Snapshots direct/custom tool descriptors before Anthropic payload construction. */

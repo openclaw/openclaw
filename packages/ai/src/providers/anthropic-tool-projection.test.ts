@@ -89,4 +89,34 @@ describe("projectAnthropicTools", () => {
       additionalItems: { type: "number" },
     });
   });
+
+  it("does not rewrite instance data that resembles a tuple schema", () => {
+    const tupleLikeValue = {
+      items: ["first", "second"],
+      additionalItems: false,
+    };
+    const projection = projectAnthropicTools(
+      [
+        {
+          name: "Match",
+          description: "Match a literal value",
+          parameters: {
+            type: "object",
+            properties: {
+              value: {
+                const: tupleLikeValue,
+                default: tupleLikeValue,
+              },
+            },
+          },
+        },
+      ],
+      (name) => name,
+    );
+
+    expect(projection.tools[0]?.inputSchema.properties.value).toEqual({
+      const: tupleLikeValue,
+      default: tupleLikeValue,
+    });
+  });
 });
