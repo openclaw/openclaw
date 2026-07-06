@@ -137,12 +137,17 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
   return task.deliveryStatus === "pending";
 }
 
-export function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {
-  return (
-    task.notifyPolicy === "state_changes" &&
-    task.deliveryStatus === "pending" &&
-    !isTerminalTaskStatus(task.status)
-  );
+export function shouldAutoDeliverTaskStateChange(
+  task: TaskRecord,
+  event?: TaskEventRecord,
+): boolean {
+  if (task.notifyPolicy === "silent") {
+    return false;
+  }
+  if (task.deliveryStatus !== "pending" || isTerminalTaskStatus(task.status)) {
+    return false;
+  }
+  return event?.kind === "running" || task.notifyPolicy === "state_changes";
 }
 
 export function shouldSuppressDuplicateTerminalDelivery(params: {

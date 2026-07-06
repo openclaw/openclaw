@@ -182,6 +182,26 @@ describe("task-executor-policy", () => {
       shouldAutoDeliverTaskStateChange(
         createTask({
           status: "running",
+          notifyPolicy: "done_only",
+          deliveryStatus: "pending",
+        }),
+        { at: 10, kind: "running" },
+      ),
+    ).toBe(true);
+    expect(
+      shouldAutoDeliverTaskStateChange(
+        createTask({
+          status: "running",
+          notifyPolicy: "done_only",
+          deliveryStatus: "pending",
+        }),
+        { at: 11, kind: "progress", summary: "Still working." },
+      ),
+    ).toBe(false);
+    expect(
+      shouldAutoDeliverTaskStateChange(
+        createTask({
+          status: "running",
           notifyPolicy: "state_changes",
           deliveryStatus: "pending",
         }),

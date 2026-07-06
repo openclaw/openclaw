@@ -85,6 +85,7 @@ const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
 const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
 const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
 const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
+const pendingTaskStateChangeDeliveries = new Map<string, Promise<void>>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 type TaskRegistryRestoreState =
@@ -136,6 +137,10 @@ type TaskDeliveryOwner = {
   sessionKey?: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   flowId?: string;
+};
+
+type TaskStateChangeDeliveryOptions = {
+  requireRequesterDeliveryContext?: boolean;
 };
 
 type ParentFlowLinkErrorCode =
@@ -390,6 +395,7 @@ function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boolean {
 
 function clearTaskRegistryMemory(): void {
   clearTaskFlowSyncRetries();
+  pendingTaskStateChangeDeliveries.clear();
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
@@ -609,6 +615,39 @@ function appendTaskEvent(event: {
     kind: event.kind,
     ...(summary ? { summary } : {}),
   };
+}
+
+function buildTaskRunningEvent(task: Pick<TaskRecord, "createdAt" | "startedAt" | "lastEventAt">) {
+  return appendTaskEvent({
+    at: task.startedAt ?? task.lastEventAt ?? task.createdAt,
+    kind: "running",
+  });
+}
+
+function scheduleTaskStateChangeDelivery(
+  taskId: string,
+  latestEvent?: TaskEventRecord,
+  options?: TaskStateChangeDeliveryOptions,
+): void {
+  if (!latestEvent) {
+    return;
+  }
+  const previous = pendingTaskStateChangeDeliveries.get(taskId);
+  const delivery = (async () => {
+    await previous;
+    await maybeDeliverTaskStateChangeUpdate(taskId, latestEvent, options);
+  })().catch((error: unknown) => {
+    log.warn("Failed to deliver background task state change", {
+      taskId,
+      error,
+    });
+  });
+  pendingTaskStateChangeDeliveries.set(taskId, delivery);
+  void delivery.finally(() => {
+    if (pendingTaskStateChangeDeliveries.get(taskId) === delivery) {
+      pendingTaskStateChangeDeliveries.delete(taskId);
+    }
+  });
 }
 
 function loadTaskRegistryDeliveryRuntime() {
@@ -1020,6 +1059,9 @@ function resolveTaskStateChangeIdempotencyKey(params: {
   latestEvent: TaskEventRecord;
   owner: TaskDeliveryOwner;
 }): string {
+  if (params.latestEvent.kind === "running") {
+    return `task-start:${params.task.taskId}`;
+  }
   if (params.owner.flowId) {
     return `flow-event:${params.owner.flowId}:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
   }
@@ -1349,10 +1391,20 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   const owner = resolveTaskDeliveryOwner(task);
+  return canDeliverTaskOwnerToRequesterOrigin(owner);
+}
+
+function canDeliverTaskOwnerToRequesterOrigin(owner: TaskDeliveryOwner): boolean {
   if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
     return false;
   }
   return canDeliverToRequesterOrigin(owner.requesterOrigin);
+}
+
+function hasRequesterDeliveryContext(origin: TaskDeliveryState["requesterOrigin"]): boolean {
+  const channel = origin?.channel?.trim();
+  const to = origin?.to?.trim();
+  return Boolean(channel && to);
 }
 
 function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
@@ -1471,6 +1523,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
   }
   tasksWithPendingDelivery.add(taskId);
   try {
+    await pendingTaskStateChangeDeliveries.get(taskId);
     const latest = tasks.get(taskId);
     if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
@@ -1620,10 +1673,11 @@ async function maybeDeliverTaskStateChangeUpdate(
 async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
   taskId: string,
   latestEvent?: TaskEventRecord,
+  options: TaskStateChangeDeliveryOptions = {},
 ): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
-  if (!current || !shouldAutoDeliverTaskStateChange(current)) {
+  if (!current || !shouldAutoDeliverTaskStateChange(current, latestEvent)) {
     return current ? cloneTaskRecord(current) : null;
   }
   const deliveryState = getTaskDeliveryState(taskId);
@@ -1636,6 +1690,12 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
   }
   try {
     const owner = resolveTaskDeliveryOwner(current);
+    if (
+      options.requireRequesterDeliveryContext &&
+      !hasRequesterDeliveryContext(owner.requesterOrigin)
+    ) {
+      return cloneTaskRecord(current);
+    }
     const ownerSessionKey = owner.sessionKey?.trim();
     if (!ownerSessionKey) {
       return updateTask(taskId, {
@@ -1643,7 +1703,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         lastEventAt: Date.now(),
       });
     }
-    if (!canDeliverTaskToRequesterOrigin(current)) {
+    if (!canDeliverTaskOwnerToRequesterOrigin(owner)) {
       queueTaskSystemEvent(current, eventText);
       upsertTaskDeliveryState({
         taskId,
@@ -1877,7 +1937,9 @@ function ensureListener() {
           : undefined;
       const updated = updateTask(current.taskId, patch);
       if (updated) {
-        void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
+        scheduleTaskStateChangeDelivery(current.taskId, stateChangeEvent, {
+          requireRequesterDeliveryContext: stateChangeEvent?.kind === "running",
+        });
         void maybeDeliverTaskTerminalUpdate(current.taskId);
       }
     }
@@ -2029,6 +2091,11 @@ export function createTaskRecord(params: {
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
+  if (record.status === "running") {
+    scheduleTaskStateChangeDelivery(taskId, buildTaskRunningEvent(record), {
+      requireRequesterDeliveryContext: true,
+    });
+  }
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
   }
@@ -2151,7 +2218,9 @@ function updateTaskStateByRunId(params: {
     if (task) {
       updated.push(task);
       if (!params.suppressDelivery) {
-        void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
+        scheduleTaskStateChangeDelivery(task.taskId, nextEvent, {
+          requireRequesterDeliveryContext: nextEvent?.kind === "running",
+        });
         void maybeDeliverTaskTerminalUpdate(task.taskId);
       }
     }

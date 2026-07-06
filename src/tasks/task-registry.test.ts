@@ -1848,6 +1848,13 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          content: "Background task started: ACP background task.",
+        }),
+      );
+      hoisted.sendMessageMock.mockClear();
+
       emitAgentEvent({
         runId: "run-delivery",
         stream: "lifecycle",
@@ -1864,9 +1871,11 @@ describe("task-registry", () => {
         }),
       );
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task ready for review: ACP background task"),
-      ]);
+      await waitForAssertion(() =>
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          expect.stringContaining("Background task ready for review: ACP background task"),
+        ]),
+      );
     });
   });
 
@@ -2796,7 +2805,7 @@ describe("task-registry", () => {
       const second = maybeDeliverTaskTerminalUpdate(task.taskId);
       await Promise.all([first, second]);
 
-      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
       const message = sentMessageCall();
       expectRecordFields(message, {
         idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
@@ -2804,9 +2813,11 @@ describe("task-registry", () => {
       expectRecordFields(message.mirror, {
         idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
       });
-      expectRecordFields(requireTaskByRunId("run-racing-delivery"), {
-        deliveryStatus: "delivered",
-      });
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-racing-delivery"), {
+          deliveryStatus: "delivered",
+        }),
+      );
     });
   });
 
@@ -4248,7 +4259,159 @@ describe("task-registry", () => {
     });
   });
 
-  it("delivers concise state-change updates only when notify policy requests them", async () => {
+  it("delivers native start ack once before terminal delivery for running tasks", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      let resolveStartDelivery: () => void = () => {};
+      hoisted.sendMessageMock
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveStartDelivery = () =>
+                resolve({
+                  channel: "notifychat",
+                  to: "notifychat:123",
+                  via: "direct",
+                });
+            }),
+        )
+        .mockResolvedValueOnce({
+          channel: "notifychat",
+          to: "notifychat:123",
+          via: "direct",
+        });
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        runId: "run-start-ack-on-create",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+        notifyPolicy: "done_only",
+      });
+
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+      expectRecordFields(sentMessageCall(0), {
+        content: "Background task started: ACP background task.",
+        idempotencyKey: `task-start:${task.taskId}`,
+      });
+
+      markTaskRunningByRunId({
+        runId: "run-start-ack-on-create",
+        startedAt: 100,
+        lastEventAt: 150,
+        eventSummary: "Started.",
+      });
+      finalizeTaskRunByRunId({
+        runId: "run-start-ack-on-create",
+        runtime: "acp",
+        status: "succeeded",
+        endedAt: 250,
+        terminalSummary: "Done.",
+      });
+      await flushAsyncWork();
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+
+      resolveStartDelivery();
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2));
+      expectRecordFields(sentMessageCall(1), {
+        content: "Background task done: ACP background task (run run-star). Done.",
+      });
+      expect(sentMessageCall(0).content).toBe("Background task started: ACP background task.");
+    });
+  });
+
+  it("delivers native start ack when a queued task transitions to running", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        runId: "run-start-ack-from-queued",
+        task: "Investigate issue",
+        status: "queued",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+      });
+
+      await flushAsyncWork();
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+
+      markTaskRunningByRunId({
+        runId: "run-start-ack-from-queued",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          content: "Background task started: ACP background task.",
+          idempotencyKey: expect.stringMatching(/^task-start:/),
+        }),
+      );
+    });
+  });
+
+  it("suppresses native start ack for silent tasks and tasks without requester origin", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        runId: "run-start-ack-silent",
+        task: "Silent task",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-start-ack-no-origin",
+        task: "No origin task",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+      });
+
+      await flushAsyncWork();
+
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
+  it("delivers concise progress updates only when notify policy requests them", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
       hoisted.sendMessageMock.mockResolvedValue({
@@ -4274,9 +4437,15 @@ describe("task-registry", () => {
 
       markTaskRunningByRunId({
         runId: "run-state-change",
-        eventSummary: "Started.",
+        startedAt: 100,
+        lastEventAt: 100,
       });
-      await waitForAssertion(() => expect(hoisted.sendMessageMock).not.toHaveBeenCalled());
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          content: "Background task started: ACP background task.",
+        }),
+      );
+      hoisted.sendMessageMock.mockClear();
 
       updateTaskNotifyPolicyById({
         taskId: task.taskId,
@@ -4284,6 +4453,7 @@ describe("task-registry", () => {
       });
       recordTaskProgressByRunId({
         runId: "run-state-change",
+        lastEventAt: 200,
         eventSummary: "No output for 60s. It may be waiting for input.",
       });
 
@@ -4301,7 +4471,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("keeps background ACP progress off the foreground lane and only sends a terminal notify", async () => {
+  it("keeps background ACP chatter off the foreground lane after native start ack", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
       resetSystemEventsForTest();
@@ -4326,6 +4496,12 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
+
+      await flushAsyncWork();
+      expectRecordFields(sentMessageCall(), {
+        content: "Background task started: ACP background task.",
+      });
+      hoisted.sendMessageMock.mockClear();
 
       const relay = startAcpSpawnParentStreamRelay({
         runId: "run-quiet-terminal",
@@ -4362,15 +4538,17 @@ describe("task-registry", () => {
       await flushAsyncWork();
 
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
-      ]);
+      await waitForAssertion(() =>
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
+        ]),
+      );
       relay.dispose();
       vi.useRealTimers();
     });
   });
 
-  it("delivers a concise terminal failure message without internal ACP chatter", async () => {
+  it("delivers a concise terminal failure message after native start ack", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
       resetSystemEventsForTest();
@@ -4396,6 +4574,12 @@ describe("task-registry", () => {
         progressSummary:
           "I am loading session context and checking helper availability before writing the file.",
       });
+
+      await flushAsyncWork();
+      expectRecordFields(sentMessageCall(), {
+        content: "Background task started: ACP background task.",
+      });
+      hoisted.sendMessageMock.mockClear();
 
       emitAgentEvent({
         runId: "run-failure-terminal",
@@ -4445,6 +4629,12 @@ describe("task-registry", () => {
         notifyPolicy: "state_changes",
       });
 
+      await flushAsyncWork();
+      expectRecordFields(sentMessageCall(), {
+        content: "Background task started: ACP background task.",
+      });
+      hoisted.sendMessageMock.mockClear();
+
       const relay = startAcpSpawnParentStreamRelay({
         runId: "run-state-stream",
         parentSessionKey: "agent:main:main",
@@ -4458,11 +4648,8 @@ describe("task-registry", () => {
 
       relay.notifyStarted();
       await flushAsyncWork();
-      expectRecordFields(sentMessageCall(), {
-        content: "Background task update: ACP background task. Started.",
-      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
 
-      hoisted.sendMessageMock.mockClear();
       vi.advanceTimersByTime(1_500);
       await flushAsyncWork();
       expectRecordFields(sentMessageCall(), {
@@ -4521,6 +4708,13 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
+
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          content: "Background task started: ACP background task.",
+        }),
+      );
+      hoisted.sendMessageMock.mockClear();
 
       const result = await cancelTaskById({
         cfg: {} as never,
@@ -4593,6 +4787,14 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
       });
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2));
+      expectRecordFields(sentMessageCall(0), {
+        content: "Background task started: Subagent task.",
+      });
+      expectRecordFields(sentMessageCall(1), {
+        content: "Background task started: Subagent task.",
+      });
+      hoisted.sendMessageMock.mockClear();
       hoisted.killSubagentRunAdminMock.mockImplementationOnce(async () => {
         finalizeTaskRunByRunId({
           runId: task.runId!,
