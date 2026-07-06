@@ -241,6 +241,10 @@ export type ResetSessionEntryLifecycleParams = {
 export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
+  expectedEntry?: SessionEntry;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedUpdatedAt?: number;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 };

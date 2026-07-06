@@ -238,6 +238,8 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
+  /** Opaque owner revision used to reject stale lifecycle mutations. */
+  lifecycleRevision?: string;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;

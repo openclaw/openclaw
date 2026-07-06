@@ -844,7 +844,14 @@ export async function deleteSqliteSessionEntryLifecycle(
       : [];
     const materializedPlans = materializeSqliteSessionStateDeletePlans(deletePlans);
     runOpenClawAgentWriteTransaction((transactionDb) => {
-      if (!sqliteLifecycleTargetMatchesExpectedEntry(transactionDb, params.target, current.entry)) {
+      const transactionEntry = resolveSqliteLifecyclePrimaryEntry(
+        transactionDb,
+        params.target,
+      )?.entry;
+      if (
+        !sqliteSessionEntriesEqual(transactionEntry, current.entry) ||
+        !shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)
+      ) {
         return;
       }
       deleteSqliteLifecycleTargetRows(transactionDb, params.target);
@@ -2517,7 +2524,41 @@ function shouldRemoveSqliteSessionEntry(
   if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
     return false;
   }
+  if (
+    removal.expectedLifecycleRevision !== undefined &&
+    entry.lifecycleRevision !== removal.expectedLifecycleRevision
+  ) {
+    return false;
+  }
   if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
+    return false;
+  }
+  return true;
+}
+
+function shouldDeleteSqliteSessionEntryLifecycle(
+  entry: SessionEntry | undefined,
+  params: DeleteSessionEntryLifecycleParams,
+): entry is SessionEntry {
+  if (!entry) {
+    return false;
+  }
+  if (
+    params.expectedEntry !== undefined &&
+    !sqliteSessionEntriesEqual(entry, params.expectedEntry)
+  ) {
+    return false;
+  }
+  if (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) {
+    return false;
+  }
+  if (
+    params.expectedLifecycleRevision !== undefined &&
+    entry.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
+    return false;
+  }
+  if (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt) {
     return false;
   }
   return true;

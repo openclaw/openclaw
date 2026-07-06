@@ -285,6 +285,8 @@ export type SessionEntryLifecycleRemoval = {
   /** Optional guard for stale plans built from a prior store read. */
   expectedSessionId?: string;
   /** Optional guard for stale plans built from a prior store read. */
+  expectedLifecycleRevision?: string;
+  /** Optional guard for stale plans built from a prior store read. */
   expectedUpdatedAt?: number;
 };
 
@@ -1261,6 +1263,12 @@ function shouldRemoveSessionEntry(
     return false;
   }
   if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
+    return false;
+  }
+  if (
+    removal.expectedLifecycleRevision !== undefined &&
+    entry.lifecycleRevision !== removal.expectedLifecycleRevision
+  ) {
     return false;
   }
   if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {

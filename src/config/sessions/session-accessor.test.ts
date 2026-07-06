@@ -9,6 +9,7 @@ import {
   applySessionEntryLifecycleMutation,
   commitReplySessionInitialization,
   createSessionEntryWithTranscript,
+  deleteSessionEntryLifecycle,
   listSessionEntries,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
@@ -1275,6 +1276,62 @@ describe("session accessor seam", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      name: "exact entry",
+      params: {
+        expectedEntry: {
+          lifecycleRevision: "original-revision",
+          sessionId: "session-1",
+          updatedAt: 999,
+        },
+      },
+    },
+    {
+      name: "session id",
+      params: { expectedSessionId: "session-2" },
+    },
+    {
+      name: "lifecycle revision",
+      params: { expectedLifecycleRevision: "replacement-revision" },
+    },
+    {
+      name: "updatedAt",
+      params: { expectedUpdatedAt: 20 },
+    },
+  ])(
+    "does not delete SQLite lifecycle entries when the $name guard mismatches",
+    async ({ params }) => {
+      const scope = {
+        sessionId: "session-1",
+        sessionKey: "agent:main:guarded-delete",
+        storePath,
+      };
+      await upsertSessionEntry(scope, {
+        lifecycleRevision: "original-revision",
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      });
+
+      const result = await deleteSessionEntryLifecycle({
+        archiveTranscript: false,
+        storePath,
+        target: {
+          canonicalKey: scope.sessionKey,
+          storeKeys: [scope.sessionKey],
+        },
+        ...params,
+      });
+
+      expect(result.deleted).toBe(false);
+      expect(loadSessionEntry(scope)).toMatchObject({
+        lifecycleRevision: "original-revision",
+        sessionId: scope.sessionId,
+        updatedAt: expect.any(Number),
+      });
+    },
+  );
 
   it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
     const now = Date.now();

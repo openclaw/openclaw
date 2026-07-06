@@ -793,6 +793,14 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
   archiveTranscript: boolean;
+  /** Optional exact row guard checked under the storage writer lock. */
+  expectedEntry?: SessionEntry;
+  /** Optional provider-run identity guard checked under the storage writer lock. */
+  expectedSessionId?: string;
+  /** Optional owner revision guard checked under the storage writer lock. */
+  expectedLifecycleRevision?: string;
+  /** Optional persisted revision guard checked under the storage writer lock. */
+  expectedUpdatedAt?: number;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
