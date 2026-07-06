@@ -132,3 +132,29 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
+
+CREATE TABLE IF NOT EXISTS session_transcript_search_sources (
+  path TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  mtime INTEGER NOT NULL,
+  size INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_transcript_search_sources_session
+  ON session_transcript_search_sources(session_key);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_search_fts USING fts5(
+  path UNINDEXED,
+  session_key UNINDEXED,
+  session_id UNINDEXED,
+  agent_id UNINDEXED,
+  seq UNINDEXED,
+  message_id UNINDEXED,
+  role UNINDEXED,
+  timestamp_ms UNINDEXED,
+  text,
+  tokenize = 'unicode61'
+);

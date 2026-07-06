@@ -214,6 +214,44 @@ export const SessionsPreviewParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full-text search over session transcript message content. */
+export const SessionsSearchParamsSchema = Type.Object(
+  {
+    query: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
+    sessionKeys: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 200 })),
+    agentId: Type.Optional(NonEmptyString),
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+/** One transcript content search hit with follow-up history provenance. */
+export const SessionsSearchHitSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    sessionId: NonEmptyString,
+    agentId: NonEmptyString,
+    seq: Type.Integer({ minimum: 1 }),
+    role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+    snippet: Type.String(),
+    timestampMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    messageId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Search response for transcript content hits. */
+export const SessionsSearchResultSchema = Type.Object(
+  {
+    query: NonEmptyString,
+    hits: Type.Array(SessionsSearchHitSchema),
+    indexedSessions: Type.Integer({ minimum: 0 }),
+    searchedSessions: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 /** Describes one session and optional derived title/last-message previews. */
 export const SessionsDescribeParamsSchema = Type.Object(
   {

@@ -30,8 +30,10 @@ import {
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
+  validateSessionsSearchParams,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -107,6 +109,10 @@ import {
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
 import {
+  searchSessionTranscripts,
+  type SessionTranscriptSearchTarget,
+} from "../session-transcript-search-index.js";
+import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
@@ -146,6 +152,7 @@ import { assertValidParams } from "./validation.js";
 const log = createSubsystemLogger("gateway/sessions");
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+const SESSIONS_SEARCH_SCAN_SESSION_LIMIT = 200;
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -247,6 +254,97 @@ function loadSessionEntriesForTarget(params: {
   const store = target.store;
   const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
+}
+
+function buildSessionSearchTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId?: string;
+}): SessionTranscriptSearchTarget | null {
+  const { target, entry } = loadSessionEntriesForTarget(params);
+  const sessionId = normalizeOptionalString(entry?.sessionId);
+  if (!sessionId) {
+    return null;
+  }
+  return {
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+    sessionId,
+    ...(entry?.sessionFile ? { sessionFile: entry.sessionFile } : {}),
+    ...(entry ? { sessionEntry: entry } : {}),
+    storePath: target.storePath,
+  };
+}
+
+async function listDefaultSessionSearchTargets(params: {
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  agentId?: string;
+}): Promise<SessionTranscriptSearchTarget[]> {
+  const { store } = loadCombinedSessionStoreForGateway(params.cfg, {
+    agentId: params.agentId,
+  });
+  const modelCatalog = await loadOptionalServerMethodModelCatalog(
+    params.context,
+    "sessions.search",
+  );
+  const result = await listSessionsFromStoreAsync({
+    cfg: params.cfg,
+    storePath: "(multiple)",
+    store,
+    modelCatalog,
+    opts: {
+      limit: SESSIONS_SEARCH_SCAN_SESSION_LIMIT,
+      includeGlobal: false,
+      includeUnknown: false,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    },
+  });
+  const targets: SessionTranscriptSearchTarget[] = [];
+  for (const row of result.sessions) {
+    const target = buildSessionSearchTarget({
+      cfg: params.cfg,
+      key: row.key,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    });
+    if (target) {
+      targets.push(target);
+    }
+  }
+  return targets;
+}
+
+async function resolveSessionSearchTargets(params: {
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  sessionKey?: string;
+  sessionKeys?: string[];
+  agentId?: string;
+}): Promise<SessionTranscriptSearchTarget[]> {
+  const keys =
+    params.sessionKeys && params.sessionKeys.length > 0
+      ? params.sessionKeys
+      : params.sessionKey
+        ? [params.sessionKey]
+        : [];
+  if (keys.length === 0) {
+    return await listDefaultSessionSearchTargets(params);
+  }
+  const targets: SessionTranscriptSearchTarget[] = [];
+  const seen = new Set<string>();
+  for (const key of keys.slice(0, SESSIONS_SEARCH_SCAN_SESSION_LIMIT)) {
+    const target = buildSessionSearchTarget({
+      cfg: params.cfg,
+      key,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    });
+    if (!target || seen.has(target.sessionKey)) {
+      continue;
+    }
+    seen.add(target.sessionKey);
+    targets.push(target);
+  }
+  return targets;
 }
 
 function resolveOptionalInitialSessionMessage(params: {
@@ -865,6 +963,36 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     respond(true, payload, undefined);
+  },
+  "sessions.search": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
+      return;
+    }
+    const p = params;
+    const cfg = context.getRuntimeConfig();
+    try {
+      const targets = await resolveSessionSearchTargets({
+        cfg,
+        context,
+        ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
+        ...(Array.isArray(p.sessionKeys) ? { sessionKeys: p.sessionKeys } : {}),
+        ...(p.agentId ? { agentId: p.agentId } : {}),
+      });
+      const result = await searchSessionTranscripts({
+        targets,
+        query: p.query,
+        limit: p.limit,
+      });
+      const payload: SessionsSearchResult = {
+        query: p.query,
+        hits: result.hits.map(({ rank: _rank, ...hit }) => hit),
+        indexedSessions: result.indexedSessions,
+        searchedSessions: targets.length,
+      };
+      respond(true, payload, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+    }
   },
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {

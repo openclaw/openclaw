@@ -555,6 +555,101 @@ test("lists and patches session store via sessions.* RPC", async () => {
   );
 });
 
+test("sessions.search indexes visible transcript text", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-search.jsonl");
+  await fs.writeFile(
+    transcriptPath,
+    createLinearSessionTranscript("sess-search", [
+      "keep the kestrel rollout behind the operator flag",
+      "ordinary unrelated note",
+    ]),
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: {
+        sessionId: "sess-search",
+        updatedAt: Date.now(),
+        sessionFile: transcriptPath,
+      },
+    },
+  });
+
+  const search = await directSessionHandlerReq<{
+    hits: Array<{
+      sessionKey: string;
+      sessionId: string;
+      agentId: string;
+      seq: number;
+      role: string;
+      snippet: string;
+    }>;
+    indexedSessions: number;
+    searchedSessions: number;
+  }>("sessions.search", {
+    query: "kestrel",
+    sessionKey: "main",
+    limit: 5,
+  });
+
+  expect(search.ok).toBe(true);
+  expect(search.payload?.indexedSessions).toBe(1);
+  expect(search.payload?.searchedSessions).toBe(1);
+  expect(search.payload?.hits).toHaveLength(1);
+  expect(search.payload?.hits[0]).toMatchObject({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-search",
+    agentId: "main",
+    seq: 1,
+    role: "user",
+  });
+  expect(search.payload?.hits[0]?.snippet.toLowerCase()).toContain("kestrel");
+
+  const replacementTranscriptPath = path.join(dir, "sess-search-replacement.jsonl");
+  await fs.writeFile(
+    replacementTranscriptPath,
+    createLinearSessionTranscript("sess-search-replacement", [
+      "move the otter rollout into the new session",
+    ]),
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: {
+        sessionId: "sess-search-replacement",
+        updatedAt: Date.now(),
+        sessionFile: replacementTranscriptPath,
+      },
+    },
+  });
+
+  const staleSearch = await directSessionHandlerReq<{
+    hits: Array<{ snippet: string }>;
+    indexedSessions: number;
+  }>("sessions.search", {
+    query: "kestrel",
+    sessionKey: "main",
+    limit: 5,
+  });
+  expect(staleSearch.ok).toBe(true);
+  expect(staleSearch.payload?.indexedSessions).toBe(1);
+  expect(staleSearch.payload?.hits).toEqual([]);
+
+  const replacementSearch = await directSessionHandlerReq<{
+    hits: Array<{ sessionId: string; snippet: string }>;
+  }>("sessions.search", {
+    query: "otter",
+    sessionKey: "main",
+    limit: 5,
+  });
+  expect(replacementSearch.ok).toBe(true);
+  expect(replacementSearch.payload?.hits).toHaveLength(1);
+  expect(replacementSearch.payload?.hits[0]).toMatchObject({
+    sessionId: "sess-search-replacement",
+  });
+});
+
 test("sessions.list configuredAgentsOnly keeps configured-agent children and hides unrelated stores", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {

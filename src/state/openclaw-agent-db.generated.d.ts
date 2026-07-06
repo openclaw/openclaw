@@ -82,6 +82,62 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionTranscriptSearchFts {
+  agent_id: string | null;
+  message_id: string | null;
+  path: string | null;
+  role: string | null;
+  seq: string | null;
+  session_id: string | null;
+  session_key: string | null;
+  text: string | null;
+  timestamp_ms: string | null;
+}
+
+export interface SessionTranscriptSearchFtsConfig {
+  k: string;
+  v: string | null;
+}
+
+export interface SessionTranscriptSearchFtsContent {
+  c0: string | null;
+  c1: string | null;
+  c2: string | null;
+  c3: string | null;
+  c4: string | null;
+  c5: string | null;
+  c6: string | null;
+  c7: string | null;
+  c8: string | null;
+  id: Generated<number>;
+}
+
+export interface SessionTranscriptSearchFtsData {
+  block: Uint8Array | null;
+  id: Generated<number>;
+}
+
+export interface SessionTranscriptSearchFtsDocsize {
+  id: Generated<number>;
+  sz: Uint8Array | null;
+}
+
+export interface SessionTranscriptSearchFtsIdx {
+  pgno: string | null;
+  segid: string;
+  term: string;
+}
+
+export interface SessionTranscriptSearchSources {
+  agent_id: string;
+  mtime: number;
+  path: string;
+  session_id: string;
+  session_key: string;
+  size: number;
+  updated_at: number;
+}
+
 export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
@@ -92,4 +148,11 @@ export interface DB {
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
+  session_transcript_search_fts: SessionTranscriptSearchFts;
+  session_transcript_search_fts_config: SessionTranscriptSearchFtsConfig;
+  session_transcript_search_fts_content: SessionTranscriptSearchFtsContent;
+  session_transcript_search_fts_data: SessionTranscriptSearchFtsData;
+  session_transcript_search_fts_docsize: SessionTranscriptSearchFtsDocsize;
+  session_transcript_search_fts_idx: SessionTranscriptSearchFtsIdx;
+  session_transcript_search_sources: SessionTranscriptSearchSources;
 }
