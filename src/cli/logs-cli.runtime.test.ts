@@ -13,6 +13,15 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+function mockSpawnedChild() {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const kill = vi.fn(() => true);
+  const child = Object.assign(new EventEmitter(), { kill, stderr, stdout });
+  spawnMock.mockReturnValue(child as unknown as ChildProcess);
+  return { child, kill, stderr, stdout };
+}
+
 describe("execFileUtf8Tail", () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -21,11 +30,7 @@ describe("execFileUtf8Tail", () => {
   it.each(["stdout", "stderr"] as const)(
     "terminates the child when %s emits an error",
     async (streamName) => {
-      const stdout = new EventEmitter();
-      const stderr = new EventEmitter();
-      const kill = vi.fn(() => true);
-      const child = Object.assign(new EventEmitter(), { kill, stderr, stdout });
-      spawnMock.mockReturnValue(child as unknown as ChildProcess);
+      const { kill, stderr, stdout } = mockSpawnedChild();
 
       const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
       stdout.emit("data", Buffer.from("partial output"));
@@ -43,10 +48,7 @@ describe("execFileUtf8Tail", () => {
   );
 
   it("does not kill the child when spawning fails", async () => {
-    const child = new EventEmitter();
-    const kill = vi.fn(() => true);
-    Object.assign(child, { kill, stderr: new EventEmitter(), stdout: new EventEmitter() });
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    const { child, kill } = mockSpawnedChild();
 
     const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
     child.emit("error", new Error("spawn failed"));
@@ -55,25 +57,38 @@ describe("execFileUtf8Tail", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it("does not return a replacement character when stdout tail starts mid UTF-8 sequence", async () => {
-    const stdout = new EventEmitter();
-    const stderr = new EventEmitter();
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => true),
-      stderr,
-      stdout,
+  it.each([
+    { label: "two-byte", text: "¢z", maxBytes: 2, expected: "z" },
+    { label: "three-byte", text: "€z", maxBytes: 3, expected: "z" },
+    { label: "four-byte", text: "😀z", maxBytes: 4, expected: "z" },
+    { label: "complete", text: "a¢z", maxBytes: 3, expected: "¢z" },
+  ])("decodes a $label character at the stdout tail boundary", async (testCase) => {
+    const { child, stdout } = mockSpawnedChild();
+    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], {
+      maxBytes: testCase.maxBytes,
     });
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
 
-    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1 });
-    stdout.emit("data", Buffer.from("é", "utf8"));
+    stdout.emit("data", Buffer.from(testCase.text, "utf8"));
     child.emit("close", 0);
 
     await expect(resultPromise).resolves.toEqual({
       code: 0,
       stderr: "",
-      stdout: "",
+      stdout: testCase.expected,
       truncated: true,
     });
+  });
+
+  it("decodes a truncated stderr tail at a UTF-8 boundary", async () => {
+    const { child, stderr } = mockSpawnedChild();
+    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
+
+    stderr.emit("data", Buffer.concat([Buffer.from("😀"), Buffer.alloc(64 * 1024 - 3, "x")]));
+    child.emit("close", 1);
+
+    const result = await resultPromise;
+    expect(result.stderr).toBe("x".repeat(64 * 1024 - 3));
+    expect(result.stderr).not.toContain("�");
+    expect(result.truncated).toBe(false);
   });
 });
