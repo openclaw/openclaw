@@ -1,4 +1,6 @@
 // Diagnostics Otel plugin module implements service behavior.
+import type { Agent as HttpAgent } from "node:http";
+import type { Agent as HttpsAgent } from "node:https";
 import {
   context as otelContextApi,
   metrics,
@@ -29,6 +31,7 @@ import {
   ATTR_GEN_AI_TOOL_DEFINITIONS,
 } from "@opentelemetry/semantic-conventions/incubating";
 import { waitForDiagnosticEventsDrained } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -105,6 +108,8 @@ type OtelContentCapturePolicy = {
 };
 
 type OtelLogsExporter = "otlp" | "stdout" | "both";
+type OtelHttpAgent = HttpAgent | HttpsAgent;
+type OtelHttpAgentFactory = (protocol: string) => OtelHttpAgent | Promise<OtelHttpAgent>;
 
 type BuiltOtelLogRecord = {
   logRecord: LogRecord;
@@ -196,6 +201,14 @@ function resolveSignalOtelUrl(params: {
     normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
     params.path,
   );
+}
+
+function resolveOtelHttpAgentOptions(url: string | undefined): OtelHttpAgentFactory | undefined {
+  if (!url) {
+    return undefined;
+  }
+  const agent = createNodeProxyAgent({ mode: "env", targetUrl: url });
+  return agent ? () => agent : undefined;
 }
 
 function resolveSampleRate(value: number | undefined): number | undefined {
@@ -1482,10 +1495,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           endpoint,
           path: "v1/metrics",
         });
+        const traceHttpAgentOptions = resolveOtelHttpAgentOptions(traceUrl);
+        const metricHttpAgentOptions = resolveOtelHttpAgentOptions(metricUrl);
         const traceExporter = tracesEnabled
           ? new OTLPTraceExporter({
               ...(traceUrl ? { url: traceUrl } : {}),
               ...(headers ? { headers } : {}),
+              ...(traceHttpAgentOptions ? { httpAgentOptions: traceHttpAgentOptions } : {}),
             })
           : undefined;
         const spanProcessors =
@@ -1501,6 +1517,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ? new OTLPMetricExporter({
               ...(metricUrl ? { url: metricUrl } : {}),
               ...(headers ? { headers } : {}),
+              ...(metricHttpAgentOptions ? { httpAgentOptions: metricHttpAgentOptions } : {}),
             })
           : undefined;
 
@@ -1904,9 +1921,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
         if (logsToOtlp) {
+          const logHttpAgentOptions = resolveOtelHttpAgentOptions(logUrl);
           const logExporter = new OTLPLogExporter({
             ...(logUrl ? { url: logUrl } : {}),
             ...(headers ? { headers } : {}),
+            ...(logHttpAgentOptions ? { httpAgentOptions: logHttpAgentOptions } : {}),
           });
           const logProcessor = new BatchLogRecordProcessor(
             logExporter,

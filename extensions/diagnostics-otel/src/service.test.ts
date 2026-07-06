@@ -60,6 +60,8 @@ const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
 const spanProcessorCtor = vi.hoisted(() => vi.fn());
+const nodeProxyAgent = vi.hoisted(() => ({ kind: "node-proxy-agent" }));
+const createNodeProxyAgentMock = vi.hoisted(() => vi.fn());
 const unhandledRejectionHandlerState = vi.hoisted(() => {
   let handlers: Array<(reason: unknown) => boolean> = [];
   return {
@@ -126,6 +128,10 @@ vi.mock("@opentelemetry/exporter-logs-otlp-proto", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   registerUnhandledRejectionHandler: unhandledRejectionHandlerState.register,
+}));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  createNodeProxyAgent: createNodeProxyAgentMock,
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
@@ -318,8 +324,13 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, argIndex: number, c
   return mockCall(mock, callIndex)[argIndex];
 }
 
-function firstExporterOptions(mock: { mock: { calls: unknown[][] } }): { url?: string } {
-  return mockCallArg(mock, 0) as { url?: string };
+type TestExporterOptions = {
+  url?: string;
+  httpAgentOptions?: (protocol: string) => unknown;
+};
+
+function firstExporterOptions(mock: { mock: { calls: unknown[][] } }): TestExporterOptions {
+  return mockCallArg(mock, 0) as TestExporterOptions;
 }
 
 function firstSpanProcessorOptions(): { scheduledDelayMillis?: number } {
@@ -489,6 +500,7 @@ afterAll(() => {
   vi.doUnmock("@opentelemetry/sdk-logs");
   vi.doUnmock("@opentelemetry/sdk-metrics");
   vi.doUnmock("@opentelemetry/sdk-trace-base");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.doUnmock("@opentelemetry/resources");
   vi.doUnmock("@opentelemetry/semantic-conventions");
   vi.resetModules();
@@ -514,6 +526,8 @@ describe("diagnostics-otel service", () => {
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
     spanProcessorCtor.mockClear();
+    createNodeProxyAgentMock.mockReset();
+    createNodeProxyAgentMock.mockReturnValue(undefined);
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -1573,6 +1587,54 @@ describe("diagnostics-otel service", () => {
     expect(traceOptions.url).toBe("https://trace-env.example.com/v1/traces");
     expect(metricOptions.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
     expect(logOptions.url).toBe("https://log-env.example.com/otlp/v1/logs");
+    await service.stop?.(ctx);
+  });
+
+  test("passes env proxy agents to OTLP HTTP exporters", async () => {
+    createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("https://collector.example.com/otlp", {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    const traceOptions = firstExporterOptions(traceExporterCtor);
+    const metricOptions = firstExporterOptions(metricExporterCtor);
+    const logOptions = firstExporterOptions(logExporterCtor);
+    expect(traceOptions.httpAgentOptions?.("https:")).toBe(nodeProxyAgent);
+    expect(metricOptions.httpAgentOptions?.("https:")).toBe(nodeProxyAgent);
+    expect(logOptions.httpAgentOptions?.("https:")).toBe(nodeProxyAgent);
+    expect(createNodeProxyAgentMock).toHaveBeenNthCalledWith(1, {
+      mode: "env",
+      targetUrl: "https://collector.example.com/otlp/v1/traces",
+    });
+    expect(createNodeProxyAgentMock).toHaveBeenNthCalledWith(2, {
+      mode: "env",
+      targetUrl: "https://collector.example.com/otlp/v1/metrics",
+    });
+    expect(createNodeProxyAgentMock).toHaveBeenNthCalledWith(3, {
+      mode: "env",
+      targetUrl: "https://collector.example.com/otlp/v1/logs",
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("leaves OTLP HTTP exporters on their default agents when env proxy is bypassed", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("https://collector.example.com/otlp", {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(firstExporterOptions(metricExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(firstExporterOptions(logExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(createNodeProxyAgentMock).toHaveBeenCalledTimes(3);
     await service.stop?.(ctx);
   });
 
