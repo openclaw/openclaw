@@ -1,4 +1,4 @@
-﻿package ai.openclaw.app.gateway
+package ai.openclaw.app.gateway
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -8,17 +8,17 @@ import android.net.NetworkRequest
 import android.util.Log
 
 /**
- * Listens for Android transport restores and signals [onAvailable] when the device
+ * Listens for Android transport restores and signals [onValidatedNetworkAvailable] when the device
  * regains a validated internet connection. Used to trigger an immediate gateway
  * reconnect instead of waiting out the time-based backoff slot in [GatewaySession].
  *
- * The receiver MUST already guard against the already-connected case: this monitor only
- * reports "transport came back", it does not decide whether a reconnect is wanted.
- * The application context is used so the callback survives the NodeRuntime lifetime.
+ * This monitor only reports "transport came back". Each gateway session still owns
+ * desired-connection and auth-pause decisions. The application context keeps this
+ * process-lifetime callback aligned with the process-lifetime NodeRuntime.
  */
-class NetworkMonitor(
+internal class NetworkMonitor(
   context: Context,
-  private val onAvailable: () -> Unit,
+  private val onValidatedNetworkAvailable: () -> Unit,
 ) {
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
   private val logTag = "OpenClaw/NetworkMonitor"
@@ -30,25 +30,17 @@ class NetworkMonitor(
 
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
-      override fun onAvailable(network: Network) {
-        // Captive portals can report onAvailable before NET_CAPABILITY_VALIDATED;
-        // read capabilities for this network instead of treating availability alone as online.
-        markOnlineWhenValidated(network)
-      }
-
       override fun onCapabilitiesChanged(
         network: Network,
         capabilities: NetworkCapabilities,
       ) {
-        if (isTransportValidated(capabilities)) {
-          markOnline(network)
-        } else {
-          markLost(network)
+        if (validatedNetworks.update(network, isTransportValidated(capabilities))) {
+          notifyValidatedNetworkAvailable()
         }
       }
 
       override fun onLost(network: Network) {
-        markLost(network)
+        validatedNetworks.update(network, isValidated = false)
       }
     }
 
@@ -66,33 +58,12 @@ class NetworkMonitor(
     }
   }
 
-  private fun markOnlineWhenValidated(network: Network) {
-    val cm = connectivity ?: return
-    val caps =
-      try {
-        cm.getNetworkCapabilities(network)
-      } catch (_: Throwable) {
-        null
-      } ?: return
-    if (isTransportValidated(caps)) {
-      markOnline(network)
-    }
-  }
-
-  private fun markOnline(network: Network) {
-    // Dedupe via the pure transition rule so the semantics stay unit-testable.
-    if (!validatedNetworks.markValidated(network)) {
-      return
-    }
+  private fun notifyValidatedNetworkAvailable() {
     try {
-      onAvailable()
+      onValidatedNetworkAvailable()
     } catch (err: Throwable) {
-      Log.w(logTag, "onAvailable callback threw: ${err.message ?: err::class.java.simpleName}")
+      Log.w(logTag, "network restore callback threw: ${err.message ?: err::class.java.simpleName}")
     }
-  }
-
-  private fun markLost(network: Network) {
-    validatedNetworks.markLost(network)
   }
 
   private fun initialValidatedNetworks(): Set<Network> {
@@ -113,15 +84,17 @@ internal class ValidatedNetworkState<T>(
   private val validatedNetworks = initialValidatedNetworks.toMutableSet()
 
   @Synchronized
-  fun markValidated(network: T): Boolean {
+  fun update(
+    network: T,
+    isValidated: Boolean,
+  ): Boolean {
     val wasOnline = validatedNetworks.isNotEmpty()
-    validatedNetworks.add(network)
-    return shouldEmitOnlineTransition(wasOnline)
-  }
-
-  @Synchronized
-  fun markLost(network: T) {
-    validatedNetworks.remove(network)
+    if (isValidated) {
+      validatedNetworks.add(network)
+    } else {
+      validatedNetworks.remove(network)
+    }
+    return !wasOnline && validatedNetworks.isNotEmpty()
   }
 }
 
@@ -131,9 +104,3 @@ internal class ValidatedNetworkState<T>(
  */
 internal fun isTransportValidated(capabilities: NetworkCapabilities): Boolean =
   capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-
-/**
- * True only on the first transition out of an offline state. Repeated onAvailable /
- * onCapabilitiesChanged calls while already online must not re-fire the reconnect path.
- */
-internal fun shouldEmitOnlineTransition(previouslyOnline: Boolean): Boolean = !previouslyOnline

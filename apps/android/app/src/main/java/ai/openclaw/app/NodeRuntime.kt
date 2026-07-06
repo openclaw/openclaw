@@ -879,10 +879,14 @@ class NodeRuntime private constructor(
   /**
    * Triggers an immediate gateway reconnect when Android reports a validated transport
    * restore, instead of waiting for the time-based backoff slot in [GatewaySession].
-   * Reuses the foreground reconnect path so all existing guards (already-connected,
-   * pending trust decision, endpoint resolution) still apply.
+   * Each session keeps ownership of desired-connection and auth-pause decisions.
    */
-  private val networkMonitor = NetworkMonitor(appContext, ::reconnectPreferredGatewayOnForeground)
+  private val networkMonitor = NetworkMonitor(appContext, ::retryGatewaySessionsAfterNetworkRestore)
+
+  private fun retryGatewaySessionsAfterNetworkRestore() {
+    operatorSession.retryAfterNetworkRestore()
+    nodeSession.retryAfterNetworkRestore()
+  }
 
   private val notificationOutbox: NotificationNodeEventOutbox by lazy {
     NotificationNodeEventOutbox(
