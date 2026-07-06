@@ -1,5 +1,6 @@
 // Runtime proxy tests cover SSE parsing, terminal error handling, and request
 // payload scrubbing before proxying model streams.
+import { createServer, type AddressInfo } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { streamProxy } from "./proxy.js";
@@ -558,5 +559,55 @@ describe("streamProxy", () => {
       stopReason: "error",
       errorMessage: "Proxy stream ended before terminal event",
     });
+  });
+
+  it("routes the request through the SSRF guard with the operator-allowed proxy host", async () => {
+    // Real loopback proves the guard's allowedHostnames policy permits the
+    // operator-configured proxy hostname end-to-end (DNS pin + dispatcher +
+    // post-stream release). vi.stubGlobal("fetch") is intentionally NOT used:
+    // the production path must exercise the guard's pinned-dispatcher branch.
+    const requests: Array<{ url: string; body: string; auth: string | undefined }> = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        requests.push({
+          url: req.url ?? "",
+          body: Buffer.concat(chunks).toString("utf8"),
+          auth: req.headers.authorization,
+        });
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+    const proxyUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const stream = streamProxy(model, context, {
+        authToken: "token-abc",
+        proxyUrl,
+      });
+      for await (const _event of stream) {
+        /* drain */
+      }
+      await stream.result();
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].url).toBe("/api/stream");
+      expect(requests[0].auth).toBe("Bearer token-abc");
+      const body = JSON.parse(requests[0].body) as {
+        model?: { id?: string; provider?: string };
+        options?: { headers?: unknown };
+      };
+      expect(body.model?.id).toBe(model.id);
+      expect(body.model?.provider).toBe(model.provider);
+      expect(body.options).not.toHaveProperty("headers");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

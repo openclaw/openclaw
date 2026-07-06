@@ -10,6 +10,7 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
 // Internal import for JSON parsing utility
 import type {
   AssistantMessage,
@@ -281,6 +282,7 @@ export function streamProxy(
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const readIdleTimeoutMs = resolveProxyReadIdleTimeoutMs(options.timeoutMs);
+    let releaseGuarded: (() => Promise<void>) | undefined;
 
     const abortHandler = () => {
       if (reader) {
@@ -294,18 +296,24 @@ export function streamProxy(
 
     try {
       const requestAbort = buildProxyRequestAbort(options.signal, readIdleTimeoutMs);
-      const response = await fetch(`${options.proxyUrl}/api/stream`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${options.authToken}`,
-          "Content-Type": "application/json",
+      const guarded = await fetchWithSsrFGuard({
+        url: `${options.proxyUrl}/api/stream`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${options.authToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: sanitizeProxyModel(model),
+            context,
+            options: buildProxyRequestOptions(options),
+          }),
+          signal: requestAbort.signal,
         },
-        body: JSON.stringify({
-          model: sanitizeProxyModel(model),
-          context,
-          options: buildProxyRequestOptions(options),
-        }),
-        signal: requestAbort.signal,
+        mode: GUARDED_FETCH_MODE.STRICT,
+        policy: { allowedHostnames: [new URL(options.proxyUrl).hostname] },
+        auditContext: "proxy-stream",
       })
         .catch((error: unknown) => {
           if (
@@ -324,6 +332,9 @@ export function streamProxy(
         .finally(() => {
           requestAbort.clear();
         });
+
+      const response = guarded.response;
+      releaseGuarded = guarded.release;
 
       if (!response.ok) {
         let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
@@ -415,6 +426,11 @@ export function streamProxy(
       } catch {
         // Stream handling above already pushed the terminal proxy event;
         // cleanup failures must not replace it with a secondary release error.
+      }
+      try {
+        await releaseGuarded?.();
+      } catch {
+        // Guarded fetch release failures must not replace the primary result.
       }
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
