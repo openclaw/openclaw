@@ -6,6 +6,126 @@ const ANSI_RE = new RegExp(`${SGR_PATTERN}|${OSC8_PATTERN}`, "g");
 const SGR_START_RE = new RegExp(`^${SGR_PATTERN}`);
 const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 
+/** Trim a trailing `)` from a bare URL only if it leaves parentheses unbalanced. */
+function trimTrailingUnbalancedParen(url: string): string {
+  if (!url.endsWith(")")) {
+    return url;
+  }
+  let depth = 0;
+  for (const char of url) {
+    if (char === "(") {
+      depth++;
+    } else if (char === ")") {
+      depth--;
+    }
+  }
+  // A negative depth means there are more closing than opening parens; drop
+  // trailing close parens that likely belong to surrounding markdown/text.
+  let trimmed = url;
+  while (depth < 0 && trimmed.endsWith(")")) {
+    trimmed = trimmed.slice(0, -1);
+    depth++;
+  }
+  return trimmed;
+}
+
+interface MarkdownLinkMatch {
+  start: number;
+  end: number;
+  url: string;
+}
+
+/**
+ * Find markdown link hrefs in text, respecting balanced parentheses inside the
+ * URL so links like `[text](https://example.com/path_(note))` parse correctly.
+ */
+function findMarkdownLinkHrefs(text: string): MarkdownLinkMatch[] {
+  const matches: MarkdownLinkMatch[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const openBracket = text.indexOf("[", i);
+    if (openBracket === -1) {
+      break;
+    }
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) {
+      break;
+    }
+    if (text[closeBracket + 1] !== "(") {
+      i = openBracket + 1;
+      continue;
+    }
+    const urlStart = closeBracket + 2;
+    // Skip optional < ... > wrapper.
+    let cursor = urlStart;
+    let wrapped = false;
+    if (text[cursor] === "<") {
+      wrapped = true;
+      cursor++;
+    }
+    if (!text.slice(cursor).startsWith("http://") && !text.slice(cursor).startsWith("https://")) {
+      i = openBracket + 1;
+      continue;
+    }
+
+    // Walk the URL, tracking paren depth, until we find the matching close paren.
+    let depth = 0;
+    let urlEnd = cursor;
+    while (urlEnd < text.length) {
+      const char = text[urlEnd];
+      if (char === "(") {
+        depth++;
+      } else if (char === ")") {
+        if (depth === 0) {
+          break;
+        }
+        depth--;
+      } else if (wrapped && char === ">" && depth === 0) {
+        // For `<url>` wrappers, the URL ends at `>` and the close paren follows.
+        urlEnd++;
+        break;
+      }
+      urlEnd++;
+    }
+
+    if (urlEnd >= text.length || text[urlEnd] !== ")") {
+      i = openBracket + 1;
+      continue;
+    }
+
+    let rawUrl = text.slice(cursor, urlEnd);
+    if (wrapped && rawUrl.endsWith(">")) {
+      rawUrl = rawUrl.slice(0, -1);
+    }
+    // Strip optional title text that may appear between the URL and closing `)`.
+    const trimmedUrl = stripMarkdownLinkTitle(rawUrl);
+    matches.push({ start: openBracket, end: urlEnd + 1, url: trimmedUrl });
+    i = urlEnd + 1;
+  }
+  return matches;
+}
+
+/** Remove a trailing markdown link title (e.g. `"title"` or `'title'`) from a URL. */
+function stripMarkdownLinkTitle(rawUrl: string): string {
+  const titleMatch = rawUrl.match(/\s+["'][^"']*["']\s*$/);
+  if (titleMatch) {
+    return rawUrl.slice(0, titleMatch.index).trimEnd();
+  }
+  return rawUrl;
+}
+
+/** Remove markdown links from text so bare-URL extraction does not double-match. */
+function removeMarkdownLinks(text: string): string {
+  let result = "";
+  let lastEnd = 0;
+  for (const match of findMarkdownLinkHrefs(text)) {
+    result += text.slice(lastEnd, match.start);
+    lastEnd = match.end;
+  }
+  result += text.slice(lastEnd);
+  return result;
+}
+
 /**
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).
@@ -14,20 +134,21 @@ export function extractUrls(markdown: string): string[] {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
-  const mdLinkRe = /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = mdLinkRe.exec(markdown)) !== null) {
-    urls.add(m[1]);
+  // Parse manually so URLs that contain balanced parentheses (e.g. Wikipedia
+  // disambiguation pages) are kept intact instead of being truncated at the
+  // first `)`.
+  for (const { url } of findMarkdownLinkHrefs(markdown)) {
+    urls.add(url);
   }
 
   // Bare URLs (remove markdown links first to avoid double-matching)
-  const stripped = markdown.replace(
-    /\[(?:[^\]]*)\]\(\s*<?https?:\/\/[^)\s>]+>?(?:\s+["'][^"']*["'])?\s*\)/g,
-    "",
-  );
-  const bareRe = /https?:\/\/[^\s)\]>]+/g;
+  const stripped = removeMarkdownLinks(markdown);
+  const bareRe = /https?:\/\/[^\s\]>]+/g;
+  let m: RegExpExecArray | null;
   while ((m = bareRe.exec(stripped)) !== null) {
-    urls.add(m[0]);
+    // Trim a trailing `)` only when it would leave the URL with unbalanced
+    // parentheses, so bare URLs like `https://example.com/path)` stay valid.
+    urls.add(trimTrailingUnbalancedParen(m[0]));
   }
 
   return [...urls];

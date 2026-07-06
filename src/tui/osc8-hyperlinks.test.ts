@@ -47,6 +47,28 @@ describe("extractUrls", () => {
     const urls = extractUrls("https://example.com/path?q=1&r=2#section");
     expect(urls).toEqual(["https://example.com/path?q=1&r=2#section"]);
   });
+
+  it("extracts markdown link URLs containing balanced parentheses", () => {
+    const urls = extractUrls("[Wikipedia](https://en.wikipedia.org/wiki/URL_(disambiguation))");
+    expect(urls).toEqual(["https://en.wikipedia.org/wiki/URL_(disambiguation)"]);
+  });
+
+  it("extracts markdown link URLs with parentheses and title text", () => {
+    const urls = extractUrls(
+      '[Wikipedia](https://en.wikipedia.org/wiki/URL_(disambiguation) "Title")',
+    );
+    expect(urls).toEqual(["https://en.wikipedia.org/wiki/URL_(disambiguation)"]);
+  });
+
+  it("keeps bare URLs with balanced parentheses", () => {
+    const urls = extractUrls("See https://en.wikipedia.org/wiki/URL_(disambiguation) for details");
+    expect(urls).toEqual(["https://en.wikipedia.org/wiki/URL_(disambiguation)"]);
+  });
+
+  it("trims a trailing unbalanced close parenthesis from bare URLs", () => {
+    const urls = extractUrls("(see https://example.com/path))");
+    expect(urls).toEqual(["https://example.com/path"]);
+  });
 });
 
 describe("addOsc8Hyperlinks", () => {
