@@ -1602,7 +1602,7 @@ export const zh_TW: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       addAttachment: "新增附件",
-      attachPhoto: "相片",
+      attachPhoto: "照片",
       attachFile: "Attach file",
       attachFileOption: "檔案",
       contextUsage: {

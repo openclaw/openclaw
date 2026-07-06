@@ -1651,7 +1651,7 @@ export const it: TranslationMap = {
       addAttachment: "Aggiungi allegato",
       attachPhoto: "Foto",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "Documento",
       contextUsage: {
         title: "Dettagli sull'uso del contesto",
         open: "Apri i dettagli sull'uso del contesto",

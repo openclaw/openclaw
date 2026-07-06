@@ -2771,17 +2771,20 @@ describe("chat attachment picker", () => {
       ".agent-chat__camera-input",
       "camera capture input",
     ) as HTMLInputElement;
-    const cameraButton = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
-    ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
+    const cameraButton = requireElement(
+      container,
+      '.agent-chat__camera-btn[aria-label="Take photo"]',
+      "camera button",
+    ) as HTMLButtonElement;
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
-    expect(cameraButton!.closest(".agent-chat__attach-menu")).not.toBeNull();
-    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
-    cameraButton!.click();
+    expect(cameraButton.closest(".agent-chat__composer-input-row")).not.toBeNull();
+    expect(
+      container.querySelector(".agent-chat__composer-footer .agent-chat__camera-btn"),
+    ).toBeNull();
+    cameraButton.click();
     expect(clickInput).toHaveBeenCalledTimes(1);
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -2799,14 +2802,12 @@ describe("chat attachment picker", () => {
     });
   });
 
-  it("keeps the camera attachment option available when the composer has text", () => {
+  it("keeps the mobile camera action available when the composer has text", () => {
     const container = renderChatView({ draft: "Ready to send" });
 
-    const cameraOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
-    ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
-    expect(cameraOption).toBeInstanceOf(HTMLButtonElement);
-    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
+    expect(
+      container.querySelector('.agent-chat__camera-btn[aria-label="Take photo"]'),
+    ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 

@@ -1629,7 +1629,7 @@ export const uk: TranslationMap = {
       discard: "Відкинути",
       faster: "Швидше",
       smarter: "Розумніше",
-      useDefaultModel: "Використовувати модель за замовчуванням",
+      useDefaultModel: "Використати модель за замовчуванням",
     },
     pairingQrExpired: {
       title: "QR-код для пар'ювання застарів",

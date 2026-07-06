@@ -1641,7 +1641,7 @@ export const id: TranslationMap = {
       addAttachment: "Tambahkan lampiran",
       attachPhoto: "Foto",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "Berkas",
       contextUsage: {
         title: "Detail penggunaan konteks",
         open: "Buka detail penggunaan konteks",

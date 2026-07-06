@@ -1618,7 +1618,7 @@ export const vi: TranslationMap = {
       discard: "Bỏ",
       faster: "Nhanh hơn",
       smarter: "Thông minh hơn",
-      useDefaultModel: "Sử dụng mô hình mặc định",
+      useDefaultModel: "Dùng mô hình mặc định",
     },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",

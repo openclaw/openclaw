@@ -1279,6 +1279,10 @@ openclaw-chat-page {
   stroke-linejoin: round;
 }
 
+.agent-chat__camera-btn {
+  display: none;
+}
+
 .agent-chat__control-label {
   display: none;
 }
@@ -1998,6 +2002,28 @@ openclaw-chat-page {
     min-height: 44px;
     justify-content: center;
     padding: 0;
+  }
+
+  .agent-chat__camera-btn {
+    display: inline-flex;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, color-mix(in srgb, var(--ok) 55%, var(--info)), var(--bg) 20%);
+    color: var(--primary-foreground);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .agent-chat__camera-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, color-mix(in srgb, var(--ok) 65%, var(--info)), var(--bg) 15%);
+    color: var(--primary-foreground);
+  }
+
+  .agent-chat__camera-btn svg {
+    width: 18px;
+    height: 18px;
   }
 
   .agent-chat__toolbar-right {

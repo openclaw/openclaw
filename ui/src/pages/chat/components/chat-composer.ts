@@ -1926,6 +1926,19 @@ export function renderChatComposer(props: ChatComposerProps) {
       providerQuota: props.providerQuota,
     },
   );
+  const cameraAction = html`
+    <openclaw-tooltip .content=${t("chat.composer.takePhoto")}>
+      <button
+        type="button"
+        class="agent-chat__input-btn agent-chat__camera-btn"
+        @click=${clickComposerCameraInput}
+        aria-label=${t("chat.composer.takePhoto")}
+        ?disabled=${!canCompose}
+      >
+        ${icons.camera}
+      </button>
+    </openclaw-tooltip>
+  `;
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel =
@@ -2428,7 +2441,7 @@ export function renderChatComposer(props: ChatComposerProps) {
             >
           </div>
           <div class="agent-chat__composer-actions">
-            ${renderChatPrimaryActions(runControlsProps)}
+            ${cameraAction} ${renderChatPrimaryActions(runControlsProps)}
           </div>
         </div>
 
