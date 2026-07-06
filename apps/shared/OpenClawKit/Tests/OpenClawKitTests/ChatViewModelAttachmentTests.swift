@@ -306,6 +306,31 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(agentViewModel.sessionRoutingContract, oldContract)
     }
 
+    @MainActor
+    func testAttachmentStagingPinsSessionAndIdentityUntilItFinishes() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: AttachmentProcessingTransport(),
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main")
+
+        viewModel.beginAttachmentStaging()
+        viewModel.syncSession(to: "agent:work:main")
+        viewModel.syncDeliveryIdentity(
+            activeAgentId: "work",
+            sessionRoutingContract: "per-sender|main|work")
+
+        XCTAssertEqual(viewModel.sessionKey, "main")
+        XCTAssertEqual(viewModel.activeAgentId, "main")
+        XCTAssertEqual(viewModel.sessionRoutingContract, "per-sender|main|main")
+
+        viewModel.endAttachmentStaging()
+
+        XCTAssertEqual(viewModel.sessionKey, "agent:work:main")
+        XCTAssertEqual(viewModel.activeAgentId, "work")
+        XCTAssertEqual(viewModel.sessionRoutingContract, "per-sender|main|work")
+    }
+
     func testAttachmentSendWithoutOutboxUsesLiveTransport() async throws {
         let capture = AttachmentSendCapture()
         let viewModel = await MainActor.run {

@@ -49,6 +49,7 @@ public final class OpenClawChatViewModel {
     private var deferredExternalSessionKey: String?
     private var deferredDeliveryIdentity: DeferredDeliveryIdentity?
     private var isSubmittingDraft = false
+    private var attachmentStagingCount = 0
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = []
@@ -528,11 +529,19 @@ public final class OpenClawChatViewModel {
     ]
 
     public func addAttachments(urls: [URL]) {
-        Task { await self.loadAttachments(urls: urls) }
+        self.beginAttachmentStaging()
+        Task {
+            defer { self.endAttachmentStaging() }
+            await self.loadAttachments(urls: urls)
+        }
     }
 
     public func addImageAttachment(data: Data, fileName: String, mimeType: String) {
-        Task { await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType) }
+        self.beginAttachmentStaging()
+        Task {
+            defer { self.endAttachmentStaging() }
+            await self.addImageAttachment(url: nil, data: data, fileName: fileName, mimeType: mimeType)
+        }
     }
 
     public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
@@ -554,7 +563,19 @@ public final class OpenClawChatViewModel {
     }
 
     private var blocksAttachmentOwnerChange: Bool {
-        self.isSendingAttachmentDraft || !self.attachments.isEmpty
+        self.isSendingAttachmentDraft || self.attachmentStagingCount > 0 || !self.attachments.isEmpty
+    }
+
+    /// File reads and image processing suspend before the attachment exists.
+    /// Keep their original chat owner pinned until staging succeeds or fails.
+    func beginAttachmentStaging() {
+        self.attachmentStagingCount += 1
+    }
+
+    func endAttachmentStaging() {
+        precondition(self.attachmentStagingCount > 0)
+        self.attachmentStagingCount -= 1
+        self.applyDeferredExternalStateIfReady()
     }
 
     // MARK: - Internals

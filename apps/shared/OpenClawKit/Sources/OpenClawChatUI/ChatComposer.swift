@@ -1091,7 +1091,9 @@ struct OpenClawChatComposer: View {
         else { return }
 
         self.stagingVoiceNoteURL = recording.fileURL
+        self.viewModel.beginAttachmentStaging()
         Task {
+            defer { self.viewModel.endAttachmentStaging() }
             await self.viewModel.addVoiceNoteAttachment(
                 fileURL: recording.fileURL,
                 durationSeconds: recording.durationSeconds)

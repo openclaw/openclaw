@@ -10,8 +10,12 @@ import UIKit
 
 extension OpenClawChatViewModel {
     /// Stages a recorded m4a voice note and removes its temporary file.
-    func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
-        defer { try? FileManager.default.removeItem(at: fileURL) }
+    public func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
+        self.beginAttachmentStaging()
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            self.endAttachmentStaging()
+        }
 
         let data: Data
         do {
