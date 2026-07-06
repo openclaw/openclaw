@@ -590,6 +590,49 @@
       }
     },
     {
+      "name": "@openclaw/longcat-provider",
+      "description": "OpenClaw LongCat provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "longcat",
+          "label": "LongCat"
+        },
+        "providers": [
+          {
+            "id": "longcat",
+            "aliases": ["meituan-longcat"],
+            "name": "LongCat",
+            "docs": "/providers/longcat",
+            "categories": ["cloud", "llm"],
+            "envVars": ["LONGCAT_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "longcat-api-key",
+                "choiceLabel": "LongCat API key",
+                "groupId": "longcat",
+                "groupLabel": "LongCat",
+                "groupHint": "OpenAI-compatible LongCat API",
+                "optionKey": "longcatApiKey",
+                "cliFlag": "--longcat-api-key",
+                "cliOption": "--longcat-api-key <key>",
+                "cliDescription": "LongCat API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/longcat-provider",
+          "npmSpec": "@openclaw/longcat-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",

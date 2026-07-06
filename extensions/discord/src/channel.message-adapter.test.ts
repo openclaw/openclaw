@@ -93,7 +93,7 @@ describe("discord channel message adapter", () => {
       });
       expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith("channel:123456", "hello", {
         verbose: false,
-        replyTo: undefined,
+        reply: undefined,
         accountId: "default",
         silent: undefined,
         cfg: {},
@@ -121,7 +121,7 @@ describe("discord channel message adapter", () => {
         mediaAccess: undefined,
         mediaLocalRoots: undefined,
         mediaReadFile: undefined,
-        replyTo: undefined,
+        reply: undefined,
         accountId: "default",
         silent: undefined,
         cfg: {},
@@ -147,7 +147,7 @@ describe("discord channel message adapter", () => {
         "payload",
         expect.objectContaining({
           verbose: false,
-          replyTo: undefined,
+          reply: undefined,
           accountId: "default",
           silent: undefined,
           cfg: {},
@@ -199,7 +199,7 @@ describe("discord channel message adapter", () => {
         {
           verbose: false,
           accountId: "default",
-          replyTo: "reply-1",
+          reply: { messageId: "reply-1", scope: "all" },
           silent: true,
           cfg: {},
           textLimit: undefined,

@@ -515,7 +515,7 @@ describe("deliverDiscordReply", () => {
     const deps = firstDeliverParams().deps!;
     await deps.discordVoice("channel:123", "https://example.com/voice.ogg", {
       cfg,
-      replyTo: "reply-1",
+      reply: { messageId: "reply-1", scope: "all" },
     });
 
     expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0)).toBe(
@@ -527,7 +527,7 @@ describe("deliverDiscordReply", () => {
     const voiceOptions = objectArgAt(sendVoiceMessageDiscordMock, 2);
     expect(voiceOptions.cfg).toBe(cfg);
     expect(voiceOptions.token).toBe("token");
-    expect(voiceOptions.replyTo).toBe("reply-1");
+    expect(voiceOptions.reply).toEqual({ messageId: "reply-1", scope: "all" });
   });
 
   it("rewrites bound thread replies to parent target plus thread id and persona", async () => {

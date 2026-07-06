@@ -1481,6 +1481,7 @@
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
+                  "providers/longcat",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",

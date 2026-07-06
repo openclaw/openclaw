@@ -1632,6 +1632,7 @@ describe("official external plugin catalog", () => {
       ["deepinfra", "@openclaw/deepinfra-provider"],
       ["deepseek", "@openclaw/deepseek-provider"],
       ["groq", "@openclaw/groq-provider"],
+      ["longcat", "@openclaw/longcat-provider"],
       ["kilocode", "@openclaw/kilocode-provider"],
       ["kimi", "@openclaw/kimi-provider"],
       ["qianfan", "@openclaw/qianfan-provider"],
@@ -1752,6 +1753,19 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists LongCat as an official external provider", () => {
+    const longcat = expectCatalogEntry("longcat");
+
+    expect(resolveOfficialExternalPluginId(longcat)).toBe("longcat");
+    expect(getOfficialExternalPluginCatalogEntry("meituan-longcat")).toBe(longcat);
+    expect(resolveOfficialExternalPluginInstall(longcat)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/longcat-provider",
+      npmSpec: "@openclaw/longcat-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
+  });
+
   it("resolves external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
@@ -1814,6 +1828,7 @@ describe("official external plugin catalog", () => {
         DEEPINFRA_API_KEY: "deepinfra-key",
         DEEPSEEK_API_KEY: "deepseek-key",
         GROQ_API_KEY: "groq-key",
+        LONGCAT_API_KEY: "longcat-key",
         KILOCODE_API_KEY: "kilocode-key",
         KIMICODE_API_KEY: "kimi-key",
         KIMI_API_KEY: "moonshot-kimi-key",
@@ -1839,6 +1854,7 @@ describe("official external plugin catalog", () => {
       "groq",
       "kilocode",
       "kimi",
+      "longcat",
       "moonshot",
       "qianfan",
       "qwen",
@@ -1849,6 +1865,7 @@ describe("official external plugin catalog", () => {
       "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ LONGCAT_API_KEY: " " })).toEqual([]);
   });
 
   it("keeps Tencent auth choices available through the cold-install auth catalog", () => {
