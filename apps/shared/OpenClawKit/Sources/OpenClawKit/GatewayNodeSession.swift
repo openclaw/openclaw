@@ -541,6 +541,8 @@ public actor GatewayNodeSession {
                 command: request.command,
                 paramsJSON: request.paramsJSON,
                 nodeId: request.nodeId)
+            // GatewayChannel waits for push handling before it rearms receive. Run device work
+            // separately so a long invoke cannot starve heartbeats or later node requests.
             Task { [weak self] in
                 await self?.handleInvokeRequest(
                     request: request,
