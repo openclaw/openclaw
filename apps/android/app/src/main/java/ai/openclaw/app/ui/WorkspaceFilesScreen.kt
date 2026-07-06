@@ -4,7 +4,7 @@ import ai.openclaw.app.GatewayWorkspaceEntry
 import ai.openclaw.app.GatewayWorkspaceFile
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.chat.ChatCodeBlock
-import ai.openclaw.app.ui.chat.decodeBase64Bitmap
+import ai.openclaw.app.ui.chat.rememberBase64ImageState
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,7 +55,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,36 +73,41 @@ internal fun WorkspaceFilesScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  // Directory drill-down and preview are screen-local: the shell keeps a
-  // single-slot Back origin, so deeper levels unwind here first.
-  var pathStack by rememberSaveable { mutableStateOf(listOf("")) }
-  var previewPath by rememberSaveable { mutableStateOf<String?>(null) }
+  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
 
-  BackHandler(enabled = previewPath != null || pathStack.size > 1) {
-    if (previewPath != null) {
-      previewPath = null
-    } else {
-      pathStack = pathStack.dropLast(1)
+  // Runtime routing derives the active agent from these two facts. Re-key the
+  // local browser with the same facts so paths from one agent never cross over.
+  key(mainSessionKey, gatewayDefaultAgentId) {
+    var pathStack by rememberSaveable { mutableStateOf(listOf("")) }
+    var previewPath by rememberSaveable { mutableStateOf<String?>(null) }
+
+    BackHandler(enabled = previewPath != null || pathStack.size > 1) {
+      if (previewPath != null) {
+        previewPath = null
+      } else {
+        pathStack = pathStack.dropLast(1)
+      }
     }
-  }
 
-  val openPreview = previewPath
-  if (openPreview != null) {
-    WorkspaceFilePreview(
-      viewModel = viewModel,
-      path = openPreview,
-      onBack = { previewPath = null },
-    )
-  } else {
-    WorkspaceDirectoryScreen(
-      viewModel = viewModel,
-      path = pathStack.last(),
-      onBack = {
-        if (pathStack.size > 1) pathStack = pathStack.dropLast(1) else onBack()
-      },
-      onOpenDirectory = { path -> pathStack = pathStack + path },
-      onOpenFile = { path -> previewPath = path },
-    )
+    val openPreview = previewPath
+    if (openPreview != null) {
+      WorkspaceFilePreview(
+        viewModel = viewModel,
+        path = openPreview,
+        onBack = { previewPath = null },
+      )
+    } else {
+      WorkspaceDirectoryScreen(
+        viewModel = viewModel,
+        path = pathStack.last(),
+        onBack = {
+          if (pathStack.size > 1) pathStack = pathStack.dropLast(1) else onBack()
+        },
+        onOpenDirectory = { path -> pathStack = pathStack + path },
+        onOpenFile = { path -> previewPath = path },
+      )
+    }
   }
 }
 
@@ -341,17 +346,16 @@ private fun WorkspaceFilePreview(
 @Composable
 private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
   if (file.isBase64 && file.mimeType.startsWith("image/")) {
-    // Malformed base64 from the gateway boundary must degrade to the
-    // no-preview state, not crash composition (Base64.decode throws).
-    val bitmap = remember(file.path) { runCatching { decodeBase64Bitmap(file.content) }.getOrNull() }
-    if (bitmap != null) {
-      Image(
-        bitmap = bitmap.asImageBitmap(),
-        contentDescription = file.name,
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-      )
-    } else {
-      ClawEmptyState(title = "No preview", body = "This image could not be decoded.")
+    val imageState = rememberBase64ImageState(file.content)
+    when {
+      imageState.image != null ->
+        Image(
+          bitmap = imageState.image,
+          contentDescription = file.name,
+          modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        )
+      imageState.failed -> ClawEmptyState(title = "No preview", body = "This image could not be decoded.")
+      else -> CircularProgressIndicator(modifier = Modifier.size(22.dp))
     }
   } else {
     // Reuse the chat renderer's code block so previews highlight and cap
