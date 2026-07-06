@@ -38,6 +38,10 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
 // per agent store) keeps the hot path allocation-free.
 const SESSION_STORE_TEMP_RE_CACHE = new Map<string, RegExp>();
 
+// Atomic writes normally rename within milliseconds. Every cleanup path shares this grace
+// period so none can race an in-flight session-store write.
+export const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
+
 function sessionStoreTempPattern(storeBasename: string): RegExp {
   let pattern = SESSION_STORE_TEMP_RE_CACHE.get(storeBasename);
   if (!pattern) {
