@@ -214,7 +214,7 @@ export function createTelegramBotCore(
         if (isTelegramSpooledReplayUpdate(ctx.update)) {
           throw new TelegramSpooledReplayProcessingError(result.error);
         }
-        updateTracker.finishUpdate(begin.update, { completed: true });
+        updateTracker.finishUpdate(begin.update, { completed: false });
         return;
       }
       updateTracker.finishUpdate(begin.update, { completed: true });

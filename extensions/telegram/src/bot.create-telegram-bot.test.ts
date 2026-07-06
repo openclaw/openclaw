@@ -2708,7 +2708,7 @@ describe("createTelegramBot", () => {
     expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([202]);
   });
 
-  it("persists recorded dispatch failures during normal polling", async () => {
+  it("keeps recorded dispatch failures retryable during normal polling", async () => {
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {
         await next();
@@ -2762,11 +2762,20 @@ describe("createTelegramBot", () => {
       });
     });
     await flushTelegramTestMicrotasks();
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([501]);
+    expect(onUpdateId).not.toHaveBeenCalled();
 
     await runMiddlewareChain({ update: { update_id: 502 } }, async () => {});
     await flushTelegramTestMicrotasks();
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([501, 502]);
+    expect(onUpdateId).not.toHaveBeenCalled();
+
+    const retryHandler = vi.fn();
+    await runMiddlewareChain({ update: { update_id: 501 } }, async () => {
+      retryHandler();
+    });
+    await flushTelegramTestMicrotasks();
+
+    expect(retryHandler).toHaveBeenCalledTimes(1);
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([502]);
   });
 
   it("rejects recorded dispatch failures during isolated spool replay", async () => {
