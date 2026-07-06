@@ -358,12 +358,6 @@ export class ChatPane extends LitElement {
       });
       return;
     }
-    if (state.realtimeTalkOptionsOpen) {
-      event.preventDefault();
-      state.realtimeTalkOptionsOpen = false;
-      state.requestUpdate();
-      return;
-    }
     if (!state.chatMobileControlsOpen) {
       return;
     }
@@ -384,17 +378,6 @@ export class ChatPane extends LitElement {
         changed = true;
       }
     });
-    if (state.realtimeTalkOptionsOpen) {
-      const insideTalkOptions = Array.from(
-        this.querySelectorAll(
-          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
-        ),
-      ).some((node) => path.includes(node));
-      if (!insideTalkOptions) {
-        state.realtimeTalkOptionsOpen = false;
-        changed = true;
-      }
-    }
     if (changed) {
       state.requestUpdate();
     }
@@ -874,7 +857,6 @@ export class ChatPane extends LitElement {
           if (!canOpenRealtimeTalkSettings) {
             return;
           }
-          state.realtimeTalkOptionsOpen = false;
           this.context.navigate("communications", { search: "?section=talk" });
         },
         onSettingsChange: state.applySettings,
