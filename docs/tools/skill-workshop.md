@@ -202,6 +202,14 @@ Skill Workshop tool, so run proposal review actions from a normal host-side
 agent session or the CLI.
 </Note>
 
+## Suggested skills
+
+OpenClaw detects durable instructions such as “next time” and “remember to” after successful
+interactive turns. On the next turn, the agent offers to save the detected workflow through
+`skill_workshop`; the user decides whether to create a proposal. This built-in suggestion does not
+create or change a skill by itself. Enable `skills.workshop.autonomous.enabled` to create pending
+proposals directly instead.
+
 ## Approval and autonomy
 
 ```json5
