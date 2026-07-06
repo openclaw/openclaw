@@ -231,6 +231,20 @@ describe("createCronToolSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts payload.fallbacks null in patch (clear-to-inherit)", () => {
+    expect(
+      Value.Check(createCronToolSchema(), {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          payload: {
+            fallbacks: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("job.agentId and job.sessionKey project to plain string type for OpenAPI 3.0 compat", () => {
     const root = providerSchemaRecord.properties as
       | Record<string, { properties?: Record<string, unknown> }>
