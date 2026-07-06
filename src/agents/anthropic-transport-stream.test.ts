@@ -345,6 +345,47 @@ describe("anthropic transport stream", () => {
     expect((cancelReason as Error).message).toBe(result.errorMessage);
   });
 
+  it("rejects oversized Anthropic SSE frames before buffering without bound", async () => {
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    let cancelCalled = false;
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(streamController) {
+            streamController.enqueue(encoder.encode("x".repeat(16 * 1024 * 1024 + 1)));
+          },
+          cancel() {
+            cancelCalled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+
+    const resultPromise = runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
+    );
+
+    const timedOut = Symbol("timed out");
+    const result = await Promise.race([resultPromise, delay(1_000, timedOut)]);
+    if (result === timedOut) {
+      controller.abort(new Error("oversized Anthropic SSE frame did not trip buffer cap"));
+      await resultPromise;
+      throw new Error("Anthropic SSE stream did not reject oversized pending buffer within 1000ms");
+    }
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      "Anthropic Messages SSE response exceeded max pending buffer size (16777216 chars) without event boundary",
+    );
+    expect(cancelCalled).toBe(true);
+  });
+
   it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
 

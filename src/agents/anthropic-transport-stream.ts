@@ -69,6 +69,9 @@ const CLAUDE_CODE_VERSION = "2.1.75";
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+// Mirror the fetch sanitizer cap here because compatible routes such as Kimi
+// bypass that layer; without a parser-local guard, partial frames grow forever.
+const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -670,6 +673,15 @@ function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   }
 }
 
+function assertAnthropicSsePendingBufferWithinLimit(pendingChars: number): void {
+  if (pendingChars <= ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
+    return;
+  }
+  throw new Error(
+    `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
+  );
+}
+
 async function* parseAnthropicSseBody(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -688,6 +700,7 @@ async function* parseAnthropicSseBody(
       buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
       let frameEnd = buffer.indexOf("\n\n");
       while (frameEnd >= 0) {
+        assertAnthropicSsePendingBufferWithinLimit(frameEnd);
         const frame = buffer.slice(0, frameEnd);
         buffer = buffer.slice(frameEnd + 2);
         const data = frame
@@ -700,8 +713,11 @@ async function* parseAnthropicSseBody(
         }
         frameEnd = buffer.indexOf("\n\n");
       }
+      assertAnthropicSsePendingBufferWithinLimit(buffer.length);
     }
-    const tail = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n").trim();
+    const tailBuffer = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n");
+    assertAnthropicSsePendingBufferWithinLimit(tailBuffer.length);
+    const tail = tailBuffer.trim();
     if (tail) {
       const data = tail
         .split("\n")
