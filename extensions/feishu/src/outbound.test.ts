@@ -790,6 +790,57 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(JSON.stringify(card)).not.toContain("image-secret");
   });
 
+  it("sends plain payload text card JSON as a native Feishu card", async () => {
+    const text = JSON.stringify({
+      schema: "2.0",
+      header: {
+        title: { tag: "plain_text", content: "Plain JSON card" },
+        template: "green",
+      },
+      body: {
+        elements: [{ tag: "markdown", content: "Card body" }],
+      },
+    });
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text },
+    });
+
+    const card = sendCardCall()?.card;
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Plain JSON card" },
+      template: "green",
+    });
+    expect(card.body.elements).toEqual([{ tag: "markdown", content: "Card body" }]);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expectFeishuResult(result, "native_card_msg");
+  });
+
+  it("keeps invalid plain card JSON on the text fallback path", async () => {
+    const text = JSON.stringify({
+      schema: "2.0",
+      body: {
+        elements: [{ tag: "img", img_key: "image-secret" }],
+      },
+    });
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toBe(text);
+    expectFeishuResult(result, "text_msg");
+  });
+
   it("sends payload media before final native cards", async () => {
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
