@@ -502,7 +502,8 @@ export function registerCronEditCommand(cron: Command) {
                   : "none";
             } else if (
               opts.bestEffortDeliver === true ||
-              ((hasAgentTurnPayloadField || hasCommandPayloadField) && hasBestEffort)
+              ((hasAgentTurnPayloadField || hasCommandPayloadField) &&
+                opts.bestEffortDeliver === true)
             ) {
               // Back-compat: best-effort true and payload edits historically implied announce mode.
               delivery.mode = "announce";
