@@ -619,6 +619,22 @@ For images/files in **channels**, or to fetch **message history**, enable Micros
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
 4. **Fully quit and relaunch Teams** to clear cached app metadata.
 
+### Group-chat file attachments (`graphMediaFallback`)
+
+Teams strips `<attachment id>` references from the message HTML it delivers to bots in **group chats**, so a file attached to a group message can arrive with no reference the bot can act on — even with the Graph permissions above granted (see [#89594](https://github.com/openclaw/openclaw/issues/89594)). To have OpenClaw fetch such messages via Graph and download their attachments anyway, enable:
+
+```json
+{
+  "channels": {
+    "msteams": {
+      "graphMediaFallback": true
+    }
+  }
+}
+```
+
+Requires `Chat.Read.All` (and `ChannelMessage.Read.All` for channels) plus `Files.Read.All` / `Sites.Read.All` Application permissions with admin consent. Trade-off: one extra Graph message lookup for each group/channel message that carries HTML but yields no downloadable media (this includes mention-only messages), which is why it is off by default.
+
 **User mentions:** @mentions work out of the box for users already in the conversation. To dynamically search and mention users **not in the current conversation**, add `User.Read.All` (Application) permission and grant admin consent.
 
 ## Known limitations

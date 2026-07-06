@@ -161,6 +161,17 @@ export type MSTeamsConfig = {
    * Use specific hosts only; avoid multi-tenant suffixes.
    */
   mediaAuthAllowHosts?: Array<string>;
+  /**
+   * Fetch group/channel message media via Microsoft Graph even when the Bot
+   * Framework payload contains no `<attachment id>` references. Teams strips
+   * those tags from group-chat HTML, so file attachments are otherwise
+   * invisible to the bot. Requires `Chat.Read.All` (and
+   * `ChannelMessage.Read.All` for channels) plus `Files.Read.All` /
+   * `Sites.Read.All` Graph Application permissions with admin consent. Adds
+   * one Graph message lookup per group/channel message that yields no media.
+   * Default: false.
+   */
+  graphMediaFallback?: boolean;
   /** Default: require @mention to respond in channels/groups. */
   requireMention?: boolean;
   /** Max group/channel messages to keep as history context (0 disables). */

@@ -57,6 +57,13 @@ export async function resolveMSTeamsInboundMedia(params: {
   log: MSTeamsLogger;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
+  /**
+   * When true, attempt the Graph media fetch for group/channel messages that
+   * carry a `text/html` attachment but no extractable `<attachment id>` tags.
+   * Teams strips those tags from the HTML delivered to bots in group chats,
+   * so real file attachments are otherwise invisible (#89594).
+   */
+  graphMediaFallback?: boolean;
 }): Promise<MSTeamsInboundMedia[]> {
   const {
     attachments,
@@ -123,8 +130,24 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
+    // Teams strips `<attachment id>` tags from the HTML delivered to bots in
+    // group chats, so real file attachments can arrive with an empty extracted
+    // ID list (#89594). With `channels.msteams.graphMediaFallback` enabled,
+    // attempt the Graph fetch for any group/channel message that carried an
+    // HTML attachment and produced no media — at the cost of one Graph message
+    // lookup per such message. The default stays off so mention-only messages
+    // don't generate spurious lookups (#58617).
+    const hasGraphFallbackCandidate =
+      hasHtmlFileAttachment ||
+      (params.graphMediaFallback === true &&
+        attachments.some(
+          (att) =>
+            typeof att.contentType === "string" &&
+            att.contentType.toLowerCase().startsWith("text/html"),
+        ));
+
     if (
-      hasHtmlFileAttachment &&
+      hasGraphFallbackCandidate &&
       mediaList.length === 0 &&
       !isBotFrameworkPersonalChatId(conversationId)
     ) {

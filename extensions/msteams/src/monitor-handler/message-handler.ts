@@ -607,6 +607,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       tokenProvider,
       allowHosts: msteamsCfg?.mediaAllowHosts,
       authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
+      graphMediaFallback: msteamsCfg?.graphMediaFallback,
       conversationType,
       conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,

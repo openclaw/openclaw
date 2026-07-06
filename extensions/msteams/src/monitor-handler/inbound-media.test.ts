@@ -128,6 +128,76 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
   });
 
+  it("triggers Graph fallback without <attachment> tags when graphMediaFallback is enabled", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    // Group-chat HTML arrives with the `<attachment id>` tags stripped by
+    // Teams even when a real file is attached (#89594).
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(downloadMSTeamsGraphMedia).mockResolvedValue({
+      media: [{ path: "/tmp/doc.pdf", contentType: "application/pdf", placeholder: "[document]" }],
+    });
+
+    const media = await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      conversationType: "groupChat",
+      conversationId: "19:group@thread.v2",
+      graphMediaFallback: true,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: "<div>please read the attached file</div>",
+        },
+      ],
+    });
+
+    expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
+    expect(media).toHaveLength(1);
+  });
+
+  it("keeps the tag gate when graphMediaFallback is disabled (default)", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      conversationType: "groupChat",
+      conversationId: "19:group@thread.v2",
+      attachments: [
+        {
+          contentType: "text/html",
+          content: "<div>please read the attached file</div>",
+        },
+      ],
+    });
+
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+  });
+
+  it("does NOT apply graphMediaFallback to personal Bot Framework chats", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      conversationType: "personal",
+      conversationId: "a:1personal",
+      graphMediaFallback: true,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: "<div>hello</div>",
+        },
+      ],
+    });
+
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+  });
+
   it("does NOT trigger Graph fallback when no attachments are text/html", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     // No HTML attachments at all → extractor returns [].
