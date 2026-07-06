@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Remote browser CDP policy:** allow the configured CDP control host through an existing hostname allowlist without widening page navigation policy. (#100986, #100819) Thanks @NianJiuZst.
 - **Discord streamed finals:** send completion replies as fresh messages so inactive channels become unread, while preserving targeted mentions without escalating `@everyone` or `@here`. (#99711, #99662) Thanks @davelutztx.
 - **Agent auth copy order:** preserve the source agent's portable auth-profile precedence when copying credentials to a new agent while excluding skipped profiles and transient auth state. (#100833) Thanks @machine3at.
 - **Cron edit delivery:** preserve each job's implicit delivery mode when applying partial delivery updates, so disabling best-effort delivery no longer turns detached job announcements off. (#100846) Thanks @machine3at.
