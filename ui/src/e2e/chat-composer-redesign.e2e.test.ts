@@ -473,14 +473,18 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
       await expect
         .poll(async () => {
-          const [attachBox, voiceBox] = await Promise.all([
+          const [polledAttachBox, polledVoiceBox] = await Promise.all([
             attach.boundingBox(),
             voice.boundingBox(),
           ]);
-          if (!attachBox || !voiceBox) {
+          if (!polledAttachBox || !polledVoiceBox) {
             return Number.POSITIVE_INFINITY;
           }
-          return Math.abs(attachBox.y + attachBox.height / 2 - (voiceBox.y + voiceBox.height / 2));
+          return Math.abs(
+            polledAttachBox.y +
+              polledAttachBox.height / 2 -
+              (polledVoiceBox.y + polledVoiceBox.height / 2),
+          );
         })
         .toBeLessThanOrEqual(2);
       await attach.click();
