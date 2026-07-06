@@ -12,6 +12,7 @@ import {
   findSessionLifecycleCleanupBoundaryViolations,
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
+  formatSessionAccessorDebtImprovements,
   migratedBundledPluginSessionAccessorFiles,
   migratedEmbeddedAgentSessionTargetFiles,
   migratedMemoryHostSessionCorpusFiles,
@@ -607,18 +608,23 @@ describe("session accessor debt ratchet", () => {
     ).toEqual({ regressions: [], improvements: [] });
   });
 
-  it("passes and reports improvements when counts drop below the baseline", () => {
-    expect(
-      compareSessionAccessorDebt(
-        { sessionAccessorRead: { "src/a.ts": 1 } },
-        { sessionAccessorRead: { "src/a.ts": 2, "src/gone.ts": 3 } },
-      ),
-    ).toEqual({
+  it("fails with a regen instruction when counts drop below the baseline", () => {
+    const debt = compareSessionAccessorDebt(
+      { sessionAccessorRead: { "src/a.ts": 1 } },
+      { sessionAccessorRead: { "src/a.ts": 2, "src/gone.ts": 3 } },
+    );
+    expect(debt).toEqual({
       regressions: [],
       improvements: [
         { concern: "sessionAccessorRead", path: "src/a.ts", currentCount: 1, baselineCount: 2 },
         { concern: "sessionAccessorRead", path: "src/gone.ts", currentCount: 0, baselineCount: 3 },
       ],
     });
+    expect(formatSessionAccessorDebtImprovements(debt.improvements)).toEqual([
+      "Legacy session accessor debt dropped below scripts/lib/session-accessor-debt-baseline.json:",
+      "- src/a.ts [sessionAccessorRead]: 1 legacy call site(s), stale baseline allows 2",
+      "- src/gone.ts [sessionAccessorRead]: 0 legacy call site(s), stale baseline allows 3",
+      "Run `pnpm lint:tmp:session-accessor-boundary:gen` to ratchet the baseline down and commit it.",
+    ]);
   });
 });

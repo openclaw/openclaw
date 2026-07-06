@@ -657,7 +657,7 @@ export function findMemoryHostSessionCorpusBoundaryViolations(content, fileName 
 // Debt ratchet: the boundary checks above only scan files already on the
 // migrated lists, so unmigrated files could quietly gain new legacy call
 // sites. The checked-in baseline locks each unmigrated file's current legacy
-// call-site count per concern; counts may only decrease.
+// call-site count per concern; any drift from the baseline fails the guard.
 export const sessionAccessorDebtBaselineRelativePath =
   "scripts/lib/session-accessor-debt-baseline.json";
 const debtBaselineRegenCommand = "pnpm lint:tmp:session-accessor-boundary:gen";
@@ -768,6 +768,20 @@ export function compareSessionAccessorDebt(currentCounts, baselineCounts) {
     }
   }
   return { regressions, improvements };
+}
+
+// Improvements fail the guard too: passing silently would leave the baseline
+// stale, letting a later change reintroduce legacy call sites up to the old
+// count without tripping the ratchet.
+export function formatSessionAccessorDebtImprovements(improvements) {
+  return [
+    `Legacy session accessor debt dropped below ${sessionAccessorDebtBaselineRelativePath}:`,
+    ...improvements.map(
+      (improvement) =>
+        `- ${improvement.path} [${improvement.concern}]: ${improvement.currentCount} legacy call site(s), stale baseline allows ${improvement.baselineCount}`,
+    ),
+    `Run \`${debtBaselineRegenCommand}\` to ratchet the baseline down and commit it.`,
+  ];
 }
 
 function resolveDebtBaselinePath(repoRoot) {
@@ -904,13 +918,8 @@ export async function main() {
     baselineCounts,
   );
 
-  if (violations.length === 0 && debt.regressions.length === 0) {
+  if (violations.length === 0 && debt.regressions.length === 0 && debt.improvements.length === 0) {
     console.log("session accessor boundary guard passed.");
-    if (debt.improvements.length > 0) {
-      console.log(
-        `Legacy session accessor debt decreased in ${debt.improvements.length} file(s); run \`${debtBaselineRegenCommand}\` to ratchet the baseline down.`,
-      );
-    }
     return;
   }
 
@@ -935,6 +944,11 @@ export async function main() {
     console.error(
       `Use src/config/sessions/session-accessor.ts helpers instead of adding legacy call sites. If the increase is an intentional seam-owner change, run \`${debtBaselineRegenCommand}\` and commit the updated baseline.`,
     );
+  }
+  if (debt.improvements.length > 0) {
+    for (const line of formatSessionAccessorDebtImprovements(debt.improvements)) {
+      console.error(line);
+    }
   }
   process.exit(1);
 }
