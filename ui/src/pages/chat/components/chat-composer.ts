@@ -86,7 +86,6 @@ type ChatComposerProps = {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
-  showNewMessages?: boolean;
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
@@ -109,7 +108,6 @@ type ChatComposerProps = {
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearReply?: () => void;
-  onScrollToBottom?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
 };
@@ -2184,14 +2182,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueRemove: props.onQueueRemove,
     })}
     ${renderSideResult(props.sideResult, props.onDismissSideResult)}
-    ${props.showNewMessages
-      ? html`
-          <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
-            ${icons.arrowDown} New messages
-          </button>
-        `
-      : nothing}
-
     <div class="agent-chat__composer-shell">
       ${mobileRunStatusIndicator !== nothing && composerRunStatus
         ? html`

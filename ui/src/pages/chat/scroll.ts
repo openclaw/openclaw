@@ -3,6 +3,7 @@ import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../../app/
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+const LATEST_MESSAGE_THRESHOLD = 1;
 const FOLLOW_REACQUIRE_THRESHOLD = 8;
 const HEADER_HIDE_SCROLL_DELTA = 12;
 const HEADER_SHOW_TOP_THRESHOLD = 24;
@@ -21,6 +22,7 @@ type ChatScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
+  requestUpdate?: () => void;
   settings?: {
     chatAutoScroll?: ChatAutoScrollMode;
   };
@@ -28,6 +30,14 @@ type ChatScrollHost = {
 
 function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
   return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
+}
+
+function setChatNewMessagesBelow(host: ChatScrollHost, next: boolean) {
+  if (host.chatNewMessagesBelow === next) {
+    return;
+  }
+  host.chatNewMessagesBelow = next;
+  host.requestUpdate?.();
 }
 
 type ChatScrollOptions = {
@@ -74,6 +84,9 @@ export function scheduleChatScroll(
       const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
       host.chatLastScrollHeight = target.scrollHeight;
       const contentChanged = options.contentChanged ?? options.source !== "resize";
+      const canShowScrollButton =
+        target.scrollHeight - target.clientHeight > LATEST_MESSAGE_THRESHOLD &&
+        distanceFromBottom > LATEST_MESSAGE_THRESHOLD;
       const autoScrollMode = normalizeChatAutoScrollMode(host.settings?.chatAutoScroll);
       const manualScroll = options.source === "manual";
 
@@ -90,7 +103,7 @@ export function scheduleChatScroll(
 
       if (!shouldStick) {
         if (contentChanged || (options.source === "resize" && contentGrew)) {
-          host.chatNewMessagesBelow = true;
+          setChatNewMessagesBelow(host, canShowScrollButton);
         }
         return;
       }
@@ -116,7 +129,7 @@ export function scheduleChatScroll(
         host.chatIsProgrammaticScroll = false;
       });
       host.chatUserNearBottom = true;
-      host.chatNewMessagesBelow = false;
+      setChatNewMessagesBelow(host, false);
       const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
         host.chatScrollTimeout = null;
@@ -143,6 +156,7 @@ export function scheduleChatScroll(
           host.chatIsProgrammaticScroll = false;
         });
         host.chatUserNearBottom = true;
+        setChatNewMessagesBelow(host, false);
       }, retryDelay);
     });
   });
@@ -164,14 +178,13 @@ export function handleChatScroll(host: ChatScrollHost, event: Event) {
   // process the event so streaming stops pinning them back to the bottom.
   const isUserScrollUp = delta < 0;
   const isDeliberateScrollUp = delta < -HEADER_HIDE_SCROLL_DELTA;
-  if (
-    host.chatIsProgrammaticScroll &&
-    !isUserScrollUp &&
-    container.scrollTop >= host.chatProgrammaticScrollTarget - container.clientHeight
-  ) {
+  if (host.chatIsProgrammaticScroll && !isUserScrollUp) {
     return;
   }
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  const distanceFromBottom = Math.max(
+    0,
+    container.scrollHeight - container.scrollTop - container.clientHeight,
+  );
   if (isUserScrollUp && distanceFromBottom > FOLLOW_REACQUIRE_THRESHOLD) {
     host.chatFollowLocked = true;
   } else if (distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD) {
@@ -188,10 +201,11 @@ export function handleChatScroll(host: ChatScrollHost, event: Event) {
     host.chatHeaderControlsHidden = false;
   }
 
-  // Clear the "new messages below" indicator when user scrolls back to bottom.
-  if (host.chatUserNearBottom) {
-    host.chatNewMessagesBelow = false;
-  }
+  setChatNewMessagesBelow(
+    host,
+    container.scrollHeight - container.clientHeight > LATEST_MESSAGE_THRESHOLD &&
+      distanceFromBottom > LATEST_MESSAGE_THRESHOLD,
+  );
 }
 
 export function resetChatScroll(host: ChatScrollHost) {
@@ -201,7 +215,7 @@ export function resetChatScroll(host: ChatScrollHost) {
   host.chatLastScrollTop = 0;
   host.chatLastScrollHeight = 0;
   host.chatHeaderControlsHidden = false;
-  host.chatNewMessagesBelow = false;
+  setChatNewMessagesBelow(host, false);
   host.chatIsProgrammaticScroll = false;
   host.chatProgrammaticScrollTarget = 0;
 }
