@@ -320,6 +320,8 @@ Android can forward device notifications to the gateway as `node.event` items. T
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
 
+WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notifications are always excluded. Their messages are already owned by native OpenClaw channel sessions; forwarding the Android notification as a separate node event could route a reply through the wrong conversation.
+
 ## Related
 
 - [iOS app](/platforms/ios)

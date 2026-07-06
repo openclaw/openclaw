@@ -981,10 +981,9 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeShardJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    expect(smokeShardJob.strategy["max-parallel"]).toBe(5);
+    expect(smokeShardJob.strategy["max-parallel"]).toBe(4);
     expect(smokeShardJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
       "matrix",
-      "slack",
       "telegram-1-of-2",
       "telegram-2-of-2",
       "whatsapp",

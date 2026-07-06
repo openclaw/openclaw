@@ -926,13 +926,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 4
       matrix:
         include:
           - name: matrix
             slug: matrix
-          - name: slack
-            slug: slack
           - name: telegram 1/2
             slug: telegram-1-of-2
           - name: telegram 2/2

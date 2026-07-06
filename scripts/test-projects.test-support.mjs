@@ -2077,6 +2077,14 @@ const SOURCE_TEST_TARGETS = new Map([
     "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
     ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
   ],
+  [
+    "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
+    ["test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
+    ["test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts"],
+  ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],

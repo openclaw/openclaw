@@ -222,6 +222,7 @@ describe("qa scenario catalog", () => {
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
     const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
+    const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
@@ -238,6 +239,17 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
     expect(uxMatrix.execution.config).toBeUndefined();
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
+    expect(otelSmoke.execution.kind).toBe("script");
+    if (otelSmoke.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
+    }
+    expect(otelSmoke.execution.args).toStrictEqual([
+      "--output-dir",
+      "${outputDir}",
+      "--logs-exporter",
+      "both",
+    ]);
+    expect(otelSmoke.coverage?.secondary).not.toContain("harness.qa-lab");
   });
 
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {

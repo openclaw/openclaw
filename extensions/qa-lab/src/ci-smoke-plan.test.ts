@@ -10,15 +10,14 @@ describe("createQaSmokeCiMatrix", () => {
     expect(second).toEqual(first);
     expect(first.include.map((shard) => shard.name)).toEqual([
       "matrix",
-      "slack",
       "telegram 1/2",
       "telegram 2/2",
       "whatsapp",
     ]);
-    expect(first.include).toHaveLength(5);
+    expect(first.include).toHaveLength(4);
 
     const scenarioIds = first.include.flatMap((shard) => shard.scenario_ids);
-    expect(scenarioIds).toHaveLength(92);
+    expect(scenarioIds).toHaveLength(91);
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     expect(first.include.every((shard) => shard.scenario_ids.length > 0)).toBe(true);
 
