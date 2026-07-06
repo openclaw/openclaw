@@ -50,7 +50,8 @@ const {
   logInfoMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   ensureAuthProfileStore: ensureAuthProfileStoreMock,
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
   listProfilesForProvider: listProfilesForProviderMock,
@@ -435,11 +436,14 @@ describe("openai image generation provider", () => {
     ).toBe(true);
   });
 
-  it("treats an empty config apiKey as not configured", () => {
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
     const provider = buildOpenAIImageGenerationProvider();
 
-    // An empty-string placeholder resolves to no usable credential in the
-    // generate path, so readiness must not count it either.
+    // Blank placeholders resolve to no usable credential in the generate
+    // path, so readiness must not count them either.
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
 
@@ -451,7 +455,7 @@ describe("openai image generation provider", () => {
             providers: {
               openai: {
                 baseUrl: "https://gateway.example.test/openai/v1",
-                apiKey: "",
+                apiKey,
                 models: [],
               },
             },

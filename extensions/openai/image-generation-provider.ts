@@ -17,6 +17,7 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
+  hasConfiguredSecretInput,
   isProviderApiKeyConfigured,
   listProfilesForProvider,
   type AuthProfileStore,
@@ -830,9 +831,9 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     label: "OpenAI",
     isConfigured: ({ cfg, agentDir }) => {
       // generateImage already authenticates from a config apiKey; count a
-      // non-empty one as configured here too, so image gen works from config
-      // alone, like chat.
-      if (cfg?.models?.providers?.openai?.apiKey) {
+      // usable one (non-blank literal or secret ref) as configured here too,
+      // so image gen works from config alone, like chat.
+      if (hasConfiguredSecretInput(cfg?.models?.providers?.openai?.apiKey)) {
         return true;
       }
       const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
