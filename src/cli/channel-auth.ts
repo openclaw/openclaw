@@ -39,7 +39,9 @@ function supportsChannelActionMode(plugin: ChannelPlugin, mode: ChannelActionMod
     return Boolean(plugin.gateway?.logoutAccount);
   }
   if (mode === "stop") {
-    return Boolean(plugin.gateway?.startAccount || plugin.gateway?.logoutAccount);
+    return Boolean(
+      plugin.gateway?.startAccount || plugin.gateway?.stopAccount || plugin.gateway?.logoutAccount,
+    );
   }
   return Boolean(plugin.gateway?.startAccount);
 }

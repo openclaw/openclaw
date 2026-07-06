@@ -601,6 +601,39 @@ describe("channel-auth", () => {
     expect(readFirstLogMessage(runtime)).toContain("Channel stop completed for whatsapp/acct-2.");
   });
 
+  it("allows stop-only gateway adapters to use the runtime stop command", async () => {
+    const stopOnlyPlugin = {
+      id: "whatsapp",
+      auth: { login: mocks.login },
+      gateway: { stopAccount: vi.fn() },
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: mocks.resolveAccount,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValueOnce(stopOnlyPlugin as typeof plugin);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValueOnce({
+      channels: [{ plugin: stopOnlyPlugin }],
+      channelSetups: [],
+    });
+    mocks.callGateway.mockResolvedValueOnce({ stopped: true });
+
+    await runChannelRuntimeCommand({ channel: "whatsapp", account: "acct-2" }, "stop", runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: {} } },
+      method: "channels.stop",
+      params: {
+        channel: "whatsapp",
+        accountId: "acct-2",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    expect(readFirstLogMessage(runtime)).toContain("Channel stop completed for whatsapp/acct-2.");
+  });
   it("restarts a linked channel runtime by stopping before starting the resolved account", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({ stopped: true })
