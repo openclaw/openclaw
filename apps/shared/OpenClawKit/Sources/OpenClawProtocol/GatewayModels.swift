@@ -4801,6 +4801,50 @@ public struct TalkSpeakResult: Codable, Sendable {
     }
 }
 
+public struct TtsSpeakParams: Codable, Sendable {
+    public let text: String
+
+    public init(
+        text: String)
+    {
+        self.text = text
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+    }
+}
+
+public struct TtsSpeakResult: Codable, Sendable {
+    public let audiobase64: String
+    public let provider: String
+    public let outputformat: String?
+    public let mimetype: String?
+    public let fileextension: String?
+
+    public init(
+        audiobase64: String,
+        provider: String,
+        outputformat: String?,
+        mimetype: String?,
+        fileextension: String?)
+    {
+        self.audiobase64 = audiobase64
+        self.provider = provider
+        self.outputformat = outputformat
+        self.mimetype = mimetype
+        self.fileextension = fileextension
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case audiobase64 = "audioBase64"
+        case provider
+        case outputformat = "outputFormat"
+        case mimetype = "mimeType"
+        case fileextension = "fileExtension"
+    }
+}
+
 public struct ChannelsStatusParams: Codable, Sendable {
     public let probe: Bool?
     public let timeoutms: Int?
