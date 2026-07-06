@@ -13,8 +13,8 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
+import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -22,6 +22,7 @@ const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
+  AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileStore,
   ProfileUsageStats,
@@ -111,11 +112,13 @@ type WhamCooldownProbeResult = {
 };
 
 function shouldProbeWhamForFailure(
-  provider: string | undefined,
+  profile: AuthProfileCredential | undefined,
   reason: AuthProfileFailureReason,
 ): boolean {
-  const normalizedProvider = normalizeProviderId(provider ?? "");
+  const normalizedProvider = normalizeProviderId(profile?.provider ?? "");
   return (
+    profile?.type === "oauth" &&
+    Boolean(profile.access) &&
     normalizedProvider === "openai" &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
@@ -716,9 +719,14 @@ export async function markAuthProfileFailure(params: {
     return;
   }
 
-  const whamResult = shouldProbeWhamForFailure(profile.provider, reason)
-    ? await probeWhamForCooldown(store, profileId)
-    : null;
+  const shouldProbeWham = shouldProbeWhamForFailure(profile, reason);
+  // A detail-less provider failure carries no credential-health evidence.
+  // Only OpenAI OAuth can disambiguate it with the canonical WHAM probe.
+  if (reason === "no_error_details" && !shouldProbeWham) {
+    return;
+  }
+
+  const whamResult = shouldProbeWham ? await probeWhamForCooldown(store, profileId) : null;
 
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;
@@ -747,7 +755,7 @@ export async function markAuthProfileFailure(params: {
         modelId,
       });
       nextStats =
-        whamResult && shouldProbeWhamForFailure(profileValue.provider, reason)
+        whamResult && shouldProbeWhamForFailure(profileValue, reason)
           ? applyWhamCooldownResult({
               existing: previousStats ?? {},
               computed,
@@ -804,7 +812,7 @@ export async function markAuthProfileFailure(params: {
     modelId,
   });
   nextStats =
-    whamResult && shouldProbeWhamForFailure(store.profiles[profileId]?.provider, reason)
+    whamResult && shouldProbeWhamForFailure(store.profiles[profileId], reason)
       ? applyWhamCooldownResult({
           existing: previousStats ?? {},
           computed,

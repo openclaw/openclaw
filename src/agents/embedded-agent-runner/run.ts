@@ -1788,23 +1788,14 @@ async function runEmbeddedAgentInternal(
       };
       const resolveRunAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
-        opts?: {
-          profileId?: string;
-          providerStarted?: boolean;
-          transientRateLimit?: boolean;
-        },
-      ) => {
-        const failureProvider = opts?.profileId
-          ? resolveAuthProfileStateProvider(profileFailureStore, opts.profileId, provider)
-          : provider;
-        return resolveAuthProfileFailureReason({
+        opts?: { providerStarted?: boolean; transientRateLimit?: boolean },
+      ) =>
+        resolveAuthProfileFailureReason({
           failoverReason,
-          provider: failureProvider,
           providerStarted: opts?.providerStarted,
           transientRateLimit: opts?.transientRateLimit,
           policy: params.authProfileFailurePolicy,
         });
-      };
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
         if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
           return;
@@ -3202,12 +3193,9 @@ async function runEmbeddedAgentInternal(
             }
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
-            // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
-            const failedPromptProfileId = lastProfileId;
             const promptProfileFailureReason = resolveRunAuthProfileFailureReason(
               promptFailoverReason,
               {
-                profileId: failedPromptProfileId,
                 providerStarted: promptErrorSource === "prompt",
                 transientRateLimit:
                   promptFailoverReason === "rate_limit" && isShortWindowRateLimitMessage(errorText),
@@ -3221,6 +3209,8 @@ async function runEmbeddedAgentInternal(
               !attempt.codexAppServerFailure &&
               attempt.promptTimeoutOutcome?.replayInvalid !== true &&
               attempt.replayMetadata.replaySafe;
+            // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
+            const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
               stage: "prompt",
               runId: params.runId,
@@ -3383,12 +3373,9 @@ async function runEmbeddedAgentInternal(
           const assistantProfileFailoverReason =
             assistantFailoverReason ??
             (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
-          // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
-          const failedAssistantProfileId = lastProfileId;
           const assistantProfileFailureReason = resolveRunAuthProfileFailureReason(
             assistantProfileFailoverReason,
             {
-              profileId: failedAssistantProfileId,
               providerStarted: assistantProviderStarted,
               transientRateLimit:
                 assistantProfileFailoverReason === "rate_limit" &&
@@ -3436,6 +3423,8 @@ async function runEmbeddedAgentInternal(
             );
             continue;
           }
+          // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
+          const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,

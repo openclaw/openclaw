@@ -111,36 +111,6 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
-  it("does not persist missing provider error details as auth-profile health", () => {
-    expect(
-      resolveAuthProfileFailureReason({
-        failoverReason: "no_error_details",
-      }),
-    ).toBeNull();
-    expect(
-      resolveAuthProfileFailureReason({
-        failoverReason: "no_error_details",
-        policy: "shared",
-      }),
-    ).toBeNull();
-    expect(
-      resolveAuthProfileFailureReason({
-        failoverReason: "no_error_details",
-        provider: "azure-foundry",
-      }),
-    ).toBeNull();
-  });
-
-  it("preserves OpenAI missing-detail failures for WHAM-backed health handling", () => {
-    expect(
-      resolveAuthProfileFailureReason({
-        failoverReason: "no_error_details",
-        provider: "OpenAI",
-        policy: "shared",
-      }),
-    ).toBe("no_error_details");
-  });
-
   it("does not persist request-shape (format) rejections as auth-profile health (#77228)", () => {
     // Format rejections are transcript/request-shape problems, not shared
     // credential failures.
