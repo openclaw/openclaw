@@ -1413,10 +1413,7 @@ function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
-function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boolean {
-  if (!shouldUseParentReviewTaskTerminalMessage(task)) {
-    return false;
-  }
+function hasBoundDiscordRequesterThread(task: TaskRecord): boolean {
   const owner = resolveTaskDeliveryOwner(task);
   const origin = owner.requesterOrigin;
   const channel = origin?.channel?.trim().toLowerCase();
@@ -1429,6 +1426,18 @@ function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boole
     to?.startsWith("channel:") &&
     threadId &&
     canDeliverToRequesterOrigin(origin),
+  );
+}
+
+function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boolean {
+  return shouldUseParentReviewTaskTerminalMessage(task) && hasBoundDiscordRequesterThread(task);
+}
+
+function canDeliverTaskStateChangeToBoundDiscordThread(task: TaskRecord): boolean {
+  return (
+    task.runtime === "acp" &&
+    Boolean(task.childSessionKey?.trim()) &&
+    hasBoundDiscordRequesterThread(task)
   );
 }
 
@@ -1703,7 +1712,8 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         lastEventAt: Date.now(),
       });
     }
-    if (!canDeliverTaskOwnerToRequesterOrigin(owner)) {
+    const shouldDeliverParentReviewDirect = canDeliverTaskStateChangeToBoundDiscordThread(current);
+    if (!canDeliverTaskOwnerToRequesterOrigin(owner) && !shouldDeliverParentReviewDirect) {
       queueTaskSystemEvent(current, eventText);
       upsertTaskDeliveryState({
         taskId,

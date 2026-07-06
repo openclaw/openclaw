@@ -4370,6 +4370,55 @@ describe("task-registry", () => {
     });
   });
 
+  it("delivers bound Discord thread start ack directly instead of queuing it on the parent session", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = "run-bound-discord-thread-start-ack";
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "channel:parent-channel",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:parent-channel",
+          threadId: "thread-84022",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId,
+        task: "Investigate thread-bound ACP delivery",
+        status: "queued",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+      });
+
+      markTaskRunningByRunId({
+        runId,
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          channel: "discord",
+          to: "channel:parent-channel",
+          threadId: "thread-84022",
+          content: "Background task started: ACP background task.",
+          idempotencyKey: expect.stringMatching(/^task-start:/),
+        }),
+      );
+      expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toStrictEqual(
+        [],
+      );
+    });
+  });
+
   it("suppresses native start ack for silent tasks and tasks without requester origin", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
