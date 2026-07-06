@@ -44,7 +44,9 @@ function logHooks(level: "info" | "warn", message: string, meta?: Record<string,
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function createDispatchStub(): (value: HookAgentDispatchPayload) => Promise<DispatchResult> {
@@ -161,12 +163,13 @@ async function main(): Promise<void> {
     dispatchAgentHook: createDispatchStub(),
   });
 
-  const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const handled = await handler(req, res);
-    if (!handled) {
-      res.statusCode = 404;
-      res.end("not found");
-    }
+  const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+    void handler(req, res).then((handled) => {
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("not found");
+      }
+    });
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -223,7 +226,7 @@ async function main(): Promise<void> {
         {
           status: entry.status,
           latencyMs: entry.latencyMs,
-          fields: Object.keys(entry.body).sort(),
+          fields: Object.keys(entry.body).toSorted(),
           body: entry.body,
         },
       ]),
@@ -234,7 +237,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });
