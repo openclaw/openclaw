@@ -549,6 +549,7 @@ public struct OpenClawChatView: View {
         UIPasteboard.general.string = text
         #endif
     }
+
     private var visibleMessages: [OpenClawChatMessage] {
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
