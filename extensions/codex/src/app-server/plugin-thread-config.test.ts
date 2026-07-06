@@ -816,6 +816,61 @@ describe("Codex plugin thread config", () => {
     });
   });
 
+  it("does not re-admit an excluded plugin-owned app through account-wide policy", async () => {
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "ask",
+          plugins: {
+            meetings: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "meetings",
+            },
+          },
+        },
+        accountApps: { mode: "all", allow_destructive_actions: "auto" },
+      },
+      appCacheKey: "runtime",
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("meetings", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("meetings", [appSummary("chatgpt-meetings")]);
+        }
+        if (method === "app/list") {
+          return {
+            data: [{ ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" }],
+            nextCursor: null,
+          };
+        }
+        if (method === "config/read") {
+          throw new Error("approval policy unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "approval_overrides_clear_failed",
+        message:
+          "Could not clear durable Codex app approval overrides for chatgpt-meetings: approval policy unavailable",
+      }),
+    );
+  });
+
   it("does not let per-plugin enablement override disabled native plugin support", async () => {
     expect(
       shouldBuildCodexPluginThreadConfig({

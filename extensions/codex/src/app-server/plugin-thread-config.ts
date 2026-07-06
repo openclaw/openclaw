@@ -269,6 +269,11 @@ export async function buildCodexPluginThreadConfig(
   };
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
+  const pluginOwnedAppIds = new Set(
+    inventory.records.flatMap((record) =>
+      record.appOwnership === "proven" ? record.ownedAppIds : [],
+    ),
+  );
   for (const record of inventory.records) {
     const activation = activationResults.find(
       (item) => item.identity.configKey === record.policy.configKey,
@@ -315,7 +320,9 @@ export async function buildCodexPluginThreadConfig(
 
   for (const app of accountAppsResult.apps) {
     // An explicit plugin policy is more specific than the account-wide policy.
-    if (policyApps[app.id]) {
+    // Reserve proven ownership even when activation/readiness fails so a broad
+    // account policy cannot re-admit an app that the explicit path excluded.
+    if (pluginOwnedAppIds.has(app.id)) {
       continue;
     }
     const accountApp = toOwnedAccountApp(app);
