@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -45,7 +46,7 @@ async function seedInlineMediaTranscript(dir: string): Promise<SeededInlineMedia
     api: "responses",
     provider: "openai",
     model: "gpt-test",
-  } as Parameters<SessionManager["appendMessage"]>[0]);
+  } as unknown as AssistantMessage);
 
   await writeSessionStore({
     entries: {
