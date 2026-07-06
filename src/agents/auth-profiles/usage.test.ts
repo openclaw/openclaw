@@ -1102,6 +1102,35 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.failureCounts?.no_error_details).toBe(1);
   });
 
+  it("does not apply a stale WHAM result after the profile changes", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore(undefined);
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: false,
+        primary_window: { used_percent: 45, reset_after_seconds: 9_000 },
+      },
+    });
+    storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
+        const freshStore = structuredClone(store);
+        freshStore.profiles["openai:default"] = {
+          type: "api_key",
+          provider: "openai",
+          key: "rotated-api-key",
+        };
+        lockParams.updater(freshStore);
+        return freshStore;
+      },
+    );
+
+    await markCodexFailureAt({ store, now, reason: "no_error_details" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.usageStats).toBeUndefined();
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
   it("maps HTTP 401 to a 12h cooldown", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore({});

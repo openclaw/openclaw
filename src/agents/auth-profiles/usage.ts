@@ -128,6 +128,19 @@ function shouldProbeWhamForFailure(
   );
 }
 
+function isSameWhamCredential(
+  expected: AuthProfileCredential,
+  current: AuthProfileCredential | undefined,
+): boolean {
+  return (
+    expected.type === "oauth" &&
+    current?.type === "oauth" &&
+    normalizeProviderId(expected.provider) === normalizeProviderId(current.provider) &&
+    expected.access === current.access &&
+    expected.accountId === current.accountId
+  );
+}
+
 function resolveActiveWindowUntil(value: unknown, now: number): number {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
@@ -738,6 +751,17 @@ export async function markAuthProfileFailure(params: {
       if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider)) {
         return false;
       }
+      const currentWhamResult =
+        whamResult &&
+        shouldProbeWhamForFailure(profileValue, reason) &&
+        isSameWhamCredential(profile, profileValue)
+          ? whamResult
+          : null;
+      // The WHAM response belongs to the credential snapshot used for the
+      // probe. A concurrent profile replacement must not inherit its result.
+      if (reason === "no_error_details" && !currentWhamResult) {
+        return false;
+      }
       const now = Date.now();
       const providerKey = normalizeProviderId(profileValue.provider);
       const cfgResolved = resolveAuthCooldownConfig({
@@ -754,15 +778,14 @@ export async function markAuthProfileFailure(params: {
         cfgResolved,
         modelId,
       });
-      nextStats =
-        whamResult && shouldProbeWhamForFailure(profileValue, reason)
-          ? applyWhamCooldownResult({
-              existing: previousStats ?? {},
-              computed,
-              now,
-              whamResult,
-            })
-          : computed;
+      nextStats = currentWhamResult
+        ? applyWhamCooldownResult({
+            existing: previousStats ?? {},
+            computed,
+            now,
+            whamResult: currentWhamResult,
+          })
+        : computed;
       updateUsageStatsEntry(freshStore, profileId, () => nextStats ?? computed);
       return true;
     },
@@ -796,6 +819,12 @@ export async function markAuthProfileFailure(params: {
     return;
   }
 
+  const currentWhamResult =
+    whamResult && isSameWhamCredential(profile, store.profiles[profileId]) ? whamResult : null;
+  if (reason === "no_error_details" && !currentWhamResult) {
+    return;
+  }
+
   const now = Date.now();
   const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
   const cfgResolved = resolveAuthCooldownConfig({
@@ -811,15 +840,14 @@ export async function markAuthProfileFailure(params: {
     cfgResolved,
     modelId,
   });
-  nextStats =
-    whamResult && shouldProbeWhamForFailure(store.profiles[profileId], reason)
-      ? applyWhamCooldownResult({
-          existing: previousStats ?? {},
-          computed,
-          now,
-          whamResult,
-        })
-      : computed;
+  nextStats = currentWhamResult
+    ? applyWhamCooldownResult({
+        existing: previousStats ?? {},
+        computed,
+        now,
+        whamResult: currentWhamResult,
+      })
+    : computed;
   updateUsageStatsEntry(store, profileId, () => nextStats ?? computed);
   authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
   logAuthProfileFailureStateChange({
