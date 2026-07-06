@@ -67,7 +67,7 @@ const resolverCases = [
         call: { ...baseCall, callId: "call-seconds", arguments: { timeoutSeconds: 30 } },
         config: undefined,
       }),
-    expected: 30_000,
+    expected: 32_000,
   },
   {
     name: "resolver/main: timeoutMs takes precedence",
@@ -107,7 +107,7 @@ const resolverCases = [
         call: { ...baseSideCall, callId: "side-seconds", arguments: { timeoutSeconds: 45 } },
         config: {},
       }),
-    expected: 45_000,
+    expected: 47_000,
   },
   {
     name: "resolver/side: timeoutMs takes precedence",

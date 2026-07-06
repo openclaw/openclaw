@@ -69,7 +69,7 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(30_000);
+    ).toBe(32_000);
   });
 
   it("prefers timeoutMs over timeoutSeconds", () => {
@@ -208,7 +208,7 @@ describe("dynamic tool execution helpers", () => {
           },
         },
       }),
-    ).toBe(180_000);
+    ).toBe(182_000);
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {

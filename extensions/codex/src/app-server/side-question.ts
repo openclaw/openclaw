@@ -19,6 +19,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -1064,7 +1065,10 @@ function readSideTimeoutSecondsAsMs(value: unknown): number | undefined {
   ) {
     return undefined;
   }
-  return value * 1000;
+  // timeoutSeconds is the tool's own inner budget (e.g., sessions_send wait);
+  // arm the outer watchdog with a grace period so the tool-owned timeout can
+  // return structured state before we cut it off.
+  return addTimerTimeoutGraceMs(value * 1000, 2_000);
 }
 
 function readSidePositiveFiniteTimeoutMs(value: unknown): number | undefined {

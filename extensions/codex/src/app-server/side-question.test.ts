@@ -2628,7 +2628,7 @@ describe("runCodexAppServerSideQuestion", () => {
       config: {} as never,
     });
 
-    expect(timeoutMs).toBe(45_000);
+    expect(timeoutMs).toBe(47_000);
   });
 
   it("prefers timeoutMs over timeoutSeconds for side-thread dynamic tool calls", () => {

@@ -12,7 +12,10 @@ import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -523,7 +526,10 @@ function readTimeoutSecondsAsMs(value: unknown): number | undefined {
   ) {
     return undefined;
   }
-  return value * 1000;
+  // timeoutSeconds is the tool's own inner budget (e.g., sessions_send wait);
+  // arm the outer watchdog with a grace period so the tool-owned timeout can
+  // return structured state before we cut it off.
+  return addTimerTimeoutGraceMs(value * 1000, 2_000);
 }
 
 function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
