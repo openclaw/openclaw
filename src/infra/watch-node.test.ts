@@ -1003,6 +1003,93 @@ describe("watch-node script", () => {
       await runPromise;
       expect(watcher.close).toHaveBeenCalledTimes(1);
     });
+
+    it("coalesces multiple file changes into single deferral loop", async () => {
+      const { child, spawn, watcher, createWatcher } = createWatchHarness();
+      const { proc: fakeProcess } = fakeProcessWithStderr();
+
+      mockResolveBuild.mockReturnValue({ shouldBuild: true, reason: "missing_dist_entry" });
+      mockResolveRuntime.mockReturnValue({ shouldSync: false, reason: "clean" });
+
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
+        cwd: "/repo/openclaw",
+        createWatcher,
+        env: { PATH: "/usr/bin" },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+      } as WatchRunParams);
+
+      // First change → deferral starts
+      watcher.emit("change", "src/infra/a.ts");
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Second change during deferral → single-flight guard, no new loop
+      watcher.emit("change", "src/infra/b.ts");
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Build becomes ready → child killed exactly once
+      mockResolveBuild.mockReturnValue({ shouldBuild: false, reason: "clean" });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+      fakeProcess.emit("SIGINT");
+      await runPromise;
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("recovers requestRestart when entry reappears then sends SIGTERM", async () => {
+      const childA = createKillableChild();
+      const childB = createKillableChild();
+      const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+      const watcher = Object.assign(new EventEmitter(), {
+        close: vi.fn(async () => {}),
+      });
+      const createWatcher = vi.fn(() => watcher);
+      const fakeProcess = createFakeProcess();
+
+      mockResolveBuild.mockReturnValue({ shouldBuild: true, reason: "missing_dist_entry" });
+      mockResolveRuntime.mockReturnValue({ shouldSync: false, reason: "clean" });
+
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
+        cwd: "/repo/openclaw",
+        createWatcher,
+        env: { PATH: "/usr/bin" },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+      } as WatchRunParams);
+
+      watcher.emit("change", "src/infra/something.ts");
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      // Deferred: child NOT killed yet
+      expect(childA.kill).not.toHaveBeenCalled();
+
+      // Build becomes ready → guard passes → kill child → exit handler restarts
+      mockResolveBuild.mockReturnValue({ shouldBuild: false, reason: "clean" });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
+      expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawn).toHaveBeenCalledTimes(2);
+
+      fakeProcess.emit("SIGINT");
+      await runPromise;
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("replaces an existing watcher lock holder before starting", async () => {

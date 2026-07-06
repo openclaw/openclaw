@@ -372,6 +372,7 @@ export async function runWatchMain(params = {}) {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
+    let deferredRestartActive = false;
     let watchProcess = null;
     let watcher = null;
     let lockHandle = null;
@@ -486,24 +487,20 @@ export async function runWatchMain(params = {}) {
               "Child exited during deferred restart but build output is not ready; waiting.",
               deps,
             );
-            const startedAt = deps.now();
-            const pollAfterChildExit = async () => {
-              while (!isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
-                if (deps.now() - startedAt > WATCH_BUILD_READY_TIMEOUT_MS) {
-                  logWatcher(
-                    `Build output still not ready after ${WATCH_BUILD_READY_TIMEOUT_MS}ms ` +
-                      "after child exit; restarting anyway (bounded recovery).",
-                    deps,
-                  );
-                  startRunner();
-                  return;
-                }
-                await deps.sleep(WATCH_BUILD_READY_POLL_MS);
-              }
-              logWatcher("Build output ready after child exit; restarting.", deps);
-              startRunner();
-            };
-            pollAfterChildExit().catch(() => {
+            deferUntilBuildReady(
+              () => {
+                logWatcher("Build output ready after child exit; restarting.", deps);
+                startRunner();
+              },
+              () => {
+                logWatcher(
+                  `Build output still not ready after ${WATCH_BUILD_READY_TIMEOUT_MS}ms ` +
+                    "after child exit; restarting anyway (bounded recovery).",
+                  deps,
+                );
+                startRunner();
+              },
+            ).catch(() => {
               startRunner();
             });
             return;
@@ -597,6 +594,22 @@ export async function runWatchMain(params = {}) {
       });
     };
 
+    // Shared readiness polling loop for both the requestRestart and
+    // child-exit deferral paths. Calls onReady when the build is ready,
+    // onTimeout after WATCH_BUILD_READY_TIMEOUT_MS. Errors fall through
+    // to the caller's catch handler.
+    const deferUntilBuildReady = async (onReady, onTimeout) => {
+      const startedAt = deps.now();
+      while (!isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
+        if (deps.now() - startedAt > WATCH_BUILD_READY_TIMEOUT_MS) {
+          onTimeout();
+          return;
+        }
+        await deps.sleep(WATCH_BUILD_READY_POLL_MS);
+      }
+      onReady();
+    };
+
     const requestRestart = (changedPath) => {
       if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
         return;
@@ -613,41 +626,42 @@ export async function runWatchMain(params = {}) {
       // Skip this check in test mode to preserve existing test behavior.
       const isTestMode = deps.env.OPENCLAW_WATCH_MODE === "test";
       if (!isTestMode && !isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
+        // Single-flight: only one deferral loop runs at a time. Additional
+        // change events during deferral are coalesced into the active loop.
+        if (deferredRestartActive) {
+          return;
+        }
+        deferredRestartActive = true;
         logWatcher(
           "Build output not ready (dist/entry.js missing or stale); waiting before restart.",
           deps,
         );
-        // Poll until build is ready, then restart. Times out after
-        // WATCH_BUILD_READY_TIMEOUT_MS to avoid polling forever when the build
-        // never completes (e.g. build error); the current process keeps running.
-        const startedAt = deps.now();
-        const pollBuildReady = async () => {
-          while (!isBuildReadyForRestart(deps.cwd, deps.env, deps.fs)) {
-            if (deps.now() - startedAt > WATCH_BUILD_READY_TIMEOUT_MS) {
-              restartRequested = false;
-              logWatcher(
-                `Build output still not ready after ${WATCH_BUILD_READY_TIMEOUT_MS}ms; giving up. ` +
-                  "The current process is still running. A future file change will retry the restart.",
-                deps,
-              );
-              return;
-            }
-            await deps.sleep(WATCH_BUILD_READY_POLL_MS);
-          }
-          logWatcher("Build output ready; proceeding with restart.", deps);
-          // Only kill if we are still the active restart request. If the
-          // child exited on its own during deferral, the exit handler will
-          // have reset restartRequested and started a new child already.
-          if (restartRequested && watchProcess && typeof watchProcess.kill === "function") {
-            signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
-          } else if (!restartRequested) {
-            logWatcher("Restart already handled by exit handler; skipping duplicate kill.", deps);
-          }
+        const clearDeferral = () => {
+          deferredRestartActive = false;
         };
-        // oxlint-disable-next-line typescript/use-unknown-in-catch-callback-variable
-        pollBuildReady().catch((err) => {
+        deferUntilBuildReady(
+          () => {
+            clearDeferral();
+            logWatcher("Build output ready; proceeding with restart.", deps);
+            if (restartRequested && watchProcess && typeof watchProcess.kill === "function") {
+              signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
+            } else if (!restartRequested) {
+              logWatcher("Restart already handled by exit handler; skipping duplicate kill.", deps);
+            }
+          },
+          () => {
+            clearDeferral();
+            restartRequested = false;
+            logWatcher(
+              `Build output still not ready after ${WATCH_BUILD_READY_TIMEOUT_MS}ms; giving up. ` +
+                "The current process is still running. A future file change will retry the restart.",
+              deps,
+            );
+          },
+        ).catch(() => {
+          clearDeferral();
           restartRequested = false;
-          logWatcher(`Error polling build readiness: ${err?.message ?? String(err)}`, deps);
+          logWatcher("Error polling build readiness; giving up.", deps);
         });
         return;
       }
