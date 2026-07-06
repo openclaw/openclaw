@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   beginTelegramReplyFence,
   buildTelegramNonInterruptingReplyFenceKey,
+  buildTelegramReplyFenceLaneKey,
+  endTelegramReplyFence,
+  hasActiveTelegramReplyFenceLane,
   resetTelegramReplyFenceForTests,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
@@ -150,6 +153,28 @@ describe("telegram reply fence supersede", () => {
     expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
     expect(mainController.signal.aborted).toBe(true);
     expect(sideController.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
+  });
+
+  it("reports active work by Telegram topic lane", () => {
+    resetTelegramReplyFenceForTests();
+    const activeKey = "agent:main:telegram:group:-100123:topic:99";
+    const laneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "openclaw",
+      sequentialKey: "telegram:-100123:topic:99",
+    });
+    const childKey = buildTelegramNonInterruptingReplyFenceKey({ activeKey, laneKey });
+
+    expect(hasActiveTelegramReplyFenceLane(laneKey)).toBe(false);
+    beginTelegramReplyFence({
+      key: childKey,
+      supersede: false,
+      laneKey,
+    });
+    expect(hasActiveTelegramReplyFenceLane(laneKey)).toBe(true);
+
+    endTelegramReplyFence(childKey);
+    expect(hasActiveTelegramReplyFenceLane(laneKey)).toBe(false);
     resetTelegramReplyFenceForTests();
   });
 });

@@ -167,6 +167,17 @@ export function supersedeTelegramReplyFenceLane(laneKey: string): boolean {
   return superseded;
 }
 
+export function hasActiveTelegramReplyFenceLane(laneKey: string): boolean {
+  const keys = [...(telegramReplyFenceKeysByLane.get(laneKey) ?? [])];
+  for (const key of keys) {
+    const state = telegramReplyFenceByKey.get(key);
+    if (state && (state.activeDispatches > 0 || (state.abortControllers?.size ?? 0) > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isTelegramReplyFenceSuperseded(params: {
   key: string;
   generation: number;

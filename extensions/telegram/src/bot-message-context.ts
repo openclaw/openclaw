@@ -46,6 +46,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -54,6 +55,11 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import {
+  buildTelegramReplyFenceLaneKey,
+  hasActiveTelegramReplyFenceLane,
+  shouldSupersedeTelegramReplyFence,
+} from "./telegram-reply-fence.js";
 import { getTopicName, resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 export type {
@@ -108,6 +114,7 @@ export type TelegramMessageContext = {
   sendRecordVoice: () => Promise<void>;
   sendChatActionHandler: BuildTelegramMessageContextParams["sendChatActionHandler"];
   initialTypingCueSent?: boolean;
+  suppressInitialTypingCue?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
@@ -533,6 +540,18 @@ export const buildTelegramMessageContext = async ({
   });
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const canShowStatusReaction = !isRoomEvent;
+  const replyFenceLaneKey = getTelegramSequentialKey({
+    message: msg,
+    ...(primaryCtx.me ? { me: primaryCtx.me } : {}),
+  });
+  const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+    accountId: route.accountId,
+    sequentialKey: replyFenceLaneKey,
+  });
+  const suppressVisibleAckWhileReplyActive =
+    canShowStatusReaction &&
+    !shouldSupersedeTelegramReplyFence(ctxPayload) &&
+    hasActiveTelegramReplyFenceLane(scopedReplyFenceLaneKey);
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -541,6 +560,8 @@ export const buildTelegramMessageContext = async ({
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
+    canShowStatusReaction &&
+    !suppressVisibleAckWhileReplyActive &&
     ackReaction &&
     shouldAckReactionGate({
       scope: ackReactionScope,
@@ -661,6 +682,7 @@ export const buildTelegramMessageContext = async ({
     sendRecordVoice,
     sendChatActionHandler,
     initialTypingCueSent,
+    suppressInitialTypingCue: suppressVisibleAckWhileReplyActive,
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
