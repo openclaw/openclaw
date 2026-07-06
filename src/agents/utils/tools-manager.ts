@@ -267,6 +267,7 @@ async function extractArchiveSafe(
   } catch (err) {
     throw new Error(
       `Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 }
