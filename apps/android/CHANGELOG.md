@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
+
 Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.
 
 Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
