@@ -1005,7 +1005,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
       ...(mandatoryAdaptiveThinking
-        ? { effort: options?.reasoning === "off" ? "low" : "high" }
+        ? { effort: options?.reasoning === "off" ? ("low" as const) : ("high" as const) }
         : {}),
     } as AnthropicOptions);
   }
