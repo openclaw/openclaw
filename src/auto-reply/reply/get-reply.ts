@@ -683,6 +683,23 @@ export async function getReplyFromConfig(
     model = resolvedChannelModelOverride.ref.model;
   }
 
+  const oneTurnModelOverrideRaw = normalizeOptionalString(resolvedOpts?.oneTurnModelOverride);
+  const oneTurnModelOverride = oneTurnModelOverrideRaw
+    ? resolveModelRefFromString({
+        raw: oneTurnModelOverrideRaw,
+        defaultProvider,
+        aliasIndex,
+      })
+    : null;
+  if (oneTurnModelOverrideRaw && !oneTurnModelOverride) {
+    typing.cleanup();
+    return { text: `Unrecognized model "${oneTurnModelOverrideRaw}".` };
+  }
+  if (oneTurnModelOverride) {
+    provider = oneTurnModelOverride.ref.provider;
+    model = oneTurnModelOverride.ref.model;
+  }
+
   if (
     shouldUseReplyFastDirectiveExecution({
       isFastTestBootstrap: useFastTestRuntime,
@@ -790,6 +807,7 @@ export async function getReplyFromConfig(
       aliasIndex,
       provider,
       model,
+      hasOneTurnModelOverride: oneTurnModelOverride !== null,
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),

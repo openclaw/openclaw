@@ -30,6 +30,13 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
     });
 
+    it("keeps trailing text as the cleaned message", () => {
+      const result = extractModelDirective("/model anthropic/claude-opus-4-6 fix this bug");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
+      expect(result.cleaned).toBe("fix this bug");
+    });
+
     it("extracts /model with a runtime override", () => {
       const result = extractModelDirective("/model anthropic/claude-opus-4-7 --runtime claude-cli");
       expect(result.hasDirective).toBe(true);
