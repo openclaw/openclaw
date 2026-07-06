@@ -1360,9 +1360,10 @@ export async function installScheduledTask(
   const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
   // Capture fallback ownership from installed metadata before replacing the
   // script. A repair can change the port or profile that locates the old process.
-  const startupEntryWasRunning =
-    (await isStartupEntryInstalled(fallbackEnv)) &&
-    (await resolveFallbackRuntime(fallbackEnv).catch(() => null))?.status === "running";
+  const startupEntryInstalled = await isStartupEntryInstalled(fallbackEnv);
+  const startupRuntime = startupEntryInstalled
+    ? await resolveFallbackRuntime(fallbackEnv).catch(() => null)
+    : null;
   const staged = await writeScheduledTaskScript(args);
   const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
   const activation = await activateScheduledTask({
@@ -1372,12 +1373,18 @@ export async function installScheduledTask(
     taskLaunchPath: staged.taskLaunchPath,
     description: staged.taskDescription,
   });
-  if (activation === "scheduled-task" && !startupEntryWasRunning) {
-    // A running fallback can briefly overlap a newly launched task. Keep its
-    // launcher until restart terminates it and proves Task Scheduler took over.
-    if (await hasScheduledTaskRunningEvidence(activationEnv)) {
-      await removeStartupEntries(activationEnv, args.stdout);
+  if (activation !== "scheduled-task") {
+    return { scriptPath: staged.scriptPath };
+  }
+  if (startupRuntime?.status === "running") {
+    // The old launcher can still own the listener after the task is created.
+    // Terminate its captured PID, then restart and prove the replacement.
+    if (startupRuntime.pid) {
+      await terminateGatewayProcessTree(startupRuntime.pid, 300);
+      await restartScheduledTask({ env: activationEnv, stdout: args.stdout });
     }
+  } else if (await hasScheduledTaskRunningEvidence(activationEnv)) {
+    await removeStartupEntries(activationEnv, args.stdout);
   }
   return { scriptPath: staged.scriptPath };
 }

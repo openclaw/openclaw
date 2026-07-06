@@ -50,6 +50,7 @@ import {
 import {
   UPDATE_IN_PROGRESS_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+  UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
 } from "./doctor/shared/update-phase.js";
 
 type GatewayServiceConfigRepairOptions = {
@@ -755,6 +756,19 @@ export async function maybeRepairGatewayServiceConfig(
       environment: updatedPlan.environment,
       environmentValueSources: updatedPlan.environmentValueSources,
     });
+    if (
+      updateRepairShouldInstall &&
+      !isTruthyEnvValue(process.env[UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV])
+    ) {
+      await service.restart({
+        env: {
+          ...serviceInstallEnv,
+          ...updatedPlan.environment,
+        },
+        stdout: process.stdout,
+      });
+      note("Restarted the repaired gateway for a legacy update parent.", "Gateway");
+    }
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);
   }

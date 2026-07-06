@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   readRuntime: vi.fn(),
   stage: vi.fn(),
   install: vi.fn(),
+  restart: vi.fn(),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
@@ -91,6 +92,7 @@ vi.mock("../daemon/service.js", () => ({
     readRuntime: mocks.readRuntime,
     stage: mocks.stage,
     install: mocks.install,
+    restart: mocks.restart,
   }),
 }));
 
@@ -125,6 +127,8 @@ const originalPlatform = process.platform;
 const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 const originalParentSupportsConfigWrite =
   process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
+const originalParentSupportsGatewayRestart =
+  process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART;
 
 function makeDoctorIo() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -363,6 +367,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
     } else {
       process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE =
         originalParentSupportsConfigWrite;
+    }
+    if (originalParentSupportsGatewayRestart === undefined) {
+      delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART;
+    } else {
+      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART =
+        originalParentSupportsGatewayRestart;
     }
   });
 
@@ -960,7 +970,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
-  it("installs running Windows update repairs so Startup-folder fallback installs can migrate", async () => {
+  it("installs and restarts running Windows repairs for a legacy update parent", async () => {
     mockProcessPlatform("win32");
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
@@ -1001,6 +1011,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+    expect(mocks.restart).toHaveBeenCalledWith({
+      env: expect.objectContaining({ OPENCLAW_SERVICE_VERSION: "2026.5.26" }),
+      stdout: process.stdout,
+    });
+    expectNoteContaining("Restarted the repaired gateway for a legacy update parent.", "Gateway");
     expect(mocks.readRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work" }),
     );
@@ -1014,6 +1029,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART = "1";
 
     await withEnvAsync(
       {
@@ -1067,6 +1083,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
+        expect(mocks.restart).not.toHaveBeenCalled();
       },
     );
   });

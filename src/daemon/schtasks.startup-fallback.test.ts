@@ -252,6 +252,19 @@ function addAcceptedRunNeverStartsResponses(): void {
   ]);
 }
 
+function addSuccessfulScheduledTaskRestartResponses(): void {
+  schtasksResponses.push(
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+    { code: 0, stdout: "", stderr: "" },
+    { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+  );
+}
+
 function notYetRunTaskQueryOutput() {
   return [
     "Status: Ready",
@@ -369,6 +382,7 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
       ]);
+      addSuccessfulScheduledTaskRestartResponses();
 
       const stdout = new PassThrough();
       let printed = "";
@@ -385,16 +399,18 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("keeps the Startup-folder launcher when the old fallback owns the listener", async () => {
+  it("takes over from a running Startup-folder fallback before removing its launcher", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 4242, command: "node.exe" }],
-        hints: [],
-      });
+      inspectPortUsage
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 4242, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
@@ -403,10 +419,12 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
       ]);
+      addSuccessfulScheduledTaskRestartResponses();
 
       await installGatewayScheduledTask(env);
 
-      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+      expectGatewayTermination(4242);
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
 
@@ -429,11 +447,13 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
       ]);
+      addSuccessfulScheduledTaskRestartResponses();
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
       expect(inspectPortUsage).toHaveBeenCalledWith(18789);
-      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+      expectGatewayTermination(4242);
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
 
@@ -442,16 +462,7 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
       await writeGatewayScript(env);
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
-      );
+      addSuccessfulScheduledTaskRestartResponses();
 
       await restartScheduledTask({ env, stdout: new PassThrough() });
 
