@@ -530,4 +530,49 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("only paints a sidebar session active on chat routes", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          sessionRow("agent:main:release", "Release planning", baseTime - 60_000),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}overview`);
+      const activeRows = page.locator(".sidebar-recent-session--active");
+      const mainRow = page.locator('.sidebar-recent-session[data-session-key="agent:main:main"]');
+      await mainRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => activeRows.count()).toBe(0);
+
+      await page.goto(`${server.baseUrl}config`);
+      await mainRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => activeRows.count()).toBe(0);
+
+      await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+      await expect.poll(() => activeRows.count()).toBe(1);
+      await expect
+        .poll(() => activeRows.first().getAttribute("data-session-key"))
+        .toBe("agent:main:main");
+
+      await page.goto(`${server.baseUrl}chat`);
+      await expect.poll(() => activeRows.count()).toBe(1);
+      await expect
+        .poll(() => activeRows.first().getAttribute("data-session-key"))
+        .toBe("agent:main:main");
+    } finally {
+      await context.close();
+    }
+  });
 });

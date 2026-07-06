@@ -5601,11 +5601,6 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.blur-digits {
-  filter: blur(4px);
-  user-select: none;
-}
-
 /* Section divider */
 .ov-section-divider {
   border-top: 1px solid var(--border);

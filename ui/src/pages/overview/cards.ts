@@ -1,7 +1,6 @@
 // Control UI view renders overview cards screen content.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, type TemplateResult } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type {
   SessionsUsageResult,
   SessionsListResult,
@@ -33,14 +32,6 @@ type OverviewCardsProps = {
   onNavigate: (routeId: NavigationRouteId) => void;
   canNavigate: (routeId: NavigationRouteId) => boolean;
 };
-
-const DIGIT_RUN = /\d{3,}/g;
-
-function blurDigits(value: string): TemplateResult {
-  const escaped = value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const blurred = escaped.replace(DIGIT_RUN, (m) => `<span class="blur-digits">${m}</span>`);
-  return html`${unsafeHTML(blurred)}`;
-}
 
 type StatCard = {
   kind: string;
@@ -295,9 +286,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
               ${sessions.map(
                 (s) => html`
                   <li class="ov-recent__row">
-                    <span class="ov-recent__key"
-                      >${blurDigits(resolveSessionDisplayName(s.key, s))}</span
-                    >
+                    <span class="ov-recent__key">${resolveSessionDisplayName(s.key, s)}</span>
                     <span class="ov-recent__model">${s.model ?? ""}</span>
                     <span class="ov-recent__time"
                       >${s.updatedAt ? formatRelativeTimestamp(s.updatedAt) : ""}</span

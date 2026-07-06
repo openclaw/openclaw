@@ -140,6 +140,35 @@ describe("overview view rendering", () => {
     expect(recentNames).not.toContain("telegram:123:456");
   });
 
+  it("does not blur non-sensitive digits in recent session display names", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:build-review",
+            kind: "direct",
+            label: "Build 20260704 review",
+            model: "gpt-5",
+            updatedAt: null,
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.querySelector(".ov-recent__key")?.textContent?.trim()).toBe(
+      "Build 20260704 review",
+    );
+    expect(container.querySelector(".blur-digits")).toBeNull();
+  });
+
   it("promotes provider quota into a dedicated overview card", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({

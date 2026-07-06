@@ -70,6 +70,7 @@ type SidebarRecentSession = {
   meta: string;
   href: string;
   active: boolean;
+  visuallyActive: boolean;
   hasActiveRun: boolean;
   kind?: string;
   pinned: boolean;
@@ -316,12 +317,14 @@ export class AppSidebar extends LitElement {
       hello: context?.gateway.snapshot.hello,
       compareSessions: this.compareSidebarSessionRows,
     });
+    const highlightCurrentSession = this.activeRouteId === "chat";
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.activeRowKey,
+      visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
@@ -1206,7 +1209,7 @@ export class AppSidebar extends LitElement {
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
-      session.active ? "sidebar-recent-session--active" : "",
+      session.visuallyActive ? "sidebar-recent-session--active" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
       this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
