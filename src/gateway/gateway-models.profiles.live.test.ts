@@ -2212,6 +2212,27 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   return assistantTexts;
 }
 
+function latestAssistantTextAfterBaseline(
+  assistantTexts: string[],
+  baselineAssistantCount: number,
+): string | undefined {
+  return assistantTexts
+    .slice(baselineAssistantCount)
+    .map((text) => text.trim())
+    .findLast((text) => text.length > 0);
+}
+
+describe("latestAssistantTextAfterBaseline", () => {
+  it("returns the final reply after an intermediate tool preamble", () => {
+    expect(
+      latestAssistantTextAfterBaseline(
+        ["previous reply", "I will read the file.", "nonce-a nonce-b"],
+        1,
+      ),
+    ).toBe("nonce-a nonce-b");
+  });
+});
+
 async function waitForSessionAssistantText(params: {
   sessionKey: string;
   baselineAssistantCount: number;
@@ -2228,10 +2249,10 @@ async function waitForSessionAssistantText(params: {
   while (Date.now() - startedAt < timeoutMs) {
     const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     if (assistantTexts.length > params.baselineAssistantCount) {
-      const freshText = assistantTexts
-        .slice(params.baselineAssistantCount)
-        .map((text) => text.trim())
-        .findLast((text) => text.length > 0);
+      const freshText = latestAssistantTextAfterBaseline(
+        assistantTexts,
+        params.baselineAssistantCount,
+      );
       if (freshText) {
         return freshText;
       }
@@ -2383,7 +2404,10 @@ async function requestGatewayAgentText(params: {
         ? waitResult.error
         : new Error(String(waitResult.error));
     }
-    return first.text;
+    // Tool-capable models can append a final reply after an earlier assistant
+    // preamble. Re-read after terminal completion or the probe validates stale text.
+    const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
+    return latestAssistantTextAfterBaseline(assistantTexts, baselineAssistantCount) ?? first.text;
   }
   void transcriptPromise.catch(() => undefined);
   if (first.kind === "agent-error") {

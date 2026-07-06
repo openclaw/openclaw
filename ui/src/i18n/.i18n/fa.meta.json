@@ -5,12 +5,12 @@
     "chat.composer.attachPhoto",
     "chat.modelPicker.useDefaultModel"
   ],
-  "generatedAt": "2026-07-06T16:01:20.522Z",
+  "generatedAt": "2026-07-06T16:12:41.603Z",
   "locale": "fa",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "f46d88ed9230725600aaf1f97d76c52a99a50677c28eaf0173b39c23fed3f9a3",
-  "totalKeys": 1589,
-  "translatedKeys": 1585,
+  "sourceHash": "be3a93b296ae9c45f2820e3b96076de5563188b9f311a0195ea3fd5afb3350ac",
+  "totalKeys": 1630,
+  "translatedKeys": 1626,
   "workflow": 1
 }

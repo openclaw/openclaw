@@ -13,6 +13,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import {
+  loadStoredSessionCustomGroups,
+  saveStoredSessionCustomGroups,
+} from "../../lib/sessions/custom-groups.ts";
 import { normalizeSessionsGroupBy, type SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   filterSessionRows,
@@ -30,32 +34,9 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 const GROUP_BY_STORAGE_KEY = "openclaw:sessions:group-by";
-const CUSTOM_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
 
 function loadStoredGroupBy(): SessionsGroupBy {
   return normalizeSessionsGroupBy(getSafeLocalStorage()?.getItem(GROUP_BY_STORAGE_KEY));
-}
-
-// Custom group names live in localStorage so empty groups survive until a session
-// is assigned; assigned groups persist server-side via the session category field.
-function loadStoredCustomGroups(): string[] {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(CUSTOM_GROUPS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((name): name is string => typeof name === "string" && name.trim().length > 0)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredCustomGroups(groups: readonly string[]) {
-  try {
-    getSafeLocalStorage()?.setItem(CUSTOM_GROUPS_STORAGE_KEY, JSON.stringify(groups));
-  } catch {
-    // ignore storage failures; groups still derive from session categories
-  }
 }
 
 export type SessionsRouteData = {
@@ -91,7 +72,7 @@ class SessionsPage extends LitElement {
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
   @state() private groupBy: SessionsGroupBy = loadStoredGroupBy();
-  @state() private customGroups: string[] = loadStoredCustomGroups();
+  @state() private customGroups: string[] = loadStoredSessionCustomGroups();
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
@@ -537,7 +518,7 @@ class SessionsPage extends LitElement {
   private rememberCustomGroup(name: string) {
     if (!this.customGroups.includes(name)) {
       this.customGroups = [...this.customGroups, name];
-      saveStoredCustomGroups(this.customGroups);
+      saveStoredSessionCustomGroups(this.customGroups);
     }
   }
 
@@ -606,6 +587,24 @@ class SessionsPage extends LitElement {
       }
     } catch (error) {
       this.error = String(error);
+    }
+  }
+
+  private async forkSession(key: string) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const agentId = this.sessionAgentId(key);
+    const forkedKey = await context.sessions.create({
+      parentSessionKey: key,
+      fork: true,
+      ...(agentId ? { agentId } : {}),
+    });
+    if (forkedKey) {
+      context.navigate("chat", { search: searchForSession(forkedKey), hash: "" });
+    } else if (context.sessions.state.error) {
+      this.error = context.sessions.state.error;
     }
   }
 
@@ -822,6 +821,7 @@ class SessionsPage extends LitElement {
         onDeleteSelected: () => void this.deleteSelected(),
         onNavigateToChat: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
+        onFork: (sessionKey) => this.forkSession(sessionKey),
         onAddToWorkboard: canCapture
           ? (session: GatewaySessionRow) => this.addToWorkboard(session)
           : undefined,

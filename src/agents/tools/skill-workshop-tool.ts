@@ -124,7 +124,7 @@ const SkillWorkshopToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type SkillWorkshopToolOptions = {
+type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;

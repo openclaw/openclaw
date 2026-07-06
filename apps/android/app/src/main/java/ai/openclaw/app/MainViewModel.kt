@@ -627,9 +627,40 @@ class MainViewModel(
     ensureRuntime().refreshChat()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    ensureRuntime().refreshChatSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    ensureRuntime().refreshChatSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    ensureRuntime().patchChatSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    ensureRuntime().deleteChatSession(key)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
 
   fun setChatThinkingLevel(level: String) {
     ensureRuntime().setChatThinkingLevel(level)

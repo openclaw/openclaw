@@ -991,6 +991,110 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.sidebar-session-menu {
+  position: fixed;
+  z-index: 121;
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+.sidebar-session-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-session-menu__item:hover:not(:disabled),
+.sidebar-session-menu__item:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-session-menu__item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.sidebar-session-menu__item--destructive {
+  color: var(--danger);
+}
+
+.sidebar-session-menu__icon,
+.sidebar-session-menu__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-menu__check {
+  color: var(--accent);
+}
+
+.sidebar-session-menu__icon svg,
+.sidebar-session-menu__check svg,
+.sidebar-session-menu__chevron svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-session-menu__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-session-menu__chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.sidebar-session-menu__separator {
+  margin: 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.sidebar-session-menu__submenu-host {
+  position: relative;
+}
+
+.sidebar-session-menu__submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 4px);
+  max-height: min(360px, calc(100vh - 24px));
+  overflow-y: auto;
+}
+
+.sidebar-session-menu__submenu--left {
+  right: calc(100% + 4px);
+  left: auto;
+}
+
 .nav-item {
   position: relative;
   display: flex;

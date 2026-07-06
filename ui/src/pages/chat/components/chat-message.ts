@@ -18,6 +18,7 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -1894,6 +1895,18 @@ type MessageActionDetails = {
   shouldFetchFullMessage: boolean;
 };
 
+function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
+  return normalizedMessage.content
+    .reduce<string[]>((lines, item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        lines.push(item.text);
+      }
+      return lines;
+    }, [])
+    .join("\n")
+    .trim();
+}
+
 function resolveMessageActionDetails(
   message: unknown,
   onOpenSidebar?: (content: SidebarContent) => void,
@@ -1903,15 +1916,7 @@ function resolveMessageActionDetails(
   if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
     return null;
   }
-  const markdown = normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
+  const markdown = stripThinkingTags(resolveNormalizedMessageMarkdown(normalizedMessage)).trim();
   if (!markdown) {
     return null;
   }
@@ -2008,15 +2013,7 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
+  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );

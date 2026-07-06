@@ -136,7 +136,7 @@ export async function loadChannels(
   await refresh;
 }
 
-export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
+async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
   if (!state.client || !state.connected || state.whatsappBusy) {
     return;
   }

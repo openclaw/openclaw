@@ -1699,7 +1699,14 @@ public final class OpenClawChatViewModel {
             contextTokens: current.contextTokens,
             thinkingLevels: current.thinkingLevels,
             thinkingOptions: current.thinkingOptions,
-            thinkingDefault: current.thinkingDefault)
+            thinkingDefault: current.thinkingDefault,
+            label: current.label,
+            category: current.category,
+            pinned: current.pinned,
+            archived: current.archived,
+            unread: current.unread,
+            lastReadAt: current.lastReadAt,
+            lastActivityAt: current.lastActivityAt)
     }
 
     private func updateCurrentSessionModel(
@@ -1729,7 +1736,14 @@ public final class OpenClawChatViewModel {
                 totalTokens: current.totalTokens,
                 modelProvider: modelProvider,
                 model: modelID,
-                contextTokens: current.contextTokens)
+                contextTokens: current.contextTokens,
+                label: current.label,
+                category: current.category,
+                pinned: current.pinned,
+                archived: current.archived,
+                unread: current.unread,
+                lastReadAt: current.lastReadAt,
+                lastActivityAt: current.lastActivityAt)
         } else {
             let placeholder = self.placeholderSession(key: sessionKey)
             self.sessions.append(

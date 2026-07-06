@@ -439,6 +439,22 @@ describe("context notice", () => {
     );
 
     expect(container.querySelector(".context-usage")).toBeNull();
+
+    const session: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 46_000,
+      contextTokens: 200_000,
+    };
+    render(
+      renderContextNotice(session, 200_000, {
+        providerQuota: { modelAuthStatusResult: null },
+      }),
+      container,
+    );
+    expect(container.querySelector(".context-usage")).not.toBeNull();
+    expect(container.querySelector(".context-usage__quota")).toBeNull();
   });
 
   it("keeps provider usage available before context token metrics arrive", () => {

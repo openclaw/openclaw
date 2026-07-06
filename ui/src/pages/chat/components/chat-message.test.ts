@@ -604,6 +604,30 @@ describe("grouped chat rendering", () => {
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
   });
 
+  it("uses the displayed answer for assistant message actions", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "<think>internal reasoning</think>\nVisible answer",
+        timestamp: 1000,
+      },
+      {
+        onOpenSidebar,
+        showReasoning: false,
+      },
+    );
+
+    container.querySelector<HTMLButtonElement>(".chat-expand-btn")?.click();
+
+    expect(requireFirstMockArg(onOpenSidebar, "sidebar open")).toMatchObject({
+      kind: "markdown",
+      content: "Visible answer",
+    });
+  });
+
   it("renders user markdown without code-block copy chrome", () => {
     const container = document.createElement("div");
     const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";

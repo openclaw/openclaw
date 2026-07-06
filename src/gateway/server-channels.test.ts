@@ -186,6 +186,7 @@ function createManager(options?: {
   getRuntimeConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
   startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
+  deferStartupAccountStartsUntil?: Promise<void>;
   fillChannelDependencies?: boolean;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -208,6 +209,9 @@ function createManager(options?: {
       ? { resolveChannelRuntime: options.resolveChannelRuntime }
       : {}),
     ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
+    ...(options?.deferStartupAccountStartsUntil
+      ? { deferStartupAccountStartsUntil: options.deferStartupAccountStartsUntil }
+      : {}),
   });
   createdManagers.push({ channelIds, manager });
   return manager;
@@ -1247,36 +1251,37 @@ describe("server-channels auto restart", () => {
     await flushMicrotasks();
   });
 
-  it("does not start traced channel accounts after stop wins the handoff", async () => {
-    const handoffEntered = createDeferred();
-    const releaseHandoff = createDeferred();
+  it("does not start deferred channel accounts after stop wins the startup handoff", async () => {
+    const releaseAccountStart = createDeferred();
+    const measureMock = vi.fn(async (name: string, run: () => unknown) => await run());
     const startupTrace = {
-      measure: async <T>(name: string, run: () => T | Promise<T>) => {
-        if (name === "channels.discord.start-account-handoff") {
-          handoffEntered.resolve();
-          await releaseHandoff.promise;
-        }
-        return await run();
-      },
+      measure: async <T>(name: string, run: () => T | Promise<T>) =>
+        (await measureMock(name, run)) as T,
     };
     const startAccount = vi.fn(async () => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
-    const manager = createManager({ startupTrace });
+    const manager = createManager({
+      startupTrace,
+      deferStartupAccountStartsUntil: releaseAccountStart.promise,
+    });
 
-    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    await waitForImmediate();
-    await handoffEntered.promise;
+    await manager.startChannels();
+    await flushMicrotasks();
     const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await flushMicrotasks();
-    releaseHandoff.resolve();
     await stopTask;
+    await flushMicrotasks();
+    releaseAccountStart.resolve();
     await flushMicrotasks();
 
     expect(startAccount).not.toHaveBeenCalled();
+    expect(measureMock.mock.calls.map(([name]) => name)).not.toContain(
+      "channels.discord.start-account-handoff",
+    );
     expect(
       manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.running,
-    ).toBe(false);
+    ).not.toBe(true);
   });
 
   it("limits whole-channel account startup fanout to four", async () => {

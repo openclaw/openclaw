@@ -206,7 +206,7 @@ const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export type ExecDockerOptions = ExecDockerRawOptions;
+type ExecDockerOptions = ExecDockerRawOptions;
 
 function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>

@@ -2593,6 +2593,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let model: String?
     public let parentsessionkey: String?
+    public let fork: Bool?
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
@@ -2604,6 +2605,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String?,
         model: String?,
         parentsessionkey: String?,
+        fork: Bool?,
         emitcommandhooks: Bool?,
         task: String?,
         message: String?,
@@ -2614,6 +2616,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.model = model
         self.parentsessionkey = parentsessionkey
+        self.fork = fork
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
@@ -2626,6 +2629,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case model
         case parentsessionkey = "parentSessionKey"
+        case fork
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
@@ -2770,6 +2774,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let category: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
+    public let unread: Bool?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
@@ -2800,6 +2805,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         category: AnyCodable? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
+        unread: Bool?,
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
@@ -2829,6 +2835,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.category = category
         self.archived = archived
         self.pinned = pinned
+        self.unread = unread
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.verboselevel = verboselevel
@@ -2860,6 +2867,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case category
         case archived
         case pinned
+        case unread
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
