@@ -219,6 +219,47 @@ struct HealthExportServiceTests {
         #expect(HealthExportBackoff.currentAttempt() == 1)
     }
 
+    @Test func `retry of a pending payload advances the anchor exactly once`() async {
+        self.reset()
+        defer { self.reset() }
+        // 1. First run: 5xx defers, persisting the pending body together with its window anchor.
+        let failing = MockUploader(error: HealthExportError.serverOrNetwork(status: 503))
+        let reader = MockReader(batch: self.makeBatch(), newAnchor: Data([7]))
+        let config = self.testConfig()
+        let first = HealthExportService(reader: reader, uploader: failing, configProvider: { config })
+        await first.exportNow()
+        #expect(HealthExportFileStore.loadAnchorData() == nil)  // live anchor stays put on defer
+        #expect(HealthExportFileStore.hasPendingPayload())
+
+        // 2. Healthy run: the pending retry succeeds and MUST advance the live anchor to the pending
+        //    window's anchor (Data([7])). The bug left it unset, so the fresh read re-read and
+        //    re-uploaded the same window.
+        let ok = MockUploader(error: nil)
+        let reader2 = MockReader(batch: .empty, newAnchor: nil)  // nothing after the pending window
+        let second = HealthExportService(reader: reader2, uploader: ok, configProvider: { config })
+        await second.exportNow()
+        #expect(HealthExportFileStore.loadAnchorData() == Data([7]))  // fix: advanced exactly once
+        #expect(!HealthExportFileStore.hasPendingPayload())          // pending cleared
+        #expect(ok.postCount == 1)                                   // posted once, no duplicate
+    }
+
+    @Test func `legacy pending without an anchor sidecar retries and clears safely`() async {
+        self.reset()
+        defer { self.reset() }
+        // A payload saved before the anchor sidecar existed (anchor: nil): retry must not crash,
+        // must clear the pending on success, and — having no sidecar to advance to — must leave the
+        // live anchor untouched (the safe pre-fix behavior, never a wrong-window advance).
+        _ = HealthExportFileStore.savePendingPayload(Data("{}".utf8), anchor: nil)
+        #expect(HealthExportFileStore.loadPendingAnchor() == nil)
+        let ok = MockUploader(error: nil)
+        let reader = MockReader(batch: .empty, newAnchor: nil)
+        let config = self.testConfig()
+        let service = HealthExportService(reader: reader, uploader: ok, configProvider: { config })
+        await service.exportNow()
+        #expect(!HealthExportFileStore.hasPendingPayload())
+        #expect(HealthExportFileStore.loadAnchorData() == nil)
+    }
+
     @Test func `nothing new when batch empty`() async {
         self.reset()
         defer { self.reset() }

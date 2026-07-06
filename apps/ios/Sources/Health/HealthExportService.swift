@@ -149,13 +149,17 @@ final class HealthExportService {
         self.status = .exporting
         self.logger.info("HealthExport: export start trigger=\(trigger, privacy: .public) force=\(force)")
 
-        // 1. Retry a previously-deferred payload first, if any.
+        // 1. Retry a previously-deferred payload first, if any. Advance the anchor to the one saved
+        //    alongside that payload so a successful retry moves the anchor exactly once — otherwise
+        //    the fresh read below would re-read and re-upload the same window.
         if let pending = HealthExportFileStore.loadPendingPayload() {
-            let retried = await self.upload(body: pending, config: config, advanceAnchor: nil)
+            let pendingAnchor = HealthExportFileStore.loadPendingAnchor()
+            let retried = await self.upload(body: pending, config: config, advanceAnchor: pendingAnchor)
             switch retried {
             case .success:
-                HealthExportFileStore.clearPendingPayload()
-            // fall through to read fresh samples below
+                // upload() already advanced the anchor (to pendingAnchor) and cleared the pending
+                // sidecar; fall through to read any samples after that anchor.
+                break
             case .stop:
                 return
             case .deferred:
@@ -222,9 +226,10 @@ final class HealthExportService {
             self.logger.error("HealthExport: client error \(status, privacy: .public) — stopping")
             return .stop
         } catch {
-            // 5xx / network — defer. Persist the body so we can retry exactly it next time,
-            // and persist the new anchor sidecar is intentionally skipped (anchor stays put).
-            HealthExportFileStore.savePendingPayload(body)
+            // 5xx / network — defer. Persist the body AND the anchor it corresponds to, so a later
+            // retry advances the anchor exactly once on success (no duplicate upload of this window).
+            // The live anchor still stays put until that retry succeeds.
+            HealthExportFileStore.savePendingPayload(body, anchor: advanceAnchor)
             let message = self.retryableErrorMessage(error)
             let delay = HealthExportBackoff.recordFailure()
             HealthExportBackoff.setLastError(message)

@@ -30,6 +30,13 @@ enum HealthExportBackgroundTask {
 
     /// Schedules the next background processing run. Best-effort; iOS decides actual timing.
     static func schedule(afterSeconds delay: TimeInterval = 30 * 60) {
+        // Only schedule when Health Export is enabled + configured. Without this guard the
+        // BGProcessingTask is submitted on every launch/background (and re-armed in `handle`)
+        // even for users who never opted in. Gating here covers both call sites.
+        guard HealthExportConfigStore.isConfigured() else {
+            self.logger.info("HealthExport: schedule skipped — not configured")
+            return
+        }
         let request = BGProcessingTaskRequest(identifier: self.identifier)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
