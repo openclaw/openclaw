@@ -643,9 +643,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   }
 
   function buildSignalDebounceKey(entry?: SignalInboundEntry): string | null {
-    if (!entry) return null;
+    if (!entry) {
+      return null;
+    }
     const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
-    if (!conversationId || !entry.senderPeerId) return null;
+    if (!conversationId || !entry.senderPeerId) {
+      return null;
+    }
     return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
   }
 
@@ -708,7 +712,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             .filter(Boolean)
             .join("\\n");
           if (!combinedText.trim()) {
-            if (conflictKey) retryAttemptsByKey.delete(conflictKey);
+            if (conflictKey) {
+              retryAttemptsByKey.delete(conflictKey);
+            }
             return;
           }
           await handleSignalInboundMessage({
