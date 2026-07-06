@@ -958,9 +958,14 @@ describe("ci workflow guards", () => {
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const uploadStep = fastCoreJob.steps.find(
+    const smokeShardJob = workflow.jobs["qa-smoke-ci-shard"];
+    const smokeRunStep = smokeShardJob.steps.find(
+      (step) => step.name === "Run smoke profile shard",
+    );
+    const smokeUploadStep = smokeShardJob.steps.find(
       (step) => step.name === "Upload QA smoke profile evidence",
     );
+    const smokeAggregateJob = workflow.jobs["qa-smoke-ci"];
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
@@ -971,30 +976,41 @@ describe("ci workflow guards", () => {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
-    expect(runStep.run).toContain("qa-smoke-ci)");
+    expect(runStep.run).not.toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(ciWorkflowText).toContain('runner: "blacksmith-16vcpu-ubuntu-2404"');
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
-    expect(runStep.run).toContain("--qa-profile smoke-ci");
-    expect(runStep.run).toContain("--concurrency 8");
-    expect(runStep.run).not.toContain("--category");
-    expect(runStep.run).not.toContain("--allow-failures");
-    expect(runStep.run).toContain("qa_exit_code=0");
-    expect(runStep.run).toContain('exit "$qa_exit_code"');
-    expect(runStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
-    expect(runStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
-    expect(runStep.run).toContain("--max-old-space-size=16384");
-    expect(runStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
-    expect(runStep.run).not.toContain("OPENAI_API_KEY");
-    expect(runStep.run).toMatch(
-      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
-    );
-    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
-    expect(uploadStep.with).toMatchObject({
-      path: ".artifacts/qa-e2e/smoke-ci-profile/",
+    expect(smokeShardJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
+    expect(smokeShardJob.strategy["max-parallel"]).toBe(5);
+    expect(smokeShardJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
+      "matrix",
+      "slack",
+      "telegram-1-of-2",
+      "telegram-2-of-2",
+      "whatsapp",
+    ]);
+    expect(smokeShardJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
+    expect(smokeRunStep.run).toContain("--concurrency 8");
+    expect(smokeRunStep.run).toContain('scenario_args+=(--scenario "$scenario_id")');
+    expect(smokeRunStep.run).not.toContain("--category");
+    expect(smokeRunStep.run).not.toContain("--allow-failures");
+    expect(smokeRunStep.run).toContain("qa_exit_code=0");
+    expect(smokeRunStep.run).toContain('exit "$qa_exit_code"');
+    expect(smokeRunStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
+    expect(smokeRunStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(smokeRunStep.run).toContain("--max-old-space-size=16384");
+    expect(smokeRunStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
+    expect(smokeRunStep.run).not.toContain("OPENAI_API_KEY");
+    expect(smokeUploadStep.if).toBe("always()");
+    expect(smokeUploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/",
       "if-no-files-found": "warn",
     });
+    expect(smokeAggregateJob.name).toBe("QA Smoke CI");
+    expect(smokeAggregateJob.needs).toEqual(["preflight", "qa-smoke-ci-shard"]);
+    expect(smokeAggregateJob["runs-on"]).toBe("ubuntu-24.04");
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 
