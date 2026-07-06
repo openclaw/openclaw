@@ -1800,6 +1800,30 @@ describe("google transport stream", () => {
     });
   });
 
+  it.each(["gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest"] as const)(
+    "adds skip-validator fallback for unsigned %s tool-call replay",
+    (id) => {
+      const model = buildGeminiModel({
+        id,
+        name: "Gemini Latest",
+      });
+
+      const params = buildGoogleGenerativeAiParams(model, {
+        messages: [googleToolCallAssistantTurn({ model: id })],
+      } as never);
+
+      expect(params.contents[0]).toMatchObject({
+        role: "model",
+        parts: [
+          {
+            thoughtSignature: "skip_thought_signature_validator",
+            functionCall: { name: "lookup", args: { q: "hello" } },
+          },
+        ],
+      });
+    },
+  );
+
   it("does not re-attach replayed Gemini thought signatures to a different tool-call part", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",
