@@ -18,6 +18,9 @@ public protocol VoiceNoteAudioCapture: AnyObject {
 
     /// Stops and discards the active capture.
     func cancel()
+
+    /// Reports capture loss after a recording has started.
+    func setFailureHandler(_ handler: @escaping @MainActor () -> Void)
 }
 
 /// A completed voice-note recording ready to stage as a chat attachment.
@@ -74,6 +77,9 @@ public final class OpenClawVoiceNoteRecorder {
         self.durationLimit = durationLimit
         self.timerIntervalNanoseconds = timerIntervalNanoseconds
         self.now = now
+        self.capture.setFailureHandler { [weak self] in
+            self?.captureFailed()
+        }
     }
 
     deinit {
@@ -233,23 +239,44 @@ public final class OpenClawVoiceNoteRecorder {
         }
     }
 
+    private func captureFailed() {
+        guard case let .recording(_, fileURL) = self.state else { return }
+        self.capture.cancel()
+        try? FileManager.default.removeItem(at: fileURL)
+        self.fail(message: String(localized: "Recording was interrupted. Try again."))
+    }
+
     private func makeTemporaryFileURL() -> URL {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let timestamp = formatter.string(from: self.now())
-        return FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-note-\(timestamp).m4a")
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
     }
 }
 
 /// AVAudioRecorder-backed AAC voice-note capture.
 @MainActor
-public final class OpenClawVoiceNoteAudioCapture: VoiceNoteAudioCapture {
+public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCapture, AVAudioRecorderDelegate {
     private var recorder: AVAudioRecorder?
     private var ownsAudioSession = false
+    private var failureHandler: (@MainActor () -> Void)?
 
-    public init() {}
+    override public init() {
+        super.init()
+        #if os(iOS)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.audioSessionInterrupted(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance())
+        #endif
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    public func setFailureHandler(_ handler: @escaping @MainActor () -> Void) {
+        self.failureHandler = handler
+    }
 
     public func requestPermission() async -> Bool {
         #if os(iOS)
@@ -289,6 +316,7 @@ public final class OpenClawVoiceNoteAudioCapture: VoiceNoteAudioCapture {
                 AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
             ]
             let recorder = try AVAudioRecorder(url: url, settings: settings)
+            recorder.delegate = self
             guard recorder.record() else {
                 throw NSError(
                     domain: "OpenClawVoiceNoteAudioCapture",
@@ -315,6 +343,32 @@ public final class OpenClawVoiceNoteAudioCapture: VoiceNoteAudioCapture {
         self.recorder?.stop()
         self.recorder = nil
         self.deactivateAudioSession()
+    }
+
+    public nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: (any Error)?) {
+        Task { @MainActor [weak self] in
+            self?.captureDidFail()
+        }
+    }
+
+    #if os(iOS)
+    @objc private nonisolated func audioSessionInterrupted(_ notification: Notification) {
+        guard
+            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            rawType == AVAudioSession.InterruptionType.began.rawValue
+        else { return }
+        Task { @MainActor [weak self] in
+            self?.captureDidFail()
+        }
+    }
+    #endif
+
+    private func captureDidFail() {
+        guard self.recorder != nil else { return }
+        self.recorder?.stop()
+        self.recorder = nil
+        self.deactivateAudioSession()
+        self.failureHandler?()
     }
 
     private func deactivateAudioSession() {

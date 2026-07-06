@@ -102,21 +102,6 @@ private func makeProjectedWatchChatRawMessage(
 }
 
 @MainActor
-private final class VoiceNoteCaptureStub: VoiceNoteAudioCapture {
-    func requestPermission() async -> Bool {
-        true
-    }
-
-    func start(url _: URL) throws {}
-
-    func stop() -> TimeInterval {
-        1
-    }
-
-    func cancel() {}
-}
-
-@MainActor
 private func waitForMainActorWork(_ condition: () -> Bool) async {
     for _ in 0..<100 {
         if condition() { return }

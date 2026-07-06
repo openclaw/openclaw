@@ -1105,6 +1105,15 @@ struct OpenClawChatComposer: View {
         }
     }
 
+    private func cancelActiveVoiceNoteIfNeeded() {
+        guard let recorder = self.voiceNoteControl?.recorder,
+              recorder.isRecording || recorder.isRequestingPermission
+        else { return }
+        // The app-owned recorder outlives this view. Release the microphone
+        // when its only recording UI disappears so capture never runs hidden.
+        recorder.cancel()
+    }
+
     private var connectionStatusText: String {
         self.connectionOK ? "Gateway connected" : "Connecting..."
     }
