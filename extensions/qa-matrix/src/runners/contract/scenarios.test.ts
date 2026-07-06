@@ -68,9 +68,6 @@ import {
   type MatrixQaScenarioContext,
 } from "./scenarios.js";
 
-const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
-  "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
-
 function matrixInboundDedupePluginStateKey(params: {
   accountId: string;
   eventId: string;
