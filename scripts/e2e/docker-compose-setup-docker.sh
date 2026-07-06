@@ -14,7 +14,7 @@ TOKEN="compose-proof-$$-$(date +%s)"
 COMPOSE=(docker compose --project-name "$PROJECT_NAME" --project-directory "$PROJECT_DIR" -f "$ROOT_DIR/docker-compose.yml")
 
 cleanup() {
-  docker rm -f "$CLI_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CLI_NAME" >/dev/null 2>&1 || true
   "${COMPOSE[@]}" down --remove-orphans --volumes >/dev/null 2>&1 || true
   docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
   rm -rf "$PROJECT_DIR"

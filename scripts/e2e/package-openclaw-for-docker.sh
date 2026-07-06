@@ -10,7 +10,7 @@ IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/do
 CONTAINER_NAME="openclaw-package-proof-$$"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
 }
 trap cleanup EXIT
