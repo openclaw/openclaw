@@ -63,7 +63,9 @@ describe("minimaxUnderstandImage response boundaries", () => {
     if (!(error instanceof Error)) {
       throw new Error("expected MiniMax VLM request to throw an Error");
     }
-    expect(error.message).toContain("MiniMax VLM: JSON response exceeds 16777216 bytes");
+    expect(error.message).toContain(
+      "MiniMax VLM response [Trace-Id=trace-456]: JSON response exceeds 16777216 bytes",
+    );
     expect(error.message).not.toContain("tail-marker");
     expect(canceled).toBe(true);
   });
