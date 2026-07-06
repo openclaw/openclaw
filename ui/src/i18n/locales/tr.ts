@@ -479,6 +479,11 @@ export const tr: TranslationMap = {
     more: "Daha fazla",
     customize: "Kenar çubuğunu özelleştir",
     customizeReset: "Varsayılanlara sıfırla",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

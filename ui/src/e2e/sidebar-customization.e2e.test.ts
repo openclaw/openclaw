@@ -76,7 +76,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await settingsLink.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/config");
       await expect.poll(() => settingsLink.getAttribute("aria-current")).toBe("page");
-      await sidebar.getByRole("link", { name: "Overview" }).click();
+      await sidebar.getByRole("searchbox", { name: "Search settings" }).fill("context");
+      await expect.poll(() => sidebar.getByText("Context Profile").isVisible()).toBe(true);
+      await sidebar.getByRole("link", { name: "Back to OpenClaw" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
       await captureUiProof(page, "01-default-pinned.png");
 
@@ -161,6 +163,23 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
 
+      await page.goto(`${server.baseUrl}config`);
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--nav-collapsed");
+      await expect
+        .poll(() =>
+          sidebar.evaluate(
+            (element) => (element as HTMLElement & { collapsed: boolean }).collapsed,
+          ),
+        )
+        .toBe(false);
+      await expect
+        .poll(() => sidebar.getByRole("link", { name: "Worktrees" }).isVisible())
+        .toBe(true);
+      await captureUiProof(page, "04b-settings-ignores-persisted-collapsed.png");
+
+      await page.goto(`${server.baseUrl}chat`);
       await page.setViewportSize({ height: 900, width: 900 });
       const drawerButton = page.locator(".topbar-nav-toggle");
       await expect.poll(() => drawerButton.isVisible()).toBe(true);

@@ -476,6 +476,11 @@ export const pt_BR: TranslationMap = {
     more: "Mais",
     customize: "Personalizar barra lateral",
     customizeReset: "Restaurar padrões",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

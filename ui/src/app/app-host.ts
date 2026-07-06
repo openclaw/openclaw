@@ -14,7 +14,7 @@ import "../components/login-gate.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import type { SidebarNavRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
@@ -67,6 +67,24 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash
   );
+}
+
+function optionsForRouteLocation(
+  location?: RouteLocation,
+): ApplicationNavigationOptions | undefined {
+  if (!location?.search && !location?.hash) {
+    return undefined;
+  }
+  return {
+    search: location.search,
+    hash: location.hash,
+  };
+}
+
+function hrefForRouteState(routeState: ShellRouteState, basePath: string): string {
+  const routeId = routeState.routeId ?? "chat";
+  const location = routeState.location;
+  return `${pathForRoute(routeId, basePath)}${location?.search ?? ""}${location?.hash ?? ""}`;
 }
 
 function resolveAgentLabel(sessionKey: string, agentsList: AgentsListResult | null): string {
@@ -341,6 +359,7 @@ class OpenClawShell extends LitElement {
   @state() private activeSessionKey = "";
   @state() private agentLabel = "";
   @state() private routeState: ShellRouteState = {};
+  @state() private settingsBackRouteState: ShellRouteState = { routeId: "chat" };
   @state() private overlaySnapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateRunning: false,
@@ -492,6 +511,11 @@ class OpenClawShell extends LitElement {
     context.navigate(routeId, routeId === "chat" ? this.chatNavigationOptions(options) : options);
   }
 
+  private navigateBackFromSettings() {
+    const routeId = this.settingsBackRouteState.routeId ?? "chat";
+    this.navigate(routeId, optionsForRouteLocation(this.settingsBackRouteState.location));
+  }
+
   private replaceChatWithCurrentSession() {
     this.context?.replace("chat", this.chatNavigationOptions());
   }
@@ -629,6 +653,9 @@ class OpenClawShell extends LitElement {
 
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
+    if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
+      this.settingsBackRouteState = routeState;
+    }
     const context = this.context;
     if (context) {
       this.ensureAgentsList(context.gateway.snapshot);
@@ -675,9 +702,10 @@ class OpenClawShell extends LitElement {
         ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
         : "";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
-    // Drawer navigation always opens expanded; the desktop collapse preference
-    // stays persisted for when the viewport returns to the desktop layout.
-    const navCollapsed = this.navCollapsed && !navDrawerOpen;
+    const isSettingsRoute = activeRoute !== undefined && isSettingsNavigationRoute(activeRoute);
+    // Drawer navigation and Settings navigation always render expanded; the
+    // desktop collapse preference stays persisted for normal sidebar routes.
+    const navCollapsed = this.navCollapsed && !navDrawerOpen && !isSettingsRoute;
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -735,6 +763,7 @@ class OpenClawShell extends LitElement {
             .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
             .sidebarMoreExpanded=${this.sidebarMoreExpanded}
             .themeMode=${context.theme.mode}
+            .settingsBackHref=${hrefForRouteState(this.settingsBackRouteState, context.basePath)}
             .onOpenPalette=${this.openPalette}
             .onToggleMore=${() =>
               context.navigation.update({
@@ -743,6 +772,7 @@ class OpenClawShell extends LitElement {
             .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
               context.navigation.update({ sidebarPinnedRoutes: routes })}
             .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
+            .onSettingsBack=${() => this.navigateBackFromSettings()}
             .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
               this.navigate(routeId, options)}
             .onPreloadRoute=${(routeId: string) =>
@@ -753,7 +783,7 @@ class OpenClawShell extends LitElement {
           class="content ${activeRoute === "chat" ? "content--chat" : ""} ${activeRoute ===
           "workboard"
             ? "content--workboard"
-            : ""}"
+            : ""} ${isSettingsRoute ? "content--settings" : ""}"
         >
           ${this.gatewayConnected
             ? nothing

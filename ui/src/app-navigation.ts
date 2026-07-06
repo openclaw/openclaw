@@ -76,6 +76,33 @@ export const SETTINGS_NAVIGATION_ROUTES = [
   "logs",
 ] as const satisfies readonly NavigationRouteId[];
 
+export const SETTINGS_NAVIGATION_GROUPS = [
+  {
+    id: "general",
+    titleKey: "tabs.config",
+    routes: ["config", "appearance"],
+  },
+  {
+    id: "communications",
+    titleKey: "tabs.communications",
+    routes: ["channels", "communications"],
+  },
+  {
+    id: "automation",
+    titleKey: "tabs.automation",
+    routes: ["automation", "mcp"],
+  },
+  {
+    id: "system",
+    titleKey: "tabs.infrastructure",
+    routes: ["infrastructure", "worktrees", "ai-agents", "debug", "logs"],
+  },
+] as const satisfies readonly {
+  id: string;
+  titleKey: string;
+  routes: readonly NavigationRouteId[];
+}[];
+
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",

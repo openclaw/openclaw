@@ -1,11 +1,17 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-07T08:47:40.747Z",
+  "fallbackKeys": [
+    "nav.backToOpenClaw",
+    "nav.contextProfile",
+    "nav.noSettingsResults",
+    "nav.searchSettings",
+    "nav.settingsSearchResults"
+  ],
+  "generatedAt": "2026-07-07T12:29:58.070Z",
   "locale": "vi",
-  "model": "gpt-5.5",
-  "provider": "openai",
-  "sourceHash": "d012bf7dea64cb5e4858358eb65d806374d86512260f7e16949b761b8bc0627b",
-  "totalKeys": 1669,
+  "model": "claude-opus-4-8",
+  "provider": "anthropic",
+  "sourceHash": "543e3cab838ec82e0ef5cef98324a36334b6768393534e965bc941f5a95daf5e",
+  "totalKeys": 1674,
   "translatedKeys": 1669,
   "workflow": 1
 }

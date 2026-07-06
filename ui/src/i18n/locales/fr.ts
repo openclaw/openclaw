@@ -481,6 +481,11 @@ export const fr: TranslationMap = {
     more: "Plus",
     customize: "Personnaliser la barre latérale",
     customizeReset: "Réinitialiser les paramètres par défaut",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

@@ -474,6 +474,11 @@ export const en: TranslationMap = {
     more: "More",
     customize: "Customize sidebar",
     customizeReset: "Reset to defaults",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

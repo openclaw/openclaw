@@ -477,6 +477,11 @@ export const fa: TranslationMap = {
     more: "بیشتر",
     customize: "سفارشی‌سازی نوار کناری",
     customizeReset: "بازنشانی به پیش‌فرض‌ها",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

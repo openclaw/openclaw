@@ -480,6 +480,11 @@ export const ru: TranslationMap = {
     more: "Ещё",
     customize: "Настроить боковую панель",
     customizeReset: "Сбросить настройки",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Терминал",

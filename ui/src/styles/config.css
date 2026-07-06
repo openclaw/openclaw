@@ -4,16 +4,10 @@
 
 /* Layout Container */
 .config-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  height: calc(100vh - 160px);
-  margin: 12px 0 0;
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--border);
-  background: var(--panel);
-  overflow: hidden;
-  overflow: clip;
+  display: block;
+  margin: 0;
+  background: transparent;
+  overflow: visible;
   animation: config-enter 0.3s var(--ease-out);
 }
 
@@ -172,10 +166,8 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  background: var(--panel);
-  overflow: hidden;
-  /* fallback for older browsers */
-  overflow: clip;
+  background: transparent;
+  overflow: visible;
 }
 
 /* Actions Bar */
@@ -505,7 +497,7 @@
 /* Content Area */
 .config-content {
   flex: 1;
-  overflow-y: auto;
+  overflow: visible;
   padding: 20px 22px;
   min-width: 0;
   scroll-behavior: smooth;

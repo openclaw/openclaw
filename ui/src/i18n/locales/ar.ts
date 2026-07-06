@@ -475,6 +475,11 @@ export const ar: TranslationMap = {
     more: "المزيد",
     customize: "تخصيص الشريط الجانبي",
     customizeReset: "إعادة التعيين إلى الإعدادات الافتراضية",
+    backToOpenClaw: "Back to OpenClaw",
+    searchSettings: "Search settings...",
+    settingsSearchResults: "Settings search results",
+    noSettingsResults: "No matching settings.",
+    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",
