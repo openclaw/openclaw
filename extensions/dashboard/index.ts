@@ -1,5 +1,7 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerDashboardGatewayMethods } from "./src/gateway.js";
+import { createWidgetHttpRouteHandler, WIDGETS_ROUTE_PREFIX } from "./src/http-route.js";
 import { DashboardStore } from "./src/store.js";
 import { createDashboardTools } from "./src/tools.js";
 
@@ -59,7 +61,21 @@ export default definePluginEntry({
       requiredScopes: ["operator.read"],
     });
 
-    // The custom-widget HTTP route (sandboxed iframe host) is wired in a
-    // follow-up PR; every caller shares this one store so mutations stay validated.
+    // L5: serve approved custom-widget assets under an unauthenticated static
+    // route (sandboxed iframes have no device token). Safe because the handler is
+    // static-file only — jailed to each widget's own dir, GET only, no data. The
+    // handler shares the same store instance, so its approved-only gate always
+    // sees the latest registry state.
+    const widgetRoute = createWidgetHttpRouteHandler({ store });
+    api.registerHttpRoute({
+      path: WIDGETS_ROUTE_PREFIX,
+      auth: "plugin",
+      match: "prefix",
+      handler: async (req: IncomingMessage, res: ServerResponse) =>
+        await widgetRoute.handleHttpRequest(req, res),
+    });
+
+    // L2/L5 wire tools, CLI, and HTTP routes through this same store
+    // instance so every caller shares one validated writer.
   },
 });

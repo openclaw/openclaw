@@ -1,11 +1,13 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { DashboardWidget } from "../lib/dashboard/types.ts";
+import type { DashboardWidget, WidgetManifestView } from "../lib/dashboard/types.ts";
 import type { BuiltinWidgetContext } from "../lib/dashboard/widgets/index.ts";
 import {
   displayWidgetTitle,
+  renderCustomWidget,
   renderWidgetBody,
   renderWidgetCell,
+  type DashboardCustomWidgetContext,
   type DashboardWidgetCellCallbacks,
 } from "./dashboard-widget-cell.ts";
 
@@ -188,12 +190,90 @@ describe("dashboard widget cell", () => {
     expect(errorCard?.textContent).toContain("binding failed");
   });
 
-  it("renders a placeholder for custom widgets in this layer (custom host is L5)", () => {
+  it("renders a placeholder for custom widgets in L3", () => {
     const container = renderToContainer(
       renderWidgetBody(widget({ kind: "custom:chart" }), null, BUILTIN_CONTEXT, noopCallbacks()),
     );
     expect(container.querySelector(".dashboard-widget__placeholder")).not.toBeNull();
-    // The sandboxed iframe host does not exist in this layer.
+  });
+});
+
+function customManifest(): WidgetManifestView {
+  return { name: "chart", bindingIds: ["value"], capabilities: ["data:read"] };
+}
+
+function customContext(
+  overrides: Partial<DashboardCustomWidgetContext> = {},
+): DashboardCustomWidgetContext {
+  return {
+    status: "approved",
+    manifest: customManifest(),
+    host: { client: null, basePath: "", sessionKey: "main" },
+    onApprove: vi.fn(),
+    onReject: vi.fn(),
+    ...overrides,
+  };
+}
+
+describe("renderCustomWidget (L5 dispatch)", () => {
+  it("renders the sandboxed iframe host for an approved widget", () => {
+    const container = renderToContainer(
+      renderCustomWidget(widget({ kind: "custom:chart" }), customContext()),
+    );
+    const iframe = container.querySelector("iframe");
+    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("holds without an iframe when approved but the manifest has not loaded", () => {
+    const container = renderToContainer(
+      renderCustomWidget(widget({ kind: "custom:chart" }), customContext({ manifest: null })),
+    );
     expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector('[data-test-id="dashboard-custom-loading"]')).not.toBeNull();
+  });
+
+  it("renders the pending approval card with Approve/Reject and NO iframe", () => {
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    const container = renderToContainer(
+      renderCustomWidget(
+        widget({ kind: "custom:chart", createdBy: "agent:main" }),
+        customContext({ status: "pending", manifest: null, onApprove, onReject }),
+      ),
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    const pending = container.querySelector('[data-test-id="dashboard-custom-pending"]');
+    expect(pending).not.toBeNull();
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="dashboard-custom-approve"]')
+      ?.click();
+    container.querySelector<HTMLButtonElement>('[data-test-id="dashboard-custom-reject"]')?.click();
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(onReject).toHaveBeenCalledOnce();
+  });
+
+  it("renders a neutral placeholder (no iframe) for a rejected widget", () => {
+    const container = renderToContainer(
+      renderCustomWidget(widget({ kind: "custom:chart" }), customContext({ status: "rejected" })),
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector('[data-test-id="dashboard-custom-rejected"]')).not.toBeNull();
+  });
+
+  it("never builds an iframe for a pending widget even via the full cell", () => {
+    const container = renderToContainer(
+      renderWidgetCell({
+        widget: widget({ kind: "custom:chart" }),
+        binding: null,
+        builtinContext: BUILTIN_CONTEXT,
+        menuOpen: false,
+        pending: false,
+        dragging: false,
+        callbacks: noopCallbacks(),
+        custom: customContext({ status: "pending", manifest: null }),
+      }),
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector('[data-test-id="dashboard-custom-pending"]')).not.toBeNull();
   });
 });
