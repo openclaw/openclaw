@@ -649,6 +649,8 @@ Periodic heartbeat runs.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
+- `reserveTokens`: token headroom kept available for model output and future tool results after compaction. When the model context window is known, OpenClaw caps the effective reserve so it cannot consume the prompt budget.
+- `reserveTokensFloor`: minimum reserve enforced by the embedded runtime. Set `0` to disable the floor. The floor remains subject to the active context-window cap.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
 - `maxHistoryShare`: maximum fraction of the total context budget allowed for retained history after compaction (range `0.1`-`0.9`).

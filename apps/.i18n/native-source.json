@@ -195,7 +195,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 570,
+      "line": 577,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2243,
+      "line": 2444,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2245,
+      "line": 2446,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2247,
+      "line": 2448,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -5707,7 +5707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 369,
+      "line": 476,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -5715,7 +5715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 369,
+      "line": 476,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -5723,7 +5723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 726,
+      "line": 863,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -5731,7 +5731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 727,
+      "line": 864,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "surface": "android",
@@ -5739,7 +5739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 728,
+      "line": 865,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed: $reason",
       "surface": "android",
@@ -5747,7 +5747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1675,
+      "line": 1812,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -5755,7 +5755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1675,
+      "line": 1812,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
