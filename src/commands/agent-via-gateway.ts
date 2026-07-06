@@ -17,6 +17,7 @@ import {
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -454,9 +455,7 @@ function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliPro
 }
 
 function createAbortDelayError(): Error {
-  const err = new Error("gateway agent retry aborted");
-  err.name = "AbortError";
-  return err;
+  return createAbortError("gateway agent retry aborted");
 }
 
 function delayMs(ms: number, signal?: AbortSignal): Promise<void> {

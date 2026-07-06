@@ -199,13 +199,14 @@ class GatewaySessionInvokeTest {
       val secondEventHandled = CompletableDeferred<Unit>()
       val events = CopyOnWriteArrayList<String>()
       val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
       val server =
         startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
           if (method == "connect") {
             webSocket.send(connectResponseFrame(id))
             webSocket.send("""{"type":"event","event":"voice.first","payload":{}}""")
             webSocket.send("""{"type":"event","event":"voice.second","payload":{}}""")
-            webSocket.close(1000, "done")
           }
         }
 
@@ -237,6 +238,8 @@ class GatewaySessionInvokeTest {
         assertEquals(listOf("voice.first", "voice.second"), events.toList())
       } finally {
         releaseFirstEvent.complete(Unit)
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
         shutdownHarness(harness, server)
       }
     }
@@ -423,6 +426,7 @@ class GatewaySessionInvokeTest {
               "operator.approvals",
               "operator.pairing",
               "operator.read",
+              "operator.talk.secrets",
               "operator.write",
             ),
         )
@@ -441,6 +445,7 @@ class GatewaySessionInvokeTest {
           listOf(
             "operator.approvals",
             "operator.read",
+            "operator.talk.secrets",
             "operator.write",
           ),
           params.scopes(),
@@ -479,7 +484,6 @@ class GatewaySessionInvokeTest {
                     secondConnectAuth.complete(auth)
                   }
                   webSocket.send(connectResponseFrame(id))
-                  webSocket.close(1000, "done")
                 }
               }
             }
@@ -602,7 +606,10 @@ class GatewaySessionInvokeTest {
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
-        assertEquals(listOf("operator.approvals", "operator.read", "operator.write"), operatorEntry?.scopes)
+        assertEquals(
+          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          operatorEntry?.scopes,
+        )
       } finally {
         shutdownHarness(harness, server)
       }
@@ -753,6 +760,47 @@ class GatewaySessionInvokeTest {
           ?.jsonPrimitive
           ?.content,
       )
+    }
+
+  @Test
+  fun nodeInvokeRequest_doesNotSendResultAfterCancellation() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val invokeStarted = CompletableDeferred<Unit>()
+      val invokeResult = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+              webSocket.send(
+                """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-cancelled","nodeId":"node-1","command":"camera.snap","timeoutMs":5000}}""",
+              )
+            }
+            "node.invoke.result" -> invokeResult.complete(Unit)
+          }
+        }
+      val harness =
+        createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
+          invokeStarted.complete(Unit)
+          throw CancellationException("cancelled")
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        withTimeout(TEST_TIMEOUT_MS) { invokeStarted.await() }
+
+        assertNull(withTimeoutOrNull(250) { invokeResult.await() })
+      } finally {
+        serverWebSocket.get()?.close(1000, "done")
+        delay(100)
+        shutdownHarness(harness, server)
+      }
     }
 
   @Test

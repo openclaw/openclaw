@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
@@ -221,6 +221,17 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
 
 describe("secrets audit", () => {
   let fixture: AuditFixture;
+
+  beforeAll(async () => {
+    const warmFixture = await createAuditFixture();
+    try {
+      await seedAuditFixture(warmFixture);
+      await runSecretsAudit({ env: warmFixture.env });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(warmFixture.rootDir, { recursive: true, force: true });
+    }
+  });
 
   async function writeModelsProvider(
     overrides: Partial<{

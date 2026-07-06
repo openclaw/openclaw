@@ -519,7 +519,9 @@ export function createOpenClawCodingTools(options?: {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
-  /** Trusted sender identity bit for command/channel-action auth; does not filter model tools. */
+  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
+  crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
@@ -637,7 +639,7 @@ export function createOpenClawCodingTools(options?: {
     return normalized === "*" || normalized === "message";
   });
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-    toolNames: options?.runtimeToolAllowlist,
+    toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });
@@ -904,6 +906,7 @@ export function createOpenClawCodingTools(options?: {
             config: options?.config,
             fsPolicy,
             requesterSenderId: options?.senderId,
+            senderIsOwner: options?.senderIsOwner,
             sessionId: options?.sessionId,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
@@ -972,6 +975,7 @@ export function createOpenClawCodingTools(options?: {
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
       ? createOpenClawTools({
+          ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           agentSessionKey: options?.sessionKey,
@@ -1157,6 +1161,7 @@ export function createOpenClawCodingTools(options?: {
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
+    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),

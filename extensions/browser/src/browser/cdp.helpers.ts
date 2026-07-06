@@ -5,6 +5,8 @@
  * redaction/headers, and request/response correlation over WebSocket.
  */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -316,7 +318,7 @@ export async function fetchJson<T>(
 ): Promise<T> {
   const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
   try {
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "cdp-json");
   } finally {
     await release();
   }
@@ -422,12 +424,6 @@ type CdpSocketOptions = {
   handshakeRetryDelayMs?: number;
   handshakeMaxRetryDelayMs?: number;
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {

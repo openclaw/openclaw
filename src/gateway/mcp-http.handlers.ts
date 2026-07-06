@@ -1,6 +1,7 @@
 // Gateway MCP loopback JSON-RPC handlers.
 // Implements initialize, tools/list, tools/call, and notification handling.
 import crypto from "node:crypto";
+import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -17,25 +18,37 @@ import {
   type McpToolSchemaEntry,
 } from "./mcp-http.schema.js";
 
-type McpTextContent = {
-  type: "text";
-  text: string;
-};
+function stringifyMcpContent(value: unknown): string {
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+}
+
+const MCP_LOOPBACK_CONTENT_TYPES = new Set<ContentBlock["type"]>([
+  "text",
+  "image",
+  "resource",
+]);
 
 // Tool implementations may return MCP content blocks, plain strings, or
-// arbitrary JSON. Normalize them into text blocks for consistent loopback output.
-function normalizeToolCallContent(result: unknown): McpTextContent[] {
+// arbitrary JSON. Preserve the valid block types shared by every protocol revision
+// this server advertises; newer and malformed shapes remain visible as text.
+function normalizeToolCallContent(result: unknown): ContentBlock[] {
   const content = (result as { content?: unknown })?.content;
   if (Array.isArray(content)) {
-    return content.map((block: { type?: string; text?: string }) => ({
-      type: (block.type ?? "text") as "text",
-      text: block.text ?? (typeof block === "string" ? block : JSON.stringify(block)),
-    }));
+    return content.map((block) => {
+      const parsed = ContentBlockSchema.safeParse(block);
+      if (parsed.success && MCP_LOOPBACK_CONTENT_TYPES.has(parsed.data.type)) {
+        return parsed.data;
+      }
+      return {
+        type: "text" as const,
+        text: stringifyMcpContent(block),
+      };
+    });
   }
   return [
     {
       type: "text",
-      text: typeof result === "string" ? result : JSON.stringify(result),
+      text: stringifyMcpContent(result),
     },
   ];
 }

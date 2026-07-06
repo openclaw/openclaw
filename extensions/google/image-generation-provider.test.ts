@@ -307,7 +307,7 @@ describe("Google image-generation provider", () => {
 
   it("accepts valid multi-image inline JSON responses above the generic provider JSON cap", async () => {
     mockGoogleApiKeyAuth();
-    const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    const imageBytes = Buffer.alloc(4 * 1024 * 1024, 1);
     const imagePayload = imageBytes.toString("base64");
     vi.stubGlobal(
       "fetch",

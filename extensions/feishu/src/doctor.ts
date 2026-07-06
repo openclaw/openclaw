@@ -15,6 +15,7 @@ import {
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -82,10 +83,6 @@ export type FeishuDoctorRepairReport = {
 
 function timestampForPath(now = new Date()): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {

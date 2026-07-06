@@ -1,6 +1,7 @@
 // Structured heartbeat response tool payload helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -36,16 +37,6 @@ export type HeartbeatToolResponse = {
 const OUTCOMES = new Set<string>(HEARTBEAT_TOOL_OUTCOMES);
 const PRIORITIES = new Set<string>(HEARTBEAT_TOOL_PRIORITIES);
 
-function readStringAlias(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = readString(record[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function readBooleanAlias(record: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {
     const value = record[key];
@@ -69,9 +60,9 @@ export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolRes
   }
 
   const priority = readString(value.priority);
-  const notificationText = readStringAlias(value, "notificationText", "notification_text");
+  const notificationText = readTrimmedStringAlias(value, ["notificationText", "notification_text"]);
   const reason = readString(value.reason);
-  const nextCheck = readStringAlias(value, "nextCheck", "next_check");
+  const nextCheck = readTrimmedStringAlias(value, ["nextCheck", "next_check"]);
   return {
     outcome: outcome as HeartbeatToolOutcome,
     notify,

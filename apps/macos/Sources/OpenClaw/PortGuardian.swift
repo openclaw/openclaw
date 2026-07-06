@@ -7,7 +7,7 @@ import Darwin
 actor PortGuardian {
     static let shared = PortGuardian()
 
-    struct Record: Codable {
+    struct Record: Codable, Equatable {
         let port: Int
         let pid: Int32
         let command: String
@@ -41,6 +41,9 @@ actor PortGuardian {
 
     func sweep(mode: AppState.ConnectionMode) async {
         self.logger.info("port sweep starting (mode=\(mode.rawValue, privacy: .public))")
+        // Reap before the port scan and in every mode: orphans come from earlier
+        // remote sessions and must die even after the user switched modes.
+        await self.reapOrphanedTunnels()
         guard mode != .unconfigured else {
             self.logger.info("port sweep skipped (mode=unconfigured)")
             return
@@ -100,6 +103,160 @@ actor PortGuardian {
         if self.records.count != before {
             self.save()
         }
+    }
+
+    // MARK: - Orphaned tunnel reaping
+
+    /// Live process facts for a recorded tunnel pid; nil means the process is gone.
+    struct TunnelProcessInfo {
+        let parentPid: Int32
+        let startedAt: TimeInterval
+        let fullCommand: String?
+    }
+
+    enum TunnelRecordAction: Equatable {
+        /// Owner still alive (or process unverifiable) — leave process and record alone.
+        case keep
+        /// Record is stale (process gone or pid reused) — forget it, never kill.
+        case drop
+        /// Orphaned tunnel this app family spawned — kill it and forget the record.
+        case reap
+    }
+
+    /// Kill recorded ssh tunnels whose owning app instance died. A crash/force-kill
+    /// leaves the tunnel reparented to launchd, holding the remote connection and
+    /// squatting the preferred local port so new tunnels drift to ephemeral ports.
+    func reapOrphanedTunnels() async {
+        let disk = Self.loadRecords(from: Self.recordPath)
+        let plan = Self.planTunnelReap(
+            memory: self.records,
+            disk: disk,
+            processInfo: Self.tunnelProcessInfo(pid:))
+        var kept = plan.keep
+        for record in plan.reap {
+            if await self.reapTunnelProcess(record.pid) {
+                let message = """
+                reaped orphaned ssh tunnel (pid \(record.pid), local port \(record.port))
+                """
+                self.logger.error("\(message, privacy: .public)")
+            } else {
+                // Keep the record so the next sweep retries the kill.
+                kept.append(record)
+                self.logger.error("failed to reap orphaned tunnel pid \(record.pid, privacy: .public)")
+            }
+        }
+        // Persist whenever the kept records differ from either source by content, not
+        // just pid set: a reaped/dropped record may exist only in the file (crashed
+        // sibling), and a pid-colliding stale disk record must be overwritten too.
+        let byTime: (Record, Record) -> Bool = { ($0.timestamp, $0.pid) < ($1.timestamp, $1.pid) }
+        kept.sort(by: byTime)
+        if kept != self.records.sorted(by: byTime) || kept != disk.sorted(by: byTime) {
+            self.records = kept
+            self.save()
+        }
+    }
+
+    /// Matches only the exact `ssh … -N -L <localPort>:127.0.0.1:<remotePort>` shape spawned by
+    /// RemotePortTunnel. First reap gate; the start-time check in classify handles pid reuse
+    /// by a look-alike tunnel on the same port.
+    static func isTunnelCommand(_ fullCommand: String, localPort: Int) -> Bool {
+        let tokens = fullCommand.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let executable = tokens.first,
+              executable == "ssh" || executable.hasSuffix("/ssh"),
+              tokens.contains("-N")
+        else { return false }
+        let forwardPrefix = "\(localPort):127.0.0.1:"
+        for (index, token) in tokens.enumerated() {
+            if token == "-L", index + 1 < tokens.count, tokens[index + 1].hasPrefix(forwardPrefix) {
+                return true
+            }
+            if token.hasPrefix("-L"), token.dropFirst(2).hasPrefix(forwardPrefix) {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func classifyTunnelRecord(_ record: Record, process: TunnelProcessInfo?) -> TunnelRecordAction {
+        guard let process else { return .drop }
+        // No readable command line (e.g. zombie): cannot prove the pid is ours, so
+        // never kill; the record drops once the process is truly gone.
+        guard let command = process.fullCommand, !command.isEmpty else { return .keep }
+        guard self.isTunnelCommand(command, localPort: record.port) else { return .drop }
+        // Records are written right after spawn, so the recorded process always starts
+        // before its record. Started-later means the pid was reused — possibly by a
+        // user's own look-alike tunnel on the same port. Drop, never kill. Small slack
+        // absorbs wall-clock steps between kernel start time and the record write.
+        guard process.startedAt <= record.timestamp + 5 else { return .drop }
+        // ppid 1 means reparented to launchd: the owning app instance died. Any other
+        // live parent may be a concurrent OpenClaw instance (prod + dev), so hands off.
+        return process.parentPid == 1 ? .reap : .keep
+    }
+
+    static func planTunnelReap(
+        memory: [Record],
+        disk: [Record],
+        processInfo: (Int32) -> TunnelProcessInfo?) -> (reap: [Record], keep: [Record])
+    {
+        // All app instances share port-guard.json, so disk can hold records from a
+        // crashed sibling this instance never saw. In-memory wins on pid collisions.
+        var merged: [Int32: Record] = [:]
+        for record in disk {
+            merged[record.pid] = record
+        }
+        for record in memory {
+            merged[record.pid] = record
+        }
+        let ordered = merged.values.sorted { ($0.timestamp, $0.pid) < ($1.timestamp, $1.pid) }
+        var reap: [Record] = []
+        var keep: [Record] = []
+        for record in ordered {
+            switch self.classifyTunnelRecord(record, process: processInfo(record.pid)) {
+            case .keep: keep.append(record)
+            case .drop: continue
+            case .reap: reap.append(record)
+            }
+        }
+        return (reap, keep)
+    }
+
+    /// Only a confirmed exit may drop the record (later sweeps retry otherwise), and
+    /// callers pick a local port right after reaping — the port is only free once ssh
+    /// has actually exited, not when the signal was delivered. TERM first, then KILL.
+    private func reapTunnelProcess(_ pid: Int32) async -> Bool {
+        _ = await ShellExecutor.run(command: ["kill", "-TERM", "\(pid)"], cwd: nil, env: nil, timeout: 2)
+        if await Self.waitForProcessExit(pid: pid) { return true }
+        _ = await ShellExecutor.run(command: ["kill", "-KILL", "\(pid)"], cwd: nil, env: nil, timeout: 2)
+        return await Self.waitForProcessExit(pid: pid)
+    }
+
+    private static func waitForProcessExit(pid: Int32, timeout: TimeInterval = 1.0) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while self.tunnelProcessInfo(pid: pid) != nil {
+            guard Date() < deadline else { return false }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return true
+    }
+
+    private static func tunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {
+        #if canImport(Darwin)
+        guard pid > 0 else { return nil }
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        let rc = sysctl(&mib, u_int(mib.count), &info, &size, nil, 0)
+        // sysctl "succeeds" with size 0 when the pid does not exist.
+        guard rc == 0, size > 0, info.kp_proc.p_pid == pid else { return nil }
+        let started = TimeInterval(info.kp_proc.p_starttime.tv_sec)
+            + TimeInterval(info.kp_proc.p_starttime.tv_usec) / 1_000_000
+        return TunnelProcessInfo(
+            parentPid: info.kp_eproc.e_ppid,
+            startedAt: started,
+            fullCommand: self.readFullCommand(pid: pid))
+        #else
+        return nil
+        #endif
     }
 
     struct PortReport: Identifiable {
@@ -428,6 +585,10 @@ extension PortGuardian {
 
 #if DEBUG
 extension PortGuardian {
+    static func _testTunnelProcessInfo(pid: Int32) -> TunnelProcessInfo? {
+        self.tunnelProcessInfo(pid: pid)
+    }
+
     static func _testParseListeners(_ text: String) -> [(
         pid: Int32,
         command: String,

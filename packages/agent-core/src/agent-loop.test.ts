@@ -1,4 +1,5 @@
 // Agent Core tests cover agent loop behavior.
+import { EventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop } from "./agent-loop.js";
@@ -77,6 +78,7 @@ describe("agentLoop EventStream failures", () => {
       undefined,
       failingStreamFn,
     );
+    expect(stream).toBeInstanceOf(EventStream);
 
     const events = await collectEvents(stream);
     const result = await stream.result();
@@ -730,6 +732,119 @@ describe("agentLoop tool termination", () => {
     };
   }
 
+  it("marks lifecycle events from the concrete hidden tool instance", async () => {
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-wait", name: "wait", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const hiddenTool: AgentTool = {
+      ...makeTool("wait", []),
+      hideFromChannelProgress: true,
+      execute: async (_toolCallId, _args, _signal, onUpdate) => {
+        onUpdate?.({
+          content: [{ type: "text", text: "still waiting" }],
+          details: { status: "waiting" },
+        });
+        return {
+          content: [{ type: "text", text: "resumed" }],
+          details: { status: "completed" },
+        };
+      },
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "resume", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [hiddenTool] },
+        { ...config, toolExecution: "sequential" },
+        undefined,
+        streamFn,
+      ),
+    );
+    const lifecycleEvents = events.filter((event) => event.type.startsWith("tool_execution_"));
+
+    expect(lifecycleEvents.map((event) => event.type)).toEqual([
+      "tool_execution_start",
+      "tool_execution_update",
+      "tool_execution_end",
+    ]);
+    expect(
+      lifecycleEvents.every(
+        (event) => "hideFromChannelProgress" in event && event.hideFromChannelProgress === true,
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores progress updates after a tool execution settles", async () => {
+    let delayedUpdate: ((result: AgentToolResult<unknown>) => void) | undefined;
+    const tool: AgentTool = {
+      name: "delayed_tool",
+      label: "delayed_tool",
+      description: "captures progress callbacks",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async (_toolCallId, _args, _signal, onUpdate) => {
+        delayedUpdate = onUpdate;
+        onUpdate?.({
+          content: [{ type: "text", text: "running" }],
+          details: { status: "running" },
+        });
+        return {
+          content: [{ type: "text", text: "done" }],
+          details: { status: "done" },
+          terminate: true,
+        };
+      },
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-delayed", name: tool.name, arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        { ...config, toolExecution: "sequential" },
+        undefined,
+        streamFn,
+      ),
+    );
+    const countAfterRun = events.length;
+    delayedUpdate?.({
+      content: [{ type: "text", text: "late" }],
+      details: { status: "late" },
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(events).toHaveLength(countAfterRun);
+    expect(events.filter((event) => event.type === "tool_execution_update")).toHaveLength(1);
+  });
+
   it("continues after a side-effect tool result when afterToolCall records it without terminate", async () => {
     const executed: string[] = [];
     let turn = 0;
@@ -841,6 +956,54 @@ describe("agentLoop tool termination", () => {
 
     expect(executed).toEqual([]);
     expect(endEvent?.executionStarted).toBe(false);
+  });
+
+  it("marks argument validation failures with typed provenance", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-edit", name: "edit", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const tool: AgentTool = {
+      ...makeTool("edit", executed),
+      parameters: Type.Object({ path: Type.String() }, { additionalProperties: false }),
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        config,
+        undefined,
+        streamFn,
+      ),
+    );
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(executed).toEqual([]);
+    expect(endEvent).toMatchObject({
+      executionStarted: false,
+      errorKind: "argument-validation",
+    });
   });
 
   it("stops after a tool result only when the finalized result explicitly terminates", async () => {

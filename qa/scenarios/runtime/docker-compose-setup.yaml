@@ -5,7 +5,7 @@ scenario:
   surface: docker-podman-hosting
   category: docker-podman-hosting.container-setup
   coverage:
-    primary:
+    secondary:
       - docker.compose
       - docker.local-image-setup-script
       - docker.only-first-run-notes

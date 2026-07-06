@@ -904,7 +904,7 @@ export async function buildTelegramConversationContext(params: {
   recentLimit: number;
   replyTargetWindowSize: number;
   minTimestampMs?: number;
-  includeNode?: (node: TelegramCachedMessageNode) => boolean;
+  includeNode?: (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => boolean;
 }): Promise<TelegramConversationContextNode[]> {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
@@ -920,7 +920,7 @@ export async function buildTelegramConversationContext(params: {
     if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
       return false;
     }
-    if (params.includeNode && !params.includeNode(node)) {
+    if (params.includeNode && !params.includeNode(node, flags)) {
       return false;
     }
     const existing = selected.get(node.messageId);

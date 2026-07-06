@@ -219,6 +219,26 @@ describe("sendMessageDiscord", () => {
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
   });
 
+  it("reports the first Discord chunk before a later chunk fails", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageDiscord("channel:789", "a".repeat(2500), {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
+  });
+
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
