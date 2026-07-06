@@ -33,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -193,6 +194,16 @@ async function finalizeSignalStatusReaction(params: {
     await delay(params.timing.errorHoldMs);
   }
   await params.controller.restoreInitial();
+}
+
+const SIGNAL_RETRY_FLUSH_MAX_ATTEMPTS = 3;
+const SIGNAL_RETRY_FLUSH_RETRY_DELAY_MS = 1_000;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+
+export function isRetryableSignalInboundError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
@@ -633,6 +644,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
+  async function flushWithRetry(
+    entry: SignalInboundEntry,
+    remainingRetries: number,
+  ): Promise<void> {
+    try {
+      await handleSignalInboundMessage(entry);
+    } catch (error) {
+      if (remainingRetries > 0 && isRetryableSignalInboundError(error)) {
+        logVerbose(
+          `signal debounce retry ${SIGNAL_RETRY_FLUSH_MAX_ATTEMPTS - remainingRetries + 1}/${SIGNAL_RETRY_FLUSH_MAX_ATTEMPTS} ` +
+            `after ${SIGNAL_RETRY_FLUSH_RETRY_DELAY_MS}ms for ${entry.senderDisplay}: ${formatErrorMessage(error)}`,
+        );
+        await delay(SIGNAL_RETRY_FLUSH_RETRY_DELAY_MS);
+        return flushWithRetry(entry, remainingRetries - 1);
+      }
+      throw error;
+    }
+  }
+
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
@@ -656,7 +686,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
       if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
+        await flushWithRetry(last, SIGNAL_RETRY_FLUSH_MAX_ATTEMPTS);
         return;
       }
       const combinedText = entries
@@ -670,15 +700,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!combinedText.trim()) {
         return;
       }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
-      });
+      await flushWithRetry(
+        {
+          ...last,
+          bodyText: combinedText,
+          commandBody: combinedCommandBody,
+          mediaPath: undefined,
+          mediaType: undefined,
+          mediaPaths: undefined,
+          mediaTypes: undefined,
+        },
+        SIGNAL_RETRY_FLUSH_MAX_ATTEMPTS,
+      );
     },
     onError: (err) => {
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
