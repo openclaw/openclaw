@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
+import "../components/connection-banner.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
@@ -107,8 +108,12 @@ function isTerminalAvailable(
 
 export class OpenClawApp extends LitElement {
   @state() private gatewayConnected = false;
+  @state() private gatewayReconnecting = false;
   @state() private gatewayLastError: string | null = null;
   @state() private gatewayLastErrorCode: string | null = null;
+  // Pinned while a connect submitted from the visible login gate is in
+  // flight, so a failed manual attempt cannot flash the shell in between.
+  @state() private loginGatePinned = false;
   @state() private loginGatewayUrl = "";
   @state() private loginToken = "";
   @state() private loginPassword = "";
@@ -186,12 +191,17 @@ export class OpenClawApp extends LitElement {
 
   private readonly updateGatewayStatus = (snapshot: {
     connected: boolean;
+    reconnecting: boolean;
     lastError: string | null;
     lastErrorCode: string | null;
   }) => {
     this.gatewayConnected = snapshot.connected;
+    this.gatewayReconnecting = snapshot.reconnecting;
     this.gatewayLastError = snapshot.lastError;
     this.gatewayLastErrorCode = snapshot.lastErrorCode;
+    if (snapshot.connected) {
+      this.loginGatePinned = false;
+    }
   };
 
   private updateTerminalSurface() {
@@ -229,7 +239,12 @@ export class OpenClawApp extends LitElement {
           ></openclaw-gateway-url-confirmation>
         `
       : nothing;
-    if (!this.gatewayConnected) {
+    // Transport drops after an established session keep the shell mounted
+    // (offline banner + client auto-retry); the login gate is reserved for
+    // first connects, credential rejections, and manual gate submissions.
+    const showLoginGate =
+      !this.gatewayConnected && (this.loginGatePinned || !this.gatewayReconnecting);
+    if (showLoginGate) {
       return html`
         <openclaw-tooltip-provider>
           <openclaw-login-gate
@@ -261,6 +276,7 @@ export class OpenClawApp extends LitElement {
                 this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
               },
               onConnect: () => {
+                this.loginGatePinned = true;
                 context.gateway.connect({
                   gatewayUrl: this.loginGatewayUrl,
                   token: this.loginToken,
@@ -308,6 +324,7 @@ class OpenClawShell extends LitElement {
   @state() private sidebarMoreExpanded = false;
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
+  @state() private gatewayLastError: string | null = null;
   @state() private terminalAvailable = false;
   @state() private terminalClient: GatewayBrowserClient | null = null;
   @state() private activeSessionKey = "";
@@ -520,11 +537,18 @@ class OpenClawShell extends LitElement {
     this.requestUpdate();
   };
 
-  private readonly updateGatewayStatus = (snapshot: { connected: boolean }) => {
-    if (snapshot.connected === this.gatewayConnected) {
+  private readonly updateGatewayStatus = (snapshot: {
+    connected: boolean;
+    lastError: string | null;
+  }) => {
+    if (
+      snapshot.connected === this.gatewayConnected &&
+      snapshot.lastError === this.gatewayLastError
+    ) {
       return;
     }
     this.gatewayConnected = snapshot.connected;
+    this.gatewayLastError = snapshot.lastError;
   };
 
   private updateTerminalSurface(snapshot: ApplicationContext["gateway"]["snapshot"]) {
@@ -691,6 +715,14 @@ class OpenClawShell extends LitElement {
             ? "content--workboard"
             : ""}"
         >
+          ${this.gatewayConnected
+            ? nothing
+            : html`<openclaw-connection-banner
+                .props=${{
+                  lastError: this.gatewayLastError,
+                  onRetry: () => context.gateway.connect(),
+                }}
+              ></openclaw-connection-banner>`}
           <openclaw-update-banner
             .props=${{
               statusBanner: this.overlaySnapshot.updateStatusBanner,

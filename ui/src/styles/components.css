@@ -309,6 +309,66 @@
 }
 
 /* ===========================================
+   Connection Banner (gateway offline / reconnecting)
+   =========================================== */
+
+.connection-banner {
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 calc(-1 * var(--shell-pad)) 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  font-weight: 500;
+  padding: 10px 16px;
+}
+
+.connection-banner__spinner {
+  display: inline-flex;
+  align-items: center;
+}
+
+.connection-banner__spinner svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  animation: connection-banner-spin 1s linear infinite;
+}
+
+@keyframes connection-banner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.connection-banner__hint {
+  margin-left: 6px;
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+.connection-banner .connection-banner__retry {
+  border-color: currentColor;
+  color: currentColor;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.connection-banner .connection-banner__retry:hover:not(:disabled) {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* ===========================================
    Cards - Refined with depth
    =========================================== */
 
@@ -1798,6 +1858,16 @@
     color-mix(in srgb, var(--danger) 8%, var(--bg-elevated)) 100%
   );
   color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
+}
+
+.callout.warn {
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 14%, var(--bg-elevated)) 0%,
+    color-mix(in srgb, var(--warn) 8%, var(--bg-elevated)) 100%
+  );
+  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
 }
 
 .callout.info {

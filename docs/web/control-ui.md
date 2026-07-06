@@ -262,6 +262,17 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
   </Accordion>
 </AccordionGroup>
 
+## Connection loss and reconnect
+
+Once a session is established, a dropped Gateway connection does not log you out. The dashboard
+stays visible with an amber "Gateway connection lost — reconnecting…" banner while the client
+retries automatically with backoff (800 ms up to 15 s). Live updates and actions pause until the
+connection returns; **Retry now** in the banner forces an immediate attempt.
+
+The login gate only appears when there is no established session yet (first open, page reload
+before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
+pairing) — states that need your input rather than waiting.
+
 ## PWA install and web push
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.

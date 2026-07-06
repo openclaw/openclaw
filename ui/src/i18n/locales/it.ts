@@ -1470,6 +1470,13 @@ export const it: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Connessione al Gateway persa",
+    reconnecting: "Riconnessione…",
+    offlineHint:
+      "Gli aggiornamenti in tempo reale e le azioni sono in pausa finché la connessione non viene ripristinata.",
+    retryNow: "Riprova ora",
+  },
   chat: {
     disconnected: "Disconnesso dal gateway.",
     archivedSessionDisabled: "Ripristina questa sessione per inviare messaggi.",

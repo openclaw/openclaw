@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Source build portability:** keep tsdown configuration self-contained so builds do not depend on resolving the tsdown package from unrun's temporary module directory.
+- **Agent tool-call decoding:** preserve surrogate-range numeric HTML entities as literal text while still decoding valid supplementary-plane values, preventing malformed model output from injecting lone UTF-16 surrogates into tool arguments. (#99564) Thanks @mikasa0818.
 - **Gateway event dispatch:** catch and log lazy subscriber setup and handler failures instead of leaking unhandled promise rejections. (#100401) Thanks @cxbAsDev.
 - **Diffs rendering:** render viewer and image output from one SSR preload, preserve language-pack highlighting through hydration, normalize language hints case-insensitively, skip identical before/after inputs with an explicit `changed` result, report truthful file-render and input errors, cache hash-pinned viewer runtimes, and prefer canonical file settings over stale aliases. (#100487)
 - **Remote browser reliability:** bound persistent Playwright tab enumeration by the existing remote CDP timeout budget and retire timed-out connection attempts so late completions cannot restore a stuck connection. (#80147, #58968) Thanks @HemantSudarshan and @KeaneYan.
@@ -26,6 +27,9 @@ Docs: https://docs.openclaw.ai
 - **Managed browser cookie persistence:** initialize new isolated macOS headless profiles with a non-interactive encryption key while preserving existing profile keys, and close Chromium through CDP before bounded signal fallback so persistent logins survive graceful browser and Gateway restarts. (#96704, #98284) Thanks @TurboTheTurtle.
 - **MCP OAuth response bounds:** reject body-less foreign error bodies without calling their inherently unbounded `text()` fallback, while preserving HTTP status and headers for safe SDK diagnostics. (#98143) Thanks @Pick-cat.
 - **Control UI approval prompts:** keep stale resolve failures and busy-state cleanup from leaking across newer approvals or Gateway reconnects. (#98394) Thanks @haruaiclone-droid.
+- **macOS service SecretRefs:** preserve generated env-file values for SecretRefs that remain in config when stale Gateway LaunchAgents are repaired or reinstalled without those variables in the invoking shell. (#99124) Thanks @mushuiyu886.
+- **Anthropic OAuth callbacks:** keep the provider-required `localhost` redirect URI stable while allowing the local callback listener to bind an explicit loopback host. (#96917) Thanks @xialonglee.
+- **Prompt-release media delivery:** accept active-leaf-preserving side appends while an embedded run temporarily releases its session lock, so successive message-tool media replies merge without a false session-takeover failure. (#100033, #100490) Thanks @scotthuang.
 - **Control UI Skills filters:** align agent and search controls, use translated labels, and preserve native checkbox and radio sizing. (#100526, #99996) Thanks @evan-YM.
 - **Control UI completed-run state:** bind active and completed updates to run identities so stale completions keep Send available while newer runs remain active. (#100527, #91680) Thanks @tiffanychum.
 - **Control UI file previews:** remove the duplicate Escape header hint while retaining the Close-button shortcut hint and Escape behavior. (#100528, #99029) Thanks @xianshishan.

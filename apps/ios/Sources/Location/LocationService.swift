@@ -12,6 +12,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
 
     private let manager = CLLocationManager()
     private var authWaitID: UUID?
+    private var authWaitRequiresDeterminedStatus = false
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
@@ -37,16 +38,18 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
 
         let status = self.manager.authorizationStatus
         if status == .notDetermined {
-            self.manager.requestWhenInUseAuthorization()
-            let updated = await self.awaitAuthorizationChange()
+            let updated = await self.requestAuthorization(requiresDeterminedStatus: true) {
+                self.manager.requestWhenInUseAuthorization()
+            }
             if mode != .always { return updated }
         }
 
         if mode == .always {
             let current = self.manager.authorizationStatus
             if current == .authorizedWhenInUse {
-                self.manager.requestAlwaysAuthorization()
-                return await self.awaitAuthorizationChange()
+                return await self.requestAuthorization(requiresDeterminedStatus: false) {
+                    self.manager.requestAlwaysAuthorization()
+                }
             }
             return current
         }
@@ -72,11 +75,17 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
             })
     }
 
-    private func awaitAuthorizationChange() async -> CLAuthorizationStatus {
+    private func requestAuthorization(
+        requiresDeterminedStatus: Bool,
+        request: () -> Void) async -> CLAuthorizationStatus
+    {
         await withCheckedContinuation { cont in
             let waitID = UUID()
             self.authWaitID = waitID
+            self.authWaitRequiresDeterminedStatus = requiresDeterminedStatus
             self.authContinuation = cont
+            // Install the waiter before requesting permission so a fast delegate callback cannot be lost.
+            request()
             Task { @MainActor in
                 let clock = ContinuousClock()
                 let noPromptDeadline = clock.now.advanced(by: .milliseconds(1500))
@@ -91,15 +100,32 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
                         continue
                     }
                     guard observedPrompt || clock.now >= noPromptDeadline else { continue }
-                    self.finishAuthorizationWait(waitID: waitID, status: self.manager.authorizationStatus)
+                    let status = self.manager.authorizationStatus
+                    guard Self.shouldCompleteAuthorizationWait(
+                        status: status,
+                        requiresDeterminedStatus: requiresDeterminedStatus)
+                    else { continue }
+                    self.finishAuthorizationWait(waitID: waitID, status: status)
                 }
             }
         }
     }
 
+    nonisolated static func shouldCompleteAuthorizationWait(
+        status: CLAuthorizationStatus,
+        requiresDeterminedStatus: Bool) -> Bool
+    {
+        !requiresDeterminedStatus || status != .notDetermined
+    }
+
     private func finishAuthorizationWait(waitID: UUID, status: CLAuthorizationStatus) {
         guard self.authWaitID == waitID, let cont = self.authContinuation else { return }
+        guard Self.shouldCompleteAuthorizationWait(
+            status: status,
+            requiresDeterminedStatus: self.authWaitRequiresDeterminedStatus)
+        else { return }
         self.authWaitID = nil
+        self.authWaitRequiresDeterminedStatus = false
         self.authContinuation = nil
         cont.resume(returning: status)
     }
