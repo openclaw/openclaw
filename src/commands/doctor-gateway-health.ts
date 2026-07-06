@@ -40,8 +40,26 @@ export type GatewayMemoryProbe = {
   };
 };
 
+type GatewayMemoryFtsProbe = NonNullable<GatewayMemoryProbe["fts"]>;
+
 function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
+}
+
+function normalizeGatewayMemoryFtsProbe(value: unknown): GatewayMemoryFtsProbe | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.enabled !== "boolean" || typeof record.available !== "boolean") {
+    return undefined;
+  }
+  const error = typeof record.error === "string" ? record.error.trim() : "";
+  return {
+    enabled: record.enabled,
+    available: record.available,
+    ...(error ? { error } : {}),
+  };
 }
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
@@ -171,12 +189,13 @@ export async function probeGatewayMemoryStatus(params: {
     // We also carry skipped: true so renderers can distinguish an intentional
     // non-deep skip from a transport timeout (which also returns checked: false).
     const gatewayChecked = payload.embedding.checked !== false;
+    const fts = normalizeGatewayMemoryFtsProbe(payload.fts);
     return {
       checked: gatewayChecked,
       ready: payload.embedding.ok,
       error: payload.embedding.error,
       skipped: !gatewayChecked,
-      fts: payload.fts,
+      ...(fts ? { fts } : {}),
     };
   } catch (err) {
     const message = formatErrorMessage(err);

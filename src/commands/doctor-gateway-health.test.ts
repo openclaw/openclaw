@@ -233,6 +233,35 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
+  it("carries validated FTS status from the gateway memory probe", async () => {
+    callGateway.mockResolvedValue({
+      embedding: { ok: true },
+      fts: { enabled: true, available: false, error: "  no such module: fts5  " },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
+      checked: true,
+      ready: true,
+      error: undefined,
+      skipped: false,
+      fts: { enabled: true, available: false, error: "no such module: fts5" },
+    });
+  });
+
+  it("ignores malformed FTS status from the gateway memory probe", async () => {
+    callGateway.mockResolvedValue({
+      embedding: { ok: true },
+      fts: { enabled: true, available: "false", error: "no such module: fts5" },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
+      checked: true,
+      ready: true,
+      error: undefined,
+      skipped: false,
+    });
+  });
+
   it("treats outer gateway timeouts as inconclusive (skipped: false)", async () => {
     // A transport timeout must NOT be treated as a skipped probe. It is a real
     // diagnostic signal and the renderer should warn for key-optional providers.

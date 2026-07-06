@@ -1236,6 +1236,46 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("no such module: fts5");
   });
 
+  it("does not warn when gateway probe reports FTS available", async () => {
+    const noteFn = vi.fn();
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: true,
+        fts: { enabled: true, available: true },
+      },
+      noteFn,
+    });
+
+    expect(noteFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the disabled memory-search exit before gateway FTS warnings", async () => {
+    const noteFn = vi.fn();
+    resolveMemorySearchConfig.mockReturnValue(null);
+
+    await noteMemorySearchHealth(cfg, {
+      includeWorkspaceMemoryHealth: false,
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: true,
+        fts: { enabled: true, available: false, error: "no such module: fts5" },
+      },
+      noteFn,
+    });
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const message = noteFn.mock.calls[0]?.[0] as string;
+    expect(message).toContain("Memory search is explicitly disabled");
+    expect(message).not.toContain("FTS5");
+  });
+
   it("uses model configure hint when gateway probe is unavailable and API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",

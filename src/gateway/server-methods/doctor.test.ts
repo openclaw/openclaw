@@ -299,6 +299,32 @@ describe("doctor.memory.status", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("ignores malformed gateway FTS status from the memory manager", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({
+          provider: "gemini",
+          fts: { enabled: true, available: "false", error: "no such module: fts5" },
+        }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
+
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      agentId: "main",
+      provider: "gemini",
+      embedding: { ok: true },
+    });
+    expect(payload).not.toHaveProperty("fts");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("returns gateway embedding probe status for the requested agent", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     getMemorySearchManager.mockResolvedValue({

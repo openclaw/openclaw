@@ -738,7 +738,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
       const statusRecord = status as Record<string, unknown>;
-      const ftsRecord = asRecord(statusRecord.fts);
+      const ftsRecord = asOptionalRecord(statusRecord.fts);
       const ftsEnabled = ftsRecord?.enabled;
       const ftsAvailable = ftsRecord?.available;
       const ftsError = normalizeTrimmedString(ftsRecord?.error);
