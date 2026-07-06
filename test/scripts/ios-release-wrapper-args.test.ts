@@ -1,5 +1,6 @@
 // iOS release wrapper tests keep release args fail-closed before Fastlane work.
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -33,11 +34,18 @@ function runScript(
 describe("iOS release shell wrapper arguments", () => {
   const missingValueCases: readonly WrapperCase[] = [
     ["scripts/ios-release-upload.sh", ["--build-number", "--bogus"], "--build-number"],
+    ["scripts/ios-release-upload.sh", ["--version", "--bogus"], "--version"],
     ["scripts/ios-release-archive.sh", ["--build-number", "--bogus"], "--build-number"],
+    ["scripts/ios-release-archive.sh", ["--version", "--bogus"], "--version"],
     ["scripts/ios-release-prepare.sh", ["--build-number", "--team-id"], "--build-number"],
     [
       "scripts/ios-release-prepare.sh",
-      ["--build-number", "7", "--team-id", "--bogus"],
+      ["--build-number", "7", "--version", "--bogus"],
+      "--version",
+    ],
+    [
+      "scripts/ios-release-prepare.sh",
+      ["--version", "2026.6.11", "--build-number", "7", "--team-id", "--bogus"],
       "--team-id",
     ],
   ];
@@ -55,10 +63,37 @@ describe("iOS release shell wrapper arguments", () => {
     },
   );
 
+  it.each([
+    "scripts/ios-release-upload.sh",
+    "scripts/ios-release-archive.sh",
+    "scripts/ios-release-prepare.sh",
+  ])("requires an explicit release version before release work in %s", (scriptPath) => {
+    const args = scriptPath.endsWith("prepare.sh") ? ["--build-number", "7"] : [];
+    const result = runScript(path.join(process.cwd(), scriptPath), args, {
+      IOS_RELEASE_VERSION: "2026.6.10",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Missing required --version.");
+    expect(result.stderr).not.toContain("No such file or directory");
+    expect(result.stderr).not.toContain("fastlane");
+    expect(result.stdout).toBe("");
+  });
+
+  it.each(["scripts/ios-release-upload.sh", "scripts/ios-release-archive.sh"])(
+    "does not accept ambient release build numbers in %s",
+    (scriptPath) => {
+      const script = readFileSync(path.join(process.cwd(), scriptPath), "utf8");
+
+      expect(script).toContain('BUILD_NUMBER=""');
+      expect(script).not.toContain('BUILD_NUMBER="${IOS_RELEASE_BUILD_NUMBER:-}"');
+    },
+  );
+
   it("rejects App Store release relay URL overrides before release work", () => {
     const result = runScript(
       path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
-      ["--build-number", "7"],
+      ["--version", "2026.6.11", "--build-number", "7"],
       {
         IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
         OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",

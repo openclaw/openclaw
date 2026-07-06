@@ -23,7 +23,6 @@ import {
   markSessionAbortTarget,
   patchSessionEntry,
   persistSessionResetLifecycle,
-  persistSessionRolloverLifecycle,
   persistSessionTranscriptTurn,
   purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
@@ -532,6 +531,318 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       sessionId: "second-session",
     });
+  });
+
+  it("commits reply session initialization despite active-turn metadata changes", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+      },
+    );
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        compactionCount: 1,
+        totalTokensFresh: false,
+        updatedAt: current.updatedAt + 1,
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "existing-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry).toMatchObject({
+      compactionCount: 1,
+      sessionId: "existing-session",
+      totalTokensFresh: false,
+      updatedAt: 30,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      compactionCount: 1,
+      sessionId: "existing-session",
+      totalTokensFresh: false,
+      updatedAt: 30,
+    });
+  });
+
+  it("commits reply session initialization despite non-identity metadata changes", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+        lastHeartbeatSentAt: 100,
+        lastHeartbeatText: "heartbeat-1",
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    // Background activity (heartbeat runner, delivery retry, etc.) can touch
+    // metadata fields without rotating the session. The initialization guard
+    // should only care about session identity, so this must not conflict.
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        lastHeartbeatSentAt: 200,
+        lastHeartbeatText: "heartbeat-2",
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      // The real caller builds the prepared entry from the snapshot, so it
+      // inherits the pre-drift heartbeat values. The commit must still notice
+      // the concurrent metadata change and preserve the newer values.
+      sessionEntry: {
+        sessionId: "existing-session",
+        updatedAt: 30,
+        lastHeartbeatSentAt: 100,
+        lastHeartbeatText: "heartbeat-1",
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("existing-session");
+    // The accepted commit must not roll back the metadata drift that happened
+    // while the initialization was in flight.
+    expect(committed.sessionEntry.lastHeartbeatSentAt).toBe(200);
+    expect(committed.sessionEntry.lastHeartbeatText).toBe("heartbeat-2");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "existing-session",
+      lastHeartbeatSentAt: 200,
+      lastHeartbeatText: "heartbeat-2",
+    });
+  });
+
+  it("preserves concurrent optional additions when prepared fields are undefined", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        modelOverride: "channel-model",
+        modelOverrideSource: "user",
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "existing-session",
+        updatedAt: 30,
+        modelOverride: undefined,
+        modelOverrideSource: undefined,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry).toMatchObject({
+      modelOverride: "channel-model",
+      modelOverrideSource: "user",
+      sessionId: "existing-session",
+      updatedAt: 30,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      modelOverride: "channel-model",
+      modelOverrideSource: "user",
+      sessionId: "existing-session",
+      updatedAt: 30,
+    });
+  });
+
+  it("does not restore pending final delivery metadata cleared after the snapshot", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: 10,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "durable reply",
+        pendingFinalDeliveryCreatedAt: 11,
+        pendingFinalDeliveryLastAttemptAt: 12,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: "previous failure",
+        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
+        pendingFinalDeliveryIntentId: "intent-1",
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    if (!snapshot.currentEntry) {
+      throw new Error("expected reply session initialization snapshot");
+    }
+
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        ...snapshot.currentEntry,
+        updatedAt: 30,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    const persisted = loadSessionEntry({ sessionKey, storePath });
+    expect(persisted?.pendingFinalDelivery).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("does not merge old-session delivery metadata into a rotated session", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "old-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    await sessionStore.updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      if (!current) {
+        throw new Error("expected existing session entry");
+      }
+      store[sessionKey] = {
+        ...current,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "old reply",
+        pendingFinalDeliveryCreatedAt: 21,
+        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
+        pendingFinalDeliveryIntentId: "intent-old",
+      };
+    });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "new-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      snapshotEntry: snapshot.currentEntry,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("new-session");
+    expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
+    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    const persisted = loadSessionEntry({ sessionKey, storePath });
+    expect(persisted?.sessionId).toBe("new-session");
+    expect(persisted?.pendingFinalDelivery).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("commits reply session initialization despite runtime-only skill snapshot cache", async () => {
@@ -1476,63 +1787,6 @@ describe("session accessor file-backed seam", () => {
     );
     expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
     expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
-  });
-
-  it("persists rollover entries and returns archived previous transcript info", async () => {
-    const now = Date.now();
-    const sessionKey = "agent:main:telegram:dm:user";
-    const retiredKey = "agent:main:main";
-    const previousTranscript = path.join(tempDir, "previous-rollover.jsonl");
-    const previousEntry: SessionEntry = {
-      sessionFile: previousTranscript,
-      sessionId: "previous-rollover",
-      updatedAt: now,
-    };
-    const nextEntry: SessionEntry = {
-      sessionFile: path.join(tempDir, "next-rollover.jsonl"),
-      sessionId: "next-rollover",
-      updatedAt: now + 1,
-    };
-    fs.writeFileSync(previousTranscript, '{"type":"session","id":"previous-rollover"}\n', "utf-8");
-    await upsertSessionEntry({ sessionKey, storePath }, previousEntry);
-    await upsertSessionEntry(
-      { sessionKey: retiredKey, storePath },
-      {
-        lastChannel: "telegram",
-        lastTo: "user",
-        sessionId: "legacy-main",
-        updatedAt: now,
-      },
-    );
-
-    const result = await persistSessionRolloverLifecycle({
-      activeSessionKey: sessionKey,
-      agentId: "main",
-      previousEntry,
-      retiredEntry: {
-        key: retiredKey,
-        entry: {
-          sessionId: "legacy-main",
-          updatedAt: now,
-        },
-      },
-      sessionEntry: nextEntry,
-      sessionKey,
-      storePath,
-    });
-
-    expect(result.sessionEntry).toMatchObject(nextEntry);
-    expect(result.previousSessionTranscript.transcriptArchived).toBe(true);
-    expect(result.previousSessionTranscript.sessionFile).toContain(
-      "previous-rollover.jsonl.reset.",
-    );
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
-    expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toEqual({
-      sessionId: "legacy-main",
-      updatedAt: expect.any(Number),
-    });
-    expect(fs.existsSync(previousTranscript)).toBe(false);
-    expect(fs.existsSync(result.previousSessionTranscript.sessionFile ?? "")).toBe(true);
   });
 
   it("appends transcript events through a session scope", async () => {

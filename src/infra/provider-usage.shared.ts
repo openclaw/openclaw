@@ -6,36 +6,31 @@ import type { UsageProviderId } from "./provider-usage.types.js";
 /** Default timeout for provider usage collection. */
 export const DEFAULT_TIMEOUT_MS = 5000;
 
-export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
+export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Claude",
+  clawrouter: "ClawRouter",
   deepseek: "DeepSeek",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
   minimax: "MiniMax",
   openai: "OpenAI",
+  openrouter: "OpenRouter",
+  venice: "Venice",
   xiaomi: "Xiaomi",
   "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
 };
 
-export const usageProviders: UsageProviderId[] = [
-  "anthropic",
-  "deepseek",
-  "github-copilot",
-  "google-gemini-cli",
-  "minimax",
-  "openai",
-  "xiaomi",
-  "xiaomi-token-plan",
-  "zai",
-];
+export function resolveProviderUsageDisplayName(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider;
+}
 
 /** Returns true for providers whose usage endpoint is only meaningful with OAuth/token auth. */
 export function isOAuthOnlyUsageProvider(provider: UsageProviderId): boolean {
   return provider === "openai";
 }
 
-/** Maps model/provider ids and credential type into supported usage provider ids. */
+/** Maps model/provider ids and credential type into a normalized usage provider id. */
 export function resolveUsageProviderId(
   provider?: string | null,
   options?: { credentialType?: string | null },
@@ -60,9 +55,7 @@ export function resolveUsageProviderId(
   ) {
     return "minimax";
   }
-  return usageProviders.includes(normalized as UsageProviderId)
-    ? (normalized as UsageProviderId)
-    : undefined;
+  return normalized || undefined;
 }
 
 export const ignoredErrors = new Set([

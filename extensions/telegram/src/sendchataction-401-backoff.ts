@@ -100,7 +100,7 @@ function isTransientSendChatActionError(error: unknown): boolean {
   return (
     isTelegramRateLimitError(error) ||
     isTelegramServerError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "send" })
+    isRecoverableTelegramNetworkError(error, { context: "action" })
   );
 }
 

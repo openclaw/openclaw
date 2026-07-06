@@ -248,6 +248,8 @@ type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfo
 type PromptReleasedOpaqueEntry = {
   type: "prompt_released_opaque";
   record: unknown;
+  /** Unowned side-leaf rows may extend only the current delivery side branch. */
+  preserveActiveLeaf?: true;
 };
 
 type PromptReleasedSessionEntry =
@@ -320,6 +322,29 @@ function parsePromptReleasedOpaqueLine(line: string): PromptReleasedOpaqueEntry 
     return !isJsonRecord(record) || record.type !== "message"
       ? { type: "prompt_released_opaque", record }
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePromptReleasedSideLeafControlLine(
+  line: string,
+): PromptReleasedOpaqueEntry | undefined {
+  try {
+    const record = JSON.parse(line) as unknown;
+    if (
+      !isJsonRecord(record) ||
+      record.type !== "leaf" ||
+      !hasSessionEntryBase(record) ||
+      (record.targetId !== null && typeof record.targetId !== "string") ||
+      (record.appendParentId !== undefined &&
+        record.appendParentId !== null &&
+        typeof record.appendParentId !== "string") ||
+      record.appendMode !== "side"
+    ) {
+      return undefined;
+    }
+    return { type: "prompt_released_opaque", record, preserveActiveLeaf: true };
   } catch {
     return undefined;
   }
@@ -430,7 +455,9 @@ function classifyPromptReleasedSessionLines(
       hasGlobalMetadata = true;
       continue;
     }
-    const opaqueEntry = options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined;
+    const opaqueEntry = options?.allowAnyMessage
+      ? parsePromptReleasedOpaqueLine(line)
+      : parsePromptReleasedSideLeafControlLine(line);
     const opaqueId =
       opaqueEntry && isJsonRecord(opaqueEntry.record)
         ? normalizeTranscriptEntryId(opaqueEntry.record.id)
@@ -1171,6 +1198,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  // An aborted prompt can settle after attempt teardown. Never let its finally
+  // path reacquire a retained lock that no owner remains to release.
+  let disposed = false;
   // Set when an active retained write prevents immediate held-lock release.
   // The scope completion path retries release after the retained use unwinds.
   let releaseHeldLockDeferred = false;
@@ -1994,10 +2024,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     async reacquireAfterPrompt(): Promise<void> {
       await waitForHeldLockDrain();
-      if (takeoverDetected || heldLock) {
+      if (disposed || takeoverDetected || heldLock) {
         return;
       }
       const lock = await acquireLock();
+      if (disposed) {
+        await lock.release();
+        return;
+      }
       try {
         heldLock = lock;
         await assertSessionFileFence();
@@ -2035,6 +2069,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return takeoverDetected;
     },
     async dispose(): Promise<void> {
+      disposed = true;
       try {
         await disposeHeldLockAfterRetainedIdle();
       } finally {

@@ -98,7 +98,7 @@ import {
   resolveFastModeForElapsed,
 } from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import { selectAgentHarness } from "../harness/selection.js";
+import { agentHarnessBuildsOpenClawTools, selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
@@ -130,6 +130,7 @@ import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -140,7 +141,7 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -180,7 +181,10 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
-import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
+import {
+  hasCodexAppServerRecoveryRetryBudget,
+  resolveCodexAppServerRecoveryRetry,
+} from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -192,6 +196,7 @@ import {
   resolveActiveErrorContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveLatestCallUsage,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
   MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
@@ -1117,6 +1122,10 @@ async function runEmbeddedAgentInternal(
             {
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
+              // Enable bundled static catalog fallback so plugin-provided
+              // models that are not discoverable via agent model discovery
+              // can still be resolved from the static catalog.
+              allowBundledStaticCatalogFallback: true,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -1542,8 +1551,7 @@ async function runEmbeddedAgentInternal(
               : lastProfileId,
           )
         : attemptAuthProfileStore;
-      const harnessBuildsOpenClawTools =
-        agentHarness.id === "codex" || agentHarness.id === "copilot";
+      const harnessBuildsOpenClawTools = agentHarnessBuildsOpenClawTools(agentHarness.id);
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -2086,6 +2094,12 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+          let attemptCancellationRequested = false;
+          const codexAppServerRecoveryRetryAvailable = hasCodexAppServerRecoveryRetryBudget({
+            alreadyRetried: codexAppServerRecoveryRetries > 0,
+            runLoopIterations,
+            maxRunLoopIterations: MAX_RUN_LOOP_ITERATIONS,
+          });
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2109,6 +2123,7 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
             chatId: params.chatId,
@@ -2143,6 +2158,7 @@ async function runEmbeddedAgentInternal(
             requestedModelId,
             fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
             fallbackReason: resolveRuntimeFallbackReason(),
+            isFinalFallbackAttempt: params.isFinalFallbackAttempt,
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
@@ -2205,12 +2221,16 @@ async function runEmbeddedAgentInternal(
               ? undefined
               : startLaneProgressHeartbeat,
             onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-            onAttemptAbort: pluginHarnessOwnsTransport
-              ? undefined
-              : () => {
-                  stopLaneProgressHeartbeat();
-                  laneTaskAbortController.abort();
-                },
+            onAttemptAbort: () => {
+              attemptCancellationRequested = true;
+              if (!params.abortSignal?.aborted) {
+                params.replyOperation?.abortByUser();
+              }
+              if (!pluginHarnessOwnsTransport) {
+                stopLaneProgressHeartbeat();
+                laneTaskAbortController.abort();
+              }
+            },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -2221,6 +2241,7 @@ async function runEmbeddedAgentInternal(
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
+            streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: notifyToolResult,
             onAgentToolResult: params.onAgentToolResult,
@@ -2244,6 +2265,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            crestodianTool: params.crestodianTool,
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -2278,6 +2300,10 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          if (attemptCancellationRequested) {
+            throwIfAborted();
+            throw createAgentRunDirectAbortError();
+          }
 
           const {
             aborted,
@@ -2314,12 +2340,22 @@ async function runEmbeddedAgentInternal(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          const currentAttemptAssistantUsage = normalizeUsage(
+            currentAttemptAssistant?.usage as UsageLike,
+          );
+          const promptCacheLastCallUsage = normalizeUsage(
+            attempt.promptCache?.lastCallUsage as UsageLike,
+          );
+          const callUsage = resolveLatestCallUsage({
+            currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
+            carriedCandidates: [lastRunPromptUsage, lastAssistantUsage],
+          });
+          const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
-          lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastRunPromptUsage = callUsage.latest;
+          lastTurnTotal = callUsage.latest?.total;
           // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
           // pure helper below so it stays unit-testable; the run loop just
           // feeds it the latest attempt outcome and bails through the
@@ -2392,10 +2428,11 @@ async function runEmbeddedAgentInternal(
             })
               ? undefined
               : sessionLastAssistant;
+          const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
           const activeErrorContext = resolveActiveErrorContext({
             provider,
             model: modelId,
-            assistant: currentAttemptAssistant ?? sessionAssistantForCandidate,
+            assistant: attemptAssistant,
           });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||
@@ -2472,7 +2509,9 @@ async function runEmbeddedAgentInternal(
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
-            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const lastTurnPromptTokens = deriveContextPromptTokens({
+              lastCallUsage: lastRunPromptUsage,
+            });
             const tokenUsedRatio =
               lastTurnPromptTokens != null && ctxInfo.tokens > 0
                 ? lastTurnPromptTokens / ctxInfo.tokens
@@ -2831,6 +2870,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
                     config: params.config,
+                    protectTrailingToolResults: true,
                   });
                   if (truncResult.truncated) {
                     log.info(
@@ -2894,6 +2934,7 @@ async function runEmbeddedAgentInternal(
                   sessionKey: params.sessionKey,
                   agentId: sessionAgentId,
                   config: params.config,
+                  protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
                 });
                 if (truncResult.truncated) {
                   log.info(
@@ -2949,7 +2990,7 @@ async function runEmbeddedAgentInternal(
                   contextTokens: ctxInfo.tokens,
                   usageAccumulator,
                   lastRunPromptUsage,
-                  lastAssistant: sessionLastAssistant,
+                  lastAssistant: attemptAssistant,
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
@@ -2982,7 +3023,7 @@ async function runEmbeddedAgentInternal(
                   contextTokens: ctxInfo.tokens,
                   usageAccumulator,
                   lastRunPromptUsage,
-                  lastAssistant: sessionLastAssistant,
+                  lastAssistant: attemptAssistant,
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
@@ -3004,9 +3045,10 @@ async function runEmbeddedAgentInternal(
             // Retry replay-safe Codex app-server failures.
             const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
-              alreadyRetried: codexAppServerRecoveryRetries > 0,
+              retryAvailable: codexAppServerRecoveryRetryAvailable,
             });
             if (codexAppServerRecoveryRetry.retry) {
+              throwIfAborted();
               codexAppServerRecoveryRetries += 1;
               suppressNextUserMessagePersistence = true;
               log.warn(
@@ -3097,7 +3139,7 @@ async function runEmbeddedAgentInternal(
                     contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant: sessionLastAssistant,
+                    lastAssistant: attemptAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
@@ -3138,7 +3180,7 @@ async function runEmbeddedAgentInternal(
                     contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant: sessionLastAssistant,
+                    lastAssistant: attemptAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
@@ -3307,9 +3349,8 @@ async function runEmbeddedAgentInternal(
             throw toErrorObject(promptError, "Prompt failed");
           }
 
-          const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: assistantForFailover?.errorMessage,
+            message: attemptAssistant?.errorMessage,
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
@@ -3320,11 +3361,11 @@ async function runEmbeddedAgentInternal(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(assistantForFailover);
-          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
-          const billingFailure = isBillingAssistantError(assistantForFailover);
-          const failoverFailure = isFailoverAssistantError(assistantForFailover);
-          const assistantFailoverReason = classifyAssistantFailoverReason(assistantForFailover);
+          const authFailure = isAuthAssistantError(attemptAssistant);
+          const rateLimitFailure = isRateLimitAssistantError(attemptAssistant);
+          const billingFailure = isBillingAssistantError(attemptAssistant);
+          const failoverFailure = isFailoverAssistantError(attemptAssistant);
+          const assistantFailoverReason = classifyAssistantFailoverReason(attemptAssistant);
           const assistantProviderStarted =
             Boolean(currentAttemptAssistant?.provider) ||
             idleTimedOut ||
@@ -3338,19 +3379,19 @@ async function runEmbeddedAgentInternal(
               providerStarted: assistantProviderStarted,
               transientRateLimit:
                 assistantProfileFailoverReason === "rate_limit" &&
-                isShortWindowRateLimitMessage(assistantForFailover?.errorMessage),
+                isShortWindowRateLimitMessage(attemptAssistant?.errorMessage),
             },
           );
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
-            assistantForFailover?.errorMessage ?? "",
+            attemptAssistant?.errorMessage ?? "",
           );
           // The shared runtime wraps interrupted streams as a timeout. Retry that
           // wrapper only for reasoning-only output so ordinary timeouts keep failover.
           const genericUnknownReasoningError =
             assistantFailoverReason === "timeout" &&
-            isGenericUnknownStreamErrorMessage(assistantForFailover?.errorMessage ?? "") &&
-            Boolean(assistantForFailover && hasOnlyAssistantReasoningContent(assistantForFailover));
+            isGenericUnknownStreamErrorMessage(attemptAssistant?.errorMessage ?? "") &&
+            Boolean(attemptAssistant && hasOnlyAssistantReasoningContent(attemptAssistant));
           const silentErrorRetryReason =
             assistantFailoverReason === null ||
             genericUnknownReasoningError ||
@@ -3369,15 +3410,15 @@ async function runEmbeddedAgentInternal(
             !promptError &&
             !timedOut &&
             silentErrorRetryReason &&
-            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: assistantForFailover }) &&
+            shouldRetrySilentErrorAssistantTurn({ attempt, assistant: attemptAssistant }) &&
             emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
           ) {
             emptyErrorRetries += 1;
             log.warn(
               `[empty-error-retry] stopReason=error non-visible-output; resubmitting ` +
                 `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
-                `provider=${assistantForFailover?.provider ?? provider} ` +
-                `model=${assistantForFailover?.model ?? model.id} ` +
+                `provider=${attemptAssistant?.provider ?? provider} ` +
+                `model=${attemptAssistant?.model ?? model.id} ` +
                 `sessionKey=${params.sessionKey ?? params.sessionId}`,
             );
             continue;
@@ -3387,13 +3428,13 @@ async function runEmbeddedAgentInternal(
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,
-            rawError: assistantForFailover?.errorMessage?.trim(),
+            rawError: attemptAssistant?.errorMessage?.trim(),
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
-            sourceProvider: assistantForFailover?.provider ?? provider,
-            sourceModel: assistantForFailover?.model ?? modelId,
+            sourceProvider: attemptAssistant?.provider ?? provider,
+            sourceModel: attemptAssistant?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
             timedOut,
@@ -3403,7 +3444,7 @@ async function runEmbeddedAgentInternal(
           if (
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
-              assistantForFailover?.errorMessage ?? "",
+              attemptAssistant?.errorMessage ?? "",
               runtimeAuthRetry,
             ))
           ) {
@@ -3468,7 +3509,7 @@ async function runEmbeddedAgentInternal(
             modelId,
             provider,
             activeErrorContext,
-            lastAssistant: assistantForFailover,
+            lastAssistant: attemptAssistant,
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             authFailure,
@@ -3552,14 +3593,14 @@ async function runEmbeddedAgentInternal(
           }
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
-            lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
+            lastAssistantUsage: attemptAssistant?.usage as UsageLike | undefined,
             lastRunPromptUsage,
             lastTurnTotal,
           });
           const reportedModelRef = resolveReportedModelRef({
             provider,
             model: model.id,
-            assistant: sessionLastAssistant,
+            assistant: attemptAssistant,
           });
           const agentMeta: EmbeddedAgentMeta = {
             sessionId: sessionIdUsed,
@@ -3575,12 +3616,13 @@ async function runEmbeddedAgentInternal(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
             compactionTokensAfter: lastCompactionTokensAfter,
           };
-          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
-          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
+          const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+            assistantTranscriptOwned: attempt.assistantTranscriptOwned,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
@@ -3620,7 +3662,7 @@ async function runEmbeddedAgentInternal(
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
-          const finalAssistantStopReason = (sessionLastAssistant?.stopReason ?? "")
+          const finalAssistantStopReason = (attemptAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
           const recoveredFinalAssistantTextAfterPromptTimeout =
@@ -3984,7 +4026,8 @@ async function runEmbeddedAgentInternal(
               replayInvalid,
               livenessState,
             });
-            const incompleteStopReason = attempt.lastAssistant?.stopReason;
+            const incompleteStopReason =
+              attempt.currentAttemptAssistant?.stopReason ?? attempt.lastAssistant?.stopReason;
             const replayMetadata = resolveAttemptReplayMetadata(attempt);
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
@@ -4096,7 +4139,7 @@ async function runEmbeddedAgentInternal(
             ? "tool_calls"
             : attempt.yieldDetected
               ? "end_turn"
-              : (sessionLastAssistant?.stopReason as string | undefined);
+              : (attemptAssistant?.stopReason as string | undefined);
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
@@ -4139,9 +4182,7 @@ async function runEmbeddedAgentInternal(
                 winnerProvider: reportedModelRef.provider,
                 winnerModel: reportedModelRef.model,
                 attempts:
-                  traceAttempts.length > 0 ||
-                  sessionLastAssistant?.provider ||
-                  sessionLastAssistant?.model
+                  traceAttempts.length > 0 || attemptAssistant?.provider || attemptAssistant?.model
                     ? [
                         ...traceAttempts,
                         {

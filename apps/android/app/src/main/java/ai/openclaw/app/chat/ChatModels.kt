@@ -1,5 +1,16 @@
 package ai.openclaw.app.chat
 
+import java.util.Locale
+
+private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
+
+/** Keeps transcript rows limited to roles Android renders as user-visible chat. */
+internal fun normalizeVisibleChatMessageRole(role: String?): String? =
+  role
+    ?.trim()
+    ?.lowercase(Locale.US)
+    ?.takeIf(visibleChatMessageRoles::contains)
+
 /**
  * Chat transcript item as delivered by gateway chat history and live chat events.
  */
@@ -47,6 +58,26 @@ data class ChatSessionEntry(
 )
 
 /**
+ * Slash command metadata exposed by the gateway for text-surface chat clients.
+ */
+data class ChatCommandEntry(
+  val name: String,
+  val description: String,
+  val category: String? = null,
+  val textAliases: List<String> = emptyList(),
+  val acceptsArgs: Boolean = false,
+)
+
+/**
+ * Run still streaming on the gateway when a chat.history snapshot was captured;
+ * [text] is the assistant text buffered so far (may be empty for runs without deltas).
+ */
+data class ChatInFlightRun(
+  val runId: String,
+  val text: String,
+)
+
+/**
  * Snapshot of one chat session, including optional thinking level selected on the gateway.
  */
 data class ChatHistory(
@@ -55,6 +86,7 @@ data class ChatHistory(
   val thinkingLevel: String?,
   val messages: List<ChatMessage>,
   val sessionInfo: ChatSessionEntry? = null,
+  val inFlightRun: ChatInFlightRun? = null,
 )
 
 /**

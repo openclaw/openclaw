@@ -1,4 +1,5 @@
 // Msteams plugin module implements inbound media behavior.
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
@@ -18,6 +19,28 @@ type MSTeamsLogger = {
   warn?: (message: string, meta?: Record<string, unknown>) => void;
   error?: (message: string, meta?: Record<string, unknown>) => void;
 };
+
+export function resolveMSTeamsInboundMediaBody(params: {
+  body: string;
+  mediaPlaceholder: string;
+  materializedMediaPlaceholder: string;
+  expectedMediaCount: number;
+  mediaCount: number;
+}): string {
+  const unavailableCount = Math.max(0, params.expectedMediaCount - params.mediaCount);
+  if (unavailableCount === 0) {
+    return params.body;
+  }
+  const body =
+    params.mediaCount > 0 && params.body === params.mediaPlaceholder
+      ? params.materializedMediaPlaceholder
+      : params.body;
+  return formatInboundMediaUnavailableText({
+    body,
+    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
+    notice: `[msteams ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+  });
+}
 
 export async function resolveMSTeamsInboundMedia(params: {
   attachments: MSTeamsAttachmentLike[];

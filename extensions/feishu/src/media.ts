@@ -822,12 +822,23 @@ async function prepareFeishuVoiceMedia(params: {
   }
 }
 
-async function probeAudioDurationMs(buffer: Buffer): Promise<number | undefined> {
+async function probeMediaDurationMs(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+}): Promise<number | undefined> {
   try {
     return await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-audio-probe-" },
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-media-probe-" },
       async (workspace) => {
-        const inputPath = await workspace.write("input.ogg", buffer);
+        const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+        const inferredExt =
+          ext && ext.length <= 12
+            ? ext
+            : mediaKindFromMime(params.contentType) === "video"
+              ? ".mp4"
+              : ".ogg";
+        const inputPath = await workspace.write(`input${inferredExt}`, params.buffer);
         const stdout = await runFfprobe(
           ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath],
           { timeoutMs: 5_000 },
@@ -840,9 +851,21 @@ async function probeAudioDurationMs(buffer: Buffer): Promise<number | undefined>
       },
     );
   } catch (err) {
-    console.warn("[feishu] failed to probe audio duration; voice bubble will omit it:", err);
+    console.warn("[feishu] failed to probe media duration; upload will omit it:", err);
     return undefined;
   }
+}
+
+async function maybeProbeUploadDurationMs(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+  msgType: "file" | "audio" | "media";
+}): Promise<number | undefined> {
+  if (params.msgType !== "audio" && params.msgType !== "media") {
+    return undefined;
+  }
+  return await probeMediaDurationMs(params);
 }
 
 /**
@@ -930,7 +953,12 @@ export async function sendMediaFeishu(params: {
       ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
     };
   }
-  const durationMs = routing.msgType === "audio" ? await probeAudioDurationMs(buffer) : undefined;
+  const durationMs = await maybeProbeUploadDurationMs({
+    buffer,
+    fileName: name,
+    contentType,
+    msgType: routing.msgType,
+  });
   const { fileKey } = await uploadFileFeishu({
     cfg,
     file: buffer,

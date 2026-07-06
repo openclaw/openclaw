@@ -1,4 +1,7 @@
 // Covers baseline config security audit findings.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -61,6 +64,90 @@ describe("security audit config basics", () => {
           finding.severity === "critical",
       ),
     ).toBe(true);
+  });
+
+  it("flags per-agent skill allowlists combined with host exec and a global mcporter registry", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-"));
+    try {
+      await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "skills", "config", "mcporter.json"),
+        JSON.stringify({
+          mcpServers: {
+            "hugegraph-asset": { baseUrl: "http://asset.example.test/mcp" },
+            "whois-mcp": { baseUrl: "http://whois.example.test/mcp" },
+          },
+        }),
+        "utf8",
+      );
+
+      const report = await runSecurityAudit({
+        config: {
+          agents: {
+            list: [
+              {
+                id: "asset-agent",
+                skills: ["asset-lifecycle-tracking"],
+                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(report.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "tools.exec.agent_skill_mcp_boundary_drift",
+            severity: "warn",
+            detail: expect.stringContaining("asset-agent"),
+          }),
+        ]),
+      );
+      const finding = report.findings.find(
+        (entry) => entry.checkId === "tools.exec.agent_skill_mcp_boundary_drift",
+      );
+      expect(finding?.detail).toContain("whois-mcp");
+      expect(finding?.detail).toContain("skills/config/mcporter.json");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not flag per-agent skill allowlists when matching agents deny exec", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-deny-"));
+    try {
+      const report = await runSecurityAudit({
+        config: {
+          mcp: {
+            servers: {
+              docs: { command: "node", args: ["docs-mcp.js"] },
+            },
+          },
+          agents: {
+            defaults: { skills: ["docs-search"] },
+            list: [{ id: "docs-agent", tools: { exec: { security: "deny" } } }],
+          },
+          tools: { exec: { security: "deny" } },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(report.findings.map((finding) => finding.checkId)).not.toContain(
+        "tools.exec.agent_skill_mcp_boundary_drift",
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("suppresses configured accepted findings from the active audit report", async () => {

@@ -47,6 +47,8 @@ function makeState(): BrowserServerState {
       controlPort: 18791,
       cdpPortRangeStart: 18800,
       cdpPortRangeEnd: 18899,
+      extensionRelayDefaultPort: 18799,
+      extensionRelayPorts: {},
       cdpProtocol: "http",
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,

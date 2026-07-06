@@ -2,6 +2,7 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -24,13 +25,7 @@ import {
 } from "./prepare-thread-context-root.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
-type SlackMediaModule = typeof import("../media.js");
-let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
-
-function loadSlackMediaModule(): Promise<SlackMediaModule> {
-  slackMediaModulePromise ??= import("../media.js");
-  return slackMediaModulePromise;
-}
+const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
 type SlackThreadContextData = {
   threadStarterBody: string | undefined;
@@ -231,7 +226,14 @@ export async function resolveSlackThreadContextData(params: {
     threadStarterBody = starter.text;
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
-    if (!params.effectiveDirectMedia && starter.files && starter.files.length > 0) {
+    // Root media seeds a new thread session once. Rehydrating it later makes
+    // old files look like current-turn uploads and repeats media processing.
+    if (
+      shouldSeedInitialThreadContext &&
+      !params.effectiveDirectMedia &&
+      starter.files &&
+      starter.files.length > 0
+    ) {
       const { resolveSlackMedia } = await loadSlackMediaModule();
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,

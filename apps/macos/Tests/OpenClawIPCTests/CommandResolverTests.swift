@@ -115,7 +115,8 @@ import Testing
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "openclaw", "rpc"]))
     }
@@ -129,7 +130,8 @@ import Testing
             extraArgs: ["--json", "--timeout", "5"],
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "openclaw", "health", "--json"]))
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
@@ -143,6 +145,94 @@ import Testing
             current: [],
             projectRoot: tmp).first
         #expect(first == tmp.appendingPathComponent("node_modules/.bin").path)
+    }
+
+    @Test func `managed install only precedes external installs after validation`() throws {
+        let home = try makeTempDirForTests()
+        let managedBin = home.appendingPathComponent(".openclaw/bin")
+        try FileManager().createDirectory(at: managedBin, withIntermediateDirectories: true)
+        let managedExecutable = managedBin.appendingPathComponent("openclaw")
+
+        let fallbackPaths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+        let validatedPaths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home,
+            validatedExecutable: managedExecutable.path)
+
+        let packageManagerPath = home.appendingPathComponent("Library/pnpm").path
+        let fallbackManagedIndex = try #require(fallbackPaths.firstIndex(of: managedBin.path))
+        let fallbackPackageManagerIndex = try #require(fallbackPaths.firstIndex(of: packageManagerPath))
+        let validatedManagedIndex = try #require(validatedPaths.firstIndex(of: managedBin.path))
+        let validatedPackageManagerIndex = try #require(validatedPaths.firstIndex(of: packageManagerPath))
+        #expect(fallbackManagedIndex > fallbackPackageManagerIndex)
+        #expect(validatedManagedIndex < validatedPackageManagerIndex)
+    }
+
+    @Test func `node manager runtimes precede system runtimes`() throws {
+        let home = try makeTempDirForTests()
+        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.19.0/bin")
+        try makeExecutableForTests(at: nodeManagerBin.appendingPathComponent("node"))
+
+        let paths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+
+        let managerIndex = try #require(paths.firstIndex(of: nodeManagerBin.path))
+        let systemIndex = try #require(paths.firstIndex(of: "/opt/homebrew/bin"))
+        #expect(managerIndex < systemIndex)
+    }
+
+    @Test func `preferred paths include local user bin after system bins`() throws {
+        let home = try makeTempDirForTests()
+        let localBin = home.appendingPathComponent(".local/bin").path
+        let paths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+
+        let localIndex = try #require(paths.firstIndex(of: localBin))
+        let systemIndex = try #require(paths.firstIndex(of: "/bin"))
+        #expect(localIndex > systemIndex)
+        #expect(paths.count(where: { $0 == localBin }) == 1)
+    }
+
+    @Test func `SSH environment replaces path without dropping inherited values`() {
+        let paths = ["/usr/bin", "/bin", "/Users/test/.local/bin", "/opt/homebrew/bin"]
+        let environment = CommandResolver.sshEnvironment(
+            base: [
+                "HOME": "/Users/test",
+                "PATH": "/stale/path",
+                "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+            ],
+            searchPaths: paths)
+
+        #expect(environment["PATH"] == paths.joined(separator: ":"))
+        #expect(environment["HOME"] == "/Users/test")
+        #expect(environment["SSH_AUTH_SOCK"] == "/tmp/ssh-agent.sock")
+    }
+
+    @Test func `validated CLI preference expires when the app requires a newer version`() throws {
+        let defaults = self.makeDefaults()
+        let root = try makeTempDirForTests()
+        let executable = root.appendingPathComponent("openclaw")
+        FileManager().createFile(atPath: executable.path, contents: Data())
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        defaults.set(executable.path, forKey: cliValidatedExecutableKey)
+        defaults.set("2026.7.3", forKey: cliValidatedVersionKey)
+
+        #expect(CommandResolver.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: .default,
+            requiredVersion: "2026.7.3") == executable.path)
+        #expect(CommandResolver.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: .default,
+            requiredVersion: "2026.8.0") == nil)
     }
 
     @Test func `builds SSH command for remote mode`() {
@@ -167,6 +257,7 @@ import Testing
         #expect(cmd.contains("StrictHostKeyChecking=yes"))
         #expect(!cmd.contains("StrictHostKeyChecking=accept-new"))
         #expect(cmd.contains("UpdateHostKeys=yes"))
+        #expect(cmd.contains("ControlPath=none"))
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {
@@ -177,6 +268,78 @@ import Testing
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
         }
+    }
+
+    @Test func `explicit SSH config host key policy omits strict override`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("gateway-alias", forKey: remoteTargetKey)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshHostKeyPolicy": "openssh",
+                        "sshTarget": "gateway-alias",
+                    ],
+                ],
+            ])
+
+        #expect(cmd.first == "/usr/bin/ssh")
+        #expect(!cmd.contains { $0.hasPrefix("StrictHostKeyChecking=") })
+        #expect(cmd.contains("ControlPath=none"))
+    }
+
+    @Test func `OpenSSH host key opt in does not transfer to a different effective target`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("new-gateway-alias", forKey: remoteTargetKey)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshHostKeyPolicy": "openssh",
+                        "sshTarget": "old-gateway-alias",
+                    ],
+                ],
+            ])
+
+        #expect(cmd.contains("StrictHostKeyChecking=yes"))
+        #expect(cmd.contains("UpdateHostKeys=yes"))
+    }
+
+    @Test func `invalid SSH host key policy fails closed`() {
+        let settings = CommandResolver.connectionSettings(configRoot: [
+            "gateway": [
+                "mode": "remote",
+                "remote": ["sshHostKeyPolicy": " OPENSSH "],
+            ],
+        ])
+
+        #expect(settings.sshHostKeyPolicy == .strict)
+    }
+
+    @Test func `remote gateway probe applies SSH host key policy`() throws {
+        let strict = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+            target: "gateway-alias",
+            hostKeyPolicy: .strict))
+        let openssh = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+            target: "gateway-alias",
+            hostKeyPolicy: .openssh))
+
+        #expect(strict.contains("StrictHostKeyChecking=yes"))
+        #expect(strict.contains("UpdateHostKeys=yes"))
+        #expect(strict.contains("ControlPath=none"))
+        #expect(!openssh.contains { $0.hasPrefix("StrictHostKeyChecking=") })
+        #expect(!openssh.contains { $0.hasPrefix("UpdateHostKeys=") })
+        #expect(openssh.contains("ControlPath=none"))
     }
 
     @Test func `empty remote defaults fall back to config remote values`() {

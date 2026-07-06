@@ -36,21 +36,20 @@ class NodeForegroundService : Service() {
       stopSelf()
       return
     }
-    // Split connection and capture flows before combining so notification text
+    // Keep the connection tuple atomic, then split connection and capture work so notification text
     // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
         combine(
           combine(
-            runtime.statusText,
+            runtime.gatewayConnectionDisplay,
             runtime.serverName,
-            runtime.isConnected,
             runtime.voiceCaptureMode,
-          ) { status, server, connected, mode ->
+          ) { connection, server, mode ->
             VoiceNotificationBase(
-              status = status,
+              status = connection.statusText,
               server = server,
-              connected = connected,
+              connected = connection.isConnected,
               mode = mode,
             )
           },
@@ -146,17 +145,7 @@ class NodeForegroundService : Service() {
     title: String,
     text: String,
   ): Notification {
-    val launchIntent =
-      Intent(this, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-      }
-    val launchPending =
-      PendingIntent.getActivity(
-        this,
-        1,
-        launchIntent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-      )
+    val launchPending = mainActivityPendingIntent(this, requestCode = 1)
 
     val stopIntent = Intent(this, NodeForegroundService::class.java).setAction(ACTION_STOP)
     val stopPending =

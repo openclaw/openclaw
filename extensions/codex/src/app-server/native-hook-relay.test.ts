@@ -1,13 +1,27 @@
 // Codex tests cover native hook relay plugin behavior.
 import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  emitCodexNativePreToolUseFailureDiagnostic,
   resolveCodexNativeHookRelayCommandTimeoutMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
+
+afterEach(() => resetDiagnosticEventsForTest());
+
+function flushDiagnosticEvents(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
 
 describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {
@@ -302,6 +316,54 @@ describe("Codex native hook relay config", () => {
       MAX_TIMER_TIMEOUT_MS,
     );
   });
+
+  it.each([
+    { reason: "turn_progress_idle_timeout", terminalReason: "timed_out" },
+    { reason: "turn_completion_idle_timeout", terminalReason: "timed_out" },
+    { reason: "turn_terminal_idle_timeout", terminalReason: "timed_out" },
+    { reason: "client_closed", terminalReason: "failed" },
+  ] as const)(
+    "projects native pre-tool failure reason $reason without a Codex item",
+    async ({ reason, terminalReason }) => {
+      const controller = new AbortController();
+      controller.abort(reason);
+      const events: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => events.push(event));
+      try {
+        emitCodexNativePreToolUseFailureDiagnostic({
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          runId: "run-1",
+          signal: controller.signal,
+          failure: {
+            toolName: "exec",
+            toolCallId: "native-no-item",
+            disposition: "cancelled",
+            durationMs: 5,
+          },
+        });
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          agentId: "main",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          runId: "run-1",
+          toolName: "exec",
+          toolCallId: "native-no-item",
+          durationMs: 5,
+          errorCategory: "before_tool_call",
+          terminalReason,
+        }),
+      );
+    },
+  );
 });
 
 function createRelay(options?: {

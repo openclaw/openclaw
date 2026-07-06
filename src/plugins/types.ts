@@ -645,6 +645,11 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
+  /** Ordered API-key/token candidates, including resolved SecretRefs, for credential classification. */
+  resolveApiKeyCandidatesFromConfigAndStore?: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => Promise<string[]>;
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
@@ -2024,7 +2029,12 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = ReplyPayload & { continueAgent?: boolean };
+export type PluginCommandResult = ReplyPayload & {
+  /** Allows the agent session to continue processing after the command. */
+  continueAgent?: boolean;
+  /** Suppresses channel fallback replies when the handler already delivered a response. */
+  suppressReply?: boolean;
+};
 
 /**
  * Handler function for plugin commands.

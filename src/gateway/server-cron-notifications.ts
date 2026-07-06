@@ -7,6 +7,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
@@ -49,6 +50,61 @@ function redactWebhookUrl(url: string): string {
 function redactOptionalWebhookUrl(url: unknown): string | undefined {
   const normalized = normalizeOptionalString(url);
   return normalized ? redactWebhookUrl(normalized) : undefined;
+}
+
+function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob): CronEvent {
+  if (job?.payload.kind !== "command") {
+    return evt;
+  }
+  const summary = redactCronCommandSummaryForExternalDelivery(evt.summary);
+  const diagnosticsSummary = redactCronCommandSummaryForExternalDelivery(evt.diagnostics?.summary);
+  const diagnosticsEntries = evt.diagnostics?.entries.map((entry) => ({
+    ...entry,
+    message: redactCronCommandSummaryForExternalDelivery(entry.message) ?? entry.message,
+  }));
+  const diagnosticsEntriesChanged = diagnosticsEntries?.some(
+    (entry, index) => entry.message !== evt.diagnostics?.entries[index]?.message,
+  );
+  const embeddedJobState = evt.job?.state;
+  const stripEmbeddedJobDiagnostics = Boolean(
+    embeddedJobState &&
+    ("lastDiagnostics" in embeddedJobState || "lastDiagnosticSummary" in embeddedJobState),
+  );
+  if (
+    summary === evt.summary &&
+    diagnosticsSummary === evt.diagnostics?.summary &&
+    !diagnosticsEntriesChanged &&
+    !stripEmbeddedJobDiagnostics
+  ) {
+    return evt;
+  }
+  const redacted: CronEvent = { ...evt };
+  if (summary !== undefined) {
+    redacted.summary = summary;
+  } else {
+    delete redacted.summary;
+  }
+  if (evt.diagnostics) {
+    redacted.diagnostics = { ...evt.diagnostics };
+    if (diagnosticsSummary !== undefined) {
+      redacted.diagnostics.summary = diagnosticsSummary;
+    } else {
+      delete redacted.diagnostics.summary;
+    }
+    if (diagnosticsEntries) {
+      redacted.diagnostics.entries = diagnosticsEntries;
+    }
+  }
+  if (stripEmbeddedJobDiagnostics && evt.job) {
+    const state = { ...evt.job.state };
+    delete state.lastDiagnostics;
+    delete state.lastDiagnosticSummary;
+    redacted.job = {
+      ...evt.job,
+      state,
+    };
+  }
+  return redacted;
 }
 
 /** Resolves direct webhook delivery and completion-destination webhooks. */
@@ -256,6 +312,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   globalFailureDestination?: CronFailureDestinationConfig;
 }): void {
   const webhookToken = normalizeOptionalString(params.webhookToken);
+  const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
   const webhookTargets = resolveCronWebhookTargets({
     delivery:
       params.job?.delivery && typeof params.job.delivery.mode === "string"
@@ -295,7 +352,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
 
   if (params.evt.summary) {
     for (const webhookTarget of webhookTargets) {
-      const payload = buildCronFinishedWebhookPayload(params.evt);
+      const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
       // Completion notification fanout is best-effort; the cron service has
       // already recorded the run result and must not wait on slow webhooks.
       void (async () => {

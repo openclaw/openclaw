@@ -147,6 +147,8 @@ export type TelegramNetworkErrorContext =
   | "webhook"
   | "delete"
   | "react"
+  | "edit"
+  | "action"
   | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;
@@ -340,4 +342,15 @@ export function isRecoverableTelegramNetworkError(
   }
 
   return false;
+}
+
+export function isRetryableTelegramApiError(
+  err: unknown,
+  options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
+): boolean {
+  return (
+    isRecoverableTelegramNetworkError(err, options) ||
+    isTelegramServerError(err) ||
+    isTelegramRateLimitError(err)
+  );
 }

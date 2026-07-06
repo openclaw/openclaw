@@ -1,6 +1,7 @@
 // Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Container, TextDisplay } from "./internal/discord.js";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
@@ -217,6 +218,26 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("hello world");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
+  });
+
+  it("reports the first Discord chunk before a later chunk fails", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageDiscord("channel:789", "a".repeat(2500), {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
   });
 
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
@@ -572,6 +593,77 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
     });
+  });
+
+  it("preserves text when Discord rejects an upload with error 40005", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Bad Request"), {
+          status: 400,
+          rawError: { code: 40005 },
+        }),
+      )
+      .mockResolvedValueOnce({ id: "fallback-msg", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "Here is the report", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/report.pdf",
+      replyTo: "orig-123",
+      components: [new Container([new TextDisplay("Attachment controls")])],
+      embeds: [{ title: "Attachment preview" }],
+    });
+
+    expect(res.messageId).toBe("fallback-msg");
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expectBodyFileName(requireRestBody(postMock, 0), "photo.jpg");
+    const fallbackBody = requireRestBody(postMock, 1);
+    expect(fallbackBody.content).toBe(
+      "Here is the report\n\n[Attachment skipped: Discord rejected the file as too large.]",
+    );
+    expect(fallbackBody).not.toHaveProperty("files");
+    expect(fallbackBody).not.toHaveProperty("components");
+    expect(fallbackBody).not.toHaveProperty("embeds");
+    expectReplyReference(fallbackBody, "orig-123");
+  });
+
+  it("reports a media-only upload rejected with HTTP 413", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(Object.assign(new Error("Bad Request"), { status: 413 }))
+      .mockResolvedValueOnce({ id: "fallback-msg", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/photo.jpg",
+    });
+
+    expect(res.messageId).toBe("fallback-msg");
+    expect(requireRestBody(postMock, 1).content).toBe(
+      "Attachment skipped: Discord rejected the file as too large.",
+    );
+    expect(requireRestBody(postMock, 1)).not.toHaveProperty("files");
+  });
+
+  it("does not mask unrelated media upload failures", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const error = Object.assign(new Error("Internal Server Error"), { status: 500 });
+    postMock.mockRejectedValue(error);
+
+    await expect(
+      sendMessageDiscord("channel:789", "report", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/report.pdf",
+        retry: { attempts: 1 },
+      }),
+    ).rejects.toBe(error);
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes mediaAccess workspaceDir when loading relative media attachments", async () => {

@@ -42,12 +42,12 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     hoisted.createOpenClawToolsMock.mockClear();
   });
 
-  function readCreateToolsArgs(): {
+  function readCreateToolsArgs(index = 0): {
     cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
     inheritedToolDenylist?: string[];
     pluginToolDenylist?: string[];
   } {
-    const args = hoisted.createOpenClawToolsMock.mock.calls[0]?.[0];
+    const args = hoisted.createOpenClawToolsMock.mock.calls[index]?.[0];
     if (!args || typeof args !== "object") {
       throw new Error("expected createOpenClawTools args");
     }
@@ -77,8 +77,16 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(args.inheritedToolDenylist).toEqual([]);
   });
 
-  it("filters owner-only core tools from non-owner loopback callers", () => {
-    const result = resolveGatewayScopedTools({
+  it("keeps owner-only core tools visible only for owner loopback callers", () => {
+    const ownerResult = resolveGatewayScopedTools({
+      cfg: {
+        gateway: { tools: { allow: ["gateway"] } },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+    });
+    const nonOwnerResult = resolveGatewayScopedTools({
       cfg: {
         gateway: { tools: { allow: ["gateway"] } },
       } as OpenClawConfig,
@@ -87,8 +95,15 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       senderIsOwner: false,
     });
 
-    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
-    const args = readCreateToolsArgs();
+    expect(ownerResult.tools.map((tool) => tool.name)).toEqual([
+      "read",
+      "sessions_spawn",
+      "cron",
+      "gateway",
+      "nodes",
+    ]);
+    expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
+    const args = readCreateToolsArgs(1);
     expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes"]);
     expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes"]);
   });
