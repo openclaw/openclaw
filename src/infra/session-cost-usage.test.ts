@@ -2944,11 +2944,8 @@ example
 
     const logs = await loadSessionLogs({ sessionFile });
     expect(logs).toHaveLength(2);
-    // Malformed timestamp should default to 0 (not NaN)
     expect(logs?.[0]?.timestamp).toBe(0);
-    // Valid timestamp should parse correctly
-    expect(logs?.[1]?.timestamp).toBeGreaterThan(0);
-    expect(Number.isFinite(logs?.[1]?.timestamp ?? Number.NaN)).toBe(true);
+    expect(logs?.[1]?.timestamp).toBe(Date.parse("2026-02-21T17:47:00.000Z"));
   });
 
   it("buckets hourly message counts into UTC quarter-hour slots", async () => {

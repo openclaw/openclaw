@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - **Android Voice layout:** keep Voice settings controls within their intended width so nested cards do not overflow or clip on constrained screens. (#100491) Thanks @IWhatsskill.
 - **Android camera logging:** remove release-path camera clip diagnostics that exposed temporary file details and added noisy invoke logs. (#99484) Thanks @NianJiuZst.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
+- **Session usage logs:** normalize malformed transcript timestamps before sorting and Gateway serialization so invalid dates cannot surface as null usage-log times. (#99418) Thanks @sheyanmin.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
 - **Config size-drop guard:** compare writes against canonical bytes for parseable object configs instead of raw BOM and indentation overhead, while preserving raw audit telemetry and the conservative malformed-input fallback. (#100591, #71865) Thanks @vincentkoc.
