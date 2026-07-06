@@ -1,6 +1,49 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    public var sessionChoices: [OpenClawChatSessionEntry] {
+        let now = Date().timeIntervalSince1970 * 1000
+        let cutoff = now - (24 * 60 * 60 * 1000)
+        let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let mainSessionKey = self.resolvedMainSessionKey
+
+        var result: [OpenClawChatSessionEntry] = []
+        var included = Set<String>()
+
+        // Always show the resolved main session first, even if it hasn't been updated recently.
+        if let main = sorted.first(where: { $0.key == mainSessionKey }) {
+            result.append(main)
+            included.insert(main.key)
+        } else {
+            result.append(self.placeholderSession(key: mainSessionKey))
+            included.insert(mainSessionKey)
+        }
+
+        for entry in sorted {
+            guard !included.contains(entry.key) else { continue }
+            guard entry.key == self.sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
+            guard (entry.updatedAt ?? 0) >= cutoff else { continue }
+            result.append(entry)
+            included.insert(entry.key)
+        }
+
+        if !included.contains(self.sessionKey) {
+            if let current = sorted.first(where: { $0.key == self.sessionKey }) {
+                result.append(current)
+            } else {
+                result.append(self.placeholderSession(key: self.sessionKey))
+            }
+        }
+
+        return result
+    }
+
+    private static func isHiddenInternalSession(_ key: String) -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
+    }
+
     func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {
         Self.matchesCurrentSessionKey(
             incoming: incoming,

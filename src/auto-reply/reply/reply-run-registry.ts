@@ -9,8 +9,10 @@ import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 
 export type ReplyRunKey = string;
@@ -19,13 +21,23 @@ export type ReplyBackendKind = "embedded" | "cli";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyBackendQueueMessageOptions = {
+  steeringMode?: "all";
+  debounceMs?: number;
+  deliveryTimeoutMs?: number;
+  waitForTranscriptCommit?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Prepared channel turn to merge only at transcript persistence. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
-  queueMessage?: (text: string) => Promise<void>;
+  queueMessage?: (text: string, options?: ReplyBackendQueueMessageOptions) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -811,7 +823,11 @@ export function isReplyRunStreamingForSessionId(sessionId: string): boolean {
   return getAttachedBackend(operation)?.isStreaming() ?? false;
 }
 
-export function queueReplyRunMessage(sessionId: string, text: string): boolean {
+export function queueReplyRunMessage(
+  sessionId: string,
+  text: string,
+  options?: ReplyBackendQueueMessageOptions,
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const backend = operation ? getAttachedBackend(operation) : undefined;
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
@@ -820,7 +836,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
-  void backend.queueMessage(text);
+  void (options ? backend.queueMessage(text, options) : backend.queueMessage(text));
   return true;
 }
 

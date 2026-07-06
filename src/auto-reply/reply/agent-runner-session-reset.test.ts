@@ -216,8 +216,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    // Rotation still happens (new session id), but the old transcript archive
-    // stays on disk for forensics/recovery — this is the P1-A non-destructive path.
+    // Rotation still happens, but the old transcript stays available for recovery.
     expect(rotatedSessionId).toBeDefined();
     expect(rotatedSessionId).not.toBe("old-session");
     await fs.access(oldTranscriptPath);

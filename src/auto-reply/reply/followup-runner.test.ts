@@ -400,7 +400,10 @@ async function loadFreshFollowupRunnerModuleForTest() {
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
   }));
   vi.doMock("./agent-runner-memory.js", () => ({
-    runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+    runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => ({
+      sessionEntry: params.sessionEntry,
+      outcome: "skipped",
+    }),
     runPreflightCompactionIfNeeded: (...args: unknown[]) =>
       runPreflightCompactionIfNeededMock(...args),
   }));

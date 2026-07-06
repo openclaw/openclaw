@@ -58,6 +58,24 @@ private func messageTexts(_ messages: [OpenClawChatMessage]) -> [String] {
     messages.map { $0.content.compactMap(\.text).joined() }
 }
 
+private func outboxCommand(
+    id: String = UUID().uuidString,
+    sessionKey: String = "main",
+    text: String,
+    thinking: String = "off",
+    createdAt: Double = Date().timeIntervalSince1970) -> OpenClawChatOutboxCommand
+{
+    OpenClawChatOutboxCommand(
+        id: id,
+        sessionKey: sessionKey,
+        text: text,
+        thinking: thinking,
+        createdAt: createdAt,
+        status: .queued,
+        retryCount: 0,
+        lastError: nil)
+}
+
 struct ChatTranscriptCacheStoreTests {
     @Test func `transcript and sessions round trip`() async throws {
         let url = try makeDatabaseURL()
@@ -319,5 +337,144 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await reader.loadTranscript(sessionKey: "main").isEmpty)
         // The bad row was deleted, not just skipped.
         #expect(await reader.loadTranscript(sessionKey: "main").isEmpty)
+    }
+}
+
+struct ChatCommandOutboxStoreTests {
+    @Test func `outbox commands round trip in createdAt order across store instances`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        // Recent timestamps: rows older than the staleness gate would expire.
+        let now = Date().timeIntervalSince1970
+        do {
+            let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+            #expect(await store.enqueueCommand(
+                outboxCommand(id: "c-2", text: "second", thinking: "high", createdAt: now - 10)))
+            #expect(await store.enqueueCommand(
+                outboxCommand(id: "c-1", text: "first", thinking: "off", createdAt: now - 20)))
+        }
+
+        // New instance = simulated app relaunch: rows are durable.
+        let reopened = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let loaded = await reopened.loadCommands()
+        #expect(loaded.map(\.id) == ["c-1", "c-2"])
+        #expect(loaded.map(\.text) == ["first", "second"])
+        #expect(loaded.map(\.thinking) == ["off", "high"])
+        #expect(loaded.map(\.status) == [.queued, .queued])
+        #expect(loaded.map(\.retryCount) == [0, 0])
+        #expect(loaded.map(\.lastError) == [nil, nil])
+        #expect(loaded.map(\.sessionKey) == ["main", "main"])
+    }
+
+    @Test func `claiming a deleted command returns false`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        #expect(await store.enqueueCommand(outboxCommand(id: "c-1", text: "kept")))
+        #expect(await store.markCommandSending(id: "c-1"))
+
+        // Deleted (or never-existing) rows must refuse the claim so a flush
+        // pass working from a stale snapshot cannot send them.
+        await store.deleteCommand(id: "c-1")
+        #expect(await store.markCommandSending(id: "c-1") == false)
+        #expect(await store.markCommandSending(id: "never-existed") == false)
+    }
+
+    @Test func `interrupted sending rows revert to queued on recovery`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        do {
+            let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+            #expect(await store.enqueueCommand(outboxCommand(id: "c-1", text: "in flight")))
+            await store.markCommandSending(id: "c-1")
+            #expect(await store.loadCommands().map(\.status) == [.sending])
+        }
+
+        // Simulated crash mid-send: a fresh process recovers the row to
+        // queued; the idempotency key makes the re-send safe.
+        let reopened = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        #expect(await reopened.recoverInterruptedSends())
+        #expect(await reopened.loadCommands().map(\.status) == [.queued])
+
+        // An unreachable store must report failure so callers do not burn
+        // their once-per-launch recovery gate while the DB is locked.
+        await reopened.retire()
+        #expect(await !reopened.recoverInterruptedSends())
+    }
+
+    @Test func `queued commands expire to failed at the staleness boundary`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let now = Date().timeIntervalSince1970
+        let maxAge = OpenClawChatSQLiteTranscriptCache.outboxCommandMaxAge
+        #expect(await store.enqueueCommand(
+            outboxCommand(id: "c-stale", text: "stale", createdAt: now - maxAge - 60)))
+        #expect(await store.enqueueCommand(
+            outboxCommand(id: "c-fresh", text: "fresh", createdAt: now - maxAge + 60)))
+
+        let loaded = await store.loadCommands()
+        let stale = try #require(loaded.first { $0.id == "c-stale" })
+        let fresh = try #require(loaded.first { $0.id == "c-fresh" })
+        #expect(stale.status == .failed)
+        #expect(stale.lastError == OpenClawChatSQLiteTranscriptCache.outboxExpiredError)
+        #expect(fresh.status == .queued)
+        #expect(fresh.lastError == nil)
+    }
+
+    @Test func `enqueue refuses beyond the queue bound`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let bound = OpenClawChatSQLiteTranscriptCache.maxQueuedCommands
+
+        for index in 0..<bound {
+            #expect(await store.enqueueCommand(outboxCommand(id: "c-\(index)", text: "m\(index)")))
+        }
+        #expect(await !store.enqueueCommand(outboxCommand(id: "c-overflow", text: "one too many")))
+        #expect(await store.loadCommands().count == bound)
+
+        // Deleting a row frees capacity again.
+        await store.deleteCommand(id: "c-0")
+        #expect(await store.enqueueCommand(outboxCommand(id: "c-after-delete", text: "fits now")))
+    }
+
+    @Test func `outbox rows are scoped per gateway identity`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        let storeB = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-b")
+
+        #expect(await storeA.enqueueCommand(outboxCommand(id: "c-a", text: "for gateway A")))
+        #expect(await storeB.loadCommands().isEmpty)
+
+        // Cross-gateway mutations must not leak either.
+        await storeB.markCommandFailed(id: "c-a", retryCount: 3, lastError: "boom")
+        await storeB.deleteCommand(id: "c-a")
+        let survivors = await storeA.loadCommands()
+        #expect(survivors.map(\.id) == ["c-a"])
+        #expect(survivors.map(\.status) == [.queued])
+    }
+
+    @Test func `retry and failure marks persist retry count and last error`() async throws {
+        let url = try makeDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
+        #expect(await store.enqueueCommand(outboxCommand(id: "c-1", text: "retry me")))
+
+        await store.markCommandQueued(id: "c-1", retryCount: 2, lastError: "socket closed")
+        var loaded = await store.loadCommands()
+        #expect(loaded.map(\.status) == [.queued])
+        #expect(loaded.map(\.retryCount) == [2])
+        #expect(loaded.map(\.lastError) == ["socket closed"])
+
+        await store.markCommandFailed(id: "c-1", retryCount: 3, lastError: "gave up")
+        loaded = await store.loadCommands()
+        #expect(loaded.map(\.status) == [.failed])
+        #expect(loaded.map(\.retryCount) == [3])
+        #expect(loaded.map(\.lastError) == ["gave up"])
+
+        await store.deleteCommand(id: "c-1")
+        #expect(await store.loadCommands().isEmpty)
     }
 }

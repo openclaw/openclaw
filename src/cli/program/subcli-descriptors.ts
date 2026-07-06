@@ -77,6 +77,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "worktrees",
+    description: "Manage isolated git worktrees for agent tasks",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "attach",
     description: "Attach Claude Code to a gateway session with scoped MCP tools",
     hasSubcommands: false,

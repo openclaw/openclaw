@@ -1057,6 +1057,41 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
+  it("preserves structured connect errors for pending requests", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      const pendingRequest = client.request("cron.list", { quiet: true });
+
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details: { code: "PAIRING_REQUIRED" },
+        },
+      });
+      await expectSocketClosed(ws);
+      ws.emitClose(4008, "connect failed");
+
+      await expect(pendingRequest).rejects.toMatchObject({
+        name: "GatewayRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "PAIRING_REQUIRED" },
+      });
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
     useNodeFakeTimers();
     const { client } = await expectRetriedDeviceTokenConnect({
