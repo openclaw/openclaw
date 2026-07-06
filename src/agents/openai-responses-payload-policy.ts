@@ -53,6 +53,7 @@ type OpenAIResponsesPayloadPolicy = {
   compactThreshold: number;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
+  shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
@@ -325,6 +326,31 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
   }
 }
 
+/**
+ * Recursively strip `status` fields from input items.
+ * Strict OpenAI-compatible Responses endpoints reject the output-only `status`
+ * field on replayed message items in `input[]` (HTTP 400 "Unknown parameter").
+ * Known-native routes (api.openai.com, Azure) silently accept it.
+ */
+export function stripInputStatusFromInput(input: unknown): void {
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      stripInputStatusFromInput(item);
+    }
+    return;
+  }
+  if (!input || typeof input !== "object") {
+    return;
+  }
+  const record = input as Record<string, unknown>;
+  delete record.status;
+  for (const value of Object.values(record)) {
+    if (typeof value === "object" && value !== null) {
+      stripInputStatusFromInput(value);
+    }
+  }
+}
+
 /** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
@@ -346,6 +372,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
     (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
+  // Strict OpenAI-compatible Responses endpoints reject output-only fields
+  // such as `status` on replayed input items. Strip them for non-native routes.
+  const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -354,6 +383,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
     shouldStripDisabledReasoningPayload,
+    shouldStripInputStatus,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
@@ -395,5 +425,8 @@ export function applyOpenAIResponsesPayloadPolicy(
   }
   if (policy.shouldStripDisabledReasoningPayload) {
     stripDisabledOpenAIReasoningPayload(payloadObj);
+  }
+  if (policy.shouldStripInputStatus) {
+    stripInputStatusFromInput(payloadObj.input);
   }
 }
