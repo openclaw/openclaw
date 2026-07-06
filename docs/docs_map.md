@@ -7555,6 +7555,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/longcat
 - Headings:
+  - H2: Install plugin
   - H2: Getting started
   - H3: Non-interactive setup
   - H2: Reasoning behavior

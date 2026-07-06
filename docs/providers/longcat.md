@@ -7,8 +7,8 @@ read_when:
 ---
 
 [LongCat](https://longcat.ai) provides a hosted API for LongCat-2.0, a
-reasoning model built for coding and agentic workloads. OpenClaw includes the
-`longcat` provider and uses LongCat's OpenAI-compatible endpoint.
+reasoning model built for coding and agentic workloads. OpenClaw provides the
+official `longcat` plugin for LongCat's OpenAI-compatible endpoint.
 
 | Property   | Value                              |
 | ---------- | ---------------------------------- |
@@ -20,6 +20,15 @@ reasoning model built for coding and agentic workloads. OpenClaw includes the
 | Context    | 1,048,576 tokens                   |
 | Max output | 131,072 tokens                     |
 | Input      | Text                               |
+
+## Install plugin
+
+Install the official package, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/longcat-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -97,7 +106,7 @@ do not route a local deployment through `longcat/LongCat-2.0`.
   </Accordion>
 
   <Accordion title="The model does not appear">
-    Run `openclaw plugins list` and confirm the bundled `longcat` plugin is
+    Run `openclaw plugins list` and confirm the `longcat` plugin is
     enabled, then run `openclaw models list --provider longcat`.
   </Accordion>
 </AccordionGroup>

@@ -12,7 +12,7 @@ OpenClaw LongCat provider plugin.
 ## Distribution
 
 - Package: `@openclaw/longcat-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/longcat-provider`
 
 ## Surface
 

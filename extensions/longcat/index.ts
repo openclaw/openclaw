@@ -12,7 +12,7 @@ const PROVIDER_ID = "longcat";
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "LongCat Provider",
-  description: "Bundled LongCat provider plugin",
+  description: "Official LongCat provider plugin",
   provider: {
     label: "LongCat",
     docsPath: "/providers/longcat",

@@ -7,12 +7,6 @@
   },
   "enabledByDefault": true,
   "providers": ["longcat"],
-  "providerEndpoints": [
-    {
-      "endpointClass": "longcat-native",
-      "hosts": ["api.longcat.chat"]
-    }
-  ],
   "providerRequest": {
     "providers": {
       "longcat": {
