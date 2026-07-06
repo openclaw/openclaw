@@ -42,10 +42,10 @@ final class WebChatManager {
     func show(sessionKey: String) {
         self.closePanel()
         if let controller = self.windowController {
-            // The window shell can switch sessions in place (sidebar), so an
-            // existing window already showing the requested session must not
-            // be torn down and re-bootstrapped.
-            if self.windowSessionKey == sessionKey || self.currentChatSessionKey == sessionKey {
+            // The window shell switches sessions in place (sidebar, /new);
+            // windowSessionKey tracks those switches, so a window already on
+            // the requested session must not be torn down and re-bootstrapped.
+            if self.windowSessionKey == sessionKey {
                 controller.show()
                 return
             }
@@ -57,6 +57,10 @@ final class WebChatManager {
         let controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
+        }
+        controller.onSessionKeyChanged = { [weak self] key in
+            self?.windowSessionKey = key
+            self?.currentChatSessionKey = key
         }
         self.windowController = controller
         self.windowSessionKey = sessionKey
@@ -88,6 +92,10 @@ final class WebChatManager {
         }
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
+        }
+        controller.onSessionKeyChanged = { [weak self] key in
+            self?.panelSessionKey = key
+            self?.currentChatSessionKey = key
         }
         self.panelController = controller
         self.panelSessionKey = sessionKey

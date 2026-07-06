@@ -509,15 +509,27 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
 // MARK: - Window controller
 
+/// Bridges the view model's session switches out of the controller. The view
+/// model is constructed before `self`, so the closure targets this box and the
+/// controller re-points it after initialization.
+@MainActor
+private final class WebChatSessionKeyRelay {
+    var onChange: ((String) -> Void)?
+}
+
 @MainActor
 final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
     private let contentController: NSViewController
+    private let sessionKeyRelay: WebChatSessionKeyRelay
     private var window: NSWindow?
     private var dismissMonitor: Any?
     var onClosed: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
+    /// Fires when the hosted chat switches sessions in place (sidebar,
+    /// composer picker, /new) so the owner can track what this surface shows.
+    var onSessionKeyChanged: ((String) -> Void)?
 
     convenience init(sessionKey: String, presentation: WebChatPresentation) {
         // Connection-mode changes tear chat windows down via resetTunnels(),
@@ -547,6 +559,8 @@ final class WebChatSwiftUIWindowController {
     {
         self.sessionKey = sessionKey
         self.presentation = presentation
+        let sessionKeyRelay = WebChatSessionKeyRelay()
+        self.sessionKeyRelay = sessionKeyRelay
         let vm = OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
@@ -555,6 +569,9 @@ final class WebChatSwiftUIWindowController {
             transcriptCache: transcriptCache,
             outbox: outbox,
             initialThinkingLevel: Self.persistedThinkingLevel(),
+            onSessionChanged: { key in
+                sessionKeyRelay.onChange?(key)
+            },
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
@@ -603,6 +620,9 @@ final class WebChatSwiftUIWindowController {
             self.contentController = Self.makePanelContentController(hosting: hosting)
         }
         self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
+        sessionKeyRelay.onChange = { [weak self] key in
+            self?.onSessionKeyChanged?(key)
+        }
     }
 
     deinit {}
