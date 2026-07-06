@@ -9,13 +9,22 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(() => ({})),
   resolveTtsConfig: vi.fn(() => ({ maxTextLength: 4096 })),
-  synthesizeSpeech: vi.fn(async () => ({
-    success: true,
-    audioBuffer: Buffer.from([1, 2, 3]),
-    provider: "openai",
-    outputFormat: "mp3",
-    fileExtension: ".mp3",
-  })),
+  synthesizeSpeech: vi.fn(
+    async (): Promise<{
+      success: boolean;
+      audioBuffer?: Buffer;
+      provider?: string;
+      outputFormat?: string;
+      fileExtension?: string;
+      error?: string;
+    }> => ({
+      success: true,
+      audioBuffer: Buffer.from([1, 2, 3]),
+      provider: "openai",
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+    }),
+  ),
   textToSpeech: vi.fn(async () => ({
     success: true,
     audioPath: "/tmp/tts.mp3",
@@ -46,13 +55,13 @@ vi.mock("../../tts/tts.js", () => ({
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../../tts/tts.js").resolveExplicitTtsOverrides,
   resolveTtsAutoMode: vi.fn(() => false),
-  resolveTtsConfig: mocks.resolveTtsConfig as typeof import("../../tts/tts.js").resolveTtsConfig,
+  resolveTtsConfig: mocks.resolveTtsConfig,
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   resolveTtsProviderOrder: vi.fn(() => ["openai"]),
   setTtsEnabled: vi.fn(),
   setTtsPersona: vi.fn(),
   setTtsProvider: vi.fn(),
-  synthesizeSpeech: mocks.synthesizeSpeech as typeof import("../../tts/tts.js").synthesizeSpeech,
+  synthesizeSpeech: mocks.synthesizeSpeech,
   textToSpeech: mocks.textToSpeech as typeof import("../../tts/tts.js").textToSpeech,
 }));
 
