@@ -1532,6 +1532,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await gateway.emitGatewayEvent("chat", {
+        deltaText: "I will inspect the file.",
         message: {
           content: [{ text: "I will inspect the file.", type: "text" }],
           role: "assistant",
@@ -1545,9 +1546,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.emitGatewayEvent("agent", {
         data: {
-          args: { path: "README.md" },
           name: "read",
-          phase: "start",
+          phase: "result",
+          result: "file contents",
           toolCallId: "call-read",
         },
         runId,
@@ -1556,7 +1557,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         stream: "tool",
         ts: Date.now() - 10_000,
       });
-      await page.locator(".chat-bubble--tool-shell").waitFor({ timeout: 10_000 });
+      const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
+      await toolBubble.waitFor({ timeout: 10_000 });
 
       const visibleOrder = await page.locator(".chat-thread").evaluate((thread: Element) => {
         return Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
@@ -1564,7 +1566,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           if (text.includes("I will inspect the file.")) {
             return ["assistant stream"];
           }
-          if (group.querySelector(".chat-bubble--tool-shell")) {
+          if (group.querySelector('[data-message-id^="tool:assistant:call-read"]')) {
             return ["tool card"];
           }
           return [];
