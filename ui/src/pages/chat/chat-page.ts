@@ -760,6 +760,7 @@ export class ChatPage extends LitElement {
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+      onGoalCommand: (command) => void state.handleSendChat(command),
       onDismissSideResult: () => {
         state.chatSideResult = null;
         state.requestUpdate?.();
