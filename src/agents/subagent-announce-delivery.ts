@@ -93,6 +93,8 @@ type SubagentAnnounceDeliveryDeps = {
     options?: EmbeddedAgentQueueMessageOptions,
   ) => EmbeddedAgentQueueMessageOutcome | Promise<EmbeddedAgentQueueMessageOutcome>;
   sendMessage: typeof sendMessage;
+  /** Override for tests. When not set, the real session store is used. */
+  loadRequesterSessionEntry?: typeof loadRequesterSessionEntry;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -654,6 +656,9 @@ export async function resolveSubagentCompletionOrigin(params: {
 }
 
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
+  if (subagentAnnounceDeliveryDeps.loadRequesterSessionEntry) {
+    return subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(requesterSessionKey);
+  }
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
@@ -1562,6 +1567,17 @@ async function sendSubagentAnnounceDirectly(params: {
         ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
         : {}),
       idempotencyKey: params.directIdempotencyKey,
+      // Restore cron run context so async completion wakes (e.g. media
+      // generation) can continue the original multi-step task instead of
+      // falling back to account defaults (#99919).
+      ...(requesterEntry?.bootstrapContextRunKind === "cron"
+        ? {
+            provider: requesterEntry.modelProvider,
+            model: requesterEntry.model,
+            thinking: requesterEntry.thinkingLevel,
+            bootstrapContextRunKind: requesterEntry.bootstrapContextRunKind,
+          }
+        : {}),
     };
     let directAnnounceResponse: unknown;
     try {

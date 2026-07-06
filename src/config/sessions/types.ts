@@ -332,6 +332,8 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  /** Runtime kind that created this session, e.g. "cron" for cron-triggered runs. */
+  bootstrapContextRunKind?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;

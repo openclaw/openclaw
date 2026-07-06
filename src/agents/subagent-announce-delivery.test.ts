@@ -5177,3 +5177,129 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
 });
+
+describe("Issue #99919: cron async completion wake carries session context", () => {
+  it("injects cron context into directAgentParams when requester session has bootstrapContextRunKind: cron", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "image done and article published" }],
+        messagingToolSentTargets: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "cron-session-context",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+      loadRequesterSessionEntry: () => ({
+        cfg: {} as never,
+        canonicalKey: "agent:main:cron:write-article:run:run-abc",
+        entry: {
+          sessionId: "cron-session-context",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-8",
+          thinkingLevel: "high",
+          bootstrapContextRunKind: "cron",
+        } as never,
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:cron:write-article:run:run-abc",
+      targetRequesterSessionKey: "agent:main:cron:write-article:run:run-abc",
+      triggerMessage: "A image generation task finished.",
+      steerMessage: "A image generation task finished.",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      requesterSessionOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      completionDirectOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "ctx-cron-wake",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-456",
+          childSessionId: "task-456",
+          announceType: "image generation task",
+          taskLabel: "article header image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/article-header.png",
+          mediaUrls: ["/tmp/article-header.png"],
+          replyInstruction: "Deliver the image and continue the article publish flow.",
+        },
+      ],
+    });
+
+    expect(result.delivered).toBe(true);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const params = expectGatewayAgentParams(callGateway, {
+      sessionKey: "agent:main:cron:write-article:run:run-abc",
+      deliver: true,
+      idempotencyKey: "ctx-cron-wake",
+    });
+
+    // Issue #99919: completion wake should carry cron context from session entry.
+    expect(params.provider).toBe("claude-cli");
+    expect(params.model).toBe("claude-opus-4-8");
+    expect(params.thinking).toBe("high");
+    expect(params.bootstrapContextRunKind).toBe("cron");
+  });
+
+  it("does NOT inject cron context when requester session is not a cron run", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "subagent done" }],
+        messagingToolSentTargets: [],
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const sendMessage = createSendMessageMock();
+
+    await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "normal-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:slack:channel:C123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "ctx-normal",
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "subagent:task-789",
+          childSessionId: "task-789",
+          announceType: "subagent task",
+          taskLabel: "research task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Research complete.",
+          replyInstruction: "Report findings.",
+        },
+      ],
+    });
+
+    const params = expectGatewayAgentParams(callGateway, {
+      sessionKey: "agent:main:slack:channel:C123",
+    });
+
+    // Non-cron sessions should never get cron context injected.
+    expect(params.provider).toBeUndefined();
+    expect(params.model).toBeUndefined();
+    expect(params.thinking).toBeUndefined();
+    expect(params.bootstrapContextRunKind).toBeUndefined();
+  });
+});
