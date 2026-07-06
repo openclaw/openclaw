@@ -1200,7 +1200,7 @@ public actor GatewayChannelActor {
         else {
             return false
         }
-        if host == "localhost" || host == "::1" || host == "127.0.0.1" || host.hasPrefix("127.") {
+        if Self.isTrustedDeviceRetryLoopbackHost(host) {
             return true
         }
         if self.url.scheme?.lowercased() == "wss",
@@ -1209,6 +1209,14 @@ public actor GatewayChannelActor {
             return trust.allowsDeviceTokenRetryAuth
         }
         return false
+    }
+
+    private static func isTrustedDeviceRetryLoopbackHost(_ host: String) -> Bool {
+        let normalized = LoopbackHost.normalizedHost(host)
+        if normalized == "0.0.0.0" || normalized == "::" {
+            return false
+        }
+        return LoopbackHost.isLoopbackHost(normalized)
     }
 
     private nonisolated func sleepUnlessCancelled(nanoseconds: UInt64) async -> Bool {

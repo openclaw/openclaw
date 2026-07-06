@@ -1357,6 +1357,98 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
+    @Test(.stateDirectoryIsolated)
+    func `token mismatch retries stored device token only for trusted loopback hosts`() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "stored-device-token")
+
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: true)
+
+        let connectError: [String: Any] = [
+            "code": GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            "message": "token mismatch",
+            "details": [
+                "canRetryWithDeviceToken": true,
+            ],
+        ]
+
+        func retryAuth(for rawURL: String) async throws -> [String: Any] {
+            let session = FakeGatewayWebSocketSession(connectError: connectError)
+            let gateway = GatewayNodeSession()
+            let url = try #require(URL(string: rawURL))
+
+            for _ in 0..<2 {
+                do {
+                    try await gateway.connect(
+                        url: url,
+                        token: "shared-gateway-token",
+                        bootstrapToken: nil,
+                        password: nil,
+                        connectOptions: options,
+                        sessionBox: WebSocketSessionBox(session: session),
+                        onConnected: {},
+                        onDisconnected: { _ in },
+                        onInvoke: { req in
+                            BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                        })
+                    Issue.record("connect unexpectedly succeeded")
+                } catch let error as GatewayConnectAuthError {
+                    #expect(error.detail == .authTokenMismatch)
+                }
+            }
+
+            let retryAuth = try #require(session.latestTask()?.latestConnectAuth())
+            await gateway.disconnect()
+            return retryAuth
+        }
+
+        for rawURL in [
+            "ws://127.attacker.example:18789",
+            "ws://0.0.0.0:18789",
+            "ws://[::]:18789",
+        ] {
+            let retryAuth = try await retryAuth(for: rawURL)
+            #expect(retryAuth["token"] as? String == "shared-gateway-token")
+            #expect(retryAuth["deviceToken"] == nil)
+        }
+
+        for rawURL in [
+            "ws://localhost:18789",
+            "ws://127.0.0.2:18789",
+            "ws://[::1]:18789",
+        ] {
+            let retryAuth = try await retryAuth(for: rawURL)
+            #expect(retryAuth["token"] as? String == "shared-gateway-token")
+            #expect(retryAuth["deviceToken"] as? String == "stored-device-token")
+        }
+    }
+
     @Test
     func `normalize canvas host url preserves explicit secure canvas port`() throws {
         let normalized = try canonicalizeCanvasHostUrl(

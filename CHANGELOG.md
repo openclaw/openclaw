@@ -18,7 +18,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Control UI file previews:** remove the duplicate Escape badge from the file-count header while retaining the shortcut hint on the Close button. (#99029) Thanks @xianshishan.
 - **Source build portability:** keep tsdown configuration self-contained so builds do not depend on resolving the tsdown package from unrun's temporary module directory.
 - **Gateway event dispatch:** catch and log lazy subscriber setup and handler failures instead of leaking unhandled promise rejections. (#100401) Thanks @cxbAsDev.
 - **Diffs rendering:** render viewer and image output from one SSR preload, preserve language-pack highlighting through hydration, normalize language hints case-insensitively, skip identical before/after inputs with an explicit `changed` result, report truthful file-render and input errors, cache hash-pinned viewer runtimes, and prefer canonical file settings over stale aliases. (#100487)
@@ -72,6 +71,7 @@ Docs: https://docs.openclaw.ai
 - **TUI new-session hooks:** create `/new` sessions through the shared Gateway lifecycle so command and session hooks receive the completed parent transcript in both Gateway and embedded modes, while preventing rollover during an active turn. (#100241, #49918) Thanks @BingqingLyu.
 - **TUI abort diagnostics:** show sanitized tool argument-validation summaries for aborted runs in both Gateway and local TUI modes without exposing raw model arguments. (#91002) Thanks @wsyjh8.
 - **iOS Watch replies:** persist queued quick replies in the gateway-scoped chat outbox and submit them through idempotent chat delivery, preventing losses, duplicates, and cross-gateway sends after reconnects. (#100031) Thanks @NianJiuZst.
+- **iOS Gateway auth retry:** restrict stored device-token retry to parsed loopback hosts and reject wildcard bind addresses, preventing remote lookalike hostnames from receiving trusted retry credentials. (#99859) Thanks @ly85206559.
 
 ## 2026.7.1
 
