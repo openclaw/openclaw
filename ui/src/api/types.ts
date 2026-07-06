@@ -177,12 +177,12 @@ export type GoogleChatStatus = {
   lastProbeAt?: number | null;
 };
 
-export type SlackBot = {
+type SlackBot = {
   id?: string | null;
   name?: string | null;
 };
 
-export type SlackTeam = {
+type SlackTeam = {
   id?: string | null;
   name?: string | null;
 };
@@ -265,7 +265,7 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
-export type ConfigSnapshotIssue = {
+type ConfigSnapshotIssue = {
   path: string;
   message: string;
 };
@@ -379,7 +379,7 @@ export type SessionWorkspaceFileEntry = {
   content?: string;
 };
 
-export type SessionWorkspaceBrowserEntry = {
+type SessionWorkspaceBrowserEntry = {
   path: string;
   name: string;
   kind: "file" | "directory";
@@ -388,7 +388,7 @@ export type SessionWorkspaceBrowserEntry = {
   updatedAtMs?: number;
 };
 
-export type SessionWorkspaceBrowserResult = {
+type SessionWorkspaceBrowserResult = {
   path: string;
   parentPath?: string;
   search?: string;
@@ -734,7 +734,7 @@ export type CronRunsResult = {
   hasMore?: boolean;
 };
 
-export type SkillsStatusConfigCheck = {
+type SkillsStatusConfigCheck = {
   path: string;
   satisfied: boolean;
 };
@@ -769,7 +769,7 @@ export type SkillClawHubLink =
       lockPath?: string;
     };
 
-export type SkillCardStatus = {
+type SkillCardStatus = {
   present: true;
   path: string;
   sizeBytes: number;
@@ -881,7 +881,7 @@ export type ModelAuthStatusResult =
 
 // ── Attention ───────────────────────────────────────
 
-export type AttentionSeverity = "error" | "warning" | "info";
+type AttentionSeverity = "error" | "warning" | "info";
 
 export type AttentionItem = {
   severity: AttentionSeverity;

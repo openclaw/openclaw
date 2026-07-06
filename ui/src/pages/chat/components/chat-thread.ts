@@ -101,7 +101,7 @@ export type ChatThreadProps = {
   onFocusComposer?: () => void;
 };
 
-export type ChatPinnedMessagesProps = Pick<
+type ChatPinnedMessagesProps = Pick<
   ChatThreadProps,
   "sessionKey" | "messages" | "userName" | "userAvatar"
 >;

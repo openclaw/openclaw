@@ -29,7 +29,7 @@ export type ChatModelSelectOption = {
   label: string;
 };
 
-export type ChatModelSelectState = {
+type ChatModelSelectState = {
   currentOverride: string;
   defaultModel: string;
   defaultDisplay: string;

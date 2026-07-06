@@ -5,7 +5,7 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 
-export type LocalAssistantIdentity = { avatar: string | null; agentId?: string | null };
+type LocalAssistantIdentity = { avatar: string | null; agentId?: string | null };
 
 type PersistedLocalAssistantIdentities = {
   avatars?: Record<string, unknown>;
