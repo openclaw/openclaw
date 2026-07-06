@@ -222,7 +222,9 @@ describe("guardSessionManager integration", () => {
     if (!preparedMessage) {
       throw new Error("expected prepared group turn");
     }
-    const sm = guardSessionManager(sessionManager);
+    const sm = guardSessionManager(sessionManager, {
+      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
     const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
       {
         role: "user",
@@ -251,6 +253,7 @@ describe("guardSessionManager integration", () => {
         senderName: "Ada",
         senderUsername: "ada42",
       },
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
     });
     expect(recorder.hasPersisted()).toBe(true);
   });
