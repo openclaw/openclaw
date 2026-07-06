@@ -153,6 +153,7 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun cancelledOneShotWaitCleansItsCapture() =
     runTest {
       val manager = createManager()
