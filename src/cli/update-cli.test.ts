@@ -814,8 +814,8 @@ describe("update-cli", () => {
     const root = createCaseDir("openclaw-updated-root");
     const entrypoints = params?.entrypoints ?? [path.join(root, "dist", "entry.js")];
     const packageRoots = entrypoints.map((entrypoint) => path.dirname(path.dirname(entrypoint)));
-    const packageJsonPaths = packageRoots.map((packageRoot) =>
-      path.join(packageRoot, "package.json"),
+    const packageJsonPaths = new Set(
+      packageRoots.map((packageRoot) => path.join(packageRoot, "package.json")),
     );
     for (const entrypoint of entrypoints) {
       const packageRoot = path.dirname(path.dirname(entrypoint));
@@ -831,7 +831,7 @@ describe("update-cli", () => {
     }
     pathExists.mockImplementation(
       async (candidate: string) =>
-        packageJsonPaths.includes(candidate) || entrypoints.includes(candidate),
+        packageJsonPaths.has(candidate) || entrypoints.includes(candidate),
     );
     if (params?.gatewayUpdateImpl) {
       vi.mocked(runGatewayUpdate).mockImplementation(() => params.gatewayUpdateImpl!(root));

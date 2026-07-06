@@ -1161,9 +1161,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     command: serviceState.command,
   });
   const serviceOwnership =
-    serviceMatchesMutationRoot === null
-      ? {}
-      : { serviceMatchesMutationRoot: serviceMatchesMutationRoot };
+    serviceMatchesMutationRoot === null ? {} : { serviceMatchesMutationRoot };
 
   if (!params.shouldRestart) {
     if (!params.jsonMode && serviceState.running) {
