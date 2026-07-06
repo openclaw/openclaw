@@ -106,6 +106,7 @@ const BROWSER_TOOL_MODEL_HINT =
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
 const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
+const BROWSER_JSON_BODY_LIMIT_BYTES = 1024 * 1024;
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
@@ -277,7 +278,19 @@ async function fetchHttpJson<T>(
       const text = body ? new TextDecoder().decode(body) : "";
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    const body = await readResponseWithLimit(res, BROWSER_JSON_BODY_LIMIT_BYTES).catch(
+      () => undefined,
+    );
+    if (!body) {
+      throw new BrowserServiceError("browser control JSON response exceeded size limit");
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(body.toString("utf-8"));
+    } catch {
+      throw new BrowserServiceError("browser control returned malformed JSON");
+    }
+    return json as T;
   } finally {
     clearTimeout(t);
     await release?.();

@@ -59,7 +59,11 @@ describe("fetchHttpJson error body boundary", () => {
         return;
       }
 
-      res.writeHead(500, { "Content-Type": "text/plain" });
+      const targetBytes =
+        req.url === "/huge-json" ? STREAM_BODY_BYTES + STREAM_CHUNK.byteLength : STREAM_BODY_BYTES;
+      res.writeHead(req.url === "/huge-json" ? 200 : 500, {
+        "Content-Type": req.url === "/huge-json" ? "application/json" : "text/plain",
+      });
       let written = 0;
       let closed = false;
       res.once("close", () => {
@@ -70,7 +74,7 @@ describe("fetchHttpJson error body boundary", () => {
         if (closed) {
           return;
         }
-        if (written >= STREAM_BODY_BYTES) {
+        if (written >= targetBytes) {
           streamCompleted = true;
           res.end();
           return;
@@ -119,5 +123,15 @@ describe("fetchHttpJson error body boundary", () => {
       message: "session expired",
     });
     await expect(smallConnectionClosed).resolves.toBeUndefined();
+  });
+
+  it("rejects an oversized successful JSON body", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/huge-json`).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "browser control JSON response exceeded size limit",
+    });
+    await expect(streamClosed).resolves.toBeUndefined();
   });
 });
