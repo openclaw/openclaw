@@ -40,7 +40,9 @@ try {
   );
 
   // Wait for listeners to attach, then emit stream errors.
-  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 50);
+  });
   emitError?.();
 
   const result = await resultPromise;

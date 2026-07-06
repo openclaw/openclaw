@@ -25,7 +25,9 @@ describe("runCommand", () => {
     const resultPromise = testing.runCommand(["echo", "hello"], undefined, undefined, undefined);
 
     stdout.emit("error", new Error("stdout broke"));
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect((child as unknown as { kill: ReturnType<typeof vi.fn> }).kill).toHaveBeenCalledWith(
+      "SIGTERM",
+    );
     child.emit("exit", 1);
 
     const result = await resultPromise;
@@ -44,7 +46,9 @@ describe("runCommand", () => {
     const resultPromise = testing.runCommand(["echo", "hello"], undefined, undefined, undefined);
 
     stderr.emit("error", new Error("stderr broke"));
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect((child as unknown as { kill: ReturnType<typeof vi.fn> }).kill).toHaveBeenCalledWith(
+      "SIGTERM",
+    );
     child.emit("exit", 1);
 
     const result = await resultPromise;
