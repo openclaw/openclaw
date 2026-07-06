@@ -79,22 +79,18 @@ async function sendDiscordThreadTextChunks(params: {
   onResult?: DiscordSendProgress;
 }): Promise<void> {
   for (const chunk of params.chunks) {
-    await sendDiscordText(
-      params.rest,
-      params.threadId,
-      chunk,
-      undefined,
-      params.request,
-      params.maxLinesPerMessage,
-      undefined,
-      undefined,
-      params.chunkMode,
-      params.silent,
-      params.suppressEmbeds,
-      params.maxChars,
-      undefined,
-      params.onResult,
-    );
+    await sendDiscordText({
+      rest: params.rest,
+      channelId: params.threadId,
+      text: chunk,
+      request: params.request,
+      maxLinesPerMessage: params.maxLinesPerMessage,
+      chunkMode: params.chunkMode,
+      silent: params.silent,
+      suppressEmbeds: params.suppressEmbeds,
+      maxChars: params.maxChars,
+      onResult: params.onResult,
+    });
   }
 }
 
@@ -129,6 +125,7 @@ function toDiscordSendResult(
     kind?: Parameters<typeof createDiscordSendResult>[0]["kind"];
     threadId?: string | number;
     replyToId?: string;
+    replyToFirstMessageOnly?: boolean;
   } = {},
 ): DiscordSendResult {
   const resultParams: Parameters<typeof createDiscordSendResult>[0] = {
@@ -141,6 +138,9 @@ function toDiscordSendResult(
   }
   if (params.replyToId) {
     resultParams.replyToId = params.replyToId;
+  }
+  if (params.replyToFirstMessageOnly) {
+    resultParams.replyToFirstMessageOnly = true;
   }
   return createDiscordSendResult(resultParams);
 }
@@ -269,28 +269,24 @@ export async function sendMessageDiscord(
     try {
       if (opts.mediaUrl) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
-        await sendDiscordMedia(
+        await sendDiscordMedia({
           rest,
-          threadId,
-          mediaCaption ?? "",
-          opts.mediaUrl,
-          opts.filename,
-          opts.mediaAccess,
-          opts.mediaLocalRoots,
-          opts.mediaReadFile,
-          mediaMaxBytes,
-          undefined,
+          channelId: threadId,
+          text: mediaCaption ?? "",
+          mediaUrl: opts.mediaUrl,
+          filename: opts.filename,
+          mediaAccess: opts.mediaAccess,
+          mediaLocalRoots: opts.mediaLocalRoots,
+          mediaReadFile: opts.mediaReadFile,
+          maxBytes: mediaMaxBytes,
           request,
           maxLinesPerMessage,
-          undefined,
-          undefined,
           chunkMode,
-          opts.silent,
+          silent: opts.silent,
           suppressEmbeds,
-          textLimit,
-          undefined,
-          reportThreadResult,
-        );
+          maxChars: textLimit,
+          onResult: reportThreadResult,
+        });
         await sendDiscordThreadTextChunks({
           rest,
           threadId,
@@ -343,55 +339,55 @@ export async function sendMessageDiscord(
   }
 
   let result: DiscordChannelMessageResult;
-  const reportResult: DiscordSendProgress = async (progressResult, kind) => {
+  const reportResult: DiscordSendProgress = async (progressResult, kind, replyToId) => {
     await opts.onDeliveryResult?.(
       toDiscordSendResult(progressResult, channelId, {
         kind,
-        replyToId: opts.replyTo,
+        replyToId,
       }),
     );
   };
   try {
     if (opts.mediaUrl) {
-      result = await sendDiscordMedia(
+      result = await sendDiscordMedia({
         rest,
         channelId,
-        textWithMentions,
-        opts.mediaUrl,
-        opts.filename,
-        opts.mediaAccess,
-        opts.mediaLocalRoots,
-        opts.mediaReadFile,
-        mediaMaxBytes,
-        opts.replyTo,
+        text: textWithMentions,
+        mediaUrl: opts.mediaUrl,
+        filename: opts.filename,
+        mediaAccess: opts.mediaAccess,
+        mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
+        maxBytes: mediaMaxBytes,
+        replyTo: opts.replyTo,
         request,
         maxLinesPerMessage,
-        opts.components,
-        opts.embeds,
+        components: opts.components,
+        embeds: opts.embeds,
         chunkMode,
-        opts.silent,
+        silent: opts.silent,
         suppressEmbeds,
-        textLimit,
-        opts.replyToFirstChunkOnly,
-        reportResult,
-      );
+        maxChars: textLimit,
+        replyToFirstChunkOnly: opts.replyToFirstChunkOnly,
+        onResult: reportResult,
+      });
     } else {
-      result = await sendDiscordText(
+      result = await sendDiscordText({
         rest,
         channelId,
-        textWithMentions,
-        opts.replyTo,
+        text: textWithMentions,
+        replyTo: opts.replyTo,
         request,
         maxLinesPerMessage,
-        opts.components,
-        opts.embeds,
+        components: opts.components,
+        embeds: opts.embeds,
         chunkMode,
-        opts.silent,
+        silent: opts.silent,
         suppressEmbeds,
-        textLimit,
-        opts.replyToFirstChunkOnly,
-        reportResult,
-      );
+        maxChars: textLimit,
+        replyToFirstChunkOnly: opts.replyToFirstChunkOnly,
+        onResult: reportResult,
+      });
     }
   } catch (err) {
     throw await buildDiscordSendError(err, {
@@ -411,6 +407,7 @@ export async function sendMessageDiscord(
   return toDiscordSendResult(result, channelId, {
     kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
     replyToId: opts.replyTo,
+    replyToFirstMessageOnly: opts.replyToFirstChunkOnly,
   });
 }
 

@@ -176,8 +176,10 @@ describe("sendMessageDiscord", () => {
     replyToFirstChunkOnly?: boolean;
   }) {
     const { rest, postMock } = makeDiscordRest();
-    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
-    await sendMessageDiscord("channel:789", params.text, {
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    const result = await sendMessageDiscord("channel:789", params.text, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -189,6 +191,7 @@ describe("sendMessageDiscord", () => {
     return {
       firstBody: requireRestBody(postMock, 0) as { message_reference?: unknown },
       secondBody: requireRestBody(postMock, 1) as { message_reference?: unknown },
+      result,
     };
   }
 
@@ -668,6 +671,9 @@ describe("sendMessageDiscord", () => {
       "fallback-1",
       "fallback-2",
     ]);
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.receipt.parts[0]?.replyToId)).toEqual(
+      ["orig-123", undefined],
+    );
   });
 
   it("reports a media-only upload rejected with HTTP 413", async () => {
@@ -819,12 +825,14 @@ describe("sendMessageDiscord", () => {
   });
 
   it("limits reply reference to the first text chunk when requested", async () => {
-    const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
+    const { firstBody, secondBody, result } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2001),
       replyToFirstChunkOnly: true,
     });
     expectReplyReference(firstBody, "orig-123");
     expectNoReplyReference(secondBody);
+    expect(result.receipt.replyToId).toBe("orig-123");
+    expect(result.receipt.parts.map((part) => part.replyToId)).toEqual(["orig-123", undefined]);
   });
 
   it("preserves reply reference for follow-up text chunks after media caption split by default", async () => {

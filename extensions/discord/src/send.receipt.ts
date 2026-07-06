@@ -19,12 +19,13 @@ export function createDiscordSendReceipt(params: {
   kind: MessageReceiptPartKind;
   threadId?: string;
   replyToId?: string;
+  replyToFirstMessageOnly?: boolean;
 }): MessageReceipt {
   const platformMessageIds = params.platformMessageIds
     .map((messageId) => messageId.trim())
     .filter((messageId) => messageId && messageId !== "unknown");
-  return createMessageReceiptFromOutboundResults({
-    results: platformMessageIds.map((messageId) => {
+  const results: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }> =
+    platformMessageIds.map((messageId, index) => {
       const result: MessageReceiptSourceResult = {
         channel: "discord",
         messageId,
@@ -32,11 +33,26 @@ export function createDiscordSendReceipt(params: {
       if (params.channelId) {
         result.channelId = params.channelId;
       }
+      if (params.replyToFirstMessageOnly && index === 0 && params.replyToId) {
+        // A top-level replyToId would be copied onto every receipt part. Nest the
+        // first receipt so persisted metadata matches Discord's one message_reference.
+        return {
+          ...result,
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [result],
+            kind: params.kind,
+            threadId: params.threadId,
+            replyToId: params.replyToId,
+          }),
+        };
+      }
       return result;
-    }),
+    });
+  return createMessageReceiptFromOutboundResults({
+    results,
     kind: params.kind,
     threadId: params.threadId,
-    replyToId: params.replyToId,
+    replyToId: params.replyToFirstMessageOnly ? undefined : params.replyToId,
   });
 }
 
@@ -46,6 +62,7 @@ export function createDiscordSendResult(params: {
   kind: MessageReceiptPartKind;
   threadId?: string | number;
   replyToId?: string;
+  replyToFirstMessageOnly?: boolean;
 }): DiscordSendResult {
   const messageId = params.result.id || "unknown";
   const channelId = params.result.channel_id ?? params.fallbackChannelId;
@@ -61,6 +78,9 @@ export function createDiscordSendResult(params: {
   }
   if (params.replyToId) {
     receiptParams.replyToId = params.replyToId;
+  }
+  if (params.replyToFirstMessageOnly) {
+    receiptParams.replyToFirstMessageOnly = true;
   }
   return {
     messageId,
