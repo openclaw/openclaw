@@ -680,11 +680,6 @@ class OpenClawShell extends LitElement {
           .themeMode=${context.theme.mode}
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
-          .navCollapsed=${navCollapsed}
-          .onToggleSidebar=${() =>
-            context.navigation.update({
-              navCollapsed: !navCollapsed,
-            })}
           .terminalAvailable=${this.terminalAvailable}
           .onToggleTerminal=${() =>
             window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
@@ -706,6 +701,10 @@ class OpenClawShell extends LitElement {
             .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
             .sidebarMoreExpanded=${this.sidebarMoreExpanded}
             .themeMode=${context.theme.mode}
+            .onToggleCollapse=${() =>
+              context.navigation.update({
+                navCollapsed: !navCollapsed,
+              })}
             .onToggleMore=${() =>
               context.navigation.update({
                 sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
