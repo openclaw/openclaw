@@ -33,41 +33,43 @@ export const SIDEBAR_SECTIONS = [
   { label: "settings", routes: ["config"] },
 ] as const satisfies readonly SidebarSection[];
 
-// Compatibility surface for the customizable pinned sidebar. The newer section
-// model remains authoritative; these exports keep older sidebar/settings code
-// working while callers migrate to sections.
-export const SIDEBAR_NAV_ROUTES = SIDEBAR_SECTIONS.flatMap((section) =>
-  section.label === "chat" || section.label === "settings" ? [] : section.routes,
-) as SidebarNavRoute[];
+type SidebarSectionRouteId = (typeof SIDEBAR_SECTIONS)[number]["routes"][number];
 
-export type SidebarNavRoute = Exclude<
-  (typeof SIDEBAR_SECTIONS)[number]["routes"][number],
-  "chat" | "config"
->;
+export type SidebarNavRoute = Exclude<SidebarSectionRouteId, "chat" | "config">;
+
+export const SIDEBAR_NAV_ROUTES = SIDEBAR_SECTIONS.flatMap((section) =>
+  section.label === "control" || section.label === "agent" ? section.routes : [],
+) as readonly SidebarNavRoute[];
 
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
   "overview",
 ] as const satisfies readonly SidebarNavRoute[];
 
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const pinned: SidebarNavRoute[] = [];
-  for (const entry of value) {
-    if (
-      typeof entry === "string" &&
-      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
-      !pinned.includes(entry as SidebarNavRoute)
-    ) {
-      pinned.push(entry as SidebarNavRoute);
-    }
-  }
-  return pinned;
+const SIDEBAR_NAV_ROUTE_SET = new Set<NavigationRouteId>(SIDEBAR_NAV_ROUTES);
+
+function isSidebarNavRoute(value: unknown): value is SidebarNavRoute {
+  return typeof value === "string" && SIDEBAR_NAV_ROUTE_SET.has(value as NavigationRouteId);
 }
 
-export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const seen = new Set<SidebarNavRoute>();
+  const routes: SidebarNavRoute[] = [];
+  for (const routeId of value) {
+    if (!isSidebarNavRoute(routeId) || seen.has(routeId)) {
+      continue;
+    }
+    seen.add(routeId);
+    routes.push(routeId);
+  }
+  return routes;
+}
+
+export function sidebarMoreRoutes(pinnedRoutes: readonly SidebarNavRoute[]): SidebarNavRoute[] {
+  const pinned = new Set(pinnedRoutes);
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.has(routeId));
 }
 
 export const SETTINGS_NAVIGATION_ROUTES = [

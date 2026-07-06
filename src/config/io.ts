@@ -510,7 +510,7 @@ function resolveConfigStatMetadata(
 function resolveConfigWriteSuspiciousReasons(params: {
   existsBefore: boolean;
   unreadableBefore: boolean;
-  previousBytes: number | null;
+  sizeBaselineBytes: number | null;
   nextBytes: number | null;
   hasMetaBefore: boolean;
   gatewayModeBefore: string | null;
@@ -524,12 +524,12 @@ function resolveConfigWriteSuspiciousReasons(params: {
     reasons.push("unreadable-config-before-write");
   }
   if (
-    typeof params.previousBytes === "number" &&
+    typeof params.sizeBaselineBytes === "number" &&
     typeof params.nextBytes === "number" &&
-    params.previousBytes >= 512 &&
-    params.nextBytes < Math.floor(params.previousBytes * 0.5)
+    params.sizeBaselineBytes >= 512 &&
+    params.nextBytes < Math.floor(params.sizeBaselineBytes * 0.5)
   ) {
-    reasons.push(`size-drop:${params.previousBytes}->${params.nextBytes}`);
+    reasons.push(`size-drop:${params.sizeBaselineBytes}->${params.nextBytes}`);
   }
   if (!params.hasMetaBefore) {
     reasons.push("missing-meta-before-write");
@@ -989,6 +989,29 @@ function logConfigWarningsOnce(params: {
 
 function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
   return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
+}
+
+function resolveConfigSizeBaselineBytes(params: {
+  raw: string | null;
+  json5: { parse: (value: string) => unknown };
+  lastTouchedVersionOverride?: string;
+}): number | null {
+  if (params.raw === null) {
+    return null;
+  }
+  const rawBytes = Buffer.byteLength(params.raw, "utf-8");
+  const parsed = parseConfigJson5(params.raw, params.json5);
+  if (!parsed.ok || !isRecord(parsed.parsed)) {
+    return rawBytes;
+  }
+  const canonical = JSON.stringify(
+    stampConfigVersion(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
+    null,
+    2,
+  )
+    .trimEnd()
+    .concat("\n");
+  return Buffer.byteLength(canonical, "utf-8");
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
@@ -2499,6 +2522,13 @@ export function createConfigIO(
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
+    // Formatting is not data. Keep malformed/non-object files on the raw-byte
+    // baseline, but compare parseable authored config in its canonical form.
+    const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
+      raw: snapshot.raw,
+      json5: deps.json5,
+      lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+    });
     const nextBytes = Buffer.byteLength(json, "utf-8");
     const previousStat = snapshot.exists
       ? await deps.fs.promises.stat(configPath).catch(() => null)
@@ -2510,7 +2540,7 @@ export function createConfigIO(
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
       existsBefore: snapshot.exists,
       unreadableBefore: snapshot.readError != null,
-      previousBytes,
+      sizeBaselineBytes,
       nextBytes,
       hasMetaBefore,
       gatewayModeBefore,

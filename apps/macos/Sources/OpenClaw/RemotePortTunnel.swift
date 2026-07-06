@@ -189,7 +189,10 @@ final class RemotePortTunnel: @unchecked Sendable {
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 
-    private static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
+    /// Shared with MacChatTranscriptCache: the offline cache identity must key
+    /// on the same remote gateway port this tunnel actually forwards to, or two
+    /// gateways behind one SSH target would share cached transcripts.
+    static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
         let root = OpenClawConfigFile.loadDict()
         if let port = GatewayRemoteConfig.resolveRemotePort(root: root) {
             return port
