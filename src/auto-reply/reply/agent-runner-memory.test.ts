@@ -398,7 +398,7 @@ describe("runMemoryFlushIfNeeded", () => {
       ),
     );
 
-    const result = await runMemoryFlushIfNeeded({
+    await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
