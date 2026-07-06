@@ -140,7 +140,9 @@ async function callUserTokenService(
     });
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : "msteams.sso: failed to read User Token service response";
+      err instanceof Error
+        ? err.message
+        : "msteams.sso: failed to read User Token service response";
     return { error: message, status: response.status };
   }
   let parsed: unknown;

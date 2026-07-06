@@ -265,6 +265,50 @@ function createStores() {
   };
 }
 
+async function getLoadedMSTeamsApp() {
+  const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
+  if (!sdkResultPromise) {
+    throw new Error("expected loadMSTeamsSdkWithAuth result");
+  }
+  return (await sdkResultPromise).app;
+}
+
+async function getRegisteredMSTeamsRoute(
+  name: string,
+): Promise<(ctx: unknown) => Promise<unknown>> {
+  const app = await getLoadedMSTeamsApp();
+  const route = app.on.mock.calls.find((call: [string, unknown]) => call[0] === name)?.[1];
+  if (typeof route !== "function") {
+    throw new Error(`expected ${name} handler`);
+  }
+  return route as (ctx: unknown) => Promise<unknown>;
+}
+
+function createJsonResponse(body: unknown, status = 200): globalThis.Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function createOversizedResponse(): globalThis.Response {
+  const chunk = new Uint8Array(64 * 1024).fill(0x41);
+  let sent = 0;
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 272) {
+          controller.close();
+          return;
+        }
+        sent += 1;
+        controller.enqueue(chunk);
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
 function requireRegisteredMSTeamsConfig(): OpenClawConfig {
   const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
     | { cfg?: OpenClawConfig }
@@ -285,6 +329,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
+    vi.unstubAllGlobals();
     runMSTeamsFileConsentInvokeHandler.mockReset().mockResolvedValue(undefined);
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
@@ -455,12 +500,41 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
-  it("gates SDK SSO invoke routes and persists successful signin events", async () => {
+  it("routes SDK SSO invokes through the bounded OpenClaw User Token helper", async () => {
     const abort = new AbortController();
     const cfg = createConfig(0);
     updateMSTeamsConfig(cfg, {
       sso: { enabled: true, connectionName: "graph" },
     });
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
+        const url = String(input);
+        if (url.includes("/api/usertoken/exchange")) {
+          expect(init?.method).toBe("POST");
+          expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer mock-token");
+          expect(JSON.parse(String(init?.body))).toEqual({ token: "exchangeable-token" });
+          return createJsonResponse({
+            channelId: "msteams",
+            connectionName: "graph",
+            token: "delegated-token-exchange",
+            expiration: "2030-01-01T00:00:00Z",
+          });
+        }
+        if (url.includes("/api/usertoken/GetToken")) {
+          expect(init?.method).toBe("GET");
+          expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer mock-token");
+          expect(url).toContain("code=654321");
+          return createJsonResponse({
+            channelId: "msteams",
+            connectionName: "graph",
+            token: "delegated-token-state",
+            expiration: "2031-02-03T04:05:06Z",
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
     const task = monitorMSTeamsProvider({
       cfg,
@@ -478,55 +552,49 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       oauthDefaultConnectionName: "graph",
     });
 
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const sdkResult = await sdkResultPromise;
-    const app = sdkResult.app;
+    const app = await getLoadedMSTeamsApp();
     expect(app.on).toHaveBeenCalledWith("signin.token-exchange", expect.any(Function));
     expect(app.on).toHaveBeenCalledWith("signin.verify-state", expect.any(Function));
     expect(app.event).toHaveBeenCalledWith("signin", expect.any(Function));
 
-    const tokenExchangeHandler = app.on.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "signin.token-exchange",
-    )?.[1];
-    expect(typeof tokenExchangeHandler).toBe("function");
-    if (typeof tokenExchangeHandler !== "function") {
-      throw new Error("expected signin token-exchange handler");
-    }
+    const tokenExchangeHandler = await getRegisteredMSTeamsRoute("signin.token-exchange");
     const exchangeResult = await tokenExchangeHandler({
-      activity: { from: { id: "29:user", aadObjectId: "aad-user" } },
-    });
-    expect(exchangeResult).toEqual({ status: 200 });
-    expect(app.onTokenExchange).toHaveBeenCalledTimes(1);
-
-    const signinHandler = app.event.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "signin",
-    )?.[1];
-    expect(typeof signinHandler).toBe("function");
-    if (typeof signinHandler !== "function") {
-      throw new Error("expected signin event handler");
-    }
-
-    signinHandler({
-      activity: { from: { id: "29:user", aadObjectId: "aad-user" } },
-      token: {
-        connectionName: "graph",
-        token: "delegated-graph-token",
-        expiration: "2030-01-01T00:00:00Z",
+      activity: {
+        type: "invoke",
+        name: "signin/tokenExchange",
+        channelId: "msteams",
+        from: { id: "29:user", aadObjectId: "aad-user" },
+        value: {
+          id: "exchange-1",
+          connectionName: "graph",
+          token: "exchangeable-token",
+        },
       },
     });
+    expect(exchangeResult).toEqual({ status: 200 });
 
-    await vi.waitFor(() => {
-      expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(2);
-      expect(ssoTokenStore.save).toHaveBeenCalledTimes(2);
+    const verifyStateHandler = await getRegisteredMSTeamsRoute("signin.verify-state");
+    const verifyResult = await verifyStateHandler({
+      activity: {
+        type: "invoke",
+        name: "signin/verifyState",
+        channelId: "msteams",
+        from: { id: "29:user", aadObjectId: "aad-user" },
+        value: { state: "654321" },
+      },
     });
+    expect(verifyResult).toEqual({ status: 200 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(2);
+    expect(app.onTokenExchange).not.toHaveBeenCalled();
+    expect(app.onVerifyState).not.toHaveBeenCalled();
+    expect(ssoTokenStore.save).toHaveBeenCalledTimes(4);
     expect(ssoTokenStore.save).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionName: "graph",
         userId: "29:user",
-        token: "delegated-graph-token",
+        token: "delegated-token-exchange",
         expiresAt: "2030-01-01T00:00:00Z",
       }),
     );
@@ -534,10 +602,95 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect.objectContaining({
         connectionName: "graph",
         userId: "aad-user",
-        token: "delegated-graph-token",
+        token: "delegated-token-exchange",
         expiresAt: "2030-01-01T00:00:00Z",
       }),
     );
+    expect(ssoTokenStore.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionName: "graph",
+        userId: "29:user",
+        token: "delegated-token-state",
+        expiresAt: "2031-02-03T04:05:06Z",
+      }),
+    );
+    expect(ssoTokenStore.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionName: "graph",
+        userId: "aad-user",
+        token: "delegated-token-state",
+        expiresAt: "2031-02-03T04:05:06Z",
+      }),
+    );
+
+    abort.abort();
+    await task;
+  });
+
+  it("rejects oversized User Token responses through registered SSO routes", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    updateMSTeamsConfig(cfg, {
+      sso: { enabled: true, connectionName: "graph" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => createOversizedResponse()),
+    );
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    const app = await getLoadedMSTeamsApp();
+    const tokenExchangeHandler = await getRegisteredMSTeamsRoute("signin.token-exchange");
+    await expect(
+      tokenExchangeHandler({
+        activity: {
+          type: "invoke",
+          name: "signin/tokenExchange",
+          channelId: "msteams",
+          from: { id: "29:user", aadObjectId: "aad-user" },
+          value: {
+            id: "exchange-oversized",
+            connectionName: "graph",
+            token: "exchangeable-token",
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      status: 412,
+      body: {
+        id: "exchange-oversized",
+        connectionName: "graph",
+        failureDetail: "unable to exchange token...",
+      },
+    });
+
+    const verifyStateHandler = await getRegisteredMSTeamsRoute("signin.verify-state");
+    await expect(
+      verifyStateHandler({
+        activity: {
+          type: "invoke",
+          name: "signin/verifyState",
+          channelId: "msteams",
+          from: { id: "29:user", aadObjectId: "aad-user" },
+          value: { state: "654321" },
+        },
+      }),
+    ).resolves.toEqual({ status: 412 });
+
+    expect(app.onTokenExchange).not.toHaveBeenCalled();
+    expect(app.onVerifyState).not.toHaveBeenCalled();
+    expect(ssoTokenStore.save).not.toHaveBeenCalled();
 
     abort.abort();
     await task;

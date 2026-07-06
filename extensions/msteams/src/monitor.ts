@@ -42,7 +42,11 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import type { MSTeamsSsoDeps } from "./sso.js";
+import {
+  handleSigninTokenExchangeInvoke,
+  handleSigninVerifyStateInvoke,
+  type MSTeamsSsoDeps,
+} from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
@@ -58,6 +62,72 @@ type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };
+
+type MSTeamsSigninActivity = {
+  channelId?: string;
+  from?: { id?: string; aadObjectId?: string };
+  value?: unknown;
+  name?: string;
+};
+
+type MSTeamsSigninTokenExchangeValue = Parameters<
+  typeof handleSigninTokenExchangeInvoke
+>[0]["value"];
+type MSTeamsSigninVerifyStateValue = Parameters<typeof handleSigninVerifyStateInvoke>[0]["value"];
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function getStringField(value: Record<string, unknown>, key: string): string | undefined {
+  const field = value[key];
+  return typeof field === "string" ? field : undefined;
+}
+
+function readSigninTokenExchangeValue(value: unknown): MSTeamsSigninTokenExchangeValue {
+  const record = getRecord(value);
+  return {
+    id: getStringField(record, "id"),
+    connectionName: getStringField(record, "connectionName"),
+    token: getStringField(record, "token"),
+  };
+}
+
+function readSigninVerifyStateValue(value: unknown): MSTeamsSigninVerifyStateValue {
+  return { state: getStringField(getRecord(value), "state") };
+}
+
+function getSsoUserIds(activity: MSTeamsSigninActivity | undefined): string[] {
+  return Array.from(
+    new Set(
+      [activity?.from?.id, activity?.from?.aadObjectId]
+        .map((id) => id?.trim())
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+}
+
+async function saveSsoTokenAliases(params: {
+  ssoDeps: MSTeamsSsoDeps;
+  connectionName: string;
+  userIds: string[];
+  primaryUserId: string;
+  token: string;
+  expiresAt?: string;
+}): Promise<void> {
+  const aliasUserIds = params.userIds.filter((userId) => userId !== params.primaryUserId);
+  await Promise.all(
+    aliasUserIds.map((userId) =>
+      params.ssoDeps.tokenStore.save({
+        connectionName: params.connectionName,
+        userId,
+        token: params.token,
+        expiresAt: params.expiresAt,
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
+  );
+}
 
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
@@ -484,10 +554,7 @@ export async function monitorMSTeamsProvider(
     void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
   });
 
-  const handleSdkSigninInvoke = async (
-    ctx: unknown,
-    delegateName: "onTokenExchange" | "onVerifyState",
-  ) => {
+  const handleBoundedSigninTokenExchange = async (ctx: unknown) => {
     const adaptedCtx = adaptSdkContext(ctx, app);
     if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
       return { status: 200, body: {} };
@@ -499,25 +566,93 @@ export async function monitorMSTeamsProvider(
       return { status: 200, body: {} };
     }
 
-    const sdkSigninApp = app as MSTeamsApp & {
-      onTokenExchange?: (ctx: unknown) => Promise<unknown>;
-      onVerifyState?: (ctx: unknown) => Promise<unknown>;
-    };
-    const delegate = sdkSigninApp[delegateName];
-    if (typeof delegate !== "function") {
-      throw new Error(`Teams SDK ${delegateName} handler is unavailable`);
+    const activity = adaptedCtx.activity as MSTeamsSigninActivity | undefined;
+    const userIds = getSsoUserIds(activity);
+    const primaryUserId = userIds[0] ?? "";
+    const value = readSigninTokenExchangeValue(activity?.value);
+    const connectionName = value.connectionName?.trim() || ssoDeps.connectionName;
+    const result = await handleSigninTokenExchangeInvoke({
+      value,
+      user: { userId: primaryUserId, channelId: activity?.channelId },
+      deps: ssoDeps,
+    });
+
+    if (result.ok) {
+      await saveSsoTokenAliases({
+        ssoDeps,
+        connectionName,
+        userIds,
+        primaryUserId,
+        token: result.token,
+        expiresAt: result.expiresAt,
+      });
+      return { status: 200 };
     }
-    return delegate.call(sdkSigninApp, ctx);
+
+    if (result.code === "service_error") {
+      return { status: result.status ?? 500 };
+    }
+
+    return {
+      status: 412,
+      body: {
+        id: value.id ?? "",
+        connectionName,
+        failureDetail: "unable to exchange token...",
+      },
+    };
   };
 
-  // Replace the SDK's default sign-in invoke routes with an authz gate that
-  // delegates to the same SDK handlers only after sender policy passes. Registering
-  // a user route with the same name intentionally replaces the SDK system route.
-  app.on("signin.token-exchange", (ctx) => handleSdkSigninInvoke(ctx, "onTokenExchange"));
-  app.on("signin.verify-state", (ctx) => handleSdkSigninInvoke(ctx, "onVerifyState"));
+  const handleBoundedSigninVerifyState = async (ctx: unknown) => {
+    const adaptedCtx = adaptSdkContext(ctx, app);
+    if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
+      return { status: 200, body: {} };
+    }
+    if (!ssoDeps) {
+      log.debug?.("signin invoke received but msteams.sso is not configured", {
+        name: adaptedCtx.activity?.name,
+      });
+      return { status: 200, body: {} };
+    }
 
-  // The delegated SDK sign-in handlers emit `signin` only after a successful
-  // token exchange/lookup. Persist that token for later OpenClaw use.
+    const activity = adaptedCtx.activity as MSTeamsSigninActivity | undefined;
+    const userIds = getSsoUserIds(activity);
+    const primaryUserId = userIds[0] ?? "";
+    const result = await handleSigninVerifyStateInvoke({
+      value: readSigninVerifyStateValue(activity?.value),
+      user: { userId: primaryUserId, channelId: activity?.channelId },
+      deps: ssoDeps,
+    });
+
+    if (result.ok) {
+      await saveSsoTokenAliases({
+        ssoDeps,
+        connectionName: ssoDeps.connectionName,
+        userIds,
+        primaryUserId,
+        token: result.token,
+        expiresAt: result.expiresAt,
+      });
+      return { status: 200 };
+    }
+
+    if (result.code === "missing_state") {
+      return { status: 404 };
+    }
+    if (result.code === "service_error") {
+      return { status: result.status ?? 500 };
+    }
+    return { status: 412 };
+  };
+
+  // Replace the SDK's default sign-in invoke routes so the live Bot Framework
+  // User Token HTTP response is read through OpenClaw's bounded reader instead
+  // of the SDK's unbounded axios `res.data` path.
+  app.on("signin.token-exchange", (ctx) => handleBoundedSigninTokenExchange(ctx));
+  app.on("signin.verify-state", (ctx) => handleBoundedSigninVerifyState(ctx));
+
+  // Keep the SDK signin event handler for any SDK-emitted signin events and
+  // persist those tokens for later OpenClaw use.
   if (ssoDeps) {
     app.event("signin", (ctx) => {
       void (async () => {
