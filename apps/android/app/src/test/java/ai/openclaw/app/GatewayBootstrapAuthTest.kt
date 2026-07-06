@@ -32,12 +32,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -921,12 +919,12 @@ class GatewayBootstrapAuthTest {
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
-    runTest {
+    runBlocking {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
       val runtime = createTestRuntime(app)
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      Dispatchers.setMain(Dispatchers.Unconfined)
       try {
         val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
 
@@ -977,14 +975,14 @@ class GatewayBootstrapAuthTest {
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun talkPttOnceRetryPreservesCaptureCleanupOwnership() =
-    runTest {
+    runBlocking {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
       val runtime = createTestRuntime(app)
       val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
       writeField(talkMode, "activePttCaptureId", "capture-1")
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      Dispatchers.setMain(Dispatchers.Unconfined)
       try {
         val retry = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
         assertNull(retry.error)
@@ -1001,21 +999,20 @@ class GatewayBootstrapAuthTest {
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun pttStartQueuedAfterCancelIsInvalidatedBeforePreparation() =
-    runTest {
+    runBlocking {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
       val runtime = createTestRuntime(app)
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
       val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      Dispatchers.setMain(Dispatchers.Unconfined)
       try {
         preparationMutex.lock()
         val cancel = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null) }
-        runCurrent()
+        yield()
         val start = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null) }
-        runCurrent()
+        yield()
         preparationMutex.unlock()
-        runCurrent()
 
         assertNull(withTimeout(5_000) { cancel.await() }.error)
         assertEquals("NODE_BACKGROUND_UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)

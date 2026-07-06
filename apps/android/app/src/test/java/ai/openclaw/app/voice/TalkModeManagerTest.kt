@@ -5,19 +5,25 @@ import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
+import android.content.Intent
+import android.content.pm.ResolveInfo
 import android.os.SystemClock
+import android.speech.RecognitionService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -87,23 +93,30 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun beginPushToTalkRejectsInvalidatedCaptureBeforeStarting() =
     runTest {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      shadowOf(app.packageManager)
+        .addResolveInfoForIntent(Intent(RecognitionService.SERVICE_INTERFACE), ResolveInfo())
       val manager = createManager()
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val error =
+          runCatching {
+            manager.beginPushToTalk(
+              allowNewCapture = true,
+              canStartCapture = { false },
+            )
+          }.exceptionOrNull()
 
-      val error =
-        runCatching {
-          manager.beginPushToTalk(
-            allowNewCapture = true,
-            canStartCapture = { false },
-          )
-        }.exceptionOrNull()
-
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", error?.message)
-      assertNull(readPrivateField(manager, "activePttCaptureId"))
-      assertFalse(manager.isListening.value)
+        assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", error?.message)
+        assertNull(readPrivateField(manager, "activePttCaptureId"))
+        assertFalse(manager.isListening.value)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
@@ -162,15 +175,21 @@ class TalkModeManagerTest {
       setPrivateField(manager, "pttCompletion", completion)
       setMutableStateFlow(manager, "_isListening", true)
       val start = TalkPttOnceStart.Started(captureId = "capture-1", completion = completion)
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val wait = launch { manager.awaitPushToTalkOnce(start) }
+        advanceUntilIdle()
+        wait.cancel()
+        runCurrent()
+        wait.join()
 
-      val wait = launch { manager.awaitPushToTalkOnce(start) }
-      advanceUntilIdle()
-      wait.cancelAndJoin()
-
-      assertNull(readPrivateField(manager, "activePttCaptureId"))
-      assertNull(readPrivateField(manager, "pttCompletion"))
-      assertFalse(manager.isListening.value)
-      assertTrue(completion.isCompleted)
+        assertNull(readPrivateField(manager, "activePttCaptureId"))
+        assertNull(readPrivateField(manager, "pttCompletion"))
+        assertFalse(manager.isListening.value)
+        assertTrue(completion.isCompleted)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
