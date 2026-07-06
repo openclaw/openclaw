@@ -6,7 +6,10 @@
 // process whose stdout/stderr/stdin streams emit `error` events after the
 // listeners are attached. With the fix each stream error rejects the command
 // and kills the child; without the stream error listeners the unhandled
-// errors would terminate the process.
+// errors would terminate the process. The same fix also moves the `fail`
+// helper in `uploadDirectoryToSshTarget` before its first use, clearing a
+// temporal dead zone that prevented the upload pipeline from registering
+// stream error listeners.
 
 import { createRequire } from "node:module";
 import path from "node:path";
