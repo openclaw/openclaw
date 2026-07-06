@@ -1070,6 +1070,7 @@ function renderChatModelReasoningSelect(params: {
                 if (draft.modelValue !== draft.initialModelValue) {
                   const switched = await onModelSelect(draft.modelValue, sessionKey);
                   if (switched === false) {
+                    chatModelPickerDrafts.delete(sessionKey);
                     return;
                   }
                 }

@@ -3260,6 +3260,43 @@ describe("chat model controls", () => {
     });
   });
 
+  it("discards staged model settings when the model save fails", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const onModelSelect = vi.fn(async () => false);
+    const container = document.createElement("div");
+    const props = {
+      ...createChatModelControlsProps(state),
+      onModelSelect,
+    };
+    render(renderChatModelControls(props), container);
+
+    const modelOption = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+    ).find((button) => button.dataset.chatModelOption === "openai/gpt-5.4");
+    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
+    modelOption?.click();
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
+
+    await vi.waitFor(() => {
+      expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main");
+    });
+    render(renderChatModelControls(props), container);
+
+    expect(getChatModelSelect(container).textContent).toContain("GPT-5.5");
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
   it("keeps speed choices visible and disabled for unsupported providers", () => {
     const { state } = createChatHeaderState({
       model: "local-model",
