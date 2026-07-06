@@ -94,7 +94,6 @@ export async function resolveSshConfig(
     });
     let stdout = "";
     let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
     const settle = (result: SshResolvedConfig | null, options?: { terminate?: boolean }) => {
       if (settled) {
         return;
@@ -112,7 +111,7 @@ export async function resolveSshConfig(
     };
 
     const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    timer = setTimeout(() => settle(null, { terminate: true }), timeoutMs);
+    const timer = setTimeout(() => settle(null, { terminate: true }), timeoutMs);
 
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => {
