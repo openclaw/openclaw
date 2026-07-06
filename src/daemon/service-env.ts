@@ -373,10 +373,10 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   for (const dir of extraDirs) {
     add(dir);
   }
-  for (const dir of userDirs) {
+  for (const dir of systemDirs) {
     add(dir);
   }
-  for (const dir of systemDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
 

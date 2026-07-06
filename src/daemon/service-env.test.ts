@@ -51,7 +51,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
   });
 
-  it("places user directories before system directories on Linux", () => {
+  it("places user directories after system directories on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
@@ -63,7 +63,33 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     expect(userDirIndex).toBeGreaterThan(-1);
     expect(systemDirIndex).toBeGreaterThan(-1);
-    expect(userDirIndex).toBeLessThan(systemDirIndex);
+    expect(systemDirIndex).toBeLessThan(userDirIndex);
+  });
+
+  it("places package-manager bin directories after trusted system directories on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/home/testuser/.local/share/pnpm",
+        NPM_CONFIG_PREFIX: "/home/testuser/.npm-global",
+      },
+      existsSync: allExist,
+    });
+
+    const systemDirIndex = result.indexOf("/usr/bin");
+    const packageManagerDirs = [
+      "/home/testuser/.local/share/pnpm",
+      "/home/testuser/.local/share/pnpm/bin",
+      "/home/testuser/.npm-global/bin",
+    ];
+
+    expect(systemDirIndex).toBeGreaterThan(-1);
+    for (const dir of packageManagerDirs) {
+      const dirIndex = result.indexOf(dir);
+      expect(dirIndex).toBeGreaterThan(-1);
+      expect(systemDirIndex).toBeLessThan(dirIndex);
+    }
   });
 
   it("places extraDirs before user directories on Linux", () => {
@@ -542,7 +568,7 @@ describe("buildMinimalServicePath", () => {
     expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
   });
 
-  it("ensures user directories come before system directories on Linux", () => {
+  it("ensures user directories come after system directories on Linux", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/bob" },
@@ -553,7 +579,7 @@ describe("buildMinimalServicePath", () => {
     const firstUserDirIdx = parts.indexOf("/home/bob/.local/bin");
     const firstSystemDirIdx = parts.indexOf("/usr/local/bin");
 
-    expect(firstUserDirIdx).toBeLessThan(firstSystemDirIdx);
+    expect(firstSystemDirIdx).toBeLessThan(firstUserDirIdx);
   });
 
   it("includes extra directories when provided", () => {
