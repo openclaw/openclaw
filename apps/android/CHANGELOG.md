@@ -14,6 +14,8 @@ Voice settings now stay within their intended width instead of overflowing or cl
 
 Camera clip capture no longer emits release-path diagnostics containing temporary file details.
 
+Push-to-talk now waits for realtime input and output to stop, keeps finishing turns serialized, and safely resumes the matching relay capture.
+
 ## 2026.6.11 - 2026-07-01
 
 Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.

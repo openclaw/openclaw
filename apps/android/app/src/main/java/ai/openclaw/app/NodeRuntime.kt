@@ -1730,6 +1730,12 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
+      talkMode.finishingPushToTalkCaptureId?.let {
+        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+          code = "PTT_BUSY",
+          message = "PTT_BUSY: previous push-to-talk turn is still finishing",
+        )
+      }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
@@ -1768,7 +1774,8 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      talkMode.activePushToTalkCaptureId?.let { captureId ->
+      val busyCaptureId = talkMode.activePushToTalkCaptureId ?: talkMode.finishingPushToTalkCaptureId
+      busyCaptureId?.let { captureId ->
         val payload = TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy")
         return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
       }
