@@ -76,7 +76,7 @@
 .workboard-auto-refresh {
   gap: 6px;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -194,7 +194,7 @@
   border-radius: var(--workboard-control-radius);
   background-color: var(--workboard-control-bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.25;
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
   transition:
@@ -532,7 +532,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: normal;
@@ -655,7 +655,7 @@
 .workboard-column__header h2 {
   margin: 0;
   color: color-mix(in srgb, var(--text) 72%, var(--muted));
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   text-transform: uppercase;
 }
 
@@ -697,7 +697,7 @@
 
 .workboard-empty-state strong {
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: calc(0.95rem * var(--control-ui-text-scale));
 }
 
 .workboard-empty-state span {
@@ -1050,7 +1050,7 @@
     5px 5px;
   background-repeat: no-repeat;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   letter-spacing: 0;
   line-height: 1;
@@ -1227,7 +1227,7 @@
 
 .workboard-board--compact .workboard-card p {
   -webkit-line-clamp: 2;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
 }
 
 .workboard-board--compact .workboard-card__actions {
@@ -1412,7 +1412,7 @@
 .workboard-detail__row span {
   display: block;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--control-ui-text-scale));
   font-weight: 650;
   text-transform: uppercase;
 }

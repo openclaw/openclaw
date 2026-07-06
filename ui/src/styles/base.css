@@ -86,10 +86,15 @@
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --control-ui-text-scale: 1;
+  --control-ui-text-2xs: calc(10px * var(--control-ui-text-scale));
   --control-ui-text-xs: calc(11px * var(--control-ui-text-scale));
   --control-ui-text-sm: calc(12px * var(--control-ui-text-scale));
+  --control-ui-text-compact: calc(13px * var(--control-ui-text-scale));
   --control-ui-text-md: calc(14px * var(--control-ui-text-scale));
+  --control-ui-text-title: calc(15px * var(--control-ui-text-scale));
   --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
+  --control-ui-text-xl: calc(20px * var(--control-ui-text-scale));
+  --control-ui-text-2xl: calc(22px * var(--control-ui-text-scale));
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
   --chat-text-size: var(--control-ui-text-md);
 
@@ -512,7 +517,7 @@ body {
 
 body {
   margin: 0;
-  font: 400 14px/1.55 var(--font-body);
+  font: 400 var(--control-ui-text-md) / 1.55 var(--font-body);
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
@@ -522,7 +527,7 @@ body {
 
 @media (min-width: 1600px) {
   body {
-    font-size: 15px;
+    font-size: var(--control-ui-text-title);
   }
 }
 

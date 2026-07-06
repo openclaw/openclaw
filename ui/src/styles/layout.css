@@ -212,7 +212,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 550;
   transition:
     background var(--duration-fast) ease,
@@ -253,7 +253,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   background: color-mix(in srgb, var(--card) 70%, transparent);
   color: var(--muted);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-size: var(--control-ui-text-2xs);
   font-weight: 550;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -310,7 +310,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   background: color-mix(in srgb, var(--card) 72%, transparent);
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   outline: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -378,7 +378,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 .settings-sidebar__empty {
   margin: 8px 9px 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
 }
 
@@ -391,7 +391,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 .settings-sidebar__group-label {
   padding: 0 9px;
   margin: 0 0 4px;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -468,7 +468,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .settings-sidebar__item-label {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -482,7 +482,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   gap: 8px;
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -566,7 +566,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -593,7 +593,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -758,7 +758,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -918,14 +918,14 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 
 .sidebar-update-card__title {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 600;
   line-height: 1.2;
 }
 
 .sidebar-update-card__subtitle {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.2;
 }
 
@@ -1132,7 +1132,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--control-ui-text-2xs);
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
   text-align: center;
@@ -1242,7 +1242,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
    as metadata rather than a form control. */
 
 .sidebar-recent-sessions__label-text {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1323,7 +1323,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 500;
   color: var(--text);
 }
@@ -1429,7 +1429,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .nav-section__label-text {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1491,7 +1491,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 
 .sidebar-customize-menu__title {
   padding: 6px 10px 8px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1510,7 +1510,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   text-align: left;
 }
 
@@ -1588,7 +1588,7 @@ openclaw-session-menu[popover] {
 .sidebar-session-sort-menu__title {
   padding: 4px 8px 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1607,7 +1607,7 @@ openclaw-session-menu[popover] {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   text-align: left;
 }
 
@@ -1669,7 +1669,7 @@ openclaw-session-menu[popover] {
 .session-menu__shortcut {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 550;
   letter-spacing: 0.04em;
 }
@@ -1743,7 +1743,7 @@ openclaw-session-menu[popover] {
 }
 
 .nav-item__text {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -1793,7 +1793,7 @@ openclaw-session-menu[popover] {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
   text-decoration: none;
@@ -1817,7 +1817,7 @@ openclaw-session-menu[popover] {
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-family: var(--font-mono);
   color: var(--danger);
 }
@@ -2105,7 +2105,7 @@ openclaw-session-menu[popover] {
 }
 
 .page-title {
-  font-size: 22px;
+  font-size: var(--control-ui-text-2xl);
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -2114,7 +2114,7 @@ openclaw-session-menu[popover] {
 
 .page-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 400;
   margin-top: 4px;
   letter-spacing: -0.005em;
@@ -2149,7 +2149,7 @@ openclaw-session-menu[popover] {
   padding: 4px 10px;
   background: transparent;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   line-height: 1.2;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2199,7 +2199,7 @@ openclaw-session-menu[popover] {
   white-space: nowrap;
   text-transform: none;
   letter-spacing: normal;
-  font-size: 12px; /* was 10px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
   transition:
@@ -2389,7 +2389,7 @@ openclaw-session-menu[popover] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: var(--muted);
 }
 
@@ -2425,7 +2425,7 @@ openclaw-session-menu[popover] {
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
   color: var(--text-strong);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   flex: none;
 }
@@ -2436,7 +2436,7 @@ openclaw-session-menu[popover] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 600;
   color: var(--text);
 }

@@ -69,7 +69,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   outline: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -106,7 +106,7 @@
   border-radius: var(--radius-full);
   background: var(--bg-hover);
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -142,7 +142,7 @@
   border-radius: calc(var(--radius-md) - 3px);
   background: transparent;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   transition:
     background var(--duration-fast) ease,
@@ -263,7 +263,7 @@
   background: var(--accent-subtle);
   border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   color: var(--accent);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   animation: badge-enter 0.2s var(--ease-out);
 }
@@ -280,7 +280,7 @@
 }
 
 .config-status {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   color: var(--muted);
   line-height: 1.35;
 }
@@ -330,7 +330,7 @@
   padding: 8px 14px;
   background: var(--bg-elevated);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   font-weight: 600;
   white-space: nowrap;
   transition:
@@ -371,7 +371,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--accent);
   list-style: none;
@@ -409,7 +409,7 @@
   padding: 8px 12px;
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   font-family: var(--mono);
 }
 
@@ -486,14 +486,14 @@
 }
 
 .config-section-hero__title {
-  font-size: 15px;
+  font-size: var(--control-ui-text-title);
   font-weight: 650;
   letter-spacing: -0.02em;
   line-height: 1.3;
 }
 
 .config-section-hero__desc {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   line-height: 1.4;
 }
@@ -527,7 +527,7 @@
 
 .settings-appearance__heading {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--control-ui-text-title);
   font-weight: 650;
   letter-spacing: -0.02em;
   color: var(--accent);
@@ -535,7 +535,7 @@
 
 .settings-appearance__hint {
   margin: -8px 0 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   color: var(--muted);
   line-height: 1.45;
 }
@@ -597,7 +597,7 @@
 }
 
 .settings-theme-card__label {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 600;
   color: var(--accent);
 }
@@ -617,14 +617,14 @@
 }
 
 .settings-theme-import__title {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 650;
   color: var(--text-strong);
 }
 
 .settings-theme-import__hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   color: var(--muted);
 }
@@ -636,7 +636,7 @@
   width: max-content;
   max-width: 100%;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   text-decoration: none;
 }
@@ -656,7 +656,7 @@
 
 .settings-theme-import__inline-hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -671,7 +671,7 @@
 }
 
 .settings-theme-import__label {
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -711,7 +711,7 @@
 }
 
 .settings-theme-import__meta-label {
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -719,7 +719,7 @@
 }
 
 .settings-theme-import__meta-value {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -727,7 +727,7 @@
 .settings-theme-import__message {
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
@@ -782,13 +782,13 @@
 
 .settings-text-scale__sample {
   font-weight: 650;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.2;
 }
 
 .settings-text-scale__label {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   line-height: 1.2;
 }
 
@@ -813,7 +813,7 @@
 }
 
 .settings-info-row__label {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
@@ -825,7 +825,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 500;
   color: var(--text);
   text-align: right;
@@ -904,7 +904,7 @@
 
 .settings-notifications__title {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: -0.015em;
   line-height: 1.35;
@@ -914,7 +914,7 @@
 .settings-notifications__hint {
   margin: 0;
   max-width: 58ch;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   color: var(--muted);
 }
@@ -927,7 +927,7 @@
   padding: 4px 9px;
   border-radius: var(--radius-full);
   border: 1px solid transparent;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   line-height: 1;
   white-space: nowrap;
@@ -980,7 +980,7 @@
 }
 
 .settings-notifications__label {
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -989,7 +989,7 @@
 
 .settings-notifications__value {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 600;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -1034,14 +1034,14 @@
   border-radius: var(--radius-md);
   background: var(--danger-subtle);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
 .config-raw-field textarea {
   min-height: 500px;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.55;
 }
 
@@ -1098,7 +1098,7 @@
 
 .config-empty__text {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   max-width: 320px;
   line-height: 1.5;
 }
@@ -1190,7 +1190,7 @@
 
 .config-section-card__title {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: -0.015em;
   line-height: 1.35;
@@ -1198,7 +1198,7 @@
 
 .config-section-card__desc {
   margin: 3px 0 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   line-height: 1.45;
 }
@@ -1269,14 +1269,14 @@
 }
 
 .cfg-field__label {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.005em;
 }
 
 .cfg-field__help {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   color: var(--muted);
   line-height: 1.45;
 }
@@ -1293,7 +1293,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 2px 8px;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   background: var(--bg-elevated);
   white-space: nowrap;
@@ -1304,7 +1304,7 @@
 }
 
 .cfg-field__error {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--danger);
 }
 
@@ -1320,7 +1320,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-accent);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   outline: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -1358,7 +1358,7 @@
 
 .cfg-input--sm {
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .cfg-input__reset {
@@ -1367,7 +1367,7 @@
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1391,7 +1391,7 @@
   border-radius: var(--radius-md);
   background: var(--bg-accent);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.55;
   resize: vertical;
   outline: none;
@@ -1416,7 +1416,7 @@
 
 .cfg-textarea--sm {
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* Redacted (click-to-reveal) */
@@ -1477,7 +1477,7 @@
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
   background: transparent;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   text-align: center;
   outline: none;
   appearance: textfield;
@@ -1499,7 +1499,7 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   outline: none;
   appearance: none;
   transition:
@@ -1532,7 +1532,7 @@
   .cfg-textarea--sm,
   .cfg-number__input,
   .cfg-select {
-    font-size: 16px;
+    font-size: var(--control-ui-input-text-size);
   }
 }
 
@@ -1556,7 +1556,7 @@
   border-radius: calc(var(--radius-md) - 3px);
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   transition:
     background var(--duration-fast) ease,
@@ -1620,7 +1620,7 @@
 
 .cfg-toggle-row__label {
   display: block;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   font-weight: 500;
   color: var(--text);
 }
@@ -1628,7 +1628,7 @@
 .cfg-toggle-row__help {
   display: block;
   margin-top: 2px;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   line-height: 1.45;
 }
@@ -1729,7 +1729,7 @@
 }
 
 .cfg-object__title {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 600;
   color: var(--text);
   line-height: 1.35;
@@ -1761,7 +1761,7 @@
 
 .cfg-object__help {
   padding: 0 12px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
@@ -1794,7 +1794,7 @@
 }
 
 .cfg-array__label {
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 600;
   color: var(--text);
 }
@@ -1807,7 +1807,7 @@
 }
 
 .cfg-array__count {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   padding: 4px 10px;
   background: var(--bg-elevated);
@@ -1828,7 +1828,7 @@
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   transition: background var(--duration-fast) ease;
 }
@@ -1854,7 +1854,7 @@
 
 .cfg-array__help {
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   border-bottom: 1px solid var(--border);
 }
@@ -1863,7 +1863,7 @@
   padding: 36px 18px;
   text-align: center;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
 }
 
 .cfg-array__items {
@@ -1890,7 +1890,7 @@
 }
 
 .cfg-array__item-index {
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
@@ -1953,7 +1953,7 @@
 }
 
 .cfg-map__label {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 600;
   color: var(--muted);
 }
@@ -1967,7 +1967,7 @@
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   transition: background var(--duration-fast) ease;
 }
@@ -1990,7 +1990,7 @@
   padding: 28px 18px;
   text-align: center;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
 }
 
 .cfg-map__items {
@@ -2059,7 +2059,7 @@
 /* Pill variants */
 .pill--sm {
   padding: 5px 12px;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
 }
 
 .pill--ok {
@@ -2106,7 +2106,7 @@
   background: var(--bg-elevated);
   color: var(--text);
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -2156,7 +2156,7 @@
 .mcp-server-row__launch {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   overflow-wrap: anywhere;
 }
 
@@ -2165,7 +2165,7 @@
   gap: 6px;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -2307,7 +2307,7 @@
   }
 
   .config-section-card__title {
-    font-size: 16px;
+    font-size: var(--control-ui-text-lg);
   }
 
   .cfg-segmented {

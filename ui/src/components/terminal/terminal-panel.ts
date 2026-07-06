@@ -1062,7 +1062,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       height: 36px;
       color: var(--muted, #8a919e);
       white-space: nowrap;
-      font-size: 12.5px;
+      font-size: calc(12.5px * var(--control-ui-text-scale));
       /* Reserve the active underline height so tabs don't shift on selection. */
       border-bottom: 2px solid transparent;
       transition:
@@ -1091,7 +1091,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       font-variant-numeric: tabular-nums;
     }
     .tp-tab__status {
-      font-size: 11px;
+      font-size: var(--control-ui-text-xs);
       color: var(--muted, #8a919e);
     }
     .tp-tab__close {
@@ -1160,7 +1160,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     .tp-empty,
     .tp-error {
       padding: 10px 12px;
-      font-size: 12px;
+      font-size: var(--control-ui-text-sm);
       color: var(--muted, #8a919e);
     }
     .tp-error {

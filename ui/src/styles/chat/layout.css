@@ -109,7 +109,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 6px;
   padding: 6px 12px;
   margin: 8px auto 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   font-family: var(--font-body);
   color: var(--text);
@@ -161,7 +161,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   padding: 0 7px;
   border-radius: var(--radius-full);
   color: currentColor;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1;
   list-style: none;
   user-select: none;
@@ -234,14 +234,14 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .context-usage__title,
 .context-usage__section-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .context-usage__context-value {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -295,7 +295,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .context-usage__plan-badge {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: none;
@@ -318,7 +318,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .context-usage__limit-label {
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -329,13 +329,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   align-items: baseline;
   gap: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   white-space: nowrap;
 }
 
 .context-usage__limit-meta strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -384,7 +384,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .context-usage__stats dt {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--control-ui-text-2xs);
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -394,7 +394,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin: 4px 0 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -405,7 +405,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin-top: 12px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -431,7 +431,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, currentColor 12%, transparent);
   color: currentColor;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1;
   transition:
     background 150ms ease-out,
@@ -476,7 +476,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.25;
 }
 
@@ -641,7 +641,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border: none;
   background: rgba(0, 0, 0, 0.7);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -756,14 +756,14 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-assistant-attachment-card__title,
 .chat-assistant-attachment-card__link {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   text-decoration: none;
   word-break: break-word;
 }
 
 .chat-assistant-attachment-card__reason {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -787,7 +787,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   width: fit-content;
   max-width: 100%;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-assistant-attachment-badge {
@@ -826,7 +826,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-radius: 8px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
@@ -942,7 +942,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: none;
   color: var(--fg);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
@@ -1011,7 +1011,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .task-suggestion__eyebrow {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1026,7 +1026,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .task-suggestion__summary {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.35;
 }
 
@@ -1042,7 +1042,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 8px;
   align-items: start;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .task-suggestion__detail > span {
@@ -1114,7 +1114,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
 }
 
 .chat-pr[data-state="merged"] {
@@ -1240,7 +1240,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, currentColor 12%, transparent);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   list-style: none;
   user-select: none;
@@ -1269,7 +1269,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: var(--panel);
   box-shadow: var(--shadow-md, 0 8px 24px rgb(0 0 0 / 0.18));
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 500;
 }
 
@@ -1280,7 +1280,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 12px;
   margin-bottom: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-pr__checks-menu-header a {
@@ -1388,7 +1388,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, var(--muted) 14%, transparent);
   color: var(--muted);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -1695,7 +1695,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-settings-popover__label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -1746,7 +1746,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   min-width: 0;
   overflow: hidden;
   color: currentColor;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1;
   text-overflow: ellipsis;
@@ -1757,7 +1757,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -1915,7 +1915,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-align: left;
 }
 
@@ -2093,7 +2093,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   max-width: 200px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2104,7 +2104,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -2158,7 +2158,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -2172,7 +2172,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
   color: var(--text);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   line-height: 1;
   padding: 0 10px;
   box-sizing: border-box;
@@ -2201,7 +2201,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
 }
 
 .agent-chat__talk-settings-link:hover,
@@ -2245,7 +2245,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
   color: var(--text);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   line-height: 1.35;
   overflow: hidden;
   user-select: none;
@@ -2324,7 +2324,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-ui-text-scale));
   line-height: 1;
   text-align: left;
 }
@@ -2468,7 +2468,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .agent-chat__token-count {
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--control-ui-text-scale));
   line-height: 1;
   color: var(--muted);
   white-space: nowrap;
@@ -2943,7 +2943,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .slash-menu-group__label {
   padding: 4px 10px 2px;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -3002,7 +3002,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .slash-menu-args {
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   color: var(--muted);
   font-family: var(--mono);
   opacity: 0.65;
@@ -3014,7 +3014,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -3027,7 +3027,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .slash-menu-badge {
-  font-size: 0.65rem;
+  font-size: calc(0.65rem * var(--control-ui-text-scale));
   font-weight: 600;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -3045,7 +3045,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   width: 100%;
   padding: 8px 10px;
   margin-top: 4px;
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   font-weight: 600;
   color: var(--accent);
   background: none;
@@ -3065,7 +3065,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   display: flex;
   gap: 10px;
   padding: 6px 10px 4px;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--control-ui-text-scale));
   color: var(--muted);
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   margin-top: 4px;
@@ -3074,7 +3074,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .slash-menu-footer kbd {
   display: inline-block;
   padding: 1px 4px;
-  font-size: 0.65rem;
+  font-size: calc(0.65rem * var(--control-ui-text-scale));
   font-family: var(--mono);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -3122,7 +3122,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border: none;
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -3222,7 +3222,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: var(--bg-elevated);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.2;
   min-width: 0;
   transition:
@@ -3275,7 +3275,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-controls__session-notice {
   width: 100%;
   min-height: 16px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 16px;
   color: var(--muted);
 }
@@ -3341,7 +3341,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.35;
   overflow: hidden;
   user-select: none;
@@ -3423,7 +3423,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   text-align: left;
 }
 
@@ -3475,7 +3475,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   overflow: hidden;
   flex: 1 1 auto;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3487,7 +3487,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-full);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--control-ui-text-2xs);
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3516,7 +3516,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 550;
   text-align: left;
 }
@@ -3529,7 +3529,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-controls__provider-icon.provider-brand-icon--fallback {
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
 }
 
 .chat-controls__inline-select-trigger > .chat-controls__provider-icon {
@@ -3569,7 +3569,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-controls__inline-select-section-label {
   padding: 3px 6px 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3606,7 +3606,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   align-items: center;
   gap: 6px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -3622,7 +3622,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 4px;
   flex: 0 0 auto;
   color: color-mix(in srgb, var(--accent) 76%, var(--text));
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 1;
@@ -3639,7 +3639,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-controls__model-option-provider {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 450;
 }
 
@@ -3675,7 +3675,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-controls__reasoning-value {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -3857,7 +3857,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, var(--text) 4%, var(--card));
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 550;
   line-height: 1;
 }
@@ -3915,7 +3915,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: color-mix(in srgb, var(--card) 74%, transparent);
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
 }
 
@@ -3950,7 +3950,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
 }
 
 /* Controls separator: the visible divider is the background; any glyph content
@@ -3964,7 +3964,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   overflow: hidden;
   background: color-mix(in srgb, var(--border-strong) 72%, transparent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   font-weight: 300;
   user-select: none;
@@ -3993,7 +3993,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   border-color: color-mix(in srgb, var(--input) 88%, transparent);
   border-radius: var(--radius-lg);
   background-color: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -4002,7 +4002,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   padding: 4px 10px;
   background: rgba(255, 255, 255, 0.04);
   border-radius: var(--radius-sm);
@@ -4127,7 +4127,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
   .chat-controls__provider-option {
     padding-inline: 8px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   .chat-controls {
@@ -4183,7 +4183,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .agent-chat__welcome h2 {
-  font-size: 20px;
+  font-size: var(--control-ui-text-xl);
   font-weight: 600;
   margin: 0;
   color: var(--foreground);
@@ -4209,7 +4209,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   color: var(--foreground);
   display: grid;
   place-items: center;
-  font-size: 20px;
+  font-size: var(--control-ui-text-xl);
   font-weight: 700;
 }
 
@@ -4230,7 +4230,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   color: var(--muted);
   background: var(--panel);
@@ -4246,7 +4246,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .agent-chat__hint {
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   color: var(--muted);
   margin: 0;
 }
@@ -4254,7 +4254,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .agent-chat__hint kbd {
   display: inline-block;
   padding: 1px 6px;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-family: var(--font-mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);
@@ -4271,7 +4271,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .agent-chat__suggestion {
   min-height: 40px;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   line-height: 1.4;
   padding: 10px 16px;
   border-radius: var(--radius-md);

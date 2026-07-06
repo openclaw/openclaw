@@ -298,7 +298,7 @@ export function renderSkills(props: SkillsProps) {
       <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
           <div style="font-weight: 600;">ClawHub</div>
-          <div class="muted" style="font-size: 13px;">
+          <div class="muted" style="font-size: var(--control-ui-text-compact);">
             Search and install skills from the registry
           </div>
         </div>
@@ -414,7 +414,9 @@ function renderClawHubResults(props: SkillsProps) {
             </div>
             <div class="list-meta" style="display: flex; align-items: center; gap: 8px;">
               ${r.version
-                ? html`<span class="muted" style="font-size: 12px;">v${r.version}</span>`
+                ? html`<span class="muted" style="font-size: var(--control-ui-text-sm);"
+                    >v${r.version}</span
+                  >`
                 : nothing}
               <button
                 class="btn btn--sm"
@@ -470,11 +472,11 @@ function renderClawHubDetailDialog(props: SkillsProps) {
               ? html`<div class="callout danger">${props.clawhubDetailError}</div>`
               : detail?.skill
                 ? html`
-                    <div style="font-size: 14px; line-height: 1.5;">
+                    <div style="font-size: var(--control-ui-text-md); line-height: 1.5;">
                       ${detail.skill.summary ?? ""}
                     </div>
                     ${detail.owner?.displayName
-                      ? html`<div class="muted" style="font-size: 13px;">
+                      ? html`<div class="muted" style="font-size: var(--control-ui-text-compact);">
                           By
                           ${detail.owner.displayName}${detail.owner.handle
                             ? html` (@${detail.owner.handle})`
@@ -482,19 +484,19 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                         </div>`
                       : nothing}
                     ${detail.latestVersion
-                      ? html`<div class="muted" style="font-size: 13px;">
+                      ? html`<div class="muted" style="font-size: var(--control-ui-text-compact);">
                           Latest: v${detail.latestVersion.version}
                         </div>`
                       : nothing}
                     ${detail.latestVersion?.changelog
                       ? html`<div
-                          style="font-size: 13px; border-top: 1px solid var(--border); padding-top: 12px; white-space: pre-wrap;"
+                          style="font-size: var(--control-ui-text-compact); border-top: 1px solid var(--border); padding-top: 12px; white-space: pre-wrap;"
                         >
                           ${detail.latestVersion.changelog}
                         </div>`
                       : nothing}
                     ${detail.metadata?.os
-                      ? html`<div class="muted" style="font-size: 12px;">
+                      ? html`<div class="muted" style="font-size: var(--control-ui-text-sm);">
                           Platforms: ${detail.metadata.os.join(", ")}
                         </div>`
                       : nothing}
@@ -591,7 +593,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             style="display: flex; align-items: center; gap: 8px;"
           >
             <span class="statusDot ${skillStatusClass(skill)}"></span>
-            ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
+            ${skill.emoji
+              ? html`<span style="font-size: calc(18px * var(--control-ui-text-scale));"
+                  >${skill.emoji}</span
+                >`
+              : nothing}
             <span>${skill.name}</span>
           </div>
           <button
@@ -605,7 +611,9 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
         </div>
         <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
           <div>
-            <div style="font-size: 14px; line-height: 1.5; color: var(--text);">
+            <div
+              style="font-size: var(--control-ui-text-md); line-height: 1.5; color: var(--text);"
+            >
               ${skill.description}
             </div>
             ${renderSkillStatusChips({ skill, showBundledBadge })}
@@ -647,7 +655,9 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             : nothing}
           ${reasons.length > 0
             ? html`
-                <div class="muted" style="font-size: 13px;">Reason: ${reasons.join(", ")}</div>
+                <div class="muted" style="font-size: var(--control-ui-text-compact);">
+                  Reason: ${reasons.join(", ")}
+                </div>
               `
             : nothing}
 
@@ -661,7 +671,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                 @change=${() => props.onToggle(skill.skillKey, skill.disabled)}
               />
             </label>
-            <span style="font-size: 13px; font-weight: 500;">
+            <span style="font-size: var(--control-ui-text-compact); font-weight: 500;">
               ${skill.disabled ? "Disabled" : "Enabled"}
             </span>
             ${canInstall
@@ -700,7 +710,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   ${(() => {
                     const href = safeExternalHref(skill.homepage);
                     return href
-                      ? html`<div class="muted" style="font-size: 13px;">
+                      ? html`<div class="muted" style="font-size: var(--control-ui-text-compact);">
                           Get your key:
                           <a href="${href}" target="_blank" rel="noopener noreferrer"
                             >${skill.homepage}</a
@@ -720,7 +730,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             : nothing}
 
           <div
-            style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: 12px; color: var(--muted);"
+            style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: var(--control-ui-text-sm); color: var(--muted);"
           >
             <div><span style="font-weight: 600;">Source:</span> ${skill.source}</div>
             <div style="font-family: var(--mono); word-break: break-all;">${skill.filePath}</div>
@@ -765,16 +775,22 @@ function renderInstalledClawHubOverview(
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>
-        <span class="muted" style="font-size: 12px;">${link.slug}@${link.installedVersion}</span>
+        <span class="muted" style="font-size: var(--control-ui-text-sm);"
+          >${link.slug}@${link.installedVersion}</span
+        >
         ${props.clawhubVerdictsLoading ? html`<span class="muted">Refreshing…</span>` : nothing}
       </div>
       ${props.clawhubVerdictsError
-        ? html`<div class="muted" style="font-size: 13px;">${props.clawhubVerdictsError}</div>`
+        ? html`<div class="muted" style="font-size: var(--control-ui-text-compact);">
+            ${props.clawhubVerdictsError}
+          </div>`
         : reasonText
-          ? html`<div class="muted" style="font-size: 13px;">${reasonText}</div>`
+          ? html`<div class="muted" style="font-size: var(--control-ui-text-compact);">
+              ${reasonText}
+            </div>`
           : nothing}
       ${auditHref
-        ? html`<div style="font-size: 13px;">
+        ? html`<div style="font-size: var(--control-ui-text-compact);">
             <a href="${auditHref}" target="_blank" rel="noopener noreferrer"
               >Full security report</a
             >
@@ -795,7 +811,7 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     if (error) {
       return html`<div class="callout danger">${error}</div>`;
     }
-    return html`<div class="muted" style="font-size: 13px;">
+    return html`<div class="muted" style="font-size: var(--control-ui-text-compact);">
       ${props.skillCardLoadingKey === skill.skillKey
         ? "Loading Skill Card..."
         : "Skill Card not loaded."}

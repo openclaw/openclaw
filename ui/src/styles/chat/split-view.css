@@ -88,7 +88,7 @@ openclaw-chat-pane {
   border-radius: 999px;
   background: var(--panel);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
@@ -154,7 +154,7 @@ openclaw-chat-pane {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
   text-overflow: ellipsis;
 }

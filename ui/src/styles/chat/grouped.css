@@ -109,7 +109,7 @@
    long configurable sender names must never wrap it taller than the gap. */
 .chat-sender-name {
   font-weight: 500;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   min-width: 0;
   white-space: nowrap;
@@ -118,7 +118,7 @@
 }
 
 .chat-group-timestamp {
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   opacity: 0.7;
   line-height: 1.2;
@@ -178,7 +178,7 @@
   gap: 10px;
   margin: 18px 8px;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   letter-spacing: 0;
   user-select: none;
 }
@@ -218,7 +218,7 @@
 .chat-divider__description {
   max-width: min(620px, 100%);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -235,7 +235,7 @@
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   flex-shrink: 0;
   align-self: flex-end;
   margin-bottom: 4px;
@@ -348,7 +348,7 @@ img.chat-avatar {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--panel) 72%, transparent);
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   font-weight: 700;
   line-height: 1;
 }
@@ -513,7 +513,7 @@ img.chat-avatar {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   color: var(--muted);
   position: relative;
@@ -646,7 +646,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 .chat-delete-confirm__text {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--control-ui-text-compact);
   font-weight: 500;
   color: var(--fg, #fff);
 }
@@ -655,7 +655,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px; /* was 11px */
+  font-size: var(--control-ui-text-sm);
   color: var(--muted, #888);
   margin-bottom: 10px;
   user-select: none;
@@ -678,7 +678,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   border: none;
   border-radius: var(--radius-sm, 4px);
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   transition: background 120ms ease-out;
 }
