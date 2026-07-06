@@ -24,7 +24,6 @@ type MockGateway = {
 
 const {
   attachDiscordGatewayLoggingMock,
-  drainPendingDeliveriesMock,
   getDiscordGatewayEmitterMock,
   registerGatewayMock,
   stopGatewayLoggingMock,
@@ -35,7 +34,6 @@ const {
   const getDiscordGatewayEmitterMockLocal = vi.fn<() => EventEmitter | undefined>(() => undefined);
   return {
     attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMockLocal),
-    drainPendingDeliveriesMock: vi.fn(async (_opts: unknown) => undefined),
     getDiscordGatewayEmitterMock: getDiscordGatewayEmitterMockLocal,
     waitForDiscordGatewayStopMock: vi.fn((_params: WaitForDiscordGatewayStopParams) =>
       Promise.resolve(),
@@ -48,10 +46,6 @@ const {
 
 vi.mock("../gateway-logging.js", () => ({
   attachDiscordGatewayLogging: attachDiscordGatewayLoggingMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
-  drainPendingDeliveries: drainPendingDeliveriesMock,
 }));
 
 vi.mock("../monitor.gateway.js", () => ({
@@ -79,7 +73,6 @@ describe("runDiscordGatewayLifecycle", () => {
 
   beforeEach(() => {
     attachDiscordGatewayLoggingMock.mockClear();
-    drainPendingDeliveriesMock.mockClear();
     getDiscordGatewayEmitterMock.mockClear();
     waitForDiscordGatewayStopMock.mockClear();
     registerGatewayMock.mockClear();
@@ -159,7 +152,6 @@ describe("runDiscordGatewayLifecycle", () => {
     };
     const lifecycleParams: LifecycleParams = {
       accountId: "default",
-      cfg: {} as LifecycleParams["cfg"],
       gateway: gateway ? (gateway as unknown as MutableDiscordGateway) : undefined,
       runtime,
       isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
@@ -743,87 +735,6 @@ describe("runDiscordGatewayLifecycle", () => {
         statusSink,
         (patch) => patch.connected === true && patch.lastDisconnect === null,
       );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("drains pending deliveries when the gateway reconnects after startup", async () => {
-    vi.useFakeTimers();
-    try {
-      const { emitter, gateway } = createGatewayHarness();
-      gateway.isConnected = true;
-      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
-      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
-        gateway.isConnected = false;
-        emitter.emit("debug", "Gateway websocket opened");
-        setTimeout(() => {
-          gateway.isConnected = true;
-        }, 1_000);
-        await vi.advanceTimersByTimeAsync(1_500);
-      });
-
-      const { lifecycleParams } = createLifecycleHarness({ gateway });
-
-      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
-
-      expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1);
-      const drainCall = drainPendingDeliveriesMock.mock.calls[0]?.[0] as {
-        drainKey: string;
-        logLabel: string;
-        selectEntry: (entry: { channel: string; accountId?: string }) => { match: boolean };
-      };
-      expect(drainCall.drainKey).toBe("discord:default");
-      expect(drainCall.logLabel).toBe("Discord reconnect drain");
-      expect(drainCall.selectEntry({ channel: "discord", accountId: "default" }).match).toBe(true);
-      expect(drainCall.selectEntry({ channel: "discord" }).match).toBe(true);
-      expect(drainCall.selectEntry({ channel: "telegram", accountId: "default" }).match).toBe(
-        false,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not drain deliveries for the initial gateway connection", async () => {
-    const { emitter, gateway } = createGatewayHarness();
-    gateway.isConnected = true;
-    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
-
-    const { lifecycleParams } = createLifecycleHarness({ gateway });
-
-    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
-
-    expect(drainPendingDeliveriesMock).not.toHaveBeenCalled();
-  });
-
-  it("does not treat a pending initial READY watch as a reconnect", async () => {
-    vi.useFakeTimers();
-    try {
-      const { emitter, gateway } = createGatewayHarness();
-      let connectedReadCount = 0;
-      Object.defineProperty(gateway, "isConnected", {
-        get: () => {
-          connectedReadCount += 1;
-          return connectedReadCount >= 3;
-        },
-      });
-      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
-      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
-        await vi.advanceTimersByTimeAsync(300);
-      });
-
-      const { gatewaySupervisor, lifecycleParams } = createLifecycleHarness({ gateway });
-      gatewaySupervisor.drainPending.mockImplementation(() => {
-        if (gatewaySupervisor.drainPending.mock.calls.length === 1) {
-          emitter.emit("debug", "Gateway websocket opened");
-        }
-        return "continue";
-      });
-
-      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
-
-      expect(drainPendingDeliveriesMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
