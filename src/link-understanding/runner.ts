@@ -41,6 +41,15 @@ function resolveTimeoutMsFromConfig(params: {
   return resolveTimeoutMs(configured, DEFAULT_LINK_TIMEOUT_SECONDS);
 }
 
+function resolveFetchTimeoutMsFromConfig(params: {
+  config?: LinkToolsConfig;
+  entries: LinkModelConfig[];
+}): number {
+  return Math.max(
+    ...params.entries.map((entry) => resolveTimeoutMsFromConfig({ config: params.config, entry })),
+  );
+}
+
 function isLinkUrlTemplate(value: string): boolean {
   return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
 }
@@ -220,8 +229,8 @@ export async function runLinkUnderstanding(params: {
   }
 
   const outputs: string[] = [];
+  const timeoutMs = resolveFetchTimeoutMsFromConfig({ config, entries });
   for (const url of links) {
-    const timeoutMs = resolveTimeoutMsFromConfig({ config, entry: entries[0] });
     let fetched: Awaited<ReturnType<typeof fetchLinkContent>>;
     try {
       fetched = await fetchLinkContent({ url, timeoutMs });
