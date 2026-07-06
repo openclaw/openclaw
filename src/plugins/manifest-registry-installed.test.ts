@@ -858,4 +858,43 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     // Only the 2 valid plugins should be present
     expect(registry.plugins).toHaveLength(2);
   });
+
+  it("forwards load-path diagnostics even when no extra candidate is merged (P2 regression)", () => {
+    const installedRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+
+    // Create a temp dir that mimics the bundled extensions dir so
+    // discoverFromConfigPaths warns about it as a bundled alias but does not
+    // emit a config-origin candidate. Without the fix, this diagnostic was
+    // silently dropped because extraCandidates.length was 0.
+    const bundledBase = makeTempDir();
+    const bundledRoot = path.join(bundledBase, "dist", "extensions");
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    setBundledPluginsDirOverrideForTest(bundledRoot);
+    writePlugin(bundledRoot, "bundled-lookalike", "bundled-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            // Only a bundled alias path — no workspace config root, so no
+            // config-origin candidate survives filtering.
+            paths: [bundledRoot],
+          },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    // Diagnostics must be forwarded even when every load path entry is
+    // filtered out by the bundled alias guard.
+    expect(registry.diagnostics.length).toBeGreaterThan(0);
+    expect(registry.diagnostics[0].level).toBe("warn");
+    expect(registry.diagnostics[0].message).toContain("bundled plugin directory");
+  });
 });

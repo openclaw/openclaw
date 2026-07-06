@@ -651,8 +651,12 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         );
         if (extraCandidates.length > 0) {
           candidates = [...indexCandidates, ...extraCandidates];
-          extraDiagnostics = loadPathDiscovery.diagnostics;
         }
+        // Always forward diagnostics from config load-path discovery, even
+        // when no extra candidate survives filtering (e.g., bundled aliases,
+        // missing paths, duplicates, or scoped-out entries). Without this,
+        // users silently lose normal discovery warnings or doctor hints.
+        extraDiagnostics = loadPathDiscovery.diagnostics;
       }
 
       return loadPluginManifestRegistry({
