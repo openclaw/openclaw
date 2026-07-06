@@ -140,6 +140,10 @@ function listConcreteCronDeliveryTargets(
 ): ConcreteCronDeliveryTarget[] {
   const targets: ConcreteCronDeliveryTarget[] = [];
   for (const job of jobs) {
+    // Disabled jobs have no next scheduled run, so their delivery target cannot fail yet.
+    if (job.enabled === false) {
+      continue;
+    }
     // Only an explicit delivery object pins a concrete channel; without one the plan resolves
     // to the pseudo "last" route decided at run time, which doctor cannot validate ahead of time.
     if (!getRecord(job.delivery)) {

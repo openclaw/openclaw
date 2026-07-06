@@ -75,6 +75,22 @@ describe("collectCronDeliveryTargetAdvisory", () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
+  it("skips disabled jobs because they have no next scheduled delivery", () => {
+    const resolve = availableChannels("slack");
+    const advisory = collectCronDeliveryTargetAdvisory({
+      jobs: [
+        job({
+          enabled: false,
+          delivery: { mode: "announce", channel: "missing-channel" },
+        }),
+      ],
+      storePath: STORE_PATH,
+      resolveAvailableChannelIds: resolve,
+    });
+    expect(advisory).toBeNull();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it("flags a concrete target even when no channels are active (only channel removed)", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
       jobs: [job({ id: "report", delivery: { mode: "announce", channel: "slack" } })],
