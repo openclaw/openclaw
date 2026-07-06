@@ -22,7 +22,7 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 
-export type ChatControlsProps = {
+type ChatControlsProps = {
   paneId: string;
   agentsList: AgentsListResult | null;
   connected: boolean;

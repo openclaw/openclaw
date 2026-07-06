@@ -260,7 +260,6 @@ const setQueryTokensForKey = (query: string, key: string, values: string[]): str
   return next.length ? `${next.join(" ")} ` : "";
 };
 
-export type { QuerySuggestion };
 export {
   addQueryToken,
   applySuggestionToQuery,
