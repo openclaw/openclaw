@@ -428,6 +428,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
+      await captureScreenshot(writable.page, artifacts, "05-detail-actions");
       await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
@@ -448,7 +449,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await cardInColumn(writable.page, "Running", editedCard.title).waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "05-moved-running");
+      await captureScreenshot(writable.page, artifacts, "06-moved-running");
 
       await writableGateway.deferNext("workboard.cards.update");
       const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
@@ -478,7 +479,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "06-lifecycle-review");
+      await captureScreenshot(writable.page, artifacts, "07-lifecycle-review");
       await details.locator('button[aria-label="Cancel"]').click();
       await details.waitFor({ state: "hidden" });
 
@@ -497,7 +498,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await writable.page.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
-      await captureScreenshot(writable.page, artifacts, "07-reloaded-review");
+      await captureScreenshot(writable.page, artifacts, "08-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
     }
@@ -520,7 +521,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor({
         state: "visible",
       });
-      await captureScreenshot(readOnly.page, artifacts, "08-read-only-board");
+      await captureScreenshot(readOnly.page, artifacts, "09-read-only-board");
       expect(await readOnly.page.getByRole("button", { name: /New card/u }).count()).toBe(0);
       expect(await readOnly.page.locator('button[aria-label="Edit card"]').count()).toBe(0);
       expect(await readOnly.page.locator('button[aria-label="Delete card"]').count()).toBe(0);
@@ -582,7 +583,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const column = statusColumn(recorded.page, "Todo");
       await column.waitFor({ state: "visible" });
       await cardInColumn(recorded.page, "Todo", overflowTitle(0)).waitFor({ state: "visible" });
-      await captureScreenshot(recorded.page, artifacts, "09-overflow-column");
+      await captureScreenshot(recorded.page, artifacts, "10-overflow-column");
 
       const titleHeights = await column
         .locator(".workboard-card h3")

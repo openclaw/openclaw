@@ -1186,7 +1186,19 @@ function renderCardMoveControl(props: WorkboardProps, card: WorkboardCard, busy:
   `;
 }
 
-function renderCardActionSlot(content: TemplateResult | typeof nothing) {
+type WorkboardCardActionContent = TemplateResult | typeof nothing;
+
+type WorkboardCardActions = {
+  topStartAction: WorkboardCardActionContent;
+  topEditAction: WorkboardCardActionContent;
+  topArchiveAction: WorkboardCardActionContent;
+  sessionAction: WorkboardCardActionContent;
+  stopAction: WorkboardCardActionContent;
+  moveAction: WorkboardCardActionContent;
+  deleteAction: WorkboardCardActionContent;
+};
+
+function renderCardActionSlot(content: WorkboardCardActionContent) {
   return html`
     <span class="workboard-card__action-slot">
       ${content === nothing
@@ -1207,7 +1219,7 @@ function getWorkboardCardActions(
     archived: boolean;
     showStartControls: boolean;
   },
-) {
+): WorkboardCardActions {
   const state = getWorkboardState(props.host);
   const writable = canMutate(props);
   const linkedSessionKey = options.linkedSessionKey;
