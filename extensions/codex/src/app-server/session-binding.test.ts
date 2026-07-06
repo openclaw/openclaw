@@ -35,8 +35,8 @@ async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
     path.join(codexHome, "auth.json"),
     `${JSON.stringify({
       tokens: {
-        access_token: "cli-access-token",
-        refresh_token: "cli-refresh-token",
+        access_token: "cli-access",
+        refresh_token: "cli-refresh",
         account_id: "account-cli",
       },
     })}\n`,
