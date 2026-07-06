@@ -319,24 +319,12 @@ actor GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    func controlUiAutoAuthToken(config: Config) async -> String? {
+    /// Token safe to inject into browser Control UI. Native device tokens stay on native websocket clients.
+    static func controlUiSharedAuthToken(config: Config) -> String? {
         if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
             return token
-        }
-        if let deviceToken = self.lastSnapshot?.auth["deviceToken"]?.value as? String {
-            let trimmed = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        let identity = DeviceIdentityStore.loadOrCreate()
-        if let entry = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") {
-            let trimmed = entry.token.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
         }
         return nil
     }
