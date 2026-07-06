@@ -1,50 +1,57 @@
-/** Tests for logs-cli runtime helpers. */
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileUtf8Tail } from "./logs-cli.runtime.js";
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    spawn: vi.fn(),
+    spawn: spawnMock,
   };
 });
 
-const { spawn } = await import("node:child_process");
-
 describe("execFileUtf8Tail", () => {
-  it("resolves with an error when stdout emits an error", async () => {
-    const mockSpawn = vi.mocked(spawn);
-    const child = new EventEmitter();
-    const stdout = new EventEmitter();
-    const stderr = new EventEmitter();
-    Object.assign(child, { stdout, stderr });
-    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
-
-    const resultPromise = execFileUtf8Tail("tail", ["-f", "log"], { maxBytes: 1024 });
-
-    stdout.emit("error", new Error("stdout EPIPE"));
-
-    const result = await resultPromise;
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("stdout EPIPE");
+  beforeEach(() => {
+    spawnMock.mockReset();
   });
 
-  it("resolves with an error when stderr emits an error", async () => {
-    const mockSpawn = vi.mocked(spawn);
+  it.each(["stdout", "stderr"] as const)(
+    "terminates the child when %s emits an error",
+    async (streamName) => {
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      const kill = vi.fn(() => true);
+      const child = Object.assign(new EventEmitter(), { kill, stderr, stdout });
+      spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+      const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
+      stdout.emit("data", Buffer.from("partial output"));
+      const streamError = new Error(`${streamName} read failed`);
+      (streamName === "stdout" ? stdout : stderr).emit("error", streamError);
+
+      await expect(resultPromise).resolves.toEqual({
+        code: 1,
+        stderr: streamError.message,
+        stdout: "partial output",
+        truncated: false,
+      });
+      expect(kill).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not kill the child when spawning fails", async () => {
     const child = new EventEmitter();
-    const stdout = new EventEmitter();
-    const stderr = new EventEmitter();
-    Object.assign(child, { stdout, stderr });
-    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+    const kill = vi.fn(() => true);
+    Object.assign(child, { kill, stderr: new EventEmitter(), stdout: new EventEmitter() });
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
 
-    const resultPromise = execFileUtf8Tail("tail", ["-f", "log"], { maxBytes: 1024 });
+    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1024 });
+    child.emit("error", new Error("spawn failed"));
 
-    stderr.emit("error", new Error("stderr EPIPE"));
-
-    const result = await resultPromise;
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("stderr EPIPE");
+    await expect(resultPromise).resolves.toMatchObject({ code: 1, stderr: "spawn failed" });
+    expect(kill).not.toHaveBeenCalled();
   });
 });

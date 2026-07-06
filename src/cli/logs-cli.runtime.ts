@@ -57,11 +57,16 @@ export async function execFileUtf8Tail(
       }
     });
 
-    const resolveWithError = (error: unknown) => {
+    const resolveWithError = (error: unknown, terminateChild = false) => {
       if (settled) {
         return;
       }
       settled = true;
+      if (terminateChild) {
+        // Journal output is only useful when fully readable. Stop the child so
+        // a failed pipe cannot leave a live command holding the CLI open.
+        child.kill();
+      }
       resolve({
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: error instanceof Error ? error.message : String(error),
@@ -70,8 +75,8 @@ export async function execFileUtf8Tail(
       });
     };
 
-    child.stdout?.on("error", resolveWithError);
-    child.stderr?.on("error", resolveWithError);
+    child.stdout?.on("error", (error) => resolveWithError(error, true));
+    child.stderr?.on("error", (error) => resolveWithError(error, true));
     child.on("error", resolveWithError);
     child.on("close", (code) => {
       if (settled) {
