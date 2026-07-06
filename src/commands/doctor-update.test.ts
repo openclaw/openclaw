@@ -283,6 +283,42 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     );
   });
 
+  it("restarts an owned gateway that stops during the git update", async () => {
+    mockGitCheckout();
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+    });
+    mocks.readGatewayServiceState
+      .mockResolvedValueOnce({
+        installed: true,
+        running: true,
+        env: { OPENCLAW_PROFILE: "work" },
+        command: {
+          programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+        },
+      })
+      .mockResolvedValueOnce({
+        installed: true,
+        running: false,
+        env: { OPENCLAW_PROFILE: "work" },
+        command: {
+          programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+        },
+      });
+
+    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+      updated: true,
+      handled: true,
+    });
+
+    expect(mocks.restartGatewayService).toHaveBeenCalledWith({
+      env: { OPENCLAW_PROFILE: "work" },
+      stdout: process.stdout,
+    });
+  });
+
   it("does not activate or restart a running gateway owned by another checkout", async () => {
     mockGitCheckout();
     mocks.runGatewayUpdate.mockResolvedValue({

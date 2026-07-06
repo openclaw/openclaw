@@ -112,7 +112,9 @@ async function restartRunningGatewayServiceAfterUpdate(
     return true;
   }
   const inspection = await inspectGatewayServiceForUpdate(root);
-  if (!inspection.allowGatewayActivation || !inspection.service || !inspection.state) {
+  // Revalidate ownership after checkout replacement, but restart even when the
+  // previously running service stopped during the update.
+  if (!inspection.allowGatewayServiceRepair || !inspection.service || !inspection.state) {
     return true;
   }
   try {
