@@ -199,6 +199,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Notification policies
   - H2: CLI reference
   - H2: Chat task board (/tasks)
+  - H3: Control UI
   - H2: Status integration (task pressure)
   - H2: Storage and maintenance
   - H3: Where tasks live

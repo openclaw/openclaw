@@ -81,14 +81,24 @@ class ChatControllerCommandControlsTest {
 
       controller.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertEquals(listOf("/model"), controller.commands.value.single().textAliases)
+      assertEquals(
+        listOf("/model"),
+        controller.commands.value
+          .single()
+          .textAliases,
+      )
 
       controller.onDisconnected("gateway closed")
       assertEquals(emptyList<ChatCommandEntry>(), controller.commands.value)
 
       controller.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertEquals(listOf("/model"), controller.commands.value.single().textAliases)
+      assertEquals(
+        listOf("/model"),
+        controller.commands.value
+          .single()
+          .textAliases,
+      )
       assertEquals(2, requests.count { it.first == "commands.list" })
     }
 
@@ -141,11 +151,21 @@ class ChatControllerCommandControlsTest {
 
       controller.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertEquals(listOf("/main"), controller.commands.value.single().textAliases)
+      assertEquals(
+        listOf("/main"),
+        controller.commands.value
+          .single()
+          .textAliases,
+      )
 
       controller.switchSession("agent:ops:dashboard:parent")
       advanceUntilIdle()
-      assertEquals(listOf("/ops"), controller.commands.value.single().textAliases)
+      assertEquals(
+        listOf("/ops"),
+        controller.commands.value
+          .single()
+          .textAliases,
+      )
 
       val commandRequests = requests.filter { it.first == "commands.list" }
       assertTrue(commandRequests.any { it.second.orEmpty().contains("\"agentId\":\"main\"") })
@@ -217,6 +237,276 @@ class ChatControllerCommandControlsTest {
 
       val create = requests.first { it.first == "sessions.create" }
       assertTrue(create.second.orEmpty().contains("\"worktree\":true"))
+    }
+
+  @Test
+  fun sessionMutationsSendGatewayContractsAndRefresh() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            if (method == "sessions.list") """{"sessions":[]}""" else "{}"
+          },
+        )
+
+      controller.patchSession(
+        key = "main",
+        clearLabel = true,
+        clearCategory = true,
+        pinned = true,
+        archived = false,
+        unread = true,
+      )
+      controller.deleteSession("main")
+
+      val patch = requests.first { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"key\":\"main\""))
+      assertTrue(patch.contains("\"label\":null"))
+      assertTrue(patch.contains("\"category\":null"))
+      assertTrue(patch.contains("\"pinned\":true"))
+      assertTrue(patch.contains("\"archived\":false"))
+      assertTrue(patch.contains("\"unread\":true"))
+
+      val delete = requests.first { it.first == "sessions.delete" }.second.orEmpty()
+      assertTrue(delete.contains("\"key\":\"main\""))
+      assertTrue(delete.contains("\"deleteTranscript\":true"))
+      assertEquals(2, requests.count { it.first == "sessions.list" })
+    }
+
+  @Test
+  fun forkSessionReturnsCreatedKeyAndRefreshesActiveSessions() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.create" -> """{"session":{"key":"agent:main:forked"}}"""
+              "sessions.list" -> """{"sessions":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      val key = controller.forkSession("main")
+
+      assertEquals("agent:main:forked", key)
+      val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(create.contains("\"parentSessionKey\":\"main\""))
+      assertTrue(create.contains("\"fork\":true"))
+      // Unqualified parent keys leave agent resolution to the gateway.
+      assertEquals(false, create.contains("\"agentId\""))
+
+      // Agent-qualified parents keep the fork under the parent's agent.
+      controller.forkSession("agent:ops:dashboard:abc")
+      val scopedCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(scopedCreate.contains("\"parentSessionKey\":\"agent:ops:dashboard:abc\""))
+      assertTrue(scopedCreate.contains("\"agentId\":\"ops\""))
+      assertTrue(requests.any { it.first == "sessions.list" })
+      assertEquals(
+        false,
+        requests
+          .last { it.first == "sessions.list" }
+          .second
+          .orEmpty()
+          .contains("\"archived\""),
+      )
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun archivedSessionListAndOpenUnreadSessionUsePatchContracts() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" -> """{"sessions":[{"key":"main","unread":true}]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions(archived = true)
+      advanceUntilIdle()
+      assertTrue(
+        requests
+          .first { it.first == "sessions.list" }
+          .second
+          .orEmpty()
+          .contains("\"archived\":true"),
+      )
+
+      controller.switchSession("main")
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+
+      val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"key\":\"main\""))
+      assertTrue(patch.contains("\"unread\":false"))
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun sessionEventsApplyExplicitLabelAndCategoryClears() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" -> """{"sessions":[{"key":"main","label":"Named","category":"Work"}]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertEquals(
+        "Work",
+        controller.sessions.value
+          .single()
+          .category,
+      )
+
+      // Another client cleared the group and name; the gateway sends explicit nulls.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","label":null,"category":null}}""",
+      )
+      advanceUntilIdle()
+      val merged = controller.sessions.value.single()
+      assertEquals(null, merged.label)
+      assertEquals(null, merged.category)
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun failedReadAcknowledgementUnlatchesForRetry() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      var failPatches = true
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.patch" -> if (failPatches) throw RuntimeException("offline") else "{}"
+              "sessions.list" -> """{"sessions":[{"key":"main","unread":true}]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+      assertEquals(1, requests.count { it.first == "sessions.patch" })
+
+      // The failed acknowledgement unlatched; the next unread snapshot retries.
+      failPatches = false
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(2, requests.count { it.first == "sessions.patch" })
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun archivingOrDeletingTheOpenSessionFallsBackToMain() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" -> """{"sessions":[{"key":"agent:main:side"}]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.switchSession("agent:main:side")
+      advanceUntilIdle()
+      assertEquals("agent:main:side", controller.sessionKey.value)
+
+      controller.patchSession(key = "agent:main:side", archived = true)
+      advanceUntilIdle()
+      assertEquals("main", controller.sessionKey.value)
+
+      controller.switchSession("agent:main:side")
+      advanceUntilIdle()
+      controller.deleteSession("agent:main:side")
+      advanceUntilIdle()
+      assertEquals("main", controller.sessionKey.value)
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun openSessionReacknowledgesUnreadOncePerEpisode() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" -> """{"sessions":[{"key":"main","unread":false}]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+      assertEquals(0, requests.count { it.first == "sessions.patch" })
+
+      // A run completes while the session stays open: the gateway flags it unread again.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(1, requests.count { it.first == "sessions.patch" })
+
+      // Server-confirmed read resets the episode; a stale duplicate must not re-patch.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","unread":false}}""",
+      )
+      advanceUntilIdle()
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(2, requests.count { it.first == "sessions.patch" })
     }
 
   @Test

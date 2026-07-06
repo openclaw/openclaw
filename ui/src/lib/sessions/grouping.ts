@@ -24,6 +24,12 @@ export type SessionRowGroup = {
   rows: GatewaySessionRow[];
 };
 
+export type SidebarSessionSection<Row> = {
+  id: "pinned" | "ungrouped" | `category:${string}`;
+  category?: string;
+  rows: Row[];
+};
+
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
@@ -98,6 +104,42 @@ export function groupSessionRows(params: {
   }
   const ids = orderedGroupIds(params.mode, byId, params.knownCategories ?? []);
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
+}
+
+/** Pinned first, named categories alphabetically, then uncategorized rows. */
+export function groupSidebarSessionRows<Row extends { pinned?: boolean; category?: string | null }>(
+  rows: readonly Row[],
+): SidebarSessionSection<Row>[] {
+  const pinned: Row[] = [];
+  const ungrouped: Row[] = [];
+  const categories = new Map<string, Row[]>();
+  for (const row of rows) {
+    if (row.pinned === true) {
+      pinned.push(row);
+      continue;
+    }
+    const category = row.category?.trim();
+    if (!category) {
+      ungrouped.push(row);
+      continue;
+    }
+    const categoryRows = categories.get(category);
+    if (categoryRows) {
+      categoryRows.push(row);
+    } else {
+      categories.set(category, [row]);
+    }
+  }
+
+  const sections: SidebarSessionSection<Row>[] = [];
+  if (pinned.length > 0) {
+    sections.push({ id: "pinned", rows: pinned });
+  }
+  for (const category of [...categories.keys()].toSorted((a, b) => a.localeCompare(b))) {
+    sections.push({ id: `category:${category}`, category, rows: categories.get(category) ?? [] });
+  }
+  sections.push({ id: "ungrouped", rows: ungrouped });
+  return sections;
 }
 
 function orderedGroupIds(

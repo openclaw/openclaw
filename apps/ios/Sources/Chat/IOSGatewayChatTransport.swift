@@ -29,6 +29,19 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         var includeGlobal: Bool
         var includeUnknown: Bool
         var limit: Int?
+        var archived: Bool?
+    }
+
+    private struct DeleteSessionParams: Codable {
+        var key: String
+        var deleteTranscript: Bool
+        var agentId: String?
+    }
+
+    private struct ForkSessionParams: Codable {
+        var parentSessionKey: String
+        var fork: Bool
+        var agentId: String?
     }
 
     private struct SessionKeyParams: Codable {
@@ -122,8 +135,38 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         max(1, Int(ceil(Double(timeoutMs) / 1000.0)) + 5)
     }
 
-    static func makeListSessionsParamsJSON(limit: Int?) throws -> String {
-        try self.encodeParams(ListSessionsParams(includeGlobal: true, includeUnknown: false, limit: limit))
+    static func makeListSessionsParamsJSON(limit: Int?, archived: Bool = false) throws -> String {
+        try self.encodeParams(ListSessionsParams(
+            includeGlobal: true,
+            includeUnknown: false,
+            limit: limit,
+            archived: archived ? true : nil))
+    }
+
+    static func makePatchSessionParamsJSON(
+        key: String,
+        agentId: String? = nil,
+        label: String?? = nil,
+        category: String?? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        unread: Bool? = nil) throws -> String
+    {
+        var params: [String: Any] = ["key": key]
+        if let agentId { params["agentId"] = agentId }
+        if let label { params["label"] = label ?? NSNull() }
+        if let category { params["category"] = category ?? NSNull() }
+        if let pinned { params["pinned"] = pinned }
+        if let archived { params["archived"] = archived }
+        if let unread { params["unread"] = unread }
+        return try self.encodeJSONObject(params)
+    }
+
+    static func makeForkSessionParamsJSON(parentKey: String, agentId: String? = nil) throws -> String {
+        try self.encodeParams(ForkSessionParams(
+            parentSessionKey: parentKey,
+            fork: true,
+            agentId: agentId))
     }
 
     static func makeChatSendParamsJSON(
@@ -243,6 +286,16 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return json
     }
 
+    private static func encodeJSONObject(_ value: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw EncodingError.invalidValue(
+                value,
+                EncodingError.Context(codingPath: [], debugDescription: "Encoded gateway params were not UTF-8"))
+        }
+        return json
+    }
+
     private func selectedGlobalAgentId(for sessionKey: String) -> String? {
         sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
             ? self.globalAgentId
@@ -275,7 +328,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
-        let json = try Self.makeListSessionsParamsJSON(limit: limit)
+        try await self.listSessions(limit: limit, archived: false)
+    }
+
+    func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
+        let json = try Self.makeListSessionsParamsJSON(limit: limit, archived: archived)
         let res = try await self.gateway.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }
@@ -294,6 +351,41 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             agentId: self.selectedGlobalAgentId(for: sessionKey),
             model: model)
         _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
+    }
+
+    func patchSession(
+        key: String,
+        label: String?? = nil,
+        category: String?? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        unread: Bool? = nil) async throws
+    {
+        let json = try Self.makePatchSessionParamsJSON(
+            key: key,
+            agentId: self.selectedGlobalAgentId(for: key),
+            label: label,
+            category: category,
+            pinned: pinned,
+            archived: archived,
+            unread: unread)
+        _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
+    }
+
+    func deleteSession(key: String) async throws {
+        let json = try Self.encodeParams(DeleteSessionParams(
+            key: key,
+            deleteTranscript: true,
+            agentId: self.selectedGlobalAgentId(for: key)))
+        _ = try await self.gateway.request(method: "sessions.delete", paramsJSON: json, timeoutSeconds: 15)
+    }
+
+    func forkSession(parentKey: String) async throws -> String {
+        let json = try Self.makeForkSessionParamsJSON(
+            parentKey: parentKey,
+            agentId: Self.agentID(fromSessionKey: parentKey) ?? self.selectedGlobalAgentId(for: parentKey))
+        let response = try await self.gateway.request(method: "sessions.create", paramsJSON: json, timeoutSeconds: 15)
+        return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: response).key
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {

@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -28,6 +29,7 @@ import {
   resolveUiConfiguredMainKey,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { refreshSlashCommands } from "./chat-commands.ts";
 import {
@@ -106,6 +108,25 @@ class ChatPage extends LitElement {
   private state: ChatPageHost | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
   private connectionGeneration = 0;
+  private readonly unreadPatchGuard = new SessionUnreadPatchGuard();
+
+  private markSessionRead(row: GatewaySessionRow | undefined) {
+    const state = this.state;
+    if (
+      !state?.connected ||
+      !row ||
+      !this.unreadPatchGuard.shouldPatch(state.sessionKey, row.unread)
+    ) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
+    const guardKey = state.sessionKey;
+    void this.context.sessions.patch(row.key, { unread: false }, { agentId }).catch(() => {
+      // Unlatch so later unread snapshots retry; the session capability
+      // publishes the actionable error for the owning page.
+      this.unreadPatchGuard.patchFailed(guardKey);
+    });
+  }
 
   private applyRouteSessionKey(sessionKey: string) {
     const state = this.state;
@@ -136,6 +157,7 @@ class ChatPage extends LitElement {
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
     resetChatStateForRouteSession(state, nextSessionKey);
+    this.markSessionRead(nextSessionRow);
     this.context.gateway.setSessionKey(nextSessionKey);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
@@ -464,6 +486,7 @@ class ChatPage extends LitElement {
     );
     if (selectedSession) {
       state.selectedChatSessionArchived = selectedSession.archived === true;
+      this.markSessionRead(selectedSession);
     }
     if (selectedSessionDeleted) {
       const agentId =

@@ -88,6 +88,7 @@ export type SessionsProps = {
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
+      unread?: boolean;
       thinkingLevel?: string | null;
       fastMode?: FastMode | null;
       verboseLevel?: string | null;
@@ -100,6 +101,7 @@ export type SessionsProps = {
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
+  onFork: (sessionKey: string) => void | Promise<void>;
   workboardSessionKeys?: Set<string>;
   workboardBusySessionKey?: string | null;
   onAddToWorkboard?: (session: GatewaySessionRow) => void | Promise<void>;
@@ -1151,29 +1153,38 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td class="data-table-key-col">
         <openclaw-tooltip .content=${keyCellTitle}>
           <div class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}>
-            ${canLink
-              ? html`<a
-                  href=${chatUrl}
-                  class="session-link"
-                  @click=${(e: MouseEvent) => {
-                    if (
-                      e.defaultPrevented ||
-                      e.button !== 0 ||
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey
-                    ) {
-                      return;
-                    }
-                    if (props.onNavigateToChat) {
-                      e.preventDefault();
-                      props.onNavigateToChat(row.key);
-                    }
-                  }}
-                  >${friendlyKeyLabel ?? row.key}</a
-                >`
-              : (friendlyKeyLabel ?? row.key)}
+            <span class="session-key-cell__key">
+              ${row.unread === true
+                ? html`<span
+                    class="session-unread-dot session-key-cell__unread"
+                    role="img"
+                    aria-label=${t("sessionsView.unread")}
+                  ></span>`
+                : nothing}
+              ${canLink
+                ? html`<a
+                    href=${chatUrl}
+                    class="session-link"
+                    @click=${(e: MouseEvent) => {
+                      if (
+                        e.defaultPrevented ||
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      ) {
+                        return;
+                      }
+                      if (props.onNavigateToChat) {
+                        e.preventDefault();
+                        props.onNavigateToChat(row.key);
+                      }
+                    }}
+                    >${friendlyKeyLabel ?? row.key}</a
+                  >`
+                : (friendlyKeyLabel ?? row.key)}
+            </span>
             ${showDisplayName
               ? html`<span class="muted session-key-display-name">${displayName}</span>`
               : nothing}
@@ -1302,6 +1313,30 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         </select>
       </td>
       <td>
+        <button
+          class="icon-btn"
+          title=${row.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}
+          aria-label=${row.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}
+          ?disabled=${props.loading}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            props.onPatch(row.key, { unread: row.unread !== true });
+          }}
+        >
+          ${row.unread ? icons.eye : icons.circle}
+        </button>
+        <button
+          class="icon-btn"
+          title=${t("sessionsView.forkSession")}
+          aria-label=${t("sessionsView.forkSession")}
+          ?disabled=${props.loading}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            void props.onFork(row.key);
+          }}
+        >
+          ${icons.copy}
+        </button>
         <button
           class="icon-btn"
           title=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
