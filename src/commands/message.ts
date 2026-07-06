@@ -50,6 +50,7 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
     handledBy: result.handledBy,
     ...(messageId ? { messageId } : {}),
     payload: result.payload,
+    ...("pagination" in result && result.pagination ? { pagination: result.pagination } : {}),
   };
 }
 

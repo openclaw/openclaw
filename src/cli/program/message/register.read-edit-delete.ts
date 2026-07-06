@@ -14,6 +14,7 @@ export function registerMessageReadEditDeleteCommands(
       ),
     )
     .option("--limit <n>", "Result limit")
+    .option("--cursor <token>", "Pagination cursor from previous result")
     .option("--message-id <id>", "Read a specific message id")
     .option("--before <id>", "Read/search before id")
     .option("--after <id>", "Read/search after id")

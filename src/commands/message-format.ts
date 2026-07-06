@@ -7,7 +7,10 @@ import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type {
+  MessageActionPagination,
+  MessageActionRunResult,
+} from "../infra/outbound/message-action-runner.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import { shortenText } from "./text-format.js";
 
@@ -242,28 +245,44 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
 }
 
 /**
- * Emit a muted hint when the provider payload signals more results are available
- * beyond the current page (e.g. hasMore, nextBatch, @odata.nextLink).
+ * Emit a muted hint when the standardized pagination metadata signals more
+ * results are available beyond the current page.
  */
-function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
+function renderPaginationHint(
+  pagination: MessageActionPagination | undefined,
+  muted: (text: string) => string,
+): string | null {
+  if (!pagination?.hasMore) {
+    return null;
+  }
+  const cursorHint = pagination.nextCursor
+    ? ` Use --cursor "${pagination.nextCursor}" for the next page.`
+    : "";
+  return muted(`More results available.${cursorHint}`);
+}
+
+/**
+ * Legacy fallback: emit a muted hint from provider-specific payload fields.
+ * Kept for providers that have not yet migrated to the {@link MessageActionPagination}
+ * contract. Once all list-producing actions normalize through `extractPagination`,
+ * this fallback can be removed.
+ */
+function renderPayloadPaginationHint(
+  payload: unknown,
+  muted: (text: string) => string,
+): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
   const obj = payload as Record<string, unknown>;
   if (obj.hasMore === true) {
-    return muted(
-      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
-    );
+    return muted("More results available.");
   }
   if (typeof obj.nextBatch === "string" && obj.nextBatch) {
-    return muted(
-      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
-    );
+    return muted("More results available.");
   }
   if (typeof obj["@odata.nextLink"] === "string" && obj["@odata.nextLink"]) {
-    return muted(
-      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
-    );
+    return muted("More results available.");
   }
   return null;
 }
@@ -398,7 +417,9 @@ export function formatMessageCliText(
     if (messagesTable) {
       lines.push(heading("Messages"));
       lines.push(messagesTable[0] ?? "");
-      const hint = renderPaginationHint(payload, muted);
+      const hint =
+        renderPaginationHint(result.pagination, muted) ??
+        renderPayloadPaginationHint(payload, muted);
       if (hint) {
         lines.push(hint);
       }
@@ -411,7 +432,9 @@ export function formatMessageCliText(
     if (pinsTable) {
       lines.push(heading("Pinned messages"));
       lines.push(pinsTable[0] ?? "");
-      const hint = renderPaginationHint(payload, muted);
+      const hint =
+        renderPaginationHint(result.pagination, muted) ??
+        renderPayloadPaginationHint(payload, muted);
       if (hint) {
         lines.push(hint);
       }
@@ -420,30 +443,41 @@ export function formatMessageCliText(
   }
 
   if (result.action === "search") {
+    // Discord search nests messages inside results: { results: { messages: [...] } }
     const results = (payload as { results?: unknown }).results;
     const list = extractDiscordSearchResultsMessages(results);
     if (list) {
       lines.push(heading("Search results"));
       lines.push(renderMessageList(list, formatOpts, "No results.")[0] ?? "");
-      // Discord search nests cursor signals (hasMore, total_results) inside
-      // results rather than at the payload top level. Try payload first, then
-      // the nested results object, then a total_results-vs-count comparison
-      // so completed searches (total_results === returned) show no hint.
+      // New standardized path first, then legacy payload hints, then the
+      // Discord-specific total_results-vs-count comparison so completed
+      // searches (total_results === returned) show no hint.
       const hint =
-        renderPaginationHint(payload, muted) ??
-        renderPaginationHint(results, muted) ??
+        renderPaginationHint(result.pagination, muted) ??
+        renderPayloadPaginationHint(results ?? payload, muted) ??
         (() => {
           if (!results || typeof results !== "object") {
             return null;
           }
           const r = results as Record<string, unknown>;
           if (typeof r.total_results === "number" && r.total_results > list.length) {
-            return muted(
-              "More results available. Use --limit to fetch more, or --json for the raw cursor.",
-            );
+            return muted("More results available.");
           }
           return null;
         })();
+      if (hint) {
+        lines.push(hint);
+      }
+      return lines;
+    }
+    // MSTeams search returns messages as a flat array directly in payload
+    const messages = (payload as { messages?: unknown }).messages;
+    if (Array.isArray(messages) && messages.length > 0) {
+      lines.push(heading("Search results"));
+      lines.push(renderMessageList(messages, formatOpts, "No results.")[0] ?? "");
+      const hint =
+        renderPaginationHint(result.pagination, muted) ??
+        renderPayloadPaginationHint(payload, muted);
       if (hint) {
         lines.push(hint);
       }
@@ -459,6 +493,11 @@ export function formatMessageCliText(
     lines.push(...summary);
     lines.push("");
     lines.push(muted("Tip: use --json for full output."));
+  }
+  const hint =
+    renderPaginationHint(result.pagination, muted) ?? renderPayloadPaginationHint(payload, muted);
+  if (hint) {
+    lines.push(hint);
   }
   return lines;
 }

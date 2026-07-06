@@ -245,6 +245,8 @@ export type ListPinsMSTeamsParams = {
 
 export type ListPinsMSTeamsResult = {
   pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
+  /** @odata.nextLink URL when pagination was truncated before exhausting all pages. */
+  "@odata.nextLink"?: string;
 };
 
 /** Maximum number of pagination pages to follow to avoid unbounded loops. */
@@ -297,7 +299,12 @@ export async function listPinsMSTeams(
     pages++;
   }
 
-  return { pins: allPins };
+  return {
+    pins: allPins,
+    // Surface the last nextLink when pagination was truncated so callers can
+    // pick up where this call stopped.
+    ...(pages >= LIST_PINS_MAX_PAGES ? { "@odata.nextLink": res["@odata.nextLink"] } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +480,8 @@ export type SearchMessagesMSTeamsParams = {
   query: string;
   from?: string;
   limit?: number;
+  /** Pagination cursor: the @odata.nextLink URL from a previous search response. */
+  cursor?: string;
 };
 
 export type SearchMessagesMSTeamsResult = {
@@ -482,10 +491,32 @@ export type SearchMessagesMSTeamsResult = {
     from: GraphMessageFrom | undefined;
     createdAt: string | undefined;
   }>;
+  /** @odata.nextLink URL when more results are available. */
+  "@odata.nextLink"?: string;
 };
 
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
+
+/** Allowed Graph API base URLs for cursor validation. */
+const VALID_CURSOR_ORIGINS = [
+  "https://graph.microsoft.com/v1.0/",
+  "https://graph.microsoft.com/beta/",
+];
+
+/**
+ * Validate that a cursor URL targets a known Microsoft Graph API origin
+ * before forwarding auth credentials. Reject everything else closed.
+ */
+function requireValidCursorOrigin(cursor: string): void {
+  const normalized = cursor.trim();
+  if (VALID_CURSOR_ORIGINS.some((origin) => normalized.startsWith(origin))) {
+    return;
+  }
+  throw new Error(
+    `MSTeams cursor must be a Microsoft Graph API URL (v1.0 or beta), got: ${normalized.slice(0, 128)}`,
+  );
+}
 
 /**
  * Search messages in a chat or channel by content via Graph API.
@@ -494,7 +525,42 @@ const SEARCH_MAX_LIMIT = 50;
 export async function searchMessagesMSTeams(
   params: SearchMessagesMSTeamsParams,
 ): Promise<SearchMessagesMSTeamsResult> {
+  // Validate cursor origin before resolving any auth token, so invalid URLs
+  // never carry credentials.
+  if (params.cursor) {
+    requireValidCursorOrigin(params.cursor);
+  }
+
   const token = await resolveGraphToken(params.cfg);
+
+  // Response type widening: Graph responses may carry an @odata.nextLink
+  // pagination cursor when more results exist than fit in one page.
+  type SearchResponse = GraphResponse<GraphMessage> & {
+    "@odata.nextLink"?: string;
+  };
+
+  // When a cursor (@odata.nextLink URL) is provided, fetch from the absolute URL
+  // directly instead of building a new search path. The cursor carries the full
+  // OData query (search, top, filter, skiptoken) from the previous response.
+  if (params.cursor) {
+    const res = await fetchGraphAbsoluteUrl<SearchResponse>({
+      token,
+      url: params.cursor,
+    });
+
+    const messages = (res.value ?? []).map((msg) => ({
+      id: msg.id ?? "",
+      text: msg.body?.content,
+      from: msg.from,
+      createdAt: msg.createdDateTime,
+    }));
+
+    return {
+      messages,
+      ...(res["@odata.nextLink"] ? { "@odata.nextLink": res["@odata.nextLink"] } : {}),
+    };
+  }
+
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
 
@@ -518,7 +584,7 @@ export async function searchMessagesMSTeams(
 
   const path = `${basePath}/messages?${parts.join("&")}`;
   // ConsistencyLevel: eventual is required by Graph API for $search queries
-  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({
+  const res = await fetchGraphJson<SearchResponse>({
     token,
     path,
     headers: { ConsistencyLevel: "eventual" },
@@ -531,5 +597,95 @@ export async function searchMessagesMSTeams(
     createdAt: msg.createdDateTime,
   }));
 
-  return { messages };
+  return {
+    messages,
+    ...(res["@odata.nextLink"] ? { "@odata.nextLink": res["@odata.nextLink"] } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// List messages
+// ---------------------------------------------------------------------------
+
+export type ListMessagesMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  limit?: number;
+  /** Pagination cursor: the @odata.nextLink URL from a previous list response. */
+  cursor?: string;
+};
+
+export type ListMessagesMSTeamsResult = {
+  messages: Array<{
+    id: string;
+    text: string | undefined;
+    from: GraphMessageFrom | undefined;
+    createdAt: string | undefined;
+  }>;
+  "@odata.nextLink"?: string;
+};
+
+const LIST_DEFAULT_LIMIT = 25;
+const LIST_MAX_LIMIT = 50;
+
+/**
+ * List recent messages in a chat or channel via Graph API.
+ * When a cursor (@odata.nextLink URL) is provided, fetches from that absolute
+ * URL directly instead of building a new list path.
+ */
+export async function listMessagesMSTeams(
+  params: ListMessagesMSTeamsParams,
+): Promise<ListMessagesMSTeamsResult> {
+  // Validate cursor origin before resolving any auth token.
+  if (params.cursor) {
+    requireValidCursorOrigin(params.cursor);
+  }
+
+  const token = await resolveGraphToken(params.cfg);
+
+  type ListResponse = GraphResponse<GraphMessage> & {
+    "@odata.nextLink"?: string;
+  };
+
+  if (params.cursor) {
+    const res = await fetchGraphAbsoluteUrl<ListResponse>({
+      token,
+      url: params.cursor,
+    });
+
+    const messages = (res.value ?? []).map((msg) => ({
+      id: msg.id ?? "",
+      text: msg.body?.content,
+      from: msg.from,
+      createdAt: msg.createdDateTime,
+    }));
+
+    return {
+      messages,
+      ...(res["@odata.nextLink"] ? { "@odata.nextLink": res["@odata.nextLink"] } : {}),
+    };
+  }
+
+  const conversationId = await resolveGraphConversationId(params.to);
+  const { basePath } = resolveConversationPath(conversationId);
+
+  const rawLimit = params.limit ?? LIST_DEFAULT_LIMIT;
+  const top = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(Math.floor(rawLimit), 1), LIST_MAX_LIMIT)
+    : LIST_DEFAULT_LIMIT;
+
+  const path = `${basePath}/messages?$top=${top}`;
+  const res = await fetchGraphJson<ListResponse>({ token, path });
+
+  const messages = (res.value ?? []).map((msg) => ({
+    id: msg.id ?? "",
+    text: msg.body?.content,
+    from: msg.from,
+    createdAt: msg.createdDateTime,
+  }));
+
+  return {
+    messages,
+    ...(res["@odata.nextLink"] ? { "@odata.nextLink": res["@odata.nextLink"] } : {}),
+  };
 }

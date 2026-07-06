@@ -137,6 +137,12 @@ export type RunMessageActionParams = {
   abortSignal?: AbortSignal;
 };
 
+/** Standardized pagination metadata surfaced to CLI/agent consumers. */
+export type MessageActionPagination = {
+  hasMore: boolean;
+  nextCursor?: string;
+};
+
 export type MessageActionRunResult =
   | {
       kind: "send";
@@ -186,12 +192,47 @@ export type MessageActionRunResult =
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
+      pagination?: MessageActionPagination;
     };
 
 export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
+}
+
+/**
+ * Extract normalized pagination metadata from a plugin action result's details.
+ * Reads the private {@code _pagination} key inserted by channel handlers,
+ * strips it from details so payload stays clean, and returns the normalized shape.
+ */
+export function extractPagination(
+  handled: { details?: unknown } | null | undefined,
+): MessageActionPagination | undefined {
+  const details = handled?.details;
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const obj = details as Record<string, unknown>;
+  // _pagination is an intentionally private details key — the underscore
+  // prefix signals channel handlers should not rely on it being preserved.
+  // oxlint-disable-next-line eslint/no-underscore-dangle
+  const pg = obj._pagination;
+  // oxlint-disable-next-line eslint/no-underscore-dangle
+  delete obj._pagination;
+  if (!pg || typeof pg !== "object") {
+    return undefined;
+  }
+  const p = pg as Record<string, unknown>;
+  const hasMore = Boolean(p.hasMore);
+  if (!hasMore) {
+    return undefined;
+  }
+  const result: MessageActionPagination = { hasMore };
+  if (typeof p.nextCursor === "string" && p.nextCursor) {
+    result.nextCursor = p.nextCursor;
+  }
+  return result;
 }
 
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
@@ -1443,6 +1484,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
+  const pagination = extractPagination(handled);
   return {
     kind: "action",
     channel,
@@ -1451,6 +1493,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     payload: extractToolPayload(handled),
     toolResult: handled,
     dryRun,
+    ...(pagination ? { pagination } : {}),
   };
 }
 

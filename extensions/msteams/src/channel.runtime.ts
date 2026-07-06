@@ -11,6 +11,7 @@ import {
 import { getMemberInfoMSTeams as getMemberInfoMSTeamsImpl } from "./graph-members.js";
 import {
   getMessageMSTeams as getMessageMSTeamsImpl,
+  listMessagesMSTeams as listMessagesMSTeamsImpl,
   listPinsMSTeams as listPinsMSTeamsImpl,
   listReactionsMSTeams as listReactionsMSTeamsImpl,
   pinMessageMSTeams as pinMessageMSTeamsImpl,
@@ -39,6 +40,7 @@ export const msTeamsChannelRuntime = {
   getMemberInfoMSTeams: getMemberInfoMSTeamsImpl,
   getMessageMSTeams: getMessageMSTeamsImpl,
   listChannelsMSTeams: listChannelsMSTeamsImpl,
+  listMessagesMSTeams: listMessagesMSTeamsImpl,
   listPinsMSTeams: listPinsMSTeamsImpl,
   listReactionsMSTeams: listReactionsMSTeamsImpl,
   pinMessageMSTeams: pinMessageMSTeamsImpl,

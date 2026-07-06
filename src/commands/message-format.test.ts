@@ -1,8 +1,9 @@
 // Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
 import { describe, expect, it } from "vitest";
+import type { MessageActionPagination } from "../infra/outbound/message-action-runner.js";
 import { formatMessageCliText } from "./message-format.js";
 
-function readResultPayload(payload: unknown) {
+function readResultPayload(payload: unknown, pagination?: MessageActionPagination) {
   return {
     kind: "action" as const,
     channel: "matrix" as const,
@@ -10,10 +11,11 @@ function readResultPayload(payload: unknown) {
     handledBy: "plugin" as const,
     payload,
     dryRun: false,
+    ...(pagination ? { pagination } : {}),
   };
 }
 
-function pinsResultPayload(payload: unknown) {
+function pinsResultPayload(payload: unknown, pagination?: MessageActionPagination) {
   return {
     kind: "action" as const,
     channel: "matrix" as const,
@@ -21,10 +23,11 @@ function pinsResultPayload(payload: unknown) {
     handledBy: "plugin" as const,
     payload,
     dryRun: false,
+    ...(pagination ? { pagination } : {}),
   };
 }
 
-function searchResultPayload(payload: unknown) {
+function searchResultPayload(payload: unknown, pagination?: MessageActionPagination) {
   return {
     kind: "action" as const,
     channel: "discord" as const,
@@ -32,6 +35,7 @@ function searchResultPayload(payload: unknown) {
     handledBy: "plugin" as const,
     payload,
     dryRun: false,
+    ...(pagination ? { pagination } : {}),
   };
 }
 
@@ -114,78 +118,59 @@ describe("formatMessageCliText displayLimit", () => {
 });
 
 describe("renderPaginationHint", () => {
-  it("emits hint when payload has hasMore: true", () => {
+  it("emits hint with cursor when pagination.hasMore and nextCursor are set", () => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages, hasMore: true });
+    const result = readResultPayload({ messages }, { hasMore: true, nextCursor: "next-token" });
     const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
     expect(out).toContain("More results available");
+    expect(out).toContain('--cursor "next-token"');
   });
 
-  it("emits hint when payload has nextBatch string", () => {
+  it("emits hint without cursor when pagination.hasMore is true but no nextCursor", () => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({ messages, nextBatch: "token-123" });
+    const result = readResultPayload({ messages }, { hasMore: true });
     const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
     expect(out).toContain("More results available");
+    expect(out).not.toContain("--cursor");
   });
 
-  it("emits hint when payload has @odata.nextLink string", () => {
+  it("emits hint for search action via pagination", () => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    const result = readResultPayload({
-      messages,
-      "@odata.nextLink": "https://graph.microsoft.com/v1.0/next",
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
-  });
-
-  it("emits hint when search results has hasMore without total_results", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    // hasMore: true inside results — Discord does not always include total_results.
     const wrapped = messages.map((m) => [m]);
-    const result = searchResultPayload({
-      results: { messages: wrapped, hasMore: true },
-    });
+    const result = searchResultPayload(
+      { results: { messages: wrapped } },
+      { hasMore: true, nextCursor: "https://graph.microsoft.com/v1.0/..." },
+    );
     const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
     expect(out).toContain("More results available");
   });
 
-  it("emits hint when total_results exceeds returned count (Discord search)", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    // Discord search wraps messages and total_results inside a results object.
-    // total_results: 200 with 1 returned message → 199 more exist.
-    const wrapped = messages.map((m) => [m]);
-    const result = searchResultPayload({
-      results: { messages: wrapped, total_results: 200 },
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).toContain("More results available");
-  });
-
-  it("does NOT emit hint when total_results equals returned count (completed search)", () => {
-    const messages = [
-      msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello"),
-      msg("id-2", "2026-01-01T00:00:01.000Z", "bob", "world"),
-    ];
-    // total_results: 2 with 2 returned messages → search is complete.
-    const wrapped = messages.map((m) => [m]);
-    const result = searchResultPayload({
-      results: { messages: wrapped, total_results: 2 },
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
-
-    expect(out).not.toContain("More results available");
-  });
-
-  it("does NOT emit hint when no pagination signal is present", () => {
+  it("does NOT emit hint when pagination is undefined", () => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
     const result = readResultPayload({ messages });
     const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
     expect(out).not.toContain("More results available");
+  });
+
+  it("does NOT emit hint when pagination.hasMore is false", () => {
+    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
+    const result = readResultPayload({ messages }, { hasMore: false });
+    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
+
+    expect(out).not.toContain("More results available");
+  });
+
+  it("falls back to payload hasMore when pagination is undefined (legacy)", () => {
+    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
+    // no pagination field — fallback reads payload.hasMore
+    const result = readResultPayload({ messages, hasMore: true });
+    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
+
+    expect(out).toContain("More results available");
+    expect(out).not.toContain("--cursor");
   });
 });

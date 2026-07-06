@@ -32,6 +32,7 @@ export function registerMessagePinCommands(message: Command, helpers: MessageCli
         ),
       )
       .option("--limit <n>", "Result limit")
+      .option("--cursor <token>", "Pagination cursor from previous result")
       .action(async (opts) => {
         await helpers.runMessageAction("list-pins", opts);
       }),

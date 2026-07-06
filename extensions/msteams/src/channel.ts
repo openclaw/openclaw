@@ -830,20 +830,52 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
 
           if (ctx.action === "read") {
-            return await runWithRequiredActionMessageTarget({
+            const messageId =
+              typeof ctx.params.messageId === "string" ? ctx.params.messageId.trim() : "";
+            // Single message by id — no pagination needed.
+            if (messageId) {
+              return await runWithRequiredActionMessageTarget({
+                actionLabel: "Read",
+                toolParams: ctx.params,
+                currentChannelId: ctx.toolContext?.currentChannelId,
+                currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+                graphOnly: true,
+                run: async (target) => {
+                  const { getMessageMSTeams } = await loadMSTeamsChannelRuntime();
+                  const message = await getMessageMSTeams({
+                    cfg: ctx.cfg,
+                    to: target.to,
+                    messageId: target.messageId,
+                  });
+                  return jsonMSTeamsOkActionResult("read", { message });
+                },
+              });
+            }
+            // Batch list — supports limit and cursor pagination.
+            return await runWithRequiredActionTarget({
               actionLabel: "Read",
               toolParams: ctx.params,
               currentChannelId: ctx.toolContext?.currentChannelId,
               currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
               graphOnly: true,
-              run: async (target) => {
-                const { getMessageMSTeams } = await loadMSTeamsChannelRuntime();
-                const message = await getMessageMSTeams({
+              run: async (to) => {
+                const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : undefined;
+                const cursor =
+                  typeof ctx.params.cursor === "string" ? ctx.params.cursor.trim() : undefined;
+                const { listMessagesMSTeams } = await loadMSTeamsChannelRuntime();
+                const result = await listMessagesMSTeams({
                   cfg: ctx.cfg,
-                  to: target.to,
-                  messageId: target.messageId,
+                  to,
+                  limit,
+                  cursor: cursor || undefined,
                 });
-                return jsonMSTeamsOkActionResult("read", { message });
+                return jsonMSTeamsOkActionResult("read", {
+                  ...result,
+                  _pagination: {
+                    hasMore: Boolean(result["@odata.nextLink"]),
+                    nextCursor: result["@odata.nextLink"],
+                  },
+                });
               },
             });
           }
@@ -896,7 +928,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               run: async (to) => {
                 const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await listPinsMSTeams({ cfg: ctx.cfg, to });
-                return jsonMSTeamsOkActionResult("list-pins", result);
+                return jsonMSTeamsOkActionResult("list-pins", {
+                  ...result,
+                  _pagination: {
+                    hasMore: Boolean(result["@odata.nextLink"]),
+                    nextCursor: result["@odata.nextLink"],
+                  },
+                });
               },
             });
           }
@@ -989,6 +1027,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : undefined;
                 const from =
                   typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
+                const cursor =
+                  typeof ctx.params.cursor === "string" ? ctx.params.cursor.trim() : undefined;
                 const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();
                 const result = await searchMessagesMSTeams({
                   cfg: ctx.cfg,
@@ -996,8 +1036,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   query,
                   from: from || undefined,
                   limit,
+                  cursor: cursor || undefined,
                 });
-                return jsonMSTeamsOkActionResult("search", result);
+                return jsonMSTeamsOkActionResult("search", {
+                  ...result,
+                  _pagination: {
+                    hasMore: Boolean(result["@odata.nextLink"]),
+                    nextCursor: result["@odata.nextLink"],
+                  },
+                });
               },
             });
           }
@@ -1019,7 +1066,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             }
             const { listChannelsMSTeams } = await loadMSTeamsChannelRuntime();
             const result = await listChannelsMSTeams({ cfg: ctx.cfg, teamId });
-            return jsonMSTeamsOkActionResult("channel-list", result);
+            return jsonMSTeamsOkActionResult("channel-list", {
+              ...result,
+              _pagination: {
+                hasMore: Boolean(result.truncated),
+              },
+            });
           }
 
           if (ctx.action === "channel-info") {
