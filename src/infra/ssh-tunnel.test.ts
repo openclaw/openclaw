@@ -206,22 +206,28 @@ describe("startSshPortForward", () => {
     expect(kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("does not crash when stderr emits a stream error", async () => {
-    vi.useFakeTimers();
-    spawnFakeSshListening();
+  it.each(["active", "teardown"] as const)(
+    "does not crash when stderr errors while the tunnel is %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      spawnFakeSshListening();
 
-    const tunnel = await startSshPortForward({
-      target: "me@example.com:2222",
-      localPortPreferred: 43210,
-      remotePort: 18789,
-      timeoutMs: 1000,
-    });
+      const tunnel = await startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 1000,
+      });
 
-    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
-      stderr: EventEmitter;
-    };
-    child.stderr.emit("error", new Error("stderr EPIPE"));
+      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
+        killed: boolean;
+        stderr: EventEmitter;
+      };
+      const stopping = phase === "teardown" ? tunnel.stop() : undefined;
+      expect(child.killed).toBe(phase === "teardown");
+      expect(() => child.stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
 
-    await expect(tunnel.stop()).resolves.toBeUndefined();
-  });
+      await expect(stopping ?? tunnel.stop()).resolves.toBeUndefined();
+    },
+  );
 });

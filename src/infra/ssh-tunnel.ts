@@ -165,13 +165,15 @@ export async function startSshPortForward(opts: {
   const child = spawn("/usr/bin/ssh", args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk) => {
+  const stderrStream = child.stderr;
+  // Child events own tunnel failure. Keep the diagnostic pipe observed so a
+  // stream error cannot become an uncaught exception during active use or teardown.
+  stderrStream?.on("error", () => {});
+  stderrStream?.setEncoding("utf8");
+  stderrStream?.on("data", (chunk) => {
     const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
-  // The diagnostic pipe can fail independently; child exit remains authoritative.
-  child.stderr?.on("error", () => {});
 
   const stop = async () => {
     if (child.killed || !child.kill("SIGTERM")) {
