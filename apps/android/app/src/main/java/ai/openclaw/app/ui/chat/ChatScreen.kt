@@ -2,7 +2,6 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
-import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -10,6 +9,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
@@ -589,6 +589,7 @@ private fun ChatMessageList(
         when (item) {
           is ChatTimelineItem.Message ->
             ChatBubble(
+              messageId = item.message.id,
               role = item.message.role,
               live = false,
               content = item.message.content,
@@ -604,6 +605,7 @@ private fun ChatMessageList(
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
+              messageId = null,
               role = "assistant",
               live = true,
               content = listOf(ChatMessageContent(text = item.text)),
@@ -759,6 +761,7 @@ private val starterPrompts =
 
 @Composable
 private fun ChatBubble(
+  messageId: String?,
   role: String,
   live: Boolean,
   content: List<ChatMessageContent>,
@@ -815,6 +818,9 @@ private fun ChatBubble(
             } else {
               Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
+          }
+          if (messageId != null) {
+            ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent)
           }
           timestampMs?.let {
             Text(
