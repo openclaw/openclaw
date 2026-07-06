@@ -7,6 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import {
   handleMarkdownCodeBlockCopy,
   highlightCode,
+  markdownFileLinkFromEvent,
   toSanitizedMarkdownHtml,
 } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
@@ -271,6 +272,7 @@ function renderFileSidebarContent(
   );
   const absolutePath = absoluteFilePath(content);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
+  const gutterDigits = String(Math.max(content.content.split("\n").length, 1)).length;
   return html`
     <section class="sidebar-file-view">
       <div class="sidebar-file-view__path-bar">
@@ -405,7 +407,9 @@ function renderFileSidebarContent(
             </div>
           `
         : nothing}
-      <div class="file-view">${unsafeHTML(highlightedLines)}</div>
+      <div class="file-view" style="--file-view-ln-digits: ${gutterDigits}">
+        ${unsafeHTML(highlightedLines)}
+      </div>
       <div class="sidebar-file-view__footer">
         <button @click=${onViewRawText} class="btn btn--sm" type="button">View Raw Text</button>
       </div>
@@ -435,7 +439,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
-      ? toSanitizedMarkdownHtml(content.content)
+      ? toSanitizedMarkdownHtml(content.content, { fileLinks: true })
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
@@ -584,6 +588,9 @@ export class ChatDetailPanel extends LitElement {
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
+  @property({ attribute: false }) onOpenWorkspaceFile?:
+    | ((target: { path: string; line?: number | null }) => void)
+    | null = null;
   @property({ attribute: false }) onRevealInWorkspace?: ((path: string) => void) | null = null;
 
   @state() private visibleContent: SidebarContent | null = null;
@@ -823,13 +830,21 @@ export class ChatDetailPanel extends LitElement {
     this.error = null;
   };
 
+  private readonly handlePanelClick = (event: Event) => {
+    handleMarkdownCodeBlockCopy(event);
+    const target = markdownFileLinkFromEvent(event);
+    if (target) {
+      this.onOpenWorkspaceFile?.(target);
+    }
+  };
+
   override render() {
     const matches = this.fileSearchMatches();
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
     return html`
-      <div @click=${handleMarkdownCodeBlockCopy}>
+      <div @click=${this.handlePanelClick}>
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,

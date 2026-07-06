@@ -675,7 +675,9 @@
 
 .file-view__line {
   display: grid;
-  grid-template-columns: minmax(3.5ch, auto) max-content;
+  /* Fixed gutter width (digit count set per file): an auto gutter column would
+     absorb free space on short lines and indent their code past longer lines. */
+  grid-template-columns: calc(var(--file-view-ln-digits, 3) * 1ch + 18px) max-content;
   min-width: max-content;
 }
 
@@ -695,7 +697,6 @@
   position: sticky;
   left: 0;
   z-index: 1;
-  min-width: 3.5ch;
   padding: 0 10px 0 8px;
   color: var(--muted);
   background: var(--panel);

@@ -375,6 +375,7 @@ export function renderChat(props: ChatProps) {
                     .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
                     .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
                     .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
+                    .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
                   ></openclaw-chat-detail-panel>
