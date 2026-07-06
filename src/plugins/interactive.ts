@@ -44,7 +44,7 @@ function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: strin
   // through live owners so a replaced or released registry cannot keep executing.
   for (const registry of collectLivePluginRegistries()) {
     const match = resolvePluginInteractiveRegistrationsMatch(
-      registry.interactiveHandlers ?? [],
+      registry.interactiveHandlers,
       channel,
       data,
     );

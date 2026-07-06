@@ -2088,6 +2088,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
+      initialAcquireSignal: params.abortSignal,
       lockOptions: {
         sessionFile: params.sessionFile,
         ...sessionWriteLockOptions,
@@ -2123,6 +2124,9 @@ export async function runEmbeddedAttempt(
         sessionLockController.withSessionWriteLock(operation),
       );
     armExternalAbortSignal();
+    // The signal can fire while the eager session lock is being acquired.
+    // Recheck after arming so a stopped run never reaches session creation or provider prompt.
+    await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
 
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
