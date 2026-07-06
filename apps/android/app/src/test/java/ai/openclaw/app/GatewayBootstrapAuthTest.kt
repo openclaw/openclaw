@@ -919,20 +919,25 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
-    runBlocking {
+    runTest {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-      val runtime = NodeRuntime(app)
+      val runtime = createTestRuntime(app)
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
 
-      val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
-
-      assertEquals("UNAVAILABLE", result.error?.code)
-      assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
-      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
-      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
-      assertFalse(talkMode.ttsOnAllResponses)
+        assertEquals("UNAVAILABLE", result.error?.code)
+        assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+        val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+        assertFalse(talkMode.ttsOnAllResponses)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
@@ -940,7 +945,7 @@ class GatewayBootstrapAuthTest {
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-      val runtime = NodeRuntime(app)
+      val runtime = createTestRuntime(app)
       runtime.setForeground(false)
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
 
@@ -956,7 +961,7 @@ class GatewayBootstrapAuthTest {
   fun staleTalkPttCleanupPreservesNewerManualMicOwnership() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-    val runtime = NodeRuntime(app)
+    val runtime = createTestRuntime(app)
     val ownershipEpoch = readField<AtomicLong>(runtime, "voiceCaptureOwnershipEpoch")
     ownershipEpoch.set(41L)
 
@@ -970,22 +975,27 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun talkPttOnceRetryPreservesCaptureCleanupOwnership() =
-    runBlocking {
+    runTest {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-      val runtime = NodeRuntime(app)
+      val runtime = createTestRuntime(app)
       val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
       writeField(talkMode, "activePttCaptureId", "capture-1")
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val retry = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
+        assertNull(retry.error)
+        assertTrue(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
 
-      val retry = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
-      assertNull(retry.error)
-      assertTrue(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
-
-      val cancel = dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
-      assertNull(cancel.error)
-      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+        val cancel = dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
+        assertNull(cancel.error)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
@@ -994,12 +1004,7 @@ class GatewayBootstrapAuthTest {
     runTest {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-      val securePrefs =
-        app.getSharedPreferences(
-          "openclaw.node.secure.test.${UUID.randomUUID()}",
-          android.content.Context.MODE_PRIVATE,
-        )
-      val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+      val runtime = createTestRuntime(app)
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
       val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
@@ -1027,7 +1032,7 @@ class GatewayBootstrapAuthTest {
   fun sameManualMicModeReassertsCaptureAndInvalidatesPendingPtt() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-    val runtime = NodeRuntime(app)
+    val runtime = createTestRuntime(app)
     runtime.setMicEnabled(true)
     val commandEpoch = readField<AtomicLong>(runtime, "talkPttCommandEpoch")
     val epochBeforeReassertion = commandEpoch.get()
@@ -1048,7 +1053,7 @@ class GatewayBootstrapAuthTest {
   fun sameTalkModeReassertionStopsManualMicCapture() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-    val runtime = NodeRuntime(app)
+    val runtime = createTestRuntime(app)
     runtime.setTalkModeEnabled(true)
     val micCapture = readField<Lazy<MicCaptureManager>>(runtime, "micCapture\$delegate").value
     micCapture.setMicEnabled(true)
@@ -1064,7 +1069,7 @@ class GatewayBootstrapAuthTest {
   @Test
   fun backgroundingStopsTalkModeCapture() {
     val app = RuntimeEnvironment.getApplication()
-    val runtime = NodeRuntime(app)
+    val runtime = createTestRuntime(app)
     val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
     readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
     readField<MutableStateFlow<Boolean>>(talkMode, "_isEnabled").value = true
@@ -1087,7 +1092,7 @@ class GatewayBootstrapAuthTest {
   fun backgroundingStopsGatewayPttWhenVoiceModeIsOff() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-    val runtime = NodeRuntime(app)
+    val runtime = createTestRuntime(app)
     val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
     writeField(talkMode, "activePttCaptureId", "capture-1")
     readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
@@ -1107,6 +1112,15 @@ class GatewayBootstrapAuthTest {
       Thread.sleep(10)
     }
     error("Expected pending gateway trust prompt")
+  }
+
+  private fun createTestRuntime(app: android.app.Application): NodeRuntime {
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
   }
 
   private fun waitForStatusText(runtime: NodeRuntime): String {
