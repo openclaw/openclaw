@@ -620,7 +620,6 @@ export async function activateSetupInference(
       if (ensured.required) {
         const updateConfig =
           deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-        const { enablePluginInConfig } = await import("../plugins/enable.js");
         await updateConfig((current) => enablePluginInConfig(current, "codex").config);
       }
     }

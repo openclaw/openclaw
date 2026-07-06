@@ -368,7 +368,8 @@ describe("activateSetupInference", () => {
         opts: { githubCopilotToken?: unknown };
         config: OpenClawConfig;
       }) => {
-        const token = String(ctx.opts.githubCopilotToken ?? "");
+        const token =
+          typeof ctx.opts.githubCopilotToken === "string" ? ctx.opts.githubCopilotToken : "";
         await upsertAuthProfileWithLock({
           profileId: "github-copilot:github",
           credential: { type: "token", provider: "github-copilot", token },
