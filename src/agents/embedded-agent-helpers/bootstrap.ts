@@ -105,7 +105,6 @@ const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
 const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
-const AGENTS_POLICY_DIGEST_CACHE_LIMIT = 16;
 
 type TrimBootstrapResult = {
   content: string;
@@ -119,7 +118,12 @@ type PolicyDigest = {
   omittedLines: number;
 };
 
-const agentsPolicyDigestCache = new Map<string, PolicyDigest>();
+let lastAgentsPolicyDigestCache:
+  | {
+      key: string;
+      digest: PolicyDigest;
+    }
+  | undefined;
 
 export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
   const raw =
@@ -184,15 +188,7 @@ function agentsPolicyDigestCacheKey(content: string, budget: number): string {
 }
 
 function rememberAgentsPolicyDigest(key: string, digest: PolicyDigest): PolicyDigest {
-  agentsPolicyDigestCache.delete(key);
-  agentsPolicyDigestCache.set(key, digest);
-  while (agentsPolicyDigestCache.size > AGENTS_POLICY_DIGEST_CACHE_LIMIT) {
-    const oldestKey = agentsPolicyDigestCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    agentsPolicyDigestCache.delete(oldestKey);
-  }
+  lastAgentsPolicyDigestCache = { key, digest };
   return digest;
 }
 
@@ -202,9 +198,8 @@ function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest 
   }
 
   const cacheKey = agentsPolicyDigestCacheKey(content, budget);
-  const cached = agentsPolicyDigestCache.get(cacheKey);
-  if (cached) {
-    return cached;
+  if (lastAgentsPolicyDigestCache?.key === cacheKey) {
+    return lastAgentsPolicyDigestCache.digest;
   }
 
   const candidates = content

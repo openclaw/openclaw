@@ -404,13 +404,17 @@ describe("prepareSessionManagerForRun", () => {
     expect(sessionManager.flushed).toBe(true);
   });
 
-  it("does not truncate when the first non-empty header is beyond the scan cap", async () => {
+  it("resets when the first non-empty header is beyond the old scan cap", async () => {
     const sessionFile = await makeTempFile();
     const blankPrefix = " \n".repeat(33_000);
     const originalTranscript =
       blankPrefix +
       [
-        '{"type":"session","id":"broken"',
+        JSON.stringify({
+          type: "session",
+          id: "fresh-session",
+          cwd: "/srv/openclaw/main",
+        }),
         JSON.stringify({
           type: "message",
           id: "user-1",
@@ -441,18 +445,26 @@ describe("prepareSessionManagerForRun", () => {
       leafId: "user-1",
     };
 
-    await expect(
-      prepareSessionManagerForRun({
-        sessionManager,
-        sessionFile,
-        hadSessionFile: true,
-        sessionId: "new-session",
-        cwd: "/tmp/task-repo",
-      }),
-    ).rejects.toThrow("Refusing to reset session transcript before finding a readable header");
+    await prepareSessionManagerForRun({
+      sessionManager,
+      sessionFile,
+      hadSessionFile: true,
+      sessionId: "new-session",
+      cwd: "/tmp/task-repo",
+    });
 
-    expect(await fs.readFile(sessionFile, "utf-8")).toBe(originalTranscript);
-    expect(sessionManager.flushed).toBe(true);
+    expect(await fs.readFile(sessionFile, "utf-8")).toBe("");
+    expect(sessionManager.fileEntries).toEqual([
+      {
+        type: "session",
+        id: "new-session",
+        cwd: "/tmp/task-repo",
+      },
+    ]);
+    expect(sessionManager.byId.size).toBe(0);
+    expect(sessionManager.labelsById.size).toBe(0);
+    expect(sessionManager.leafId).toBeNull();
+    expect(sessionManager.flushed).toBe(false);
   });
 
   it("keeps recovered user-only transcripts through open and run preparation", async () => {

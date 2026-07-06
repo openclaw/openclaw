@@ -2,6 +2,7 @@
  * Prepares session managers and transcript state before embedded runs.
  */
 import fs from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
@@ -15,62 +16,62 @@ type SessionHeaderEntry = {
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
 const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
-const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 
-type SessionFileHeaderRead = {
-  firstLine?: string;
-  cappedBeforeFirstLine: boolean;
-};
-
-async function readFirstSessionFileLine(sessionFile: string): Promise<SessionFileHeaderRead> {
+async function readFirstSessionFileLine(sessionFile: string): Promise<string | undefined> {
   const handle = await fs.open(sessionFile, "r");
   try {
-    const chunks: string[] = [];
-    let totalBytes = 0;
-    while (totalBytes < MAX_SESSION_HEADER_BYTES) {
-      const buffer = Buffer.alloc(
-        Math.min(SESSION_HEADER_READ_CHUNK_BYTES, MAX_SESSION_HEADER_BYTES - totalBytes),
-      );
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, totalBytes);
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.alloc(SESSION_HEADER_READ_CHUNK_BYTES);
+    let line = "";
+    let lineHasContent = false;
+
+    const scanText = (text: string): string | undefined => {
+      let start = 0;
+      while (start <= text.length) {
+        const newlineIndex = text.indexOf("\n", start);
+        const segment = newlineIndex === -1 ? text.slice(start) : text.slice(start, newlineIndex);
+        if (lineHasContent) {
+          line += segment;
+        } else {
+          const trimmedStart = segment.trimStart();
+          if (trimmedStart.length > 0) {
+            lineHasContent = true;
+            line = trimmedStart;
+          }
+        }
+        if (newlineIndex === -1) {
+          break;
+        }
+        if (lineHasContent) {
+          return line.trim();
+        }
+        start = newlineIndex + 1;
+      }
+      return undefined;
+    };
+
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead === 0) {
         break;
       }
-      chunks.push(buffer.toString("utf-8", 0, bytesRead));
-      const nextTotalBytes = totalBytes + bytesRead;
-      const readEnd = bytesRead < buffer.length || nextTotalBytes >= MAX_SESSION_HEADER_BYTES;
-      const scannedText = chunks.join("");
-      const lines = scannedText.split(/\r?\n/u);
-      const hasCompleteLine = lines.length > 1;
-      const linesToScan = hasCompleteLine ? lines.slice(0, -1) : readEnd ? lines : [];
-      for (const line of linesToScan) {
-        const trimmed = line.trim();
-        if (trimmed) {
-          return { firstLine: trimmed, cappedBeforeFirstLine: false };
-        }
-      }
-      totalBytes = nextTotalBytes;
-      if (totalBytes >= MAX_SESSION_HEADER_BYTES) {
-        return { cappedBeforeFirstLine: true };
+      const firstLine = scanText(decoder.write(buffer.subarray(0, bytesRead)));
+      if (firstLine) {
+        return firstLine;
       }
     }
-    const firstLine = chunks
-      .join("")
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .find((line) => line.length > 0);
-    return { firstLine, cappedBeforeFirstLine: false };
+    const trailingLine = scanText(decoder.end());
+    if (trailingLine) {
+      return trailingLine;
+    }
+    return lineHasContent ? line.trim() : undefined;
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
 async function assertExistingHeaderIsReadable(sessionFile: string): Promise<void> {
-  const { firstLine, cappedBeforeFirstLine } = await readFirstSessionFileLine(sessionFile);
-  if (cappedBeforeFirstLine) {
-    throw new Error(
-      `Refusing to reset session transcript before finding a readable header: ${sessionFile}`,
-    );
-  }
+  const firstLine = await readFirstSessionFileLine(sessionFile);
   if (!firstLine) {
     return;
   }
