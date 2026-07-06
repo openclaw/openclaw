@@ -736,7 +736,10 @@ export class ChatDetailPanel extends LitElement {
 
   private readonly openInEditor = (editor: "cursor" | "vscode" | "windsurf" | "zed") => {
     const content = this.visibleContent;
-    const absPath = content?.kind === "file" ? absoluteFilePath(content) : null;
+    if (content?.kind !== "file") {
+      return;
+    }
+    const absPath = absoluteFilePath(content);
     if (!absPath) {
       return;
     }

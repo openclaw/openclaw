@@ -235,6 +235,7 @@ function loadWorkspace(
       }
       const fileItems = files?.files ?? [];
       const artifactItems = artifacts?.artifacts ?? [];
+      const browserItems = files?.browser?.entries ?? [];
       current.list = {
         sessionKey,
         ...(files?.root ? { root: files.root } : {}),
@@ -245,6 +246,7 @@ function loadWorkspace(
       if (
         current.activeId &&
         !fileItems.some((file) => `file:${file.path}` === current.activeId) &&
+        !browserItems.some((entry) => `file:${entry.path}` === current.activeId) &&
         !artifactItems.some((artifact) => `artifact:${artifact.id}` === current.activeId)
       ) {
         current.activeId = null;
