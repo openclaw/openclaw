@@ -43,4 +43,15 @@ describe("crypto digest helpers", () => {
       await expect(sha256File(filePath)).resolves.toBe(HOSTILE_BYTES_SHA256);
     });
   });
+
+  it("throws a wrapped error when the file stream fails mid-read", async () => {
+    await withTempDir({ prefix: "openclaw-crypto-digest-" }, async (dir) => {
+      const filePath = path.join(dir, "not-a-file");
+      await fs.mkdir(filePath);
+
+      await expect(sha256File(filePath)).rejects.toThrow(
+        /EISDIR|is a directory|Failed to hash file/,
+      );
+    });
+  });
 });
