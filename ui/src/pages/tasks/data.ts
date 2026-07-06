@@ -169,6 +169,29 @@ export function mergeTaskLists(...lists: readonly (readonly TaskSummary[])[]): T
   return sortTasks([...byId.values()]);
 }
 
+export type TasksCancelResult = {
+  found: boolean;
+  cancelled: boolean;
+  reason?: string;
+  task?: TaskSummary;
+};
+
+// Cancellation refusals (already-terminal, missing handle, stale id) arrive as
+// successful responses with cancelled=false + reason, not thrown errors.
+export function normalizeTasksCancelResult(value: unknown): TasksCancelResult | null {
+  if (!isRecord(value) || typeof value.cancelled !== "boolean") {
+    return null;
+  }
+  const reason = optionalString(value.reason);
+  const task = normalizeTaskSummary(value.task);
+  return {
+    found: value.found === true,
+    cancelled: value.cancelled,
+    ...(reason ? { reason } : {}),
+    ...(task ? { task } : {}),
+  };
+}
+
 export function normalizeTaskEventPayload(value: unknown): TaskEventPayload | null {
   if (!isRecord(value)) {
     return null;

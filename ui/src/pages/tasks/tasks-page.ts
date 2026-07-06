@@ -10,8 +10,8 @@ import { searchForSession } from "../../lib/sessions/index.ts";
 import {
   applyTaskEvent,
   mergeTaskLists,
+  normalizeTasksCancelResult,
   normalizeTasksListResult,
-  normalizeTaskSummary,
   type TaskSummary,
 } from "./data.ts";
 import { renderTasks } from "./view.ts";
@@ -135,11 +135,14 @@ export class TasksPage extends LitElement {
     this.error = null;
     try {
       const payload = await client.request("tasks.cancel", { taskId });
-      if (typeof payload === "object" && payload !== null && "task" in payload) {
-        const task = normalizeTaskSummary(payload.task);
-        if (task) {
-          this.tasks = applyTaskEvent(this.tasks, { action: "upserted", task }).tasks;
-        }
+      const result = normalizeTasksCancelResult(payload);
+      if (result?.task) {
+        this.tasks = applyTaskEvent(this.tasks, { action: "upserted", task: result.task }).tasks;
+      }
+      // Refusals (already terminal, stale id, no cancellation handle) are
+      // successful responses with cancelled=false; surface them like errors.
+      if (!result?.cancelled) {
+        this.error = result?.reason?.trim() || t("tasksPage.cancelFailed");
       }
     } catch (error) {
       this.error = formatTaskError(error, t("tasksPage.cancelFailed"));

@@ -3,6 +3,7 @@ import {
   applyTaskEvent,
   mergeTaskLists,
   normalizeTaskSummary,
+  normalizeTasksCancelResult,
   normalizeTasksListResult,
   partitionTasks,
   sortTasks,
@@ -74,6 +75,28 @@ describe("tasks page data", () => {
     const merged = mergeTaskLists(recentPage, activePage);
     expect(merged.map((entry) => entry.id)).toEqual(["new-terminal", "shared", "old-running"]);
     expect(merged.find((entry) => entry.id === "shared")?.updatedAt).toBe(850);
+  });
+
+  it("normalizes cancel results including refusals with reasons", () => {
+    expect(
+      normalizeTasksCancelResult({
+        found: true,
+        cancelled: false,
+        reason: "task already finished",
+        task: { id: "task-1", taskId: "task-1", status: "completed" },
+      }),
+    ).toEqual({
+      found: true,
+      cancelled: false,
+      reason: "task already finished",
+      task: { id: "task-1", taskId: "task-1", status: "completed" },
+    });
+    expect(normalizeTasksCancelResult({ found: true, cancelled: true })).toEqual({
+      found: true,
+      cancelled: true,
+    });
+    expect(normalizeTasksCancelResult({ found: true })).toBeNull();
+    expect(normalizeTasksCancelResult("nope")).toBeNull();
   });
 
   it("merges upserts, applies deletes, and requests refetches for restored events", () => {
