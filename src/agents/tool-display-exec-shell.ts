@@ -268,10 +268,121 @@ function scanTopLevelChars(
       continue;
     }
 
+    // Heredoc redirect: find the delimiter word, then skip the body until
+    // the terminator line. This prevents `;`, `&&`, `||`, `|` inside
+    // heredoc bodies from being treated as top-level stage/pipeline
+    // separators.
+    if (char === "<" && command[i + 1] === "<") {
+      i = skipHeredocBody(command, i + 2);
+      continue;
+    }
+
     if (visit(char, i) === false) {
       return;
     }
   }
+}
+
+/** Extract the heredoc delimiter from a `<<` operator at `redirectPos`.
+ *  Returns the delimiter word, whether it was quoted, and the index of the
+ *  first body character. Returns undefined if the delimiter is unparseable. */
+function parseHeredocDelimiter(
+  command: string,
+  redirectPos: number,
+): { delimiter: string; quoted: boolean; bodyStart: number } | undefined {
+  let pos = redirectPos;
+  const len = command.length;
+
+  // Skip optional `-` (strip-leading-tabs marker).
+  if (pos < len && command[pos] === "-") {
+    pos += 1;
+  }
+
+  // Skip whitespace.
+  while (pos < len && (command[pos] === " " || command[pos] === "\t")) {
+    pos += 1;
+  }
+
+  if (pos >= len) {
+    return undefined;
+  }
+
+  // Quoted delimiter — suppresses expansion like a single-quoted string.
+  if (command[pos] === "'" || command[pos] === '"') {
+    const quoteChar = command[pos];
+    pos += 1;
+    const start = pos;
+    while (pos < len && command[pos] !== quoteChar) {
+      pos += 1;
+    }
+    const delimiter = command.slice(start, pos);
+    if (pos < len) {
+      pos += 1;
+    } // skip closing quote
+    const bodyStart = skipToNextLine(command, pos);
+    return { delimiter, quoted: true, bodyStart };
+  }
+
+  // Unquoted delimiter — ends at whitespace/newline.
+  const start = pos;
+  while (pos < len && command[pos] !== " " && command[pos] !== "\t" && command[pos] !== "\n") {
+    pos += 1;
+  }
+  const delimiter = command.slice(start, pos);
+  const bodyStart = skipToNextLine(command, pos);
+  return { delimiter, quoted: false, bodyStart };
+}
+
+/** Skip to the first character of the next line (past whitespace + newline). */
+function skipToNextLine(command: string, offset: number): number {
+  let pos = offset;
+  while (pos < command.length && (command[pos] === " " || command[pos] === "\t")) {
+    pos += 1;
+  }
+  if (pos < command.length && command[pos] === "\n") {
+    pos += 1;
+  }
+  return pos;
+}
+
+/**
+ * Skip past a heredoc body, returning the index just after the terminator
+ * line. If the delimiter is never found, returns the original `redirectEnd`
+ * so the caller falls back to treating the redirect as opaque.
+ */
+function skipHeredocBody(command: string, redirectEnd: number): number {
+  const delim = parseHeredocDelimiter(command, redirectEnd);
+  if (!delim || delim.delimiter.length === 0) {
+    return redirectEnd;
+  }
+
+  let idx = delim.bodyStart;
+  const len = command.length;
+
+  while (idx < len) {
+    // Walk to the next newline.
+    const lineStart = idx;
+    let lineEnd = idx;
+    while (lineEnd < len && command[lineEnd] !== "\n") {
+      lineEnd += 1;
+    }
+    const afterNewline = lineEnd < len ? lineEnd + 1 : lineEnd;
+
+    // Trim leading tabs (heredoc strip-tabs mode).
+    let contentStart = lineStart;
+    while (contentStart < lineEnd && command[contentStart] === "\t") {
+      contentStart += 1;
+    }
+
+    const lineContent = command.slice(contentStart, lineEnd);
+    if (lineContent === delim.delimiter) {
+      return afterNewline;
+    }
+
+    idx = afterNewline;
+  }
+
+  return redirectEnd; // terminator not found — don't skip
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
