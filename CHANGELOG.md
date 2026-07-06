@@ -36,7 +36,6 @@ Docs: https://docs.openclaw.ai
 - **iOS development app identity:** keep the development app labeled OpenClaw while using its distinct debug icon to differentiate it from release builds.
 - **iOS QR gateway handoff:** stop VisionKit before delivering scanned setup codes, and keep deferred auth, approval, Watch, and foreground-node work bound to its originating gateway across reconnects. (#99572) Thanks @PollyBot13.
 - **Agent terminal failures:** surface a safe interactive reply when an agent run ends without visible output, while preserving completed message-tool delivery and heartbeat-specific guidance. (#99304) Thanks @moeedahmed.
-- **Claude CLI streamed replies:** preserve assistant text already received from Claude CLI when its terminal result envelope is empty, preventing false empty-response failover after a complete streamed answer. (#90450) Thanks @totobusnello.
 - **MCP loopback tool results:** preserve schema-valid text, image, and embedded-resource content through HTTP tool calls while rendering malformed or protocol-incompatible blocks as safe text. (#100336) Thanks @tzy-17.
 - **Control UI tool-result images:** render direct image content blocks from Gateway history and make the delayed-send scroll E2E setup deterministic. (#100295) Thanks @lzyyzznl.
 - **Plugin approval diagnostics:** distinguish request validation rejections, expired wait decisions, and unavailable Gateways while keeping approval failures fail-closed. (#100337) Thanks @tzy-17.
