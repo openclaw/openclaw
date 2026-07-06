@@ -1,0 +1,24 @@
+{
+  "format": "openclaw-snes-level-contract-v1",
+  "projectSpecific": false,
+  "levelId": "generic-level-001",
+  "template": "platformer",
+  "spawn": { "x": 16, "y": 160 },
+  "goal": { "x": 2048, "y": 144 },
+  "tilemapLayers": [
+    { "id": "foreground", "width": 128, "height": 14, "tileSize": 16 }
+  ],
+  "collisionGrid": [
+    "................................................................",
+    "################################################################"
+  ],
+  "objects": [
+    { "id": "enemy-001", "type": "enemy", "x": 256, "y": 160 },
+    { "id": "item-001", "type": "item", "x": 384, "y": 128 },
+    { "id": "checkpoint-001", "type": "checkpoint", "x": 1024, "y": 144 }
+  ],
+  "runtimeProofRequired": true,
+  "hostedGlmUsed": false,
+  "commercialMaterialUsed": false,
+  "fxpakWritePerformed": false
+}

@@ -1,0 +1,47 @@
+{
+  "format": "openclaw-snes-asset-pipeline-v1",
+  "projectSpecific": false,
+  "hostedGlmUsed": false,
+  "commercialMaterialUsed": false,
+  "fxpakWritePerformed": false,
+  "stages": {
+    "assetIntent": {
+      "assetId": "generic_hero_walk",
+      "kind": "sprite",
+      "dimensions": "32x32",
+      "frames": 6,
+      "paletteLimit": 16,
+      "mustShow": ["readable silhouette", "two-frame leg motion"],
+      "mustNotShow": ["placeholder rectangle", "licensed character"],
+      "animationBeats": ["left foot", "right foot"],
+      "production": true,
+      "runtimeProofRequired": true,
+      "humanVisualTarget": 90
+    },
+    "sourcePreservation": {
+      "status": "planned",
+      "sourceSha256": "source-sha-placeholder"
+    },
+    "indexedConversion": {
+      "status": "planned",
+      "paletteIndexRange": "0-15"
+    },
+    "contactSheet": {
+      "status": "planned",
+      "required": true
+    },
+    "qualityValidation": {
+      "status": "planned",
+      "blankFrameDetection": true,
+      "duplicateFrameDetection": true
+    },
+    "runtimeUse": {
+      "status": "planned",
+      "runtimeProofRequired": true
+    },
+    "humanApprovalQueue": {
+      "status": "planned",
+      "requiredForProduction": true
+    }
+  }
+}

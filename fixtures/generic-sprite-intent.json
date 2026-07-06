@@ -1,0 +1,13 @@
+{
+  "assetId": "generic_hero_walk",
+  "kind": "sprite",
+  "dimensions": "32x32",
+  "frames": 6,
+  "paletteLimit": 16,
+  "mustShow": ["readable silhouette", "two-frame leg motion"],
+  "mustNotShow": ["placeholder rectangle", "licensed character"],
+  "animationBeats": ["left foot", "right foot"],
+  "production": true,
+  "runtimeProofRequired": true,
+  "humanVisualTarget": 90
+}
