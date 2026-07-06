@@ -7,7 +7,7 @@ describe("github-copilot provider-policy-api", () => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
-        modelId: "claude-opus-4.6",
+        modelId: "claude-sonnet-4.6",
       })?.levels.map((level) => level.id),
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });

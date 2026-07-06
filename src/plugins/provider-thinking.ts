@@ -1,7 +1,6 @@
 // Resolves provider thinking-level policy from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
-import { resolveProviderRuntimePlugin } from "./provider-runtime.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -87,16 +86,7 @@ export function resolveProviderThinkingProfile(
   if (activeProfile !== undefined) {
     return activeProfile;
   }
-  const bundledProfile = resolveBundledProviderPolicySurface(
-    params.provider,
-  )?.resolveThinkingProfile?.(params.context);
-  if (bundledProfile !== undefined) {
-    return bundledProfile;
-  }
-  // Fall back to the runtime plugin registry for providers that register
-  // thinking hooks through the SDK (e.g. github-copilot) rather than the
-  // legacy PLUGIN_REGISTRY_STATE path.
-  return resolveProviderRuntimePlugin({ provider: params.provider })?.resolveThinkingProfile?.(
+  return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(
     params.context,
   );
 }

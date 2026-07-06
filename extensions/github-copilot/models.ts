@@ -93,16 +93,17 @@ export function resolveCopilotForwardCompatModel(
   // model isn't available on the user's plan. This lets new models be used
   // by simply adding them to agents.defaults.models in openclaw.json — no
   // code change required.
+  const api = resolveCopilotTransportApi(trimmedModelId);
   const reasoning =
     /^o[13](\b|$)/.test(lowerModelId) ||
     isCopilotCodexModelId(lowerModelId) ||
-    resolveCopilotTransportApi(trimmedModelId) === "anthropic-messages";
+    api === "anthropic-messages";
   const compat = resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
     provider: PROVIDER_ID,
-    api: resolveCopilotTransportApi(trimmedModelId),
+    api,
     reasoning,
     // Optimistic: most Copilot models support images, and the API rejects
     // image payloads for text-only models rather than failing silently.

@@ -183,15 +183,17 @@ describe("resolveCopilotForwardCompatModel", () => {
     }
   });
 
+  it("infers reasoning=true for Claude model IDs routed through Anthropic Messages", () => {
+    for (const id of ["claude-haiku-4.5", "claude-sonnet-4.6", "claude-opus-4.8"]) {
+      const ctx = createMockCtx(id);
+      const result = requireResolvedModel(ctx);
+      expect(result.api).toBe("anthropic-messages");
+      expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+    }
+  });
+
   it("sets reasoning=false for non-reasoning model IDs including mid-string o1/o3", () => {
-    for (const id of [
-      "gpt-5.4-mini",
-      "claude-sonnet-4.6",
-      "gpt-4o",
-      "mycodexmodel",
-      "audio-o1-hd",
-      "turbo-o3-voice",
-    ]) {
+    for (const id of ["gpt-5.4-mini", "gpt-4o", "mycodexmodel", "audio-o1-hd", "turbo-o3-voice"]) {
       const ctx = createMockCtx(id);
       const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
