@@ -242,11 +242,9 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
         summary?: unknown;
         tokensBefore?: unknown;
       };
-      return (
-        isString(candidate.firstKeptEntryId) &&
-        typeof candidate.summary === "string" &&
-        typeof candidate.tokensBefore === "number"
-      );
+      // tokensBefore is telemetry and must not gate truncation when poisoned
+      // by synthetic delivery-mirror entries (see #100982).
+      return isString(candidate.firstKeptEntryId) && typeof candidate.summary === "string";
     }
     case "custom":
       return isString((entry as { customType?: unknown }).customType);
