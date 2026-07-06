@@ -172,6 +172,11 @@ export function execDockerRaw(
 
     const stdin = child.stdin;
     if (stdin) {
+      stdin.on("error", (error) => {
+        // stdin errors are usually broken pipes; the command outcome is already
+        // covered by stdout/stderr/close handlers, so avoid unhandled exceptions.
+        outputStreamError = outputStreamError ?? error;
+      });
       if (opts?.input !== undefined) {
         stdin.end(opts.input);
       } else {
