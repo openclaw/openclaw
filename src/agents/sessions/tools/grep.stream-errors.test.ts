@@ -49,6 +49,7 @@ describe("grep tool stream errors", () => {
     child.stdout.emit("error", new Error("stdout EPIPE"));
 
     await expect(resultPromise).rejects.toThrow("stdout EPIPE");
+    expect(child.killed).toBe(true);
   });
 
   it("rejects when stderr emits an error", async () => {
@@ -68,5 +69,6 @@ describe("grep tool stream errors", () => {
     child.stderr.emit("error", new Error("stderr EPIPE"));
 
     await expect(resultPromise).rejects.toThrow("stderr EPIPE");
+    expect(child.killed).toBe(true);
   });
 });

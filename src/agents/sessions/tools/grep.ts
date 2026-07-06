@@ -267,10 +267,12 @@ export function createGrepToolDefinition(
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             child.stdout?.on("error", (error) => {
+              stopChild();
               cleanup();
               settle(() => reject(new Error(`ripgrep stdout error: ${error.message}`)));
             });
             child.stderr?.on("error", (error) => {
+              stopChild();
               cleanup();
               settle(() => reject(new Error(`ripgrep stderr error: ${error.message}`)));
             });
