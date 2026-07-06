@@ -98,11 +98,13 @@ export function execDockerRaw(
       }
     }
 
-    child.stdout?.on("error", () => {});
+    // Output pipes may fail independently; child close/error remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    child.stdout?.on("error", ignoreOutputStreamError);
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
-    child.stderr?.on("error", () => {});
+    child.stderr?.on("error", ignoreOutputStreamError);
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
