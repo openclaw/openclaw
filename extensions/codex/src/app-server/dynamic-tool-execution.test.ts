@@ -332,7 +332,7 @@ describe("dynamic tool execution helpers", () => {
       toolBridge: {
         handleToolCall: vi.fn(
           () =>
-            new Promise((resolve) => {
+            new Promise<CodexDynamicToolCallResponse>((resolve) => {
               // sessions_send can spend time resolving/snapshotting the target
               // before its own timeoutSeconds wait starts.
               setTimeout(() => resolve(structuredTimeout), 6_000);
