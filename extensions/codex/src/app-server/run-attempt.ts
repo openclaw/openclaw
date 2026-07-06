@@ -20,7 +20,6 @@ import {
   isActiveHarnessContextEngine,
   loadCodexBundleMcpThreadConfig,
   resolveAgentHarnessBeforePromptBuildResult,
-  resolveAgentRunAbortLifecycleFields,
   resolveContextEngineOwnerPluginId,
   resolveSandboxContext,
   resolveSessionAgentIds,
@@ -179,7 +178,6 @@ import {
   hasPendingDynamicToolTerminalDiagnostic,
   isDynamicToolTerminalDiagnosticEvent,
   isMatchingDynamicToolTerminalDiagnostic,
-  resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
   shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
@@ -205,13 +203,11 @@ import {
   clearPendingCodexNativeHookRelayUnregistersForTests,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
-  emitCodexNativePreToolUseFailureDiagnostic,
   flushPendingCodexNativeHookRelayUnregistersForTests,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
-  type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
 import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
@@ -882,7 +878,6 @@ export async function runCodexAppServerAttempt(
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
@@ -1276,13 +1271,6 @@ export async function runCodexAppServerAttempt(
         meta && typeof meta === "object" && !Array.isArray(meta)
           ? (meta as Record<string, unknown>).mirrorIdentity
           : undefined;
-      const mirrorOrigin =
-        meta && typeof meta === "object" && !Array.isArray(meta)
-          ? (meta as Record<string, unknown>).mirrorOrigin
-          : undefined;
-      if (mirrorOrigin === "codex-app-server") {
-        return false;
-      }
       if (typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) {
         return false;
       }
@@ -1432,41 +1420,6 @@ export async function runCodexAppServerAttempt(
     trajectoryEndRecorded = true;
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
-  const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
-  const projectorRef: { current?: CodexAppServerEventProjector } = {};
-  let nativePreToolUseFailureFallbackActive = false;
-  let nativePreToolUseFailureFallbackTerminalReason:
-    | CodexNativePreToolUseFailure["disposition"]
-    | undefined;
-  const emitNativePreToolUseFailure = (failure: CodexNativePreToolUseFailure) => {
-    emitCodexNativePreToolUseFailureDiagnostic({
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
-      runId: params.runId,
-      signal: runAbortController.signal,
-      failure,
-      ...(nativePreToolUseFailureFallbackActive
-        ? {
-            terminalReason: nativePreToolUseFailureFallbackTerminalReason ?? failure.disposition,
-          }
-        : {}),
-    });
-  };
-  const flushPendingNativePreToolUseFailures = () => {
-    for (const failure of pendingNativePreToolUseFailures.splice(0)) {
-      emitNativePreToolUseFailure(failure);
-    }
-  };
-  const activateNativePreToolUseFailureFallback = () => {
-    if (!nativePreToolUseFailureFallbackActive) {
-      nativePreToolUseFailureFallbackTerminalReason = runAbortController.signal.aborted
-        ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
-        : undefined;
-      nativePreToolUseFailureFallbackActive = true;
-    }
-    flushPendingNativePreToolUseFailures();
-  };
   let releaseSharedClientLease: (() => void) | undefined;
   let sharedCodexClientRetiredForOneShotCleanup = false;
   const releaseSharedClientLeaseOnce = () => {
@@ -1542,16 +1495,6 @@ export async function runCodexAppServerAttempt(
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
-      onPreToolUseFailure: (failure) => {
-        const projector = projectorRef.current;
-        if (projector) {
-          projector.recordNativeToolPreToolUseFailure(failure);
-        } else if (nativePreToolUseFailureFallbackActive) {
-          emitNativePreToolUseFailure(failure);
-        } else {
-          pendingNativePreToolUseFailures.push(failure);
-        }
-      },
     });
     return {
       configPatch: nativeHookRelay
@@ -1665,7 +1608,6 @@ export async function runCodexAppServerAttempt(
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
   } catch (error) {
-    activateNativePreToolUseFailureFallback();
     nativeHookRelay?.unregister();
     await releaseSandboxExecEnvironment();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -1746,6 +1688,7 @@ export async function runCodexAppServerAttempt(
   let terminalDynamicToolReleaseCheckScheduled = false;
   let currentTurnHadNonTerminalDynamicToolResult = false;
   const turnIdRef: { current?: string } = {};
+  const projectorRef: { current?: CodexAppServerEventProjector } = {};
   const userInputBridgeRef: {
     current?: ReturnType<typeof createCodexUserInputBridge>;
   } = {};
@@ -1937,23 +1880,6 @@ export async function runCodexAppServerAttempt(
       },
     });
     lifecycleTerminalEmitted = true;
-  };
-  const buildLifecycleTerminalMeta = (input: { aborted: boolean; timedOut: boolean }) => {
-    const abortFields = input.aborted
-      ? resolveAgentRunAbortLifecycleFields(runAbortController.signal)
-      : undefined;
-    if (input.timedOut || abortFields?.stopReason === "timeout") {
-      return {
-        aborted: true,
-        status: "timed_out",
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      } as const;
-    }
-    return input.aborted
-      ? ({ aborted: true, status: "cancelled", stopReason: "stop" } as const)
-      : undefined;
   };
 
   const executionPhaseKeys = new Set<string>();
@@ -2440,8 +2366,6 @@ export async function runCodexAppServerAttempt(
             internalExecAutoReview: appServer.approvalsReviewer === "user",
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal: runAbortController.signal,
-            onNativeToolFailureDisposition: (itemId, disposition) =>
-              projector?.recordNativeToolApprovalFailure(itemId, disposition),
           });
         }
         return undefined;
@@ -2474,7 +2398,6 @@ export async function runCodexAppServerAttempt(
       });
       emitDynamicToolStartedDiagnostic({
         call,
-        agentId: sessionAgentId,
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -2598,7 +2521,6 @@ export async function runCodexAppServerAttempt(
           emitDynamicToolTerminalDiagnostic({
             response,
             call,
-            agentId: sessionAgentId,
             runId: params.runId,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -2632,7 +2554,6 @@ export async function runCodexAppServerAttempt(
         ) {
           emitDynamicToolErrorDiagnostic({
             call,
-            agentId: sessionAgentId,
             runId: params.runId,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -2979,7 +2900,6 @@ export async function runCodexAppServerAttempt(
       }
       notificationCleanup();
       requestCleanup();
-      activateNativePreToolUseFailureFallback();
       nativeHookRelay?.unregister();
       await releaseSandboxExecEnvironment();
       await runAgentCleanupStep({
@@ -3012,176 +2932,179 @@ export async function runCodexAppServerAttempt(
     }
   }
   if (!turn) {
-    activateNativePreToolUseFailureFallback();
     await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
-  turnIdRef.current = turn.turn.id;
-  const activeTurnId = turn.turn.id;
-  let assistantStreamEventEmitted = false;
-  let assistantStreamNeedsTerminalSnapshot = false;
-  emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
-  userInputBridgeRef.current = createCodexUserInputBridge({
-    paramsForRun: params,
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-    signal: runAbortController.signal,
-  });
-  trajectoryRecorder?.recordEvent("prompt.submitted", {
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-    prompt: codexTurnPromptText,
-    imagesCount: params.images?.length ?? 0,
-  });
-  projectorRef.current = new CodexAppServerEventProjector(
-    {
-      ...dynamicToolParams,
-      onAgentEvent: (event) => {
-        if (event.stream === "assistant" && typeof event.data.delta === "string") {
-          assistantStreamEventEmitted = true;
-          assistantStreamNeedsTerminalSnapshot ||= event.data.replaceable === true;
-        }
-        return dynamicToolParams.onAgentEvent?.(event);
+
+  // Hoist variables referenced by the finally block.
+  let activeTurnId = "";
+  let abortListener: (() => void) | undefined;
+  let closeCleanup: (() => void) | undefined;
+  let handle: Record<string, unknown> | undefined;
+  let freezeRunTerminalOutcome: (() => void) | undefined;
+  try {
+    turnIdRef.current = turn.turn.id;
+    activeTurnId = turn.turn.id;
+    let assistantStreamEventEmitted = false;
+    let assistantStreamNeedsTerminalSnapshot = false;
+    emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
+    userInputBridgeRef.current = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      signal: runAbortController.signal,
+    });
+    trajectoryRecorder?.recordEvent("prompt.submitted", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      prompt: codexTurnPromptText,
+      imagesCount: params.images?.length ?? 0,
+    });
+    projectorRef.current = new CodexAppServerEventProjector(
+      {
+        ...dynamicToolParams,
+        onAgentEvent: (event) => {
+          if (event.stream === "assistant" && typeof event.data.delta === "string") {
+            assistantStreamEventEmitted = true;
+            assistantStreamNeedsTerminalSnapshot ||= event.data.replaceable === true;
+          }
+          return dynamicToolParams.onAgentEvent?.(event);
+        },
       },
-    },
-    thread.threadId,
-    activeTurnId,
-    {
-      nativePostToolUseRelayEnabled:
-        nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
-        nativeHookRelay.shouldRelayEvent("post_tool_use"),
-      runAbortSignal: runAbortController.signal,
-      trajectoryRecorder,
-      onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
-    },
-  );
-  if (
-    isTerminalTurnStatus(turn.turn.status) ||
-    pendingNotifications.some((notification) =>
-      isTerminalTurnNotificationForTurn(notification, activeTurnId),
-    )
-  ) {
-    terminalTurnNotificationQueued = true;
-  }
-  const closeCleanup: (() => void) | undefined = (
-    client as {
-      addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
+      thread.threadId,
+      activeTurnId,
+      {
+        nativePostToolUseRelayEnabled:
+          nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+          nativeHookRelay.shouldRelayEvent("post_tool_use"),
+        trajectoryRecorder,
+        onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      },
+    );
+    if (
+      isTerminalTurnStatus(turn.turn.status) ||
+      pendingNotifications.some((notification) =>
+        isTerminalTurnNotificationForTurn(notification, activeTurnId),
+      )
+    ) {
+      terminalTurnNotificationQueued = true;
     }
-  ).addCloseHandler?.(() => {
-    if (completed || terminalTurnNotificationQueued || runAbortController.signal.aborted) {
-      return;
-    }
-    clientClosedPromptError = "codex app-server client closed before turn completed";
-    trajectoryRecorder?.recordEvent("turn.client_closed", {
-      threadId: thread.threadId,
-      turnId: activeTurnId,
-    });
-    embeddedAgentLog.warn("codex app-server client closed before turn completed", {
-      threadId: thread.threadId,
-      turnId: activeTurnId,
-    });
-    clientClosedAbort = true;
-    runAbortController.abort("client_closed");
-    completed = true;
-    turnWatches.clearAllTimers();
-    resolveCompletion?.();
-  });
-  emitLifecycleStart();
-  const activeProjector = projectorRef.current;
-  if (!activeProjector) {
-    throw new Error("codex app-server projector was not initialized");
-  }
-  turnWatches.armTerminalIdleWatch();
-  turnWatches.touchActivity("turn:start", { arm: true });
-  turnWatches.armAttemptIdleWatch();
-  turnWatches.touchActivity("turn:start", { attemptProgress: true });
-  for (const failure of pendingNativePreToolUseFailures.splice(0)) {
-    activeProjector.recordNativeToolPreToolUseFailure(failure);
-  }
-  for (const notification of pendingNotifications.splice(0)) {
-    await enqueueNotification(notification);
-  }
-  if (!completed && isTerminalTurnStatus(turn.turn.status)) {
-    await enqueueNotification({
-      method: "turn/completed",
-      params: {
+    closeCleanup = (
+      client as {
+        addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
+      }
+    ).addCloseHandler?.(() => {
+      if (completed || terminalTurnNotificationQueued || runAbortController.signal.aborted) {
+        return;
+      }
+      clientClosedPromptError = "codex app-server client closed before turn completed";
+      trajectoryRecorder?.recordEvent("turn.client_closed", {
         threadId: thread.threadId,
         turnId: activeTurnId,
-        turn: turn.turn as unknown as JsonObject,
-      },
+      });
+      embeddedAgentLog.warn("codex app-server client closed before turn completed", {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+      });
+      clientClosedAbort = true;
+      runAbortController.abort("client_closed");
+      completed = true;
+      turnWatches.clearAllTimers();
+      resolveCompletion?.();
     });
-  }
-
-  const activeSteeringQueue = createCodexSteeringQueue({
-    client,
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-    answerPendingUserInput: (text) =>
-      userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
-    signal: runAbortController.signal,
-  });
-  steeringQueueRef.current = activeSteeringQueue;
-  const handle = {
-    kind: "embedded" as const,
-    runId: params.runId,
-    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
-      activeSteeringQueue.queue(text, optionsLocal),
-    isStreaming: () => !completed && !runAbortController.signal.aborted,
-    isStopped: () => completed || timedOut || runAbortController.signal.aborted,
-    isAbortable: () => !terminalOutcomeFrozen || sharedAbortAllowedAfterTerminalOutcome,
-    isCompacting: () => projectorRef.current?.isCompacting() ?? false,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    cancel: () => abortExplicitly("cancelled"),
-    abort: () => abortExplicitly("aborted"),
-  };
-  params.replyOperation?.attachBackend(handle);
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-  const freezeRunTerminalOutcome = () => {
-    if (terminalOutcomeFrozen) {
-      return;
+    emitLifecycleStart();
+    const activeProjector = projectorRef.current;
+    if (!activeProjector) {
+      throw new Error("codex app-server projector was not initialized");
     }
-    terminalOutcomeFrozen = true;
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-  };
-  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
-  void mirrorPromptAtTurnStartBestEffort({
-    params,
-    agentId: sessionAgentId,
-    notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
-    cwd: effectiveCwd,
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-  });
-
-  const abortListener = () => {
-    const shouldRetireClient = timedOut;
-    if (shouldRetireClient) {
-      void (async () => {
-        // Timed-out native turns cannot be safely resumed on the same thread.
-        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
-        await retireCodexAppServerClientAfterTimedOutTurn(client, {
+    turnWatches.armTerminalIdleWatch();
+    turnWatches.touchActivity("turn:start", { arm: true });
+    turnWatches.armAttemptIdleWatch();
+    turnWatches.touchActivity("turn:start", { attemptProgress: true });
+    for (const notification of pendingNotifications.splice(0)) {
+      await enqueueNotification(notification);
+    }
+    if (!completed && isTerminalTurnStatus(turn.turn.status)) {
+      await enqueueNotification({
+        method: "turn/completed",
+        params: {
           threadId: thread.threadId,
           turnId: activeTurnId,
-          reason: String(runAbortController.signal.reason ?? "timeout"),
-        });
-      })().finally(() => {
-        resolveCompletion?.();
+          turn: turn.turn as unknown as JsonObject,
+        },
       });
-      return;
     }
-    interruptCodexTurnBestEffort(client, {
+
+    const activeSteeringQueue = createCodexSteeringQueue({
+      client,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      answerPendingUserInput: (text) =>
+        userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+      signal: runAbortController.signal,
+    });
+    steeringQueueRef.current = activeSteeringQueue;
+    handle = {
+      kind: "embedded" as const,
+      runId: params.runId,
+      queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
+        activeSteeringQueue.queue(text, optionsLocal),
+      isStreaming: () => !completed && !runAbortController.signal.aborted,
+      isStopped: () => completed || timedOut || runAbortController.signal.aborted,
+      isAbortable: () => !terminalOutcomeFrozen || sharedAbortAllowedAfterTerminalOutcome,
+      isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      cancel: () => abortExplicitly("cancelled"),
+      abort: () => abortExplicitly("aborted"),
+    };
+    freezeRunTerminalOutcome = () => {
+      if (terminalOutcomeFrozen) {
+        return;
+      }
+      terminalOutcomeFrozen = true;
+      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    };
+    const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+    void mirrorPromptAtTurnStartBestEffort({
+      params,
+      agentId: sessionAgentId,
+      notifyUserMessagePersisted,
+      sessionKey: sandboxSessionKey,
+      cwd: effectiveCwd,
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
-    resolveCompletion?.();
-  };
-  runAbortController.signal.addEventListener("abort", abortListener, { once: true });
-  if (runAbortController.signal.aborted) {
-    abortListener();
-  }
 
-  try {
+    abortListener = () => {
+      const shouldRetireClient = timedOut;
+      if (shouldRetireClient) {
+        void (async () => {
+          // Timed-out native turns cannot be safely resumed on the same thread.
+          await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+          await retireCodexAppServerClientAfterTimedOutTurn(client, {
+            threadId: thread.threadId,
+            turnId: activeTurnId,
+            reason: String(runAbortController.signal.reason ?? "timeout"),
+          });
+        })().finally(() => {
+          resolveCompletion?.();
+        });
+        return;
+      }
+      interruptCodexTurnBestEffort(client, {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+      });
+      resolveCompletion?.();
+    };
+    runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+    if (runAbortController.signal.aborted) {
+      abortListener();
+    }
+
+    params.replyOperation?.attachBackend(handle);
+    setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+
     await completion;
     // Timeout completion can win while a received notification is still being
     // projected, for example while persisting raw image-generation media. Wait
@@ -3379,7 +3302,7 @@ export async function runCodexAppServerAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
+    await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
       notifyUserMessagePersisted,
@@ -3538,12 +3461,11 @@ export async function runCodexAppServerAttempt(
       emitLifecycleTerminal({
         phase: "error",
         error: formatErrorMessage(finalPromptError),
-        ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
       });
     } else {
       emitLifecycleTerminal({
         phase: "end",
-        ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+        ...(finalAborted ? { aborted: true } : {}),
       });
     }
     return {
@@ -3554,7 +3476,6 @@ export async function runCodexAppServerAttempt(
       promptErrorSource: finalPromptErrorSource,
       ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
       ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
-      ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
       systemPromptReport,
     };
   } finally {
@@ -3567,10 +3488,6 @@ export async function runCodexAppServerAttempt(
     emitLifecycleTerminal({
       phase: "error",
       error: "codex app-server run completed without lifecycle terminal event",
-      ...buildLifecycleTerminalMeta({
-        aborted: runAbortController.signal.aborted && !clientClosedAbort,
-        timedOut,
-      }),
     });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
@@ -3875,9 +3792,6 @@ function handleApprovalRequest(params: {
   internalExecAutoReview?: boolean;
   autoApprove?: boolean;
   signal?: AbortSignal;
-  onNativeToolFailureDisposition?: Parameters<
-    typeof handleCodexAppServerApprovalRequest
-  >[0]["onNativeToolFailureDisposition"];
 }): Promise<JsonValue | undefined> {
   return handleCodexAppServerApprovalRequest({
     method: params.method,
@@ -3891,7 +3805,6 @@ function handleApprovalRequest(params: {
     internalExecAutoReview: params.internalExecAutoReview,
     autoApprove: params.autoApprove,
     signal: params.signal,
-    onNativeToolFailureDisposition: params.onNativeToolFailureDisposition,
   });
 }
 
