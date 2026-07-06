@@ -41,8 +41,10 @@ internal fun parseWorkspaceListing(root: JsonElement): GatewayWorkspaceListing? 
   val entries =
     (obj["entries"] as? JsonArray)?.mapNotNull { item ->
       val entry = item.asObjectOrNull() ?: return@mapNotNull null
-      val path = entry["path"].asStringOrNull()?.trim().orEmpty()
-      val name = entry["name"].asStringOrNull()?.trim().orEmpty()
+      // Paths/names are opaque workspace identifiers echoed back to the
+      // gateway; never trim them or entries with edge whitespace break.
+      val path = entry["path"].asStringOrNull().orEmpty()
+      val name = entry["name"].asStringOrNull().orEmpty()
       if (path.isEmpty() || name.isEmpty()) return@mapNotNull null
       GatewayWorkspaceEntry(
         path = path,
@@ -62,14 +64,13 @@ internal fun parseWorkspaceListing(root: JsonElement): GatewayWorkspaceListing? 
 
 internal fun parseWorkspaceFile(root: JsonElement): GatewayWorkspaceFile? {
   val file = root.asObjectOrNull()?.get("file").asObjectOrNull() ?: return null
-  val path = file["path"].asStringOrNull()?.trim().orEmpty()
+  val path = file["path"].asStringOrNull().orEmpty()
   if (path.isEmpty()) return null
   return GatewayWorkspaceFile(
     path = path,
     name =
       file["name"]
         .asStringOrNull()
-        ?.trim()
         .orEmpty()
         .ifEmpty { path.substringAfterLast('/') },
     size = file["size"].asLongOrNull() ?: 0L,
