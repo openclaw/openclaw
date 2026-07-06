@@ -2,7 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSlackClient,
+  getSlackTestState,
   resetSlackTestState,
+  runSlackMessageOnce,
   startSlackMonitor,
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
@@ -54,6 +56,69 @@ describe("auth.test boot call", () => {
     );
     expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining("replace it with a Bot User OAuth Token"),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("required-mention channels fail closed"),
+    );
+  });
+
+  it("does not use a user-token identity as the bot mention target", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          groupPolicy: "open",
+          channels: { C1: { allow: true, requireMention: true } },
+        },
+      },
+    });
+    const client = getSlackClient();
+    client.auth.test.mockResolvedValueOnce({
+      user_id: "UUSER",
+      user: "human-installer",
+      team_id: "T1",
+      team: "OpenClaw",
+    });
+    client.conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+    const { replyMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "unexpected" });
+
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: {
+          type: "message",
+          user: "USENDER",
+          text: "<@UUSER> status",
+          ts: "100.000",
+          channel: "C1",
+          channel_type: "channel",
+        },
+      },
+      { botToken: "xoxp-user-token" },
+    );
+
+    expect(replyMock).not.toHaveBeenCalled();
+  });
+
+  it("warns that required-mention channels fail closed when auth.test fails", async () => {
+    const runtimeLog = vi.fn();
+    getSlackClient().auth.test.mockRejectedValueOnce(new Error("request_timeout"));
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+    await stopSlackMonitor(monitor);
+
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "required-mention channels will fail closed without another trusted activation signal",
+      ),
     );
   });
 });

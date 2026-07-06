@@ -233,9 +233,12 @@ describe("resolveBuildAllSteps", () => {
       throw new Error("Missing ciArtifacts tsdown step");
     }
 
-    expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).not.toHaveProperty(
-      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD",
-    );
+    expect(
+      resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } }).options.env,
+    ).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    });
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
@@ -428,10 +431,10 @@ describe("build-all timing output", () => {
       formatBuildAllTimingSummary([
         { label: "tsdown", status: "ran", durationMs: 99000 },
         { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
-        { label: "build:plugin-sdk:dts", status: "ran", durationMs: 34567 },
+        { label: "write-plugin-sdk-entry-dts", status: "ran", durationMs: 34567 },
       ]),
     ).toBe(
-      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; build:plugin-sdk:dts 34.6s; plugins:assets:copy (cached) 12ms",
+      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
     );
   });
 });

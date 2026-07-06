@@ -37,7 +37,9 @@ import type {
   TuiBackend,
   TuiEvent,
   TuiModelChoice,
+  TuiApprovalDecision,
   TuiSessionList,
+  TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
 } from "./tui-backend.js";
@@ -98,6 +100,14 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isLegacyPreserveSideRunsError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
 export type GatewaySessionList = TuiSessionList;
@@ -211,12 +221,34 @@ export class GatewayChatClient implements TuiBackend {
     return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
   }
 
-  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
-    return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
+    const params = {
       sessionKey: opts.sessionKey,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      runId: opts.runId,
-    });
+      ...(opts.runId ? { runId: opts.runId } : {}),
+    };
+    if (opts.runId) {
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        params,
+      );
+    }
+    try {
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        { ...params, preserveSideRuns: true },
+      );
+    } catch (err) {
+      // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
+      // so mixed-version TUI stops still work, even without BTW isolation.
+      if (!isLegacyPreserveSideRunsError(err)) {
+        throw err;
+      }
+      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
+        "chat.abort",
+        params,
+      );
+    }
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
@@ -252,6 +284,13 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
+  async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
+    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+      ...opts,
+      emitCommandHooks: Boolean(opts.parentSessionKey),
+    });
+  }
+
   async resetSession(
     key: string,
     reason?: "new" | "reset",
@@ -276,6 +315,17 @@ export class GatewayChatClient implements TuiBackend {
   async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
     const res = await this.client.request<CommandsListResult>("commands.list", opts ?? {});
     return Array.isArray(res?.commands) ? res.commands : [];
+  }
+
+  async listPluginApprovals() {
+    return await this.client.request("plugin.approval.list", {});
+  }
+
+  async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
+    return await this.client.request<{ ok?: boolean }>("plugin.approval.resolve", {
+      id,
+      decision,
+    });
   }
 }
 

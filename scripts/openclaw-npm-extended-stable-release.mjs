@@ -160,12 +160,19 @@ export function validateExtendedStableRunIdentity({
   expectedSha,
 }) {
   const expectedWorkflowName =
-    kind === "preflight" ? "OpenClaw NPM Release" : "Full Release Validation";
+    kind === "preflight"
+      ? "OpenClaw NPM Release"
+      : kind === "plugin"
+        ? "Plugin NPM Release"
+        : "Full Release Validation";
   const checks = [
     ["workflowName", expectedWorkflowName],
     ["event", "workflow_dispatch"],
-    ...(kind === "validation" ? [["status", "completed"]] : []),
+    ...(kind === "validation" || kind === "plugin" ? [["status", "completed"]] : []),
     ["conclusion", "success"],
+    ...(kind === "plugin" && npmDistTag === "extended-stable"
+      ? [["displayTitle", `Plugin NPM Release [extended-stable] ${expectedSha}`]]
+      : []),
   ];
   for (const [key, expected] of checks) {
     if (run[key] !== expected) {

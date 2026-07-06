@@ -1,7 +1,7 @@
 // Verifies SQLite-backed outbound queue storage, metadata, failure updates,
 // recovery-state markers, and failed-entry moves.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   ackDelivery,
@@ -10,6 +10,7 @@ import {
   failDeliveryAfterPlatformSend,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
 } from "./delivery-queue.js";
@@ -36,6 +37,8 @@ describe("delivery-queue storage", () => {
         {
           channel: "directchat",
           to: "+1555",
+          queuePolicy: "required",
+          requireUnknownSendReconciliation: true,
           payloads: [{ text: "hello" }],
           renderedBatchPlan: {
             payloadCount: 1,
@@ -69,6 +72,8 @@ describe("delivery-queue storage", () => {
       expect(entry.id).toBe(id);
       expect(entry.channel).toBe("directchat");
       expect(entry.to).toBe("+1555");
+      expect(entry.queuePolicy).toBe("required");
+      expect(entry.requireUnknownSendReconciliation).toBe(true);
       expect(entry.renderedBatchPlan).toEqual({
         payloadCount: 1,
         textCount: 1,
@@ -130,12 +135,15 @@ describe("delivery-queue storage", () => {
         tmpDir(),
       );
 
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
+        replyToId: "1782584644.377229",
+      });
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(typeof entry.platformSendStartedAt).toBe("number");
       expect((entry.platformSendStartedAt as number) > 0).toBe(true);
       expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(entry.effectiveReplyToId).toBe("1782584644.377229");
       expect(entry.retryCount).toBe(0);
     });
 
@@ -157,6 +165,31 @@ describe("delivery-queue storage", () => {
       expect((entry.platformSendStartedAt as number) > 0).toBe(true);
       expect(entry.recoveryState).toBe("unknown_after_send");
       expect(entry.retryCount).toBe(0);
+    });
+
+    it("refreshes the attempt timestamp immediately before provider I/O", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000);
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        vi.setSystemTime(9_000);
+        await markDeliveryPlatformSendDispatched(id, tmpDir());
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.platformSendStartedAt).toBe(9_000);
+      expect(entry.recoveryState).toBe("send_attempt_started");
     });
 
     it("increments retryCount, records attempt time, and sets lastError", async () => {

@@ -1074,6 +1074,11 @@
       "translated": "OpenClaw में आपका स्वागत है"
     },
     {
+      "id": "native.android.f941909a3fa51055",
+      "source": "OpenClaw logo",
+      "translated": "OpenClaw लोगो"
+    },
+    {
       "id": "native.android.cc878f72a6b70b23",
       "source": "Connect to your Gateway",
       "translated": "अपने Gateway से कनेक्ट करें"
@@ -2864,6 +2869,26 @@
       "translated": "Skill"
     },
     {
+      "id": "native.android.efc938b5cc23e079",
+      "source": "Back",
+      "translated": "वापस"
+    },
+    {
+      "id": "native.android.3e0f25545a6ccfb4",
+      "source": "Terminal",
+      "translated": "टर्मिनल"
+    },
+    {
+      "id": "native.android.a196c4c819426137",
+      "source": "Terminal needs a connected gateway",
+      "translated": "टर्मिनल के लिए कनेक्टेड Gateway आवश्यक है"
+    },
+    {
+      "id": "native.android.9f3ceb93047671b5",
+      "source": "Connect to your gateway to open a shell in the agent workspace.",
+      "translated": "एजेंट वर्कस्पेस में शेल खोलने के लिए अपने Gateway से कनेक्ट करें।"
+    },
+    {
       "id": "native.android.5e0524a5d86e673a",
       "source": "Dictation",
       "translated": "श्रुतलेखन"
@@ -3124,9 +3149,9 @@
       "translated": "संदेश टाइप करें…"
     },
     {
-      "id": "native.android.6522139155c1eebd",
-      "source": "Gateway is offline. Open Settings to reconnect.",
-      "translated": "Gateway ऑफ़लाइन है। फिर से कनेक्ट करने के लिए सेटिंग्स खोलें।"
+      "id": "native.android.8e06942aa080e420",
+      "source": "Gateway is offline. Text messages are queued and sent after reconnecting.",
+      "translated": "Gateway ऑफ़लाइन है। टेक्स्ट संदेश कतार में रखे गए हैं और फिर से कनेक्ट होने के बाद भेजे जाते हैं।"
     },
     {
       "id": "native.android.d6227e983e46ca7c",
@@ -3197,6 +3222,16 @@
       "id": "native.android.29021f925bf290c7",
       "source": "... +${toolCalls.size - 6} more",
       "translated": "... +${toolCalls.size - 6} और"
+    },
+    {
+      "id": "native.android.9bd31c23ebdf7c7a",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
+    },
+    {
+      "id": "native.android.b728b15914267f57",
+      "source": "Delete",
+      "translated": "हटाएँ"
     },
     {
       "id": "native.android.1d0bb431f08154a6",
@@ -4504,6 +4539,21 @@
       "translated": "तैयार"
     },
     {
+      "id": "native.apple.e5524d5756a62744",
+      "source": "Unable to Export Transcript",
+      "translated": "प्रतिलेख निर्यात नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.942d6a10fd90d6e3",
+      "source": "OK",
+      "translated": "ठीक है"
+    },
+    {
+      "id": "native.apple.3548c8d1ab43e85e",
+      "source": "OpenClaw could not prepare the Markdown file.",
+      "translated": "OpenClaw Markdown फ़ाइल तैयार नहीं कर सका।"
+    },
+    {
       "id": "native.apple.202b97e93b938049",
       "source": "What would you like to work on?",
       "translated": "आप किस पर काम करना चाहेंगे?"
@@ -4517,6 +4567,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Settings / Gateway खोलता है"
+    },
+    {
+      "id": "native.apple.ced228bb4d20a726",
+      "source": "Export Transcript",
+      "translated": "प्रतिलेख निर्यात करें"
+    },
+    {
+      "id": "native.apple.940e1f943750c94b",
+      "source": "Chat actions",
+      "translated": "चैट कार्रवाइयाँ"
     },
     {
       "id": "native.apple.b635acd93246d67b",
@@ -7109,6 +7169,36 @@
       "translated": "मोड चयन पर वापस जाएँ"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "सादा टेक्स्ट (स्थानीय नेटवर्क)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "सुरक्षा"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "मैन्युअल सेटअप का उपयोग करें"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "सेटअप लिंक"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "सादा टेक्स्ट क्रेडेंशियल्स को उजागर कर सकता है। केवल तभी जारी रखें जब आप इस स्थानीय नेटवर्क और होस्ट पर भरोसा करते हों।"
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "इस एंडपॉइंट की समीक्षा करें। क्रेडेंशियल्स केवल तब लागू होते हैं जब आप Connect पर टैप करते हैं।"
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "अभी तक कोई gateway नहीं मिला।"
@@ -7424,6 +7514,11 @@
       "translated": "Cron Jobs"
     },
     {
+      "id": "native.apple.b3b5114b91a8db8f",
+      "source": "Terminal",
+      "translated": "टर्मिनल"
+    },
+    {
       "id": "native.apple.584dfce592c64899",
       "source": "Docs",
       "translated": "दस्तावेज़"
@@ -7562,6 +7657,31 @@
       "id": "native.apple.994760420a194561",
       "source": "Voice Wake triggered",
       "translated": "Voice Wake ट्रिगर हुआ"
+    },
+    {
+      "id": "native.apple.8ba33bf5712e3af2",
+      "source": "Terminal",
+      "translated": "टर्मिनल"
+    },
+    {
+      "id": "native.apple.2f67b32536f24e9d",
+      "source": "Gateway settings",
+      "translated": "Gateway सेटिंग्स"
+    },
+    {
+      "id": "native.apple.25e3befd890f1a73",
+      "source": "Terminal needs a connected gateway",
+      "translated": "टर्मिनल के लिए कनेक्टेड Gateway आवश्यक है"
+    },
+    {
+      "id": "native.apple.197411362978db2d",
+      "source": "Connect to your gateway to open a shell in the agent workspace.",
+      "translated": "एजेंट वर्कस्पेस में शेल खोलने के लिए अपने Gateway से कनेक्ट करें।"
+    },
+    {
+      "id": "native.apple.0a687ce373931085",
+      "source": "Open Gateway Settings",
+      "translated": "Gateway सेटिंग्स खोलें"
     },
     {
       "id": "native.apple.3b21081fb5ce84ba",
@@ -7949,6 +8069,11 @@
       "translated": "अस्वीकार करें"
     },
     {
+      "id": "native.apple.6fdc607c6178ba31",
+      "source": "OpenClaw on GitHub",
+      "translated": "GitHub पर OpenClaw"
+    },
+    {
       "id": "native.apple.5ac0c79487a492b4",
       "source": "OpenClaw",
       "translated": "OpenClaw"
@@ -8327,6 +8452,26 @@
       "id": "native.apple.936bfd42a2f08232",
       "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
       "translated": "आंशिक: \\(self.summary.totals.missingCostEntries) प्रविष्टियों में लागत नहीं है"
+    },
+    {
+      "id": "native.apple.84f1d9ae4965cfe0",
+      "source": "Crestodian",
+      "translated": "Crestodian"
+    },
+    {
+      "id": "native.apple.69557562fe99d402",
+      "source": "Your setup helper. It can check status, fix config, switch models, ",
+      "translated": "आपका सेटअप सहायक। यह स्थिति जाँच सकता है, कॉन्फ़िग ठीक कर सकता है, मॉडल बदल सकता है, "
+    },
+    {
+      "id": "native.apple.648423d89aec0c13",
+      "source": "Chat",
+      "translated": "चैट"
+    },
+    {
+      "id": "native.apple.bd180b943ee89cfe",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "सुझाव: “status”, “doctor”, “set default model …”, या “connect telegram” आज़माएँ।"
     },
     {
       "id": "native.apple.779f488d2ddd9eaf",
@@ -10294,6 +10439,151 @@
       "translated": "अगला"
     },
     {
+      "id": "native.apple.99c49ed9c135cdcd",
+      "source": "Claude (Anthropic)",
+      "translated": "Claude (Anthropic)"
+    },
+    {
+      "id": "native.apple.5c0a3a27717239d6",
+      "source": "OpenAI",
+      "translated": "OpenAI"
+    },
+    {
+      "id": "native.apple.f85f71cced8225d6",
+      "source": "Google Gemini",
+      "translated": "Google Gemini"
+    },
+    {
+      "id": "native.apple.0a6a895baa7f708e",
+      "source": "Looking for AI you already use…",
+      "translated": "आपके द्वारा पहले से उपयोग किए जा रहे AI को खोजा जा रहा है…"
+    },
+    {
+      "id": "native.apple.9d19cb7eb5fa6d79",
+      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
+      "translated": "Claude Code, Codex, Gemini, और सहेजी गई API keys की जाँच की जा रही है।"
+    },
+    {
+      "id": "native.apple.7e1e827f427bc317",
+      "source": "Couldn’t check this Mac for AI accounts",
+      "translated": "इस Mac पर AI खातों की जाँच नहीं की जा सकी"
+    },
+    {
+      "id": "native.apple.87a3b9052eedd7eb",
+      "source": "Try again",
+      "translated": "फिर से कोशिश करें"
+    },
+    {
+      "id": "native.apple.3a585b31d77507d8",
+      "source": "None of the found options worked",
+      "translated": "मिले हुए विकल्पों में से कोई भी काम नहीं किया"
+    },
+    {
+      "id": "native.apple.86f29266102f1bf3",
+      "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key below.",
+      "translated": "विवरण ऊपर प्रत्येक विकल्प में दिए गए हैं। आप लॉगिन ठीक करके फिर से कोशिश कर सकते हैं, या नीचे API key से कनेक्ट कर सकते हैं।"
+    },
+    {
+      "id": "native.apple.ff87d5ec9e15e581",
+      "source": "Check again",
+      "translated": "फिर से जाँचें"
+    },
+    {
+      "id": "native.apple.dc51d7deab7b6c1e",
+      "source": "Need help? Chat with Crestodian",
+      "translated": "मदद चाहिए? Crestodian से चैट करें"
+    },
+    {
+      "id": "native.apple.6bf2e2bdd950a97d",
+      "source": "Your AI is ready",
+      "translated": "आपका AI तैयार है"
+    },
+    {
+      "id": "native.apple.c3ed46eded513a65",
+      "source": "No AI accounts found on this Mac",
+      "translated": "इस Mac पर कोई AI खाता नहीं मिला"
+    },
+    {
+      "id": "native.apple.f87ba9e9eb97d8bb",
+      "source": "That’s fine — you can connect one with an API key. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
+      "translated": "कोई बात नहीं — आप API key से एक कनेक्ट कर सकते हैं। अगर आप इस Mac पर Claude Code, Codex, या Gemini CLI का उपयोग करते हैं, तो पहले वहाँ साइन इन करें और “Check again” दबाएँ।"
+    },
+    {
+      "id": "native.apple.f51a11c7f56bdb29",
+      "source": "Recommended",
+      "translated": "अनुशंसित"
+    },
+    {
+      "id": "native.apple.361c4a91a6aef57b",
+      "source": "Connect with an API key instead…",
+      "translated": "इसके बजाय API key से कनेक्ट करें…"
+    },
+    {
+      "id": "native.apple.99c1034543042eca",
+      "source": "Connect with an API key",
+      "translated": "API key से कनेक्ट करें"
+    },
+    {
+      "id": "native.apple.9da1d31635dca50b",
+      "source": "Provider",
+      "translated": "प्रदाता"
+    },
+    {
+      "id": "native.apple.41d117fdc784999f",
+      "source": "Connect",
+      "translated": "कनेक्ट करें"
+    },
+    {
+      "id": "native.apple.3863947506f62f17",
+      "source": "Create a key at \\(self.model.manualProvider.consoleName), paste it here, and OpenClaw checks it with a real test question.",
+      "translated": "\\(self.model.manualProvider.consoleName) पर एक key बनाएँ, उसे यहाँ पेस्ट करें, और OpenClaw एक वास्तविक टेस्ट प्रश्न से उसकी जाँच करेगा।"
+    },
+    {
+      "id": "native.apple.ce55144c35473419",
+      "source": "That key didn’t work",
+      "translated": "वह key काम नहीं की"
+    },
+    {
+      "id": "native.apple.95ba6710c48389ae",
+      "source": "Crestodian — setup helper",
+      "translated": "Crestodian — सेटअप सहायक"
+    },
+    {
+      "id": "native.apple.06d9df11b5b462b4",
+      "source": "Done",
+      "translated": "हो गया"
+    },
+    {
+      "id": "native.apple.c3460290224a3ed3",
+      "source": "Open help…",
+      "translated": "मदद खोलें…"
+    },
+    {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian काम कर रहा है…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "Restart"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "सीक्रेट दर्ज करें…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Crestodian को जवाब दें… (yes सब कुछ सेट कर देता है)"
+    },
+    {
+      "id": "native.apple.78d1ad73762a7ce8",
+      "source": "Connect your AI",
+      "translated": "अपने AI को कनेक्ट करें"
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "वापस"
@@ -10304,9 +10594,14 @@
       "translated": "OpenClaw में आपका स्वागत है"
     },
     {
-      "id": "native.apple.dd7411f18b0fe203",
-      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
-      "translated": "OpenClaw आपका निजी AI सहायक है। यह सवालों के जवाब दे सकता है, फ़ाइलों और ऐप्स के साथ काम कर सकता है, और आपके नियंत्रित Gateway के ज़रिए WhatsApp और Telegram जैसी सेवाओं से कनेक्ट हो सकता है।"
+      "id": "native.apple.0629bbbd6db95199",
+      "source": "Your personal AI assistant, living on your own Mac.",
+      "translated": "आपका निजी AI सहायक, आपके अपने Mac पर।"
+    },
+    {
+      "id": "native.apple.ff6f4069f0185b9b",
+      "source": "It answers questions, works with your files and apps, and can chat with you on WhatsApp or Telegram. Setup takes about two minutes.",
+      "translated": "यह सवालों के जवाब देता है, आपकी फ़ाइलों और ऐप्स के साथ काम करता है, और WhatsApp या Telegram पर आपसे चैट कर सकता है। सेटअप में लगभग दो मिनट लगते हैं।"
     },
     {
       "id": "native.apple.86e4509eb0626ec8",
@@ -10319,14 +10614,14 @@
       "translated": "अपने सहायक को कार्य दें और उसे अपने Mac पर आपकी मदद करने दें।"
     },
     {
-      "id": "native.apple.16ab10ed9293b718",
-      "source": "Connect the tools you use",
-      "translated": "अपने इस्तेमाल के टूल्स कनेक्ट करें"
+      "id": "native.apple.8496e933d9cbc56d",
+      "source": "Chat wherever you like",
+      "translated": "जहाँ चाहें वहाँ चैट करें"
     },
     {
-      "id": "native.apple.687c1c2abdb8581e",
-      "source": "Bring conversations and services together in one assistant.",
-      "translated": "बातचीतों और सेवाओं को एक ही सहायक में साथ लाएँ।"
+      "id": "native.apple.d6ca07ea4a825a3f",
+      "source": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "translated": "यह ऐप, WhatsApp, Telegram, Discord, Slack — आपकी पसंद।"
     },
     {
       "id": "native.apple.caf822c2d393914f",
@@ -10334,9 +10629,9 @@
       "translated": "नियंत्रण अपने पास रखें"
     },
     {
-      "id": "native.apple.203bfa5e80135faa",
-      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
-      "translated": "चुनें कि Gateway कहाँ चलेगा और OpenClaw को कौन-सी अनुमतियाँ मिलेंगी।"
+      "id": "native.apple.46514f735df5cddc",
+      "source": "Everything runs where you decide, with permissions you grant.",
+      "translated": "सब कुछ वहीं चलता है जहाँ आप तय करते हैं, आपकी दी गई अनुमतियों के साथ।"
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
@@ -10344,24 +10639,39 @@
       "translated": "OpenClaw आपके सक्षम की गई अनुमतियों और सेवाओं का उपयोग करके कार्रवाइयाँ कर सकता है। प्रॉम्प्ट की समीक्षा करें और केवल उन टूल्स को कनेक्ट करें जिन पर आप भरोसा करते हैं।"
     },
     {
-      "id": "native.apple.2033d33228ce52d7",
-      "source": "Where should OpenClaw run?",
-      "translated": "OpenClaw कहाँ चलना चाहिए?"
+      "id": "native.apple.a5d02aaf6208e924",
+      "source": "Where should your assistant live?",
+      "translated": "आपका सहायक कहाँ रहना चाहिए?"
     },
     {
-      "id": "native.apple.4791cce2ae762f19",
-      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
-      "translated": "सबसे सरल सेटअप के लिए, Gateway को इस Mac पर चलाएँ। OpenClaw इसे इंस्टॉल करता है और आपके लिए इसे चालू रखता है।"
+      "id": "native.apple.e6acb60b10ef1206",
+      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "अधिकतर लोग यह Mac चुनते हैं — OpenClaw सब कुछ इंस्टॉल करता है और इसे बैकग्राउंड में चालू रखता है। आप इसे Settings में कभी भी बदल सकते हैं।"
     },
     {
-      "id": "native.apple.300a583f28880928",
-      "source": "This Mac",
-      "translated": "यह Mac"
+      "id": "native.apple.21f1053c1054db24",
+      "source": "On this Mac",
+      "translated": "इस Mac पर"
     },
     {
-      "id": "native.apple.43f381cd291c5e11",
-      "source": "Don’t start the Gateway yet.",
-      "translated": "Gateway अभी शुरू न करें।"
+      "id": "native.apple.848c45dfcda2c160",
+      "source": "On another computer",
+      "translated": "किसी दूसरे कंप्यूटर पर"
+    },
+    {
+      "id": "native.apple.1921bcc57bcd747d",
+      "source": "Set up later",
+      "translated": "बाद में सेट अप करें"
+    },
+    {
+      "id": "native.apple.3647303a73877ecf",
+      "source": "Skip Gateway setup for now; pick Local or Remote later in Settings → General.",
+      "translated": "अभी के लिए Gateway सेटअप छोड़ें; बाद में Settings → General में Local या Remote चुनें।"
+    },
+    {
+      "id": "native.apple.d54084b48f40aa0a",
+      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "OK — OpenClaw अभी कुछ भी शुरू नहीं करेगा। बाद में Settings → General में Local या Remote चुनें।"
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -10379,19 +10689,29 @@
       "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
-      "id": "native.apple.ea066347e0bcb237",
-      "source": "Retry remote discovery (Tailscale DNS-SD + Serve probe).",
-      "translated": "रिमोट डिस्कवरी फिर से प्रयास करें (Tailscale DNS-SD + Serve probe)।"
+      "id": "native.apple.9ab228a4cb7d4403",
+      "source": "1 gateway found on your network — click to choose it.",
+      "translated": "आपके नेटवर्क पर 1 gateway मिला — इसे चुनने के लिए क्लिक करें।"
     },
     {
-      "id": "native.apple.d8b14de6ceb397fb",
-      "source": "Searching for nearby gateways…",
-      "translated": "आस-पास के gateways खोजे जा रहे हैं…"
+      "id": "native.apple.279c63b244b85ece",
+      "source": "\\(count) gateways found on your network — click to choose one.",
+      "translated": "आपके नेटवर्क पर \\(count) gateways मिले — एक चुनने के लिए क्लिक करें।"
     },
     {
-      "id": "native.apple.98436332aec81f9b",
-      "source": "Nearby gateways",
-      "translated": "आस-पास के gateways"
+      "id": "native.apple.43777eabc068e240",
+      "source": "No gateways found on your network yet.",
+      "translated": "आपके नेटवर्क पर अभी कोई gateway नहीं मिला।"
+    },
+    {
+      "id": "native.apple.b485089ad79067a9",
+      "source": "Look again",
+      "translated": "फिर से देखें"
+    },
+    {
+      "id": "native.apple.e39798604090ef9c",
+      "source": "Retry discovery (Bonjour + Tailscale DNS-SD).",
+      "translated": "Discovery फिर से आज़माएँ (Bonjour + Tailscale DNS-SD)।"
     },
     {
       "id": "native.apple.94575e6937b47f7b",
@@ -10524,54 +10844,54 @@
       "translated": "अनुमतियाँ दें"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "ये macOS अनुमतियाँ OpenClaw को इस Mac पर ऐप्स को ऑटोमेट करने और संदर्भ कैप्चर करने देती हैं।"
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "ये macOS permissions OpenClaw को इस Mac पर apps को automate करने और context capture करने देती हैं। Status अपने-आप update होता है।"
     },
     {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "स्थिति रीफ़्रेश करें"
+      "id": "native.apple.42af85cdf91d0264",
+      "source": "Getting things ready",
+      "translated": "चीज़ें तैयार की जा रही हैं"
     },
     {
-      "id": "native.apple.8d7590f1d8f61a1d",
-      "source": "Setting up OpenClaw",
-      "translated": "OpenClaw सेट अप किया जा रहा है"
+      "id": "native.apple.183aee003b44ede6",
+      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
+      "translated": "OpenClaw इस Mac पर अपनी background service सेट कर रहा है। इसमें आमतौर पर एक मिनट से कम समय लगता है — कोई Terminal नहीं, कोई administrator password नहीं।"
     },
     {
-      "id": "native.apple.e88512a0fe7fb140",
-      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
-      "translated": "OpenClaw स्थानीय Gateway और उसके प्रबंधित रनटाइम को इंस्टॉल कर रहा है।"
+      "id": "native.apple.d0b8cf59f852b3d0",
+      "source": "Install OpenClaw",
+      "translated": "OpenClaw इंस्टॉल करें"
     },
     {
-      "id": "native.apple.0c05ab4b362710de",
-      "source": "Checking existing setup…",
-      "translated": "मौजूदा सेटअप की जाँच की जा रही है…"
+      "id": "native.apple.0112e18fa97e7c0c",
+      "source": "Start the background service",
+      "translated": "background service शुरू करें"
     },
     {
-      "id": "native.apple.56b68eb592ecf449",
-      "source": "Installing the Gateway…",
-      "translated": "Gateway इंस्टॉल किया जा रहा है…"
+      "id": "native.apple.d1f9f278b55fe9b0",
+      "source": "Runs quietly and starts again after a restart.",
+      "translated": "चुपचाप चलता है और restart के बाद फिर से शुरू हो जाता है।"
     },
     {
-      "id": "native.apple.80155398d97fbe63",
-      "source": "Gateway installed",
-      "translated": "Gateway इंस्टॉल हो गया"
+      "id": "native.apple.0357f1eea66db068",
+      "source": "Ready for the next step",
+      "translated": "अगले चरण के लिए तैयार"
     },
     {
-      "id": "native.apple.2d2acbf2e16f8604",
-      "source": "Retry setup",
-      "translated": "सेटअप फिर से आज़माएँ"
+      "id": "native.apple.9f58badc863cbf2b",
+      "source": "Once the service answers, you’ll connect your AI.",
+      "translated": "जब service जवाब देगी, तब आप अपना AI कनेक्ट करेंगे।"
     },
     {
-      "id": "native.apple.4d58294df8d0b1e6",
-      "source": "Check again",
-      "translated": "फिर से जाँचें"
+      "id": "native.apple.3bcb83316b3d90bb",
+      "source": "The Gateway didn’t start",
+      "translated": "Gateway शुरू नहीं हुआ"
     },
     {
-      "id": "native.apple.15cfa96c75b57b04",
-      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
-      "translated": "निजी user-space इंस्टॉल का उपयोग करता है। किसी Terminal, administrator access, या Homebrew की आवश्यकता नहीं है।"
+      "id": "native.apple.f36edc58238aa8ce",
+      "source": "Try again",
+      "translated": "फिर से कोशिश करें"
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10634,14 +10954,19 @@
       "translated": "अपने एजेंट से मिलें"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "यह एक समर्पित ऑनबोर्डिंग चैट है। आपका एजेंट अपना परिचय देगा, जानेगा कि आप कौन हैं, और यदि आप चाहें तो WhatsApp या Telegram कनेक्ट करने में मदद करेगा।"
+      "id": "native.apple.6c35dc9becd6ca0f",
+      "source": "Your agent introduces itself, picks a name with you, and helps you connect WhatsApp, Telegram, or another channel — just chat.",
+      "translated": "आपका agent अपना परिचय देता है, आपके साथ एक नाम चुनता है, और WhatsApp, Telegram या किसी अन्य channel से कनेक्ट करने में मदद करता है — बस chat करें।"
     },
     {
-      "id": "native.apple.5e1277166b2ad41a",
-      "source": "All set",
-      "translated": "सब तैयार है"
+      "id": "native.apple.25e82538dc9e9aad",
+      "source": "You’re all set!",
+      "translated": "आप पूरी तरह तैयार हैं!"
+    },
+    {
+      "id": "native.apple.9f73f753266a9fa2",
+      "source": "Finish opens the chat — say hi to your new agent.",
+      "translated": "Finish chat खोलता है — अपने नए agent को hi कहें।"
     },
     {
       "id": "native.apple.678dee9dedd72ce4",
@@ -10674,9 +10999,9 @@
       "translated": "त्वरित चैट और स्थिति के लिए OpenClaw मेनू बार आइकन पर क्लिक करें।"
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "WhatsApp या Telegram कनेक्ट करें"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Discord, Slack, Telegram, WhatsApp, … connect करें"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10757,71 +11082,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "अभी तक कोई Skills रिपोर्ट नहीं की गई हैं।"
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "सेटअप विज़ार्ड"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Gateway से निर्देशित सेटअप का पालन करें। इससे ऑनबोर्डिंग CLI के साथ सिंक में रहती है।"
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "विज़ार्ड त्रुटि"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "पुनः प्रयास करें"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "सेटअप रोका गया है"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "स्थानीय Gateway शुरू करने और सेटअप जारी रखने के लिए OpenClaw फिर से शुरू करें।"
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "सेटअप फिर से शुरू करें"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "विज़ार्ड शुरू हो रहा है…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "विज़ार्ड पूरा हुआ। अगले चरण पर जारी रखें।"
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "विज़ार्ड की प्रतीक्षा हो रही है…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "असमर्थित चरण प्रकार"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "जारी रखें"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "चलाएँ"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",
@@ -11342,6 +11602,11 @@
       "id": "native.apple.f5f4ff67674093ec",
       "source": "Voice & Talk",
       "translated": "वॉइस और टॉक"
+    },
+    {
+      "id": "native.apple.f5aa19bc071cf585",
+      "source": "Crestodian",
+      "translated": "Crestodian"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",

@@ -3,9 +3,16 @@ import OpenClawProtocol
 import SwiftUI
 
 struct ChatProTab: View {
+    private struct TranscriptShareItem: Identifiable {
+        let id = UUID()
+        let fileURL: URL
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @State private var viewModel: OpenClawChatViewModel?
     @State private var viewModelTransportModeID = ""
+    @State private var transcriptShareItem: TranscriptShareItem?
+    @State private var showsTranscriptExportError = false
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
@@ -44,6 +51,9 @@ struct ChatProTab: View {
         .onChange(of: self.appModel.chatSessionKey) { _, _ in
             self.syncChatViewModel()
         }
+        .onChange(of: self.appModel.chatViewModelIdentityID) { _, _ in
+            self.syncChatViewModel()
+        }
         .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
             self.syncChatViewModel()
             self.viewModel?.refresh()
@@ -76,9 +86,27 @@ struct ChatProTab: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    self.chatActionsMenu
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     self.connectionStatusButton
                         .accessibilityIdentifier("chat-gateway-status")
                 }
+            }
+            .sheet(item: self.$transcriptShareItem) { item in
+                ChatTranscriptShareSheet(fileURL: item.fileURL)
+            }
+            .alert(
+                String(localized: "Unable to Export Transcript"),
+                isPresented: self.$showsTranscriptExportError)
+            {
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.body)
+                }
+            } message: {
+                Text("OpenClaw could not prepare the Markdown file.")
+                    .font(OpenClawType.body)
             }
     }
 
@@ -126,12 +154,15 @@ struct ChatProTab: View {
 
     private func syncChatViewModel() {
         let sessionKey = self.appModel.chatSessionKey
-        let transportModeID = self.appModel.chatTransportModeID
+        // Includes the cache gateway identity so switching paired gateways
+        // rebuilds the view model even while the transport mode stays the same.
+        let transportModeID = self.appModel.chatViewModelIdentityID
         guard let viewModel else {
             self.viewModelTransportModeID = transportModeID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: self.appModel.makeChatTransport(),
+                transcriptCache: self.appModel.makeChatTranscriptCache(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -145,6 +176,7 @@ struct ChatProTab: View {
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: self.appModel.makeChatTransport(),
+                transcriptCache: self.appModel.makeChatTranscriptCache(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
                 },
@@ -201,6 +233,44 @@ struct ChatProTab: View {
         .foregroundStyle(self.gatewayPillColor)
         // Even breathing room inside the system glass capsule.
         .padding(.horizontal, 6)
+    }
+
+    private var chatActionsMenu: some View {
+        Menu {
+            Button {
+                self.exportTranscript()
+            } label: {
+                Label {
+                    Text("Export Transcript")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
+            .disabled(self.viewModel == nil)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("Chat actions")
+    }
+
+    private func exportTranscript() {
+        guard let viewModel else { return }
+        let title = viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName
+        let filename = ChatTranscriptExporter.filename(
+            sessionTitle: title,
+            sessionKey: viewModel.sessionKey)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
+        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try viewModel.exportTranscriptMarkdown().write(to: fileURL, atomically: true, encoding: .utf8)
+            self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
+        } catch {
+            self.showsTranscriptExportError = true
+        }
     }
 
     private var gatewayConnected: Bool {

@@ -210,4 +210,24 @@ describe("voice-call tunnels", () => {
     expect(tunnel?.publicUrl).toBe("https://dispatch.ngrok.io/hook");
     expect(tunnel?.provider).toBe("ngrok");
   });
+
+  it("handles spawn errors on tailscale stop cleanup without crashing", async () => {
+    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
+    // Start the tunnel — first spawn is tailscale serve (succeeds)
+    const startProc = nextProcess();
+    const result = startTailscaleTunnel({ mode: "serve", port: 3334, path: "/voice/stop" });
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+    startProc.close(0);
+    const tunnel = await result;
+
+    // Stop the tunnel — second spawn is tailscale stop (errors)
+    const stopProc = nextProcess();
+    const stopPromise = tunnel.stop();
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(2));
+    // Emit error on the stop process — without the fix this crashes
+    stopProc.fail(new Error("tailscale not found"));
+
+    // The stop promise must still resolve despite the error
+    await expect(stopPromise).resolves.toBeUndefined();
+  });
 });

@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -30,6 +31,9 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { getEmbeddedPluginApprovalBroker } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
@@ -127,6 +131,8 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
@@ -696,7 +702,73 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
+    const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
+    if (embeddedApprovalBroker) {
+      const result = await embeddedApprovalBroker.request({
+        request: {
+          pluginId: approval.pluginId,
+          title: approval.title,
+          description: approval.description,
+          severity: approval.severity,
+          allowedDecisions: approval.allowedDecisions,
+          toolName: params.toolName,
+          toolCallId: params.toolCallId,
+          agentId: params.ctx?.agentId,
+          sessionKey: params.ctx?.sessionKey,
+          turnSourceChannel: params.ctx?.turnSourceChannel,
+          turnSourceTo: params.ctx?.turnSourceTo,
+          turnSourceAccountId: params.ctx?.turnSourceAccountId,
+          turnSourceThreadId: params.ctx?.turnSourceThreadId,
+        },
+        timeoutMs,
+        signal: params.signal,
+      });
+      const decision = result.decision;
+      const resolution: PluginApprovalResolution =
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+        decision === PluginApprovalResolutions.DENY
+          ? decision
+          : PluginApprovalResolutions.TIMEOUT;
+      notifyPluginApprovalResolution(approval, resolution);
+      if (
+        decision === PluginApprovalResolutions.ALLOW_ONCE ||
+        decision === PluginApprovalResolutions.ALLOW_ALWAYS
+      ) {
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+          approvalResolution: resolution,
+        };
+      }
+      if (decision === PluginApprovalResolutions.DENY) {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason: "Denied by user",
+          params: params.baseParams,
+        };
+      }
+      if (approval.timeoutBehavior === "allow") {
+        return {
+          blocked: false,
+          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+          approvalResolution: resolution,
+        };
+      }
+      return {
+        blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
+        reason: "Approval timed out",
+        params: params.baseParams,
+      };
+    }
+
+    gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
       status?: string;
@@ -717,6 +789,9 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        ...(params.ctx?.approvalReviewerDeviceId
+          ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
+          : {}),
         turnSourceChannel: params.ctx?.turnSourceChannel,
         turnSourceTo: params.ctx?.turnSourceTo,
         turnSourceAccountId: params.ctx?.turnSourceAccountId,
@@ -726,6 +801,7 @@ async function requestPluginToolApproval(params: {
       },
       { expectFinal: false },
     );
+    gatewayApprovalPhase = "none";
     const id = requestResult?.id;
     if (!id) {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
@@ -757,6 +833,7 @@ async function requestPluginToolApproval(params: {
     } else {
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
+      gatewayApprovalPhase = "wait";
       const waitPromise: Promise<{
         id?: string;
         decision?: string | null;
@@ -856,12 +933,21 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
+    // INVALID_REQUEST means different things before and after registration.
+    const invalidRequest =
+      err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
+    const reason =
+      invalidRequest && gatewayApprovalPhase === "request"
+        ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
+        : invalidRequest && gatewayApprovalPhase === "wait"
+          ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
+          : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Plugin approval required (gateway unavailable)",
+      reason,
       params: params.baseParams,
     };
   }

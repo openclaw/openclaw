@@ -116,7 +116,11 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  deleted_cwd="$PWD"',
       "  cd / || exit 1",
       '  rm -rf "$deleted_cwd"',
-      "  deadline=100",
+      // Fail-safe only: the wrapper normally kills this child mid-loop. The
+      // deadline just has to outlast wrapper timer starvation under
+      // parallel-suite load, or the child exits 66 before the wrapper reacts
+      // and the test asserts on the wrong stderr message.
+      "  deadline=1000",
       '  while [ "$deadline" -gt 0 ] && [ ! -d "$deleted_cwd" ]; do',
       "    deadline=$((deadline - 1))",
       "    sleep 0.01",
@@ -206,7 +210,7 @@ function makeSlowVersionCrabbox(helpText: string): string {
   const script = [
     "#!/usr/bin/env node",
     "const args = process.argv.slice(2);",
-    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 6_000); }',
+    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 1_000); }',
     `else if (args[0] === "run" && args[1] === "--help") { process.stdout.write(${JSON.stringify(helpText)}); }`,
   ].join("\n");
   writeFileSync(crabboxPath, `${script}\n`, "utf8");
@@ -493,6 +497,7 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     {
       env: {
         OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH: descendantPidPath,
+        OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS: "100",
       },
       nodePreload: testTimingPreload({ clockScale: 20 }),
     },
@@ -571,7 +576,7 @@ afterAll(() => {
   }
 });
 
-describe.concurrent("scripts/crabbox-wrapper", () => {
+describe("scripts/crabbox-wrapper", () => {
   const azureProviderHelp =
     "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
   const advertisedProviderAliasHelp = [
@@ -3112,6 +3117,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   it("times out hung sanity probes before rejecting the selected binary", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
     const result = runWrapper(helpText, ["--version"], {
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "100" },
       extraPathEntries: [makeSlowVersionCrabbox(helpText)],
       nodePreload: testTimingPreload({ spawnTimeoutMs: 25 }),
     });

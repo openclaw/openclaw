@@ -17,7 +17,7 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
-const NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
@@ -25,7 +25,7 @@ const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ]);
-const ACTIVE_NODE_STEP_KILLERS = new Set();
+const ACTIVE_NODE_STEP_KILLERS = new Map();
 let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
 let parentSignalExitCode = 1;
@@ -52,11 +52,38 @@ function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function listSourceDtsOutputs({ sourceDir, outputPrefix }) {
+  const outputs = [];
+
+  function visit(relativeDir) {
+    const absoluteDir = path.join(repoRoot, sourceDir, relativeDir);
+    for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+      const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        visit(relativePath);
+        continue;
+      }
+      if (
+        !entry.name.endsWith(".ts") ||
+        entry.name.endsWith(".test.ts") ||
+        entry.name.endsWith(".test-helpers.ts")
+      ) {
+        continue;
+      }
+      outputs.push(`${outputPrefix}/${relativePath.replace(/\.ts$/u, ".d.ts")}`);
+    }
+  }
+
+  visit("");
+  return outputs.toSorted((a, b) => a.localeCompare(b));
+}
+
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/plugins/types.ts",
   "src/auto-reply",
+  "packages/ai/src",
   "packages/llm-core/src",
   "packages/markdown-core/src",
   "packages/media-core/src",
@@ -77,7 +104,12 @@ const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
   packageDir: "acp-core",
   outputPrefix: "dist/plugin-sdk/packages/acp-core/src",
 });
+const AI_REQUIRED_DTS_OUTPUTS = listSourceDtsOutputs({
+  sourceDir: "packages/ai/src",
+  outputPrefix: "dist/plugin-sdk/packages/ai/src",
+});
 const ROOT_DTS_REQUIRED_OUTPUTS = [
+  ...AI_REQUIRED_DTS_OUTPUTS,
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
@@ -146,7 +178,12 @@ const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
   packageDir: "acp-core",
   outputPrefix: "packages/plugin-sdk/dist/packages/acp-core/src",
 });
+const AI_REQUIRED_PACKAGE_DTS_OUTPUTS = listSourceDtsOutputs({
+  sourceDir: "packages/ai/src",
+  outputPrefix: "packages/plugin-sdk/dist/packages/ai/src",
+});
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  ...AI_REQUIRED_PACKAGE_DTS_OUTPUTS,
   "packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts",
   "packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts",
   "packages/plugin-sdk/dist/packages/markdown-core/src/frontmatter.d.ts",
@@ -438,9 +475,15 @@ export function signalNodeStep(
 }
 
 function signalActiveNodeSteps(signal) {
-  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS) {
+  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS.keys()) {
     killNodeStep(signal);
   }
+}
+
+function activeNodeStepKillGraceMs() {
+  return ACTIVE_NODE_STEP_KILLERS.size > 0
+    ? Math.max(...ACTIVE_NODE_STEP_KILLERS.values())
+    : DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS;
 }
 
 function installNodeStepParentSignalForwarders() {
@@ -460,7 +503,7 @@ function installNodeStepParentSignalForwarders() {
       signalActiveNodeSteps(signal);
       parentSignalExitTimer ??= setTimeout(
         () => process.exit(parentSignalExitCode),
-        NODE_STEP_ABORT_KILL_GRACE_MS,
+        activeNodeStepKillGraceMs(),
       );
     });
   }
@@ -482,6 +525,10 @@ function resolveNodeStepTimerTimeoutMs(valueMs) {
  */
 export function runNodeStep(label, args, timeoutMs, params = {}) {
   const resolvedTimeoutMs = resolveNodeStepTimerTimeoutMs(timeoutMs);
+  const abortKillGraceMs = Math.max(
+    0,
+    Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
+  );
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
   installNodeStepParentSignalForwarders();
@@ -534,18 +581,18 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
         await waitForProcessGroupExit(100);
       }
     };
-    ACTIVE_NODE_STEP_KILLERS.add(killNodeStep);
+    ACTIVE_NODE_STEP_KILLERS.set(killNodeStep, abortKillGraceMs);
     const abortStep = () => {
       if (settled || canceled) {
         return;
       }
       canceled = true;
       killNodeStep("SIGTERM");
-      killDeadlineAt = Date.now() + NODE_STEP_ABORT_KILL_GRACE_MS;
+      killDeadlineAt = Date.now() + abortKillGraceMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         killNodeStep("SIGKILL");
-      }, NODE_STEP_ABORT_KILL_GRACE_MS);
+      }, abortKillGraceMs);
       killTimer.unref?.();
     };
     function cleanup() {
@@ -630,7 +677,11 @@ export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
     steps.map((step) =>
-      runNodeStep(step.label, step.args, step.timeoutMs, { abortController, env: step.env }),
+      runNodeStep(step.label, step.args, step.timeoutMs, {
+        abortController,
+        abortKillGraceMs: step.abortKillGraceMs,
+        env: step.env,
+      }),
     ),
   );
   const firstFailure = results.find((result) => result.status === "rejected");

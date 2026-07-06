@@ -1,11 +1,16 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatCacheDatabase
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
+import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.RoomChatCommandOutbox
+import ai.openclaw.app.chat.RoomChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -16,6 +21,7 @@ import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -302,6 +308,17 @@ class NodeRuntime(
     val password: String?,
   )
 
+  /**
+   * HTTP(S) page origin of the connected gateway plus the shared credential a
+   * gateway-served page (e.g. the `?view=terminal` Control UI document) can
+   * authenticate with. Derived from the same endpoint/auth the WS sessions use.
+   */
+  data class GatewayControlPage(
+    val baseUrl: String,
+    val token: String?,
+    val password: String?,
+  )
+
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
@@ -490,6 +507,8 @@ class NodeRuntime(
 
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+  private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
+  val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
   private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
@@ -647,6 +666,9 @@ class NodeRuntime(
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        // Every successful connection refreshes history, including reconnects whose main key did not change.
+        chat.refresh()
+        refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
@@ -821,14 +843,49 @@ class NodeRuntime(
     }
   }
 
+  // One Room handle owns both chat stores (disposable transcript cache + durable command outbox).
+  private val chatCacheDatabase: ChatCacheDatabase = ChatCacheDatabase.open(appContext)
+
+  private val chatTranscriptCache: RoomChatTranscriptCache =
+    RoomChatTranscriptCache(database = chatCacheDatabase)
+
+  private val chatCommandOutbox: RoomChatCommandOutbox =
+    RoomChatCommandOutbox(database = chatCacheDatabase)
+
   private val chat: ChatController =
     ChatController(
       scope = scope,
       session = operatorSession,
       json = json,
+      transcriptCache = chatTranscriptCache,
+      cacheScope = ::chatCacheScope,
+      commandOutbox = chatCommandOutbox,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
+
+  /**
+   * Stable per-gateway scope for the offline chat cache; resolved per call so cached transcripts
+   * never leak across gateways. Null (nothing paired/configured) disables cache reads and writes.
+   */
+  private fun chatCacheGatewayId(): String? {
+    connectedEndpoint?.stableId?.let { return it }
+    // Chat bootstrap can call this during construction, before the public preference aliases below
+    // initialize. Read their owner directly or onboarding can crash on a null StateFlow field.
+    if (prefs.manualEnabled.value) {
+      val host = prefs.manualHost.value.trim()
+      val port = prefs.manualPort.value
+      if (host.isEmpty() || port !in 1..65535) return null
+      return GatewayEndpoint.manual(host = host, port = port).stableId
+    }
+    return prefs.lastDiscoveredStableId.value.trim().takeIf { it.isNotEmpty() }
+  }
+
+  private fun chatCacheScope(): ChatCacheScope? =
+    chatCacheGatewayId()?.let { gatewayId ->
+      ChatCacheScope(gatewayId = gatewayId, connectionGeneration = connectAttemptSeq.get())
+    }
+
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> =
     lazy {
       // Reuse the existing TalkMode speech engine for native Android TTS playback
@@ -1223,11 +1280,16 @@ class NodeRuntime(
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
 
   /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
-  fun resetGatewaySetupAuth() {
+  suspend fun resetGatewaySetupAuth() {
     prefs.clearGatewaySetupAuth()
     val deviceId = identityStore.loadOrCreate().deviceId
     deviceAuthStore.clearToken(deviceId, "node")
     deviceAuthStore.clearToken(deviceId, "operator")
+    // A pairing/auth reset can precede pairing a different gateway principal at the same
+    // endpoint id. The purge must complete before pairing continues: queued commands are
+    // replayed on reconnect, so an async purge could flush stale rows to the new principal.
+    runCatching { chatTranscriptCache.clearAll() }
+    runCatching { chatCommandOutbox.clearAll() }
   }
 
   /** Persists onboarding state; callers decide whether runtime startup is needed first. */
@@ -1262,6 +1324,11 @@ class NodeRuntime(
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+
+  fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
+
+  fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
@@ -1311,7 +1378,7 @@ class NodeRuntime(
         refreshExecApprovalsFromGateway()
       }
     } else {
-      stopManualVoiceSession()
+      stopActiveVoiceSession()
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
     }
   }
@@ -1810,7 +1877,7 @@ class NodeRuntime(
 
   private fun stopActiveVoiceSession() {
     talkMode.ttsOnAllResponses = false
-    talkMode.setEnabled(false)
+    talkMode.stopAllCapture()
     stopVoicePlayback()
     micCapture.setMicEnabled(false)
     prefs.setVoiceMicEnabled(false)
@@ -1858,6 +1925,7 @@ class NodeRuntime(
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
     val storedOperatorEntry = loadStoredRoleDeviceAuthEntry("operator")
+    refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
     val usesStoredOperatorDeviceToken =
       operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
     val operatorAuth =
@@ -1912,6 +1980,7 @@ class NodeRuntime(
     notificationOutbox.clear()
     invalidateNodeCapabilityApprovalState()
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
+    chat.onGatewayScopeChanging()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
@@ -1957,6 +2026,24 @@ class NodeRuntime(
 
   private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
 
+  private fun refreshGatewayControlPage(
+    endpoint: GatewayEndpoint? = connectedEndpoint,
+    auth: GatewayConnectAuth = activeGatewayAuth ?: resolveGatewayConnectAuth(),
+    storedOperatorToken: String? = loadStoredRoleDeviceAuthEntry("operator")?.token,
+  ) {
+    if (endpoint == null) {
+      _gatewayControlPage.value = null
+      return
+    }
+    val pageAuth = resolveGatewayControlPageAuth(auth, storedOperatorToken)
+    _gatewayControlPage.value =
+      GatewayControlPage(
+        baseUrl = gatewayControlPageBaseUrl(endpoint),
+        token = pageAuth.token,
+        password = pageAuth.password,
+      )
+  }
+
   private fun connectAfterTlsCheck(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
@@ -1982,6 +2069,12 @@ class NodeRuntime(
     auth: GatewayConnectAuth,
   ) {
     beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+  }
+
+  /** HTTP(S) origin serving the connected gateway's Control UI pages. */
+  private fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
+    val scheme = if (endpoint.tlsEnabled) "https" else "http"
+    return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}"
   }
 
   internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth =
@@ -2073,8 +2166,10 @@ class NodeRuntime(
   fun disconnect() {
     notificationOutbox.clear()
     connectAttemptSeq.incrementAndGet()
+    chat.onGatewayScopeChanging()
     stopActiveVoiceSession()
     connectedEndpoint = null
+    _gatewayControlPage.value = null
     activeGatewayAuth = null
     updateStatus {
       operatorConnectionProblem = null
@@ -3451,6 +3546,44 @@ internal fun resolveOperatorSessionConnectAuth(
   )
 }
 
+internal fun resolveGatewayControlPageAuth(
+  auth: NodeRuntime.GatewayConnectAuth,
+  storedOperatorToken: String?,
+): NodeRuntime.GatewayConnectAuth {
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = explicitToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = explicitPassword,
+    )
+  }
+
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = storedToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  return NodeRuntime.GatewayConnectAuth(
+    token = null,
+    bootstrapToken = null,
+    password = null,
+  )
+}
+
 internal fun operatorSessionUsesStoredDeviceToken(
   auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
@@ -3635,11 +3768,7 @@ internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalSta
     else -> GatewayNodeApprovalState.Loading
   }
 
-internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean =
-  event == "node.pair.requested" || event == "node.pair.resolved"
-
-internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean =
-  error.details?.code == "PAIRING_REQUIRED"
+internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
 
 internal fun currentNodeCapabilityApproval(
   nodes: List<GatewayNodeSummary>,

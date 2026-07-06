@@ -252,6 +252,10 @@ import {
   LogsTailResultSchema,
   type TerminalAckResult,
   TerminalAckResultSchema,
+  type TerminalAttachParams,
+  TerminalAttachParamsSchema,
+  type TerminalAttachResult,
+  TerminalAttachResultSchema,
   type TerminalCloseParams,
   TerminalCloseParamsSchema,
   type TerminalDataEvent,
@@ -262,12 +266,20 @@ import {
   TerminalExitEventSchema,
   type TerminalInputParams,
   TerminalInputParamsSchema,
+  type TerminalListResult,
+  TerminalListResultSchema,
   type TerminalOpenParams,
   TerminalOpenParamsSchema,
   type TerminalOpenResult,
   TerminalOpenResultSchema,
   type TerminalResizeParams,
   TerminalResizeParamsSchema,
+  type TerminalSessionInfo,
+  TerminalSessionInfoSchema,
+  type TerminalTextParams,
+  TerminalTextParamsSchema,
+  type TerminalTextResult,
+  TerminalTextResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -493,6 +505,18 @@ import {
   WebLoginStartParamsSchema,
   type WebLoginWaitParams,
   WebLoginWaitParamsSchema,
+  type CrestodianChatParams,
+  CrestodianChatParamsSchema,
+  type CrestodianChatResult,
+  CrestodianChatResultSchema,
+  type CrestodianSetupDetectParams,
+  CrestodianSetupDetectParamsSchema,
+  type CrestodianSetupDetectResult,
+  CrestodianSetupDetectResultSchema,
+  type CrestodianSetupActivateParams,
+  CrestodianSetupActivateParamsSchema,
+  type CrestodianSetupActivateResult,
+  CrestodianSetupActivateResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -737,6 +761,15 @@ export const validateConfigSchemaLookupParams = lazyCompile<ConfigSchemaLookupPa
 export const validateConfigSchemaLookupResult = lazyCompile<ConfigSchemaLookupResult>(
   ConfigSchemaLookupResultSchema,
 );
+export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
+  CrestodianChatParamsSchema,
+);
+export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
+  CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
+  CrestodianSetupActivateParamsSchema,
+);
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
 export const validateWizardCancelParams = lazyCompile<WizardCancelParams>(WizardCancelParamsSchema);
@@ -938,6 +971,10 @@ export const validateTerminalResizeParams = lazyCompile<TerminalResizeParams>(
 );
 export const validateTerminalCloseParams =
   lazyCompile<TerminalCloseParams>(TerminalCloseParamsSchema);
+export const validateTerminalAttachParams = lazyCompile<TerminalAttachParams>(
+  TerminalAttachParamsSchema,
+);
+export const validateTerminalTextParams = lazyCompile<TerminalTextParams>(TerminalTextParamsSchema);
 export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
@@ -1117,6 +1154,12 @@ export {
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
+  CrestodianChatParamsSchema,
+  CrestodianChatResultSchema,
+  CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResultSchema,
+  CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1226,6 +1269,12 @@ export {
   TerminalInputParamsSchema,
   TerminalResizeParamsSchema,
   TerminalCloseParamsSchema,
+  TerminalAttachParamsSchema,
+  TerminalAttachResultSchema,
+  TerminalSessionInfoSchema,
+  TerminalListResultSchema,
+  TerminalTextParamsSchema,
+  TerminalTextResultSchema,
   TerminalAckResultSchema,
   TerminalDataEventSchema,
   TerminalExitEventSchema,
@@ -1284,6 +1333,12 @@ export type {
   ConfigPatchParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
+  CrestodianChatParams,
+  CrestodianChatResult,
+  CrestodianSetupDetectParams,
+  CrestodianSetupDetectResult,
+  CrestodianSetupActivateParams,
+  CrestodianSetupActivateResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1459,6 +1514,12 @@ export type {
   TerminalInputParams,
   TerminalResizeParams,
   TerminalCloseParams,
+  TerminalAttachParams,
+  TerminalAttachResult,
+  TerminalSessionInfo,
+  TerminalListResult,
+  TerminalTextParams,
+  TerminalTextResult,
   TerminalAckResult,
   TerminalDataEvent,
   TerminalExitEvent,

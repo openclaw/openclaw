@@ -20,6 +20,7 @@ type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" |
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 
 export type CodexAppServerTranscriptMirrorResult = {
+  assistantMirrorIdentitiesOwned: string[];
   userMessagesPresent: MirroredUserMessage[];
 };
 
@@ -107,7 +108,7 @@ export async function mirrorTranscriptBestEffort(params: {
   cwd: string;
   threadId: string;
   turnId: string;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     const messages = await resolveFinalCodexMirrorMessages({
       params: params.params,
@@ -130,10 +131,18 @@ export async function mirrorTranscriptBestEffort(params: {
       config: params.params.config,
     });
     for (const message of mirrorResult.userMessagesPresent) {
-      params.notifyUserMessagePersisted(message);
+      try {
+        params.notifyUserMessagePersisted(message);
+      } catch (error) {
+        embeddedAgentLog.warn("failed to notify codex app-server user-message persistence", {
+          error: formatErrorMessage(error),
+        });
+      }
     }
+    return mirrorResult.assistantMirrorIdentitiesOwned.includes(`${params.turnId}:assistant`);
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
+    return false;
   }
 }
 
@@ -286,11 +295,11 @@ export async function mirrorCodexAppServerTranscript(params: {
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
   if (messages.length === 0) {
-    return { userMessagesPresent: [] };
+    return { assistantMirrorIdentitiesOwned: [], userMessagesPresent: [] };
   }
 
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  const { appendedUpdates, userMessagesPresent } = await withSessionTranscriptWriteLock(
+  const mirrorBatch = await withSessionTranscriptWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       const nextAppendedUpdates: Array<{
@@ -298,6 +307,7 @@ export async function mirrorCodexAppServerTranscript(params: {
         message: AgentMessage;
         messageSeq: number;
       }> = [];
+      const nextAssistantMirrorIdentitiesOwned = new Set<string>();
       const nextUserMessagesPresent: MirroredUserMessage[] = [];
       const mirrorState = readTranscriptMirrorState(await transcript.readEvents());
       let nextMessageSeq = mirrorState.messageCount;
@@ -315,6 +325,9 @@ export async function mirrorCodexAppServerTranscript(params: {
           if (persistedUserMessage) {
             nextUserMessagesPresent.push(persistedUserMessage);
           }
+          if (message.role === "assistant") {
+            nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
+          }
           continue;
         }
         const nextMessage = runAgentHarnessBeforeMessageWriteHook({
@@ -323,6 +336,12 @@ export async function mirrorCodexAppServerTranscript(params: {
           sessionKey: params.sessionKey,
         });
         if (!nextMessage) {
+          if (message.role === "assistant") {
+            // A transcript hook deliberately blocked this logical assistant row.
+            // Treat that as an authoritative persistence decision so delivery
+            // does not bypass the hook with a fallback mirror.
+            nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
+          }
           continue;
         }
         const messageToAppend = (
@@ -342,6 +361,9 @@ export async function mirrorCodexAppServerTranscript(params: {
           continue;
         }
         const { messageId, message: appendedMessage } = appended;
+        if (message.role === "assistant") {
+          nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
+        }
         if (appendedMessage.role === "user") {
           nextUserMessagesPresent.push(appendedMessage);
           if (idempotencyKey) {
@@ -358,24 +380,37 @@ export async function mirrorCodexAppServerTranscript(params: {
           mirrorState.idempotencyKeys.add(idempotencyKey);
         }
       }
-      return { appendedUpdates: nextAppendedUpdates, userMessagesPresent: nextUserMessagesPresent };
+      return {
+        appendedUpdates: nextAppendedUpdates,
+        assistantMirrorIdentitiesOwned: [...nextAssistantMirrorIdentitiesOwned],
+        userMessagesPresent: nextUserMessagesPresent,
+      };
     },
   );
+  const { appendedUpdates, assistantMirrorIdentitiesOwned, userMessagesPresent } = mirrorBatch;
 
   for (const update of appendedUpdates) {
-    await publishSessionTranscriptUpdateByIdentity({
-      ...transcriptTarget,
-      update: {
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        message: update.message,
-        messageId: update.messageId,
-        messageSeq: update.messageSeq,
-      },
-    });
+    try {
+      await publishSessionTranscriptUpdateByIdentity({
+        ...transcriptTarget,
+        update: {
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          message: update.message,
+          messageId: update.messageId,
+          messageSeq: update.messageSeq,
+        },
+      });
+    } catch (error) {
+      // The transcript append is already committed. A transient live-update
+      // failure must not make dispatch append a second assistant message.
+      embeddedAgentLog.warn("failed to publish codex app-server transcript update", {
+        error: formatErrorMessage(error),
+      });
+    }
   }
 
-  return { userMessagesPresent };
+  return { assistantMirrorIdentitiesOwned, userMessagesPresent };
 }
 
 function resolveCodexMirrorTranscriptTarget(params: {
@@ -418,5 +453,9 @@ function readTranscriptMirrorState(events: unknown[]): {
       }
     }
   }
-  return { idempotencyKeys, messageCount, userMessagesByIdempotencyKey };
+  return {
+    idempotencyKeys,
+    messageCount,
+    userMessagesByIdempotencyKey,
+  };
 }

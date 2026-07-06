@@ -70,7 +70,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
-  "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
+  "update.channel":
+    'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only and foreground-only.',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
   "update.auto.stableDelayHours":
@@ -95,9 +96,11 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
-    "Enables the operator terminal for admin-scope clients when true (default). Disable to remove the browser/mobile shell surface entirely; an authenticated admin operator can already drive host commands, so treat this as a convenience-versus-exposure trade-off. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
+    "Enables the operator terminal for admin-scope clients when true (default: false). This exposes a browser/mobile shell with the gateway process environment, so enable it only for trusted operator deployments. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
   "gateway.terminal.shell":
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
+  "gateway.terminal.detachedSessionTimeoutSeconds":
+    "Seconds a terminal session survives after its connection drops (laptop sleep, page reload), staying reattachable via terminal.attach with its recent output replayed. Set 0 to kill sessions the moment the connection drops. Default: 300 (5 minutes). Detached sessions keep running their commands, so shorten this on shared or exposed hosts.",
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
@@ -198,6 +201,14 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
   "talk.realtime.transport":
     "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
+  "talk.realtime.vadThreshold":
+    "Realtime voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive).",
+  "talk.realtime.silenceDurationMs":
+    "Milliseconds of silence before a realtime Talk user turn is committed.",
+  "talk.realtime.prefixPaddingMs":
+    "Milliseconds of audio retained before realtime voice activity is detected.",
+  "talk.realtime.reasoningEffort":
+    "Provider-specific reasoning effort for realtime Talk sessions, such as minimal, low, medium, or high.",
   "talk.realtime.brain":
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
@@ -411,9 +422,9 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy.hostnameAllowlist":
     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
   "browser.remoteCdpTimeoutMs":
-    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
+    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. The larger of this value and remoteCdpHandshakeTimeoutMs also bounds persistent remote tab enumeration. Increase for high-latency tunnels, or lower for faster failure detection.",
   "browser.remoteCdpHandshakeTimeoutMs":
-    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
+    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. The larger of this value and remoteCdpTimeoutMs also bounds persistent remote tab enumeration. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:
@@ -1440,6 +1451,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.utilityModel":
+    "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated session and thread titles. Falls back to the agent's primary model when unset.",
+  "agents.list.*.utilityModel":
+    "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
   "agents.list.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
   "agents.list.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
@@ -1997,7 +2012,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
-    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used.",
+    "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":

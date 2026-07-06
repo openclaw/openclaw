@@ -27,6 +27,17 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts utility models on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({ utilityModel: "openai/gpt-5.4-mini" })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      utilityModel: "google/gemini-3.1-flash-lite-preview",
+    });
+
+    expect(defaults.utilityModel).toBe("openai/gpt-5.4-mini");
+    expect(agent.utilityModel).toBe("google/gemini-3.1-flash-lite-preview");
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

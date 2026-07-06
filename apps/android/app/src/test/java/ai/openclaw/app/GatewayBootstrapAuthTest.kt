@@ -214,6 +214,48 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun resolveGatewayControlPageAuthFallsBackToStoredOperatorToken() {
+    val resolved =
+      resolveGatewayControlPageAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = " stored-token ",
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "stored-token", bootstrapToken = null, password = null),
+      resolved,
+    )
+  }
+
+  @Test
+  fun resolveGatewayControlPageAuthPrefersExplicitSharedAuth() {
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+      resolveGatewayControlPageAuth(
+        auth =
+          NodeRuntime.GatewayConnectAuth(
+            token = " shared-token ",
+            bootstrapToken = "bootstrap-1",
+            password = "shared-password",
+          ),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "shared-password"),
+      resolveGatewayControlPageAuth(
+        auth =
+          NodeRuntime.GatewayConnectAuth(
+            token = null,
+            bootstrapToken = "bootstrap-1",
+            password = " shared-password ",
+          ),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+  }
+
+  @Test
   fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
     assertEquals(
       ConnectionManager.nativeClientOperatorScopes,
@@ -562,7 +604,7 @@ class GatewayBootstrapAuthTest {
     authStore.saveToken(deviceId, "node", "stale-node-token")
     authStore.saveToken(deviceId, "operator", "stale-operator-token")
 
-    runtime.resetGatewaySetupAuth()
+    runBlocking { runtime.resetGatewaySetupAuth() }
 
     assertNull(prefs.loadGatewayToken())
     assertNull(prefs.loadGatewayBootstrapToken())
@@ -623,6 +665,46 @@ class GatewayBootstrapAuthTest {
       assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
       assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
     }
+
+  @Test
+  fun backgroundingStopsTalkModeCapture() {
+    val app = RuntimeEnvironment.getApplication()
+    val runtime = NodeRuntime(app)
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
+    readField<MutableStateFlow<Boolean>>(talkMode, "_isEnabled").value = true
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+    talkMode.ttsOnAllResponses = true
+
+    assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
+    assertTrue(talkMode.isEnabled.value)
+    assertTrue(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+
+    runtime.setForeground(false)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(talkMode.isEnabled.value)
+    assertFalse(talkMode.ttsOnAllResponses)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+  }
+
+  @Test
+  fun backgroundingStopsGatewayPttWhenVoiceModeIsOff() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = NodeRuntime(app)
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    writeField(talkMode, "activePttCaptureId", "capture-1")
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+
+    runtime.setForeground(false)
+
+    assertNull(readField<String?>(talkMode, "activePttCaptureId"))
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+  }
 
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {

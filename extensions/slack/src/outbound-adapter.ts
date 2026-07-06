@@ -69,7 +69,9 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   const username = normalizeOptionalString(identity.name);
   const iconUrl = normalizeOptionalString(identity.avatarUrl);
   const rawEmoji = normalizeOptionalString(identity.emoji);
-  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  // Live Slack accepts Unicode custom icons even though its docs show shortcode form.
+  // send.ts downgrades once per send when a workspace rejects the configured icon.
+  const iconEmoji = !iconUrl ? rawEmoji : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
   }
@@ -169,6 +171,12 @@ async function sendSlackOutboundMessage(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
+  deliveryQueueId?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["deliveryQueueId"];
+  onPlatformSendDispatch?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["onPlatformSendDispatch"];
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
   >[0]["onDeliveryResult"];
@@ -195,6 +203,8 @@ async function sendSlackOutboundMessage(params: {
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
+    deliveryQueueId: params.deliveryQueueId,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
     onDeliveryResult: params.onDeliveryResult
       ? async (progress) => {
           await params.onDeliveryResult?.(attachChannelToResult("slack", progress));
@@ -419,6 +429,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
+      deliveryQueueId,
+      onPlatformSendDispatch,
       onDeliveryResult,
     }) =>
       await sendSlackOutboundMessage({
@@ -430,6 +442,8 @@ export const slackOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
         identity,
+        deliveryQueueId,
+        onPlatformSendDispatch,
         onDeliveryResult,
       }),
     sendMedia: async ({

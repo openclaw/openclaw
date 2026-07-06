@@ -656,11 +656,12 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
-const legacyWhatsAppCrontabCheck: HealthCheck = {
+const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
   description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
   source: "doctor",
+  defaultEnabled: false,
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
       await import("../commands/doctor/cron/index.js");

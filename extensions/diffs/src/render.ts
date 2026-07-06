@@ -24,6 +24,13 @@ const MAX_PATCH_TOTAL_LINES = 120_000;
 const VIEWER_LOADER_DOCUMENT_PATH = "../../assets/viewer.js";
 const LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH = "../../../diffs-language-pack/assets/viewer.js";
 
+export class DiffRenderInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DiffRenderInputError";
+  }
+}
+
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
@@ -65,11 +72,19 @@ function resolveBeforeAfterFileName(params: {
   return DEFAULT_FILE_NAME;
 }
 
+function resolveDiffTypography(presentation: DiffRenderOptions["presentation"]): {
+  fontSize: number;
+  lineHeight: number;
+} {
+  const fontSize = normalizeDiffFontSize(presentation.fontSize);
+  const lineSpacing = normalizeDiffLineSpacing(presentation.lineSpacing);
+  const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
+  return { fontSize, lineHeight };
+}
+
 function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
   const fontFamily = escapeCssString(options.presentation.fontFamily);
-  const fontSize = normalizeDiffFontSize(options.presentation.fontSize);
-  const lineSpacing = normalizeDiffLineSpacing(options.presentation.lineSpacing);
-  const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
+  const { fontSize, lineHeight } = resolveDiffTypography(options.presentation);
   return {
     theme: {
       light: "pierre-light",
@@ -201,6 +216,10 @@ function buildHtmlDocument(params: {
   bodyHtml: string;
   theme: DiffRenderOptions["presentation"]["theme"];
   imageMaxWidth: number;
+  imageTypography: {
+    fontSize: number;
+    lineHeight: number;
+  };
   runtimeMode: "viewer" | "image";
   viewerRuntime: "base" | "language-pack";
 }): string {
@@ -208,6 +227,15 @@ function buildHtmlDocument(params: {
     params.viewerRuntime === "language-pack"
       ? LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH
       : VIEWER_LOADER_DOCUMENT_PATH;
+  const imageTypographyCss =
+    params.runtimeMode === "image"
+      ? `
+      .oc-frame[data-render-mode="image"] .oc-diff-host {
+        --diffs-font-size: ${params.imageTypography.fontSize}px;
+        --diffs-line-height: ${params.imageTypography.lineHeight}px;
+      }
+`
+      : "";
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -256,6 +284,7 @@ function buildHtmlDocument(params: {
       .oc-frame[data-render-mode="image"] {
         max-width: ${Math.max(640, Math.round(params.imageMaxWidth))}px;
       }
+${imageTypographyCss}
 
       [data-openclaw-diff-root] {
         display: grid;
@@ -364,54 +393,32 @@ async function renderBeforeAfterDiff(
     ...(lang ? { lang } : {}),
   };
   const { viewerOptions, imageOptions } = buildRenderVariants({ options, target });
-  const [viewerResult, imageResult] = await Promise.all([
-    viewerOptions
-      ? preloadMultiFileDiffWithFallback({
-          oldFile,
-          newFile,
-          options: viewerOptions,
-        })
-      : Promise.resolve(undefined),
-    imageOptions
-      ? preloadMultiFileDiffWithFallback({
-          oldFile,
-          newFile,
-          options: imageOptions,
-        })
-      : Promise.resolve(undefined),
-  ]);
-  const [viewerPayload, imagePayload] = await Promise.all([
-    viewerResult && viewerOptions
-      ? normalizeDiffViewerPayloadLanguages(
-          {
-            prerenderedHTML: viewerResult.prerenderedHTML,
-            oldFile: viewerResult.oldFile,
-            newFile: viewerResult.newFile,
-            options: viewerOptions,
-            langs: collectDiffPayloadLanguageHints({
-              oldFile: viewerResult.oldFile,
-              newFile: viewerResult.newFile,
-            }),
-          },
-          { languagePackAvailable },
-        )
-      : Promise.resolve(undefined),
-    imageResult && imageOptions
-      ? normalizeDiffViewerPayloadLanguages(
-          {
-            prerenderedHTML: imageResult.prerenderedHTML,
-            oldFile: imageResult.oldFile,
-            newFile: imageResult.newFile,
-            options: imageOptions,
-            langs: collectDiffPayloadLanguageHints({
-              oldFile: imageResult.oldFile,
-              newFile: imageResult.newFile,
-            }),
-          },
-          { languagePackAvailable },
-        )
-      : Promise.resolve(undefined),
-  ]);
+  const preloadOptions = viewerOptions ?? imageOptions;
+  if (!preloadOptions) {
+    throw new Error(`Unsupported diff render target: ${target}`);
+  }
+  const preloadResult = await preloadMultiFileDiffWithFallback({
+    oldFile,
+    newFile,
+    options: preloadOptions,
+  });
+  const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
+    {
+      prerenderedHTML: preloadResult.prerenderedHTML,
+      oldFile: preloadResult.oldFile,
+      newFile: preloadResult.newFile,
+      options: preloadOptions,
+      langs: collectDiffPayloadLanguageHints({
+        oldFile: preloadResult.oldFile,
+        newFile: preloadResult.newFile,
+      }),
+    },
+    { languagePackAvailable },
+  );
+  const viewerPayload = viewerOptions
+    ? { ...normalizedPayload, options: viewerOptions }
+    : undefined;
+  const imagePayload = imageOptions ? { ...normalizedPayload, options: imageOptions } : undefined;
   const section = buildRenderedSection({
     ...(viewerPayload ? { viewerPayload } : {}),
     ...(imagePayload ? { imagePayload } : {}),
@@ -441,10 +448,12 @@ async function renderPatchDiff(
       .map((fileDiff) => normalizePatchFileLanguage(fileDiff, { languagePackAvailable })),
   );
   if (files.length === 0) {
-    throw new Error("Patch input did not contain any file diffs.");
+    throw new DiffRenderInputError("Patch input did not contain any file diffs.");
   }
   if (files.length > MAX_PATCH_FILE_COUNT) {
-    throw new Error(`Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`);
+    throw new DiffRenderInputError(
+      `Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`,
+    );
   }
   const totalLines = files.reduce((sum, fileDiff) => {
     const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
@@ -452,51 +461,37 @@ async function renderPatchDiff(
     return sum + Math.max(splitLines, unifiedLines, 0);
   }, 0);
   if (totalLines > MAX_PATCH_TOTAL_LINES) {
-    throw new Error(`Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`);
+    throw new DiffRenderInputError(
+      `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
+    );
   }
 
   const { viewerOptions, imageOptions } = buildRenderVariants({ options, target });
+  const preloadOptions = viewerOptions ?? imageOptions;
+  if (!preloadOptions) {
+    throw new Error(`Unsupported diff render target: ${target}`);
+  }
   const sections = await Promise.all(
     files.map(async (fileDiff) => {
-      const [viewerResult, imageResult] = await Promise.all([
-        viewerOptions
-          ? preloadFileDiffWithFallback({
-              fileDiff,
-              options: viewerOptions,
-            })
-          : Promise.resolve(undefined),
-        imageOptions
-          ? preloadFileDiffWithFallback({
-              fileDiff,
-              options: imageOptions,
-            })
-          : Promise.resolve(undefined),
-      ]);
-
-      const [viewerPayload, imagePayload] = await Promise.all([
-        viewerResult && viewerOptions
-          ? normalizeDiffViewerPayloadLanguages(
-              {
-                prerenderedHTML: viewerResult.prerenderedHTML,
-                fileDiff: viewerResult.fileDiff,
-                options: viewerOptions,
-                langs: collectDiffPayloadLanguageHints({ fileDiff: viewerResult.fileDiff }),
-              },
-              { languagePackAvailable },
-            )
-          : Promise.resolve(undefined),
-        imageResult && imageOptions
-          ? normalizeDiffViewerPayloadLanguages(
-              {
-                prerenderedHTML: imageResult.prerenderedHTML,
-                fileDiff: imageResult.fileDiff,
-                options: imageOptions,
-                langs: collectDiffPayloadLanguageHints({ fileDiff: imageResult.fileDiff }),
-              },
-              { languagePackAvailable },
-            )
-          : Promise.resolve(undefined),
-      ]);
+      const preloadResult = await preloadFileDiffWithFallback({
+        fileDiff,
+        options: preloadOptions,
+      });
+      const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
+        {
+          prerenderedHTML: preloadResult.prerenderedHTML,
+          fileDiff: preloadResult.fileDiff,
+          options: preloadOptions,
+          langs: collectDiffPayloadLanguageHints({ fileDiff: preloadResult.fileDiff }),
+        },
+        { languagePackAvailable },
+      );
+      const viewerPayload = viewerOptions
+        ? { ...normalizedPayload, options: viewerOptions }
+        : undefined;
+      const imagePayload = imageOptions
+        ? { ...normalizedPayload, options: imageOptions }
+        : undefined;
 
       return buildRenderedSection({
         ...(viewerPayload ? { viewerPayload } : {}),
@@ -537,6 +532,7 @@ export async function renderDiffDocument(
       ? await renderBeforeAfterDiff(input, options, target)
       : await renderPatchDiff(input, options, target);
   const viewerRuntime = rendered.usesLanguagePack ? "language-pack" : "base";
+  const imageTypography = resolveDiffTypography(buildImageRenderOptions(options).presentation);
 
   return {
     ...(rendered.viewerBodyHtml
@@ -546,6 +542,7 @@ export async function renderDiffDocument(
             bodyHtml: rendered.viewerBodyHtml,
             theme: options.presentation.theme,
             imageMaxWidth: options.image.maxWidth,
+            imageTypography,
             runtimeMode: "viewer",
             viewerRuntime,
           }),
@@ -558,6 +555,7 @@ export async function renderDiffDocument(
             bodyHtml: rendered.imageBodyHtml,
             theme: options.presentation.theme,
             imageMaxWidth: options.image.maxWidth,
+            imageTypography,
             runtimeMode: "image",
             viewerRuntime,
           }),

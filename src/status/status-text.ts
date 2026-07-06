@@ -69,7 +69,7 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
 ]);
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 
-function resolveStatusChannelFeatureLine(params: {
+export function resolveStatusChannelFeatureLine(params: {
   cfg: OpenClawConfig;
   statusChannel: string;
   statusAccountId?: string;
@@ -274,7 +274,7 @@ function buildStatusUptimeLine(): string {
   return `⏱️ Uptime: gateway ${formatStatusUptimeDuration(gatewayUptimeMs)} · system ${formatStatusUptimeDuration(systemUptimeMs)}`;
 }
 
-async function resolveRuntimePluginHealthLine(): Promise<string> {
+async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
     return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());

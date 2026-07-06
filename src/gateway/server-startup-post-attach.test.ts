@@ -245,6 +245,8 @@ vi.mock("./server-tailscale.js", () => ({
 const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
+const { createGatewayCloseHandler } = await import("./server-close.js");
+const { createChatRunState } = await import("./server-chat-state.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
@@ -1894,9 +1896,6 @@ describe("startGatewayPostAttachRuntime", () => {
     const postReadySidecars = [{ stop: vi.fn() }];
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
-    const { createGatewayCloseHandler } = await import("./server-close.js");
-    const { createChatRunState } = await import("./server-chat-state.js");
-
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -1918,6 +1917,7 @@ describe("startGatewayPostAttachRuntime", () => {
       lifecycleUnsub: null,
       chatRunState: createChatRunState(),
       chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
       removeChatRun: vi.fn(),
       agentRunSeq: new Map(),
       nodeSendToSession: vi.fn(),

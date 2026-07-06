@@ -66,6 +66,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugin.approval.resolve", scope: "operator.approvals" },
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
+  { name: "crestodian.chat", scope: "operator.admin" },
+  { name: "crestodian.setup.detect", scope: "operator.admin" },
+  { name: "crestodian.setup.activate", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },
@@ -237,6 +240,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "nativeHook.invoke", scope: "operator.admin", advertise: false },
   { name: "web.login.start", scope: "operator.admin", advertise: false },
   { name: "web.login.wait", scope: "operator.admin", advertise: false },
+  // Terminal detach/reattach surface. Appended at the end (not next to the
+  // other terminal.* methods) so previously advertised method indices stay
+  // stable for older clients.
+  { name: "terminal.attach", scope: "operator.admin" },
+  { name: "terminal.list", scope: "operator.admin" },
+  { name: "terminal.text", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

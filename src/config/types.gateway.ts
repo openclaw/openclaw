@@ -70,6 +70,14 @@ export type TalkRealtimeConfig = {
   mode?: "realtime" | "stt-tts" | "transcription";
   /** Byte/session transport. */
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  /** Voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive). */
+  vadThreshold?: number;
+  /** Milliseconds of silence before the current user turn is committed. */
+  silenceDurationMs?: number;
+  /** Milliseconds of audio retained before detected speech begins. */
+  prefixPaddingMs?: number;
+  /** Provider-specific realtime reasoning effort. */
+  reasoningEffort?: string;
   /** Tool/agent strategy for realtime sessions. */
   brain?: "agent-consult" | "direct-tools" | "none";
   /** How Gateway relay handles final user transcripts when the provider skips a consult. */
@@ -269,13 +277,19 @@ export type GatewayRemoteConfig = {
  * host terminal is allowed.
  */
 export type GatewayTerminalConfig = {
-  /** Master switch for the operator terminal. Default: true. */
+  /** Master switch for the operator terminal. Default: false. */
   enabled?: boolean;
   /**
    * Shell executable to launch. When unset the host login shell is used
    * ($SHELL on Unix, %ComSpec% on Windows).
    */
   shell?: string;
+  /**
+   * How long (seconds) a session survives after its connection drops, staying
+   * reattachable via terminal.attach. 0 kills sessions on disconnect
+   * immediately. Default: 300.
+   */
+  detachedSessionTimeoutSeconds?: number;
 };
 
 /** Gateway config reload strategy for managed installs. */

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -367,6 +368,26 @@ describe("resolveReplyDirectives", () => {
     expect(result).toEqual({ kind: "reply", reply: { text: error.message } });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+  });
+
+  it("marks terminal directive replies for delivery under source suppression", async () => {
+    mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
+      kind: "reply",
+      reply: { text: "Model set to fable (anthropic/claude-fable-5) for this session." },
+    });
+
+    const { result } = await resolveHelloWithModelDefaults({
+      body: "/model fable",
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+    });
+
+    expect(result.kind).toBe("reply");
+    if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected a single directive reply");
+    }
+    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
   it("keeps one-turn fast mode with the resolved fast mode", async () => {

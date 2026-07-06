@@ -1,6 +1,6 @@
-// Keep the runtime class on the package specifier so built agent-core shares
-// constructor identity with @openclaw/llm-core; source types keep SDK d.ts bundled.
-import { EventStream as LlmEventStream } from "@openclaw/llm-core";
+// Keep the runtime class on the public package specifier so OpenClaw and
+// external consumers share one constructor identity.
+import { EventStream as LlmEventStream } from "@openclaw/ai/event-stream";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -667,6 +667,7 @@ async function executeToolCallsSequential(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       };
     } else {
@@ -745,6 +746,7 @@ async function executeToolCallsParallel(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(preparation.errorKind ? { errorKind: preparation.errorKind } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
@@ -800,6 +802,7 @@ type ImmediateToolCallOutcome = {
   kind: "immediate";
   result: AgentToolResult<unknown>;
   isError: boolean;
+  errorKind?: "argument-validation";
 };
 
 type ExecutedToolCallOutcome = {
@@ -812,6 +815,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
 };
 
@@ -1056,9 +1060,30 @@ async function prepareToolCall(
   const dispatchToolCall: AgentToolCall =
     tool.name === toolCall.name ? toolCall : { ...toolCall, name: tool.name };
 
+  let preparedToolCall: AgentToolCall;
   try {
-    const preparedToolCall = prepareToolCallArguments(tool, dispatchToolCall);
-    const validatedArgs = validateToolArguments(tool, preparedToolCall);
+    preparedToolCall = prepareToolCallArguments(tool, dispatchToolCall);
+  } catch (error) {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      isError: true,
+    };
+  }
+
+  let validatedArgs: unknown;
+  try {
+    validatedArgs = validateToolArguments(tool, preparedToolCall);
+  } catch (error) {
+    return {
+      kind: "immediate",
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+      isError: true,
+      errorKind: "argument-validation",
+    };
+  }
+
+  try {
     if (config.beforeToolCall) {
       const beforeResult = await config.beforeToolCall(
         {
@@ -1219,6 +1244,7 @@ async function emitToolExecutionEnd(
     result: finalized.result,
     isError: finalized.isError,
     executionStarted: finalized.executionStarted,
+    ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
     ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   });
 }

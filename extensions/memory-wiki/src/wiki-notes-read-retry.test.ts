@@ -479,6 +479,35 @@ describe("memory-wiki existing-page read retry", () => {
     expect(after).toContain(userNote);
   });
 
+  it("preserves chatgpt conversation notes containing replacement-pattern dollar sequences", async () => {
+    const { config, exportDir, pagePath } = await createChatGptImportFixture(
+      "memory-wiki-chatgpt-dollar-notes-",
+    );
+    const userNote = "Energy identity $$E=mc^2$$ and match $& and prefix $` and suffix $' end.";
+    const noteBlock = [
+      "<!-- openclaw:human:start -->",
+      userNote,
+      "<!-- openclaw:human:end -->",
+    ].join("\n");
+    const edited = (await fs.readFile(pagePath, "utf8")).replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      () => noteBlock,
+    );
+    await fs.writeFile(pagePath, edited, "utf8");
+
+    const second = await importChatGptConversations({
+      config,
+      exportPath: exportDir,
+      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+    });
+
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(second.createdCount).toBe(0);
+    expect(second.updatedCount).toBe(0);
+    expect(second.skippedCount).toBe(1);
+    expect(after).toContain(userNote);
+  });
+
   it("leaves a ChatGPT page unchanged after a persistent existing-page read failure", async () => {
     const { config, exportDir, pagePath } = await createChatGptImportFixture(
       "memory-wiki-chatgpt-persistent-read-",

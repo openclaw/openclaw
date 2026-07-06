@@ -211,8 +211,17 @@ export function createProfileTabOps({
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
         const ssrfPolicy = getCdpControlPolicy();
+        const resolved = state().resolved;
+        const timeoutMs = Math.max(
+          resolved.remoteCdpTimeoutMs,
+          resolved.remoteCdpHandshakeTimeoutMs,
+        );
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl, ssrfPolicy });
+        const pages = await listPagesViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          ssrfPolicy,
+          timeoutMs,
+        });
         return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
           targetId: p.targetId,
           title: p.title,

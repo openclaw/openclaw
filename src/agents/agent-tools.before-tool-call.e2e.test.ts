@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -1593,6 +1594,68 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
   });
 
+  it.each([
+    [
+      "surfaces validation rejections",
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message:
+          "invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+      }),
+      "Plugin approval request rejected: invalid plugin.approval.request params: at /title: must not have more than 80 characters",
+    ],
+    [
+      "keeps structured service failures on the unavailable fallback",
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "approval service unavailable",
+      }),
+      "Plugin approval required (gateway unavailable)",
+    ],
+  ])("%s", async (_label, error, expectedReason) => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "x".repeat(81),
+        description: "Gateway classification test",
+      },
+    });
+    mockCallGateway.mockRejectedValueOnce(error);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", expectedReason);
+  });
+
+  it("reports an expired accepted approval without calling it a request rejection", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: { title: "Approval", description: "Wait phase classification" },
+    });
+    mockCallGateway
+      .mockResolvedValueOnce({ id: "plugin:accepted", status: "accepted" })
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "approval expired or not found",
+        }),
+      );
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toHaveProperty(
+      "reason",
+      "Plugin approval no longer available: approval expired or not found",
+    );
+  });
+
   it("blocks when gateway returns no id", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -1941,6 +2004,7 @@ describe("before_tool_call requireApproval handling", () => {
       currentMessagingTarget: "channel:deliverable-1",
       agentAccountId: "acct-1",
       currentThreadTs: "thread-1",
+      approvalReviewerDeviceId: "device-tui-reviewer",
     });
     const readTool = tools.find((tool) => tool.name === "read");
     if (!readTool) {
@@ -1955,6 +2019,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
     expect(requestParams.turnSourceAccountId).toBe("acct-1");
     expect(requestParams.turnSourceThreadId).toBe("thread-1");
+    expect(requestParams.approvalReviewerDeviceIds).toEqual(["device-tui-reviewer"]);
   });
 
   it("omits turn source routing fields when ctx does not carry them", async () => {
