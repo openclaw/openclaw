@@ -9449,6 +9449,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Lifecycle
   - H2: Chat
+  - H3: Learn from recent work
   - H2: CLI
   - H2: Proposal content
   - H2: Support files
