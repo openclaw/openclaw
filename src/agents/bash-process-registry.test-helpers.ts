@@ -37,6 +37,7 @@ export function createProcessSessionFixture(params: {
     exitCode: undefined,
     exitSignal: undefined,
     truncated: false,
+    aggregateTruncated: false,
     backgrounded: params.backgrounded ?? false,
     cursorKeyMode: params.cursorKeyMode ?? "normal",
   };

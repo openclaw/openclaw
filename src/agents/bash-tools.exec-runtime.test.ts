@@ -799,6 +799,46 @@ describe("runExecProcess POSIX command wrapper", () => {
     expect(supervisorMock.spawn.mock.calls[1]?.[0].timeoutMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 
+  it("does not mark complete aggregate output truncated when only pending buffers are capped", async () => {
+    const output = "x".repeat(120);
+    supervisorMock.spawn.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => {
+        input.onStdout?.(output);
+        return {
+          runId: "mock-run",
+          startedAtMs: Date.now(),
+          wait: async () => ({
+            reason: "exit" as const,
+            exitCode: 0,
+            exitSignal: null,
+            durationMs: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+          cancel: vi.fn(),
+        };
+      },
+    );
+
+    const outcome = await runExecProcess({
+      command: "emit pending-capped output",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: [],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 50,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.aggregated).toBe(output);
+    expect(outcome.truncated).toBe(false);
+  });
   it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
     if (process.platform === "win32") {
       return;

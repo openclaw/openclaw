@@ -81,6 +81,7 @@ export interface ProcessSession {
   exitReason?: TerminationReason;
   exited: boolean;
   truncated: boolean;
+  aggregateTruncated: boolean;
   backgrounded: boolean;
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
@@ -165,8 +166,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   }
   session.totalOutputChars += chunk.length;
   const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
-  session.truncated =
-    session.truncated || aggregated.length < session.aggregated.length + chunk.length;
+  const aggregateTruncated = aggregated.length < session.aggregated.length + chunk.length;
+  session.aggregateTruncated = session.aggregateTruncated || aggregateTruncated;
+  session.truncated = session.truncated || aggregateTruncated;
   session.aggregated = aggregated;
   session.tail = tail(session.aggregated, 2000);
 }

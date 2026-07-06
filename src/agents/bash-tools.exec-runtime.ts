@@ -737,6 +737,7 @@ export async function runExecProcess(opts: {
     exitCode: undefined as number | null | undefined,
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
+    aggregateTruncated: false,
     backgrounded: false,
     cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
@@ -960,7 +961,7 @@ export async function runExecProcess(opts: {
             error: retryErr,
             aggregated: session.aggregated.trim(),
             durationMs: Date.now() - startedAt,
-            truncated: session.truncated,
+            truncated: session.aggregateTruncated,
           }),
           sessionKey: opts.sessionKey,
           target: diagnosticTarget,
@@ -977,7 +978,7 @@ export async function runExecProcess(opts: {
           error: err,
           aggregated: session.aggregated.trim(),
           durationMs: Date.now() - startedAt,
-          truncated: session.truncated,
+          truncated: session.aggregateTruncated,
         }),
         sessionKey: opts.sessionKey,
         target: diagnosticTarget,
@@ -1002,7 +1003,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
-        truncated: session.truncated,
+        truncated: session.aggregateTruncated,
       });
 
       markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
@@ -1035,7 +1036,7 @@ export async function runExecProcess(opts: {
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
-        truncated: session.truncated,
+        truncated: session.aggregateTruncated,
       });
       emitExecProcessCompleted({
         command: opts.command,
