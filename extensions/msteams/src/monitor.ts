@@ -406,13 +406,16 @@ export async function monitorMSTeamsProvider(
   // Bot Framework token exchange or persist anything).
   let ssoDeps: MSTeamsSsoDeps | undefined;
   if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
+    const userTokenBaseUrl = app.cloud?.tokenServiceUrl?.trim();
     ssoDeps = {
       tokenProvider,
       tokenStore: createMSTeamsSsoTokenStoreFs(),
       connectionName: msteamsCfg.sso.connectionName,
+      ...(userTokenBaseUrl ? { userTokenBaseUrl } : {}),
     };
     log.debug?.("msteams sso enabled", {
       connectionName: msteamsCfg.sso.connectionName,
+      ...(userTokenBaseUrl ? { userTokenBaseUrl } : {}),
     });
   }
 

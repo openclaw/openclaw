@@ -135,19 +135,31 @@ const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const runMSTeamsFileConsentInvokeHandler = vi.hoisted(() => vi.fn(async () => {}));
 const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
-  vi.fn(async (_creds?: unknown, _options?: unknown) => ({
-    app: {
-      on: vi.fn(),
-      event: vi.fn(),
-      onTokenExchange: vi.fn(async () => ({ status: 200 })),
-      onVerifyState: vi.fn(async () => ({ status: 200 })),
-      initialize: vi.fn(async () => {}),
-      tokenManager: {
-        getBotToken: vi.fn(async () => ({ toString: (): string => "bot-token" })),
-        getGraphToken: vi.fn(async () => ({ toString: (): string => "graph-token" })),
+  vi.fn(async (_creds?: unknown, options?: unknown) => {
+    const cloud = (options as { cloud?: string } | undefined)?.cloud;
+    const tokenServiceUrl =
+      cloud === "USGov"
+        ? "https://tokengcch.botframework.azure.us"
+        : cloud === "USGovDoD"
+          ? "https://apiDoD.botframework.azure.us"
+          : cloud === "China"
+            ? "https://token.botframework.azure.cn"
+            : "https://token.botframework.com";
+    return {
+      app: {
+        on: vi.fn(),
+        event: vi.fn(),
+        onTokenExchange: vi.fn(async () => ({ status: 200 })),
+        onVerifyState: vi.fn(async () => ({ status: 200 })),
+        initialize: vi.fn(async () => {}),
+        cloud: { tokenServiceUrl },
+        tokenManager: {
+          getBotToken: vi.fn(async () => ({ toString: (): string => "bot-token" })),
+          getGraphToken: vi.fn(async () => ({ toString: (): string => "graph-token" })),
+        },
       },
-    },
-  })),
+    };
+  }),
 );
 
 const ssoTokenStore = vi.hoisted(() => ({
@@ -289,6 +301,10 @@ function createJsonResponse(body: unknown, status = 200): globalThis.Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function getFetchInputUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
 function createOversizedResponse(): globalThis.Response {
@@ -508,8 +524,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        const url = getFetchInputUrl(input);
         if (url.includes("/api/usertoken/exchange")) {
           expect(init?.method).toBe("POST");
           expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer mock-token");
@@ -627,6 +642,98 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         expiresAt: "2031-02-03T04:05:06Z",
       }),
     );
+
+    abort.abort();
+    await task;
+  });
+
+  it("preserves the SDK cloud User Token service URL for registered SSO routes", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    updateMSTeamsConfig(cfg, {
+      cloud: "USGov",
+      serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
+      sso: { enabled: true, connectionName: "graph" },
+    });
+    const requestedUrls: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request): Promise<globalThis.Response> => {
+      const url = getFetchInputUrl(input);
+      requestedUrls.push(url);
+      if (url.includes("/api/usertoken/exchange")) {
+        return createJsonResponse({
+          channelId: "msteams",
+          connectionName: "graph",
+          token: "gov-token-exchange",
+        });
+      }
+      if (url.includes("/api/usertoken/GetToken")) {
+        return createJsonResponse({
+          channelId: "msteams",
+          connectionName: "graph",
+          token: "gov-token-state",
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
+      cloud: "USGov",
+      serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
+      oauthDefaultConnectionName: "graph",
+    });
+
+    const tokenExchangeHandler = await getRegisteredMSTeamsRoute("signin.token-exchange");
+    await expect(
+      tokenExchangeHandler({
+        activity: {
+          type: "invoke",
+          name: "signin/tokenExchange",
+          channelId: "msteams",
+          from: { id: "29:user" },
+          value: {
+            id: "exchange-gov",
+            connectionName: "graph",
+            token: "exchangeable-token",
+          },
+        },
+      }),
+    ).resolves.toEqual({ status: 200 });
+
+    const verifyStateHandler = await getRegisteredMSTeamsRoute("signin.verify-state");
+    await expect(
+      verifyStateHandler({
+        activity: {
+          type: "invoke",
+          name: "signin/verifyState",
+          channelId: "msteams",
+          from: { id: "29:user" },
+          value: { state: "654321" },
+        },
+      }),
+    ).resolves.toEqual({ status: 200 });
+
+    expect(requestedUrls).toHaveLength(2);
+    expect(requestedUrls).toEqual([
+      expect.stringMatching(
+        /^https:\/\/tokengcch\.botframework\.azure\.us\/api\/usertoken\/exchange\?/,
+      ),
+      expect.stringMatching(
+        /^https:\/\/tokengcch\.botframework\.azure\.us\/api\/usertoken\/GetToken\?/,
+      ),
+    ]);
 
     abort.abort();
     await task;

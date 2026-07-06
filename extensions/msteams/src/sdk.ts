@@ -162,6 +162,7 @@ export type MSTeamsApp = {
   };
   cloud?: {
     graphScope?: string;
+    tokenServiceUrl?: string;
   };
   api: {
     serviceUrl?: string;
