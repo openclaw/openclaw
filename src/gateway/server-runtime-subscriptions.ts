@@ -1,6 +1,7 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -16,8 +17,24 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 
+function dispatchEventHandler<TEvent>(params: {
+  loadHandler: () => Promise<(event: TEvent) => unknown>;
+  event: TEvent;
+  log: SubsystemLogger;
+  failureMessage: string;
+  context: Record<string, unknown>;
+}) {
+  void params
+    .loadHandler()
+    .then((handler) => handler(params.event))
+    .catch((error: unknown) => {
+      params.log.warn(params.failureMessage, { ...params.context, error });
+    });
+}
+
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  log: SubsystemLogger;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   broadcastToConnIds: (
     event: string,
@@ -234,7 +251,13 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     }
-    void getAgentEventHandler().then((handler) => handler(evt));
+    dispatchEventHandler({
+      loadHandler: getAgentEventHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Agent event dispatch failed",
+      context: { runId: evt.runId, stream: evt.stream },
+    });
   });
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
@@ -242,11 +265,23 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    void getTranscriptUpdateHandler().then((handler) => handler(evt));
+    dispatchEventHandler({
+      loadHandler: getTranscriptUpdateHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Transcript update dispatch failed",
+      context: { sessionKey: evt.sessionKey },
+    });
   });
 
   const lifecycleUnsub = onSessionLifecycleEvent((evt) => {
-    void getLifecycleEventHandler().then((handler) => handler(evt));
+    dispatchEventHandler({
+      loadHandler: getLifecycleEventHandler,
+      event: evt,
+      log: params.log,
+      failureMessage: "Lifecycle event dispatch failed",
+      context: { sessionKey: evt.sessionKey },
+    });
   });
 
   return {
