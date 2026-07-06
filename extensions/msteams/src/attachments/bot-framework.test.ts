@@ -514,6 +514,49 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         { status: 500 },
       ]);
     });
+
+    it("logs a warning when the attachmentInfo JSON response exceeds the byte cap", async () => {
+      const warn = vi.fn();
+      const hugeBody = JSON.stringify({
+        name: "doc.pdf",
+        type: "application/pdf",
+        views: [{ viewId: "original", size: 10 }],
+        padding: "x".repeat(128 * 1024),
+      });
+      const fetchFn: typeof fetch = (async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith("/v3/attachments/att-1")) {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(hugeBody));
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+
+      const media = await downloadMSTeamsBotFrameworkAttachment({
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        attachmentId: "att-1",
+        tokenProvider: buildTokenProvider(),
+        maxBytes: 10_000_000,
+        fetchFn,
+        fetchFnSupportsDispatcher: true,
+        resolveFn: resolvePublicHost,
+        logger: { warn },
+      });
+
+      expect(media).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(firstMockCall(warn, "logger.warn")[0]).toBe(
+        "msteams botFramework attachmentInfo parse failed",
+      );
+    });
   });
 });
 
