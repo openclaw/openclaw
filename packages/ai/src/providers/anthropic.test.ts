@@ -1992,7 +1992,7 @@ describe("Anthropic provider", () => {
       for await (const event of stream) {
         events.push(event);
       }
-    } catch (err) {
+    } catch {
       // Stream itself doesn't throw, it emits 'error' event
     }
 
