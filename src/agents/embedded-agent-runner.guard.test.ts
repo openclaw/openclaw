@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   attachRuntimeUserTurnTranscriptContext,
@@ -27,11 +27,10 @@ function assistantToolCall(id: string): AgentMessage {
 }
 
 describe("guardSessionManager integration", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
     resetGlobalHookRunner();
-    cleanupTempDirs(tempDirs);
   });
 
   it("persists synthetic toolResult before subsequent assistant message", () => {
@@ -206,7 +205,7 @@ describe("guardSessionManager integration", () => {
   });
 
   it("commits queued group sender metadata to JSONL and completes its recorder", () => {
-    const dir = makeTempDir(tempDirs, "openclaw-queued-group-turn-");
+    const dir = tempDirs.make("openclaw-queued-group-turn-");
     const sessionManager = SessionManager.create(dir, dir);
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) {
