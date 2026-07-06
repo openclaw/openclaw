@@ -51,6 +51,7 @@ import {
 import {
   UPDATE_IN_PROGRESS_ENV,
   UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
+  UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
 } from "./doctor/shared/update-phase.js";
@@ -93,6 +94,12 @@ function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
     !legacyWizardParent &&
     !normalizedParentArgs.includes("--no-restart")
   );
+}
+
+function updateParentAllowsGatewayServiceRepair(env: NodeJS.ProcessEnv): boolean {
+  const repairPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV];
+  // A legacy parent cannot prove which checkout owns the service. First upgrade fails closed.
+  return repairPolicy !== undefined && isTruthyEnvValue(repairPolicy);
 }
 
 const execFileAsync = promisify(execFile);
@@ -645,6 +652,13 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+  if (updateRepairMode && !updateParentAllowsGatewayServiceRepair(process.env)) {
+    note(
+      "Update parent did not authorize changes to this gateway service definition; leaving it unchanged.",
+      "Gateway service config",
+    );
+    return cfg;
+  }
   if (
     shouldDeferUpdateModeSystemdServiceRepair({
       repairMode: prompter.repairMode,

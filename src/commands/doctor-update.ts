@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
@@ -42,25 +43,81 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     : "not-git";
 }
 
-async function restartRunningGatewayServiceAfterUpdate(runtime: RuntimeEnv): Promise<boolean> {
+type GatewayServiceUpdatePolicy = {
+  allowGatewayServiceRepair: boolean;
+  allowGatewayActivation: boolean;
+};
+
+type GatewayServiceUpdateInspection = GatewayServiceUpdatePolicy & {
+  service?: ReturnType<typeof resolveGatewayService>;
+  state?: Awaited<ReturnType<typeof readGatewayServiceState>>;
+};
+
+const NO_GATEWAY_SERVICE_UPDATE: GatewayServiceUpdatePolicy = {
+  allowGatewayServiceRepair: false,
+  allowGatewayActivation: false,
+};
+
+async function inspectGatewayServiceForUpdate(
+  root: string,
+): Promise<GatewayServiceUpdateInspection> {
+  if (isServiceRepairExternallyManaged()) {
+    return NO_GATEWAY_SERVICE_UPDATE;
+  }
+  try {
+    const service = resolveGatewayService();
+    const state = await readGatewayServiceState(service, { env: process.env });
+    if (!state.installed) {
+      return NO_GATEWAY_SERVICE_UPDATE;
+    }
+    const layout = await summarizeGatewayServiceLayout(state.command);
+    const serviceRoot = layout?.packageRootReal ?? layout?.packageRoot;
+    const serviceEntrypoint = layout?.entrypoint;
+    if (
+      !serviceRoot ||
+      !serviceEntrypoint ||
+      (!path.isAbsolute(serviceEntrypoint) && !path.win32.isAbsolute(serviceEntrypoint))
+    ) {
+      return NO_GATEWAY_SERVICE_UPDATE;
+    }
+    const [serviceRootReal, updateRootReal] = await Promise.all([
+      resolveComparablePath(serviceRoot),
+      resolveComparablePath(root),
+    ]);
+    if (serviceRootReal !== updateRootReal) {
+      return NO_GATEWAY_SERVICE_UPDATE;
+    }
+    return {
+      allowGatewayServiceRepair: true,
+      allowGatewayActivation: state.running,
+      service,
+      state,
+    };
+  } catch {
+    // Repair or activation can disrupt a different checkout, so unknown ownership fails closed.
+    return NO_GATEWAY_SERVICE_UPDATE;
+  }
+}
+
+async function restartRunningGatewayServiceAfterUpdate(
+  runtime: RuntimeEnv,
+  root: string,
+  wasOwnedAndRunning: boolean,
+): Promise<boolean> {
   if (isServiceRepairExternallyManaged()) {
     note(EXTERNAL_SERVICE_REPAIR_NOTE, "Update");
     return true;
   }
-  let service: ReturnType<typeof resolveGatewayService>;
-  let state: Awaited<ReturnType<typeof readGatewayServiceState>>;
-  try {
-    service = resolveGatewayService();
-    state = await readGatewayServiceState(service, { env: process.env });
-  } catch {
+  if (!wasOwnedAndRunning) {
     return true;
   }
-  if (!state.installed || !state.running) {
+  const inspection = await inspectGatewayServiceForUpdate(root);
+  if (!inspection.allowGatewayActivation || !inspection.service || !inspection.state) {
     return true;
   }
   try {
-    await service.restart({
-      env: state.env,
+    await inspection.service.restart({
+      env: inspection.state.env,
       stdout: process.stdout,
     });
     note("Restarted the running gateway service after updating OpenClaw.", "Update");
@@ -100,6 +157,11 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return { updated: false };
     }
     note("Running update…", "Update");
+    const serviceInspection = await inspectGatewayServiceForUpdate(params.root);
+    const serviceUpdatePolicy: GatewayServiceUpdatePolicy = {
+      allowGatewayServiceRepair: serviceInspection.allowGatewayServiceRepair,
+      allowGatewayActivation: serviceInspection.allowGatewayActivation,
+    };
     const { progress, stop } = createUpdateProgress(process.stdout.isTTY);
     let result: UpdateRunResult;
     try {
@@ -107,7 +169,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         cwd: params.root,
         argv1: process.argv[1],
         progress,
-        allowGatewayActivation: true,
+        ...serviceUpdatePolicy,
       });
     } finally {
       stop();
@@ -124,7 +186,11 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       "Update result",
     );
     if (result.status === "ok") {
-      const restarted = await restartRunningGatewayServiceAfterUpdate(params.runtime);
+      const restarted = await restartRunningGatewayServiceAfterUpdate(
+        params.runtime,
+        params.root,
+        serviceUpdatePolicy.allowGatewayActivation,
+      );
       if (!restarted) {
         params.outro("Update completed, but gateway service restart failed.");
         params.runtime.exit(1);

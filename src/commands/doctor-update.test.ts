@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   readGatewayServiceState: vi.fn(),
   restartGatewayService: vi.fn(),
   resolveGatewayService: vi.fn(),
+  summarizeGatewayServiceLayout: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   runGatewayUpdate: vi.fn(),
 }));
@@ -34,6 +35,10 @@ vi.mock("../infra/update-runner.js", () => ({
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: mocks.readGatewayServiceState,
   resolveGatewayService: mocks.resolveGatewayService,
+}));
+
+vi.mock("../daemon/service-layout.js", () => ({
+  summarizeGatewayServiceLayout: mocks.summarizeGatewayServiceLayout,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
@@ -66,6 +71,7 @@ beforeEach(async () => {
   mocks.readGatewayServiceState.mockReset();
   mocks.restartGatewayService.mockReset();
   mocks.resolveGatewayService.mockReset();
+  mocks.summarizeGatewayServiceLayout.mockReset();
   mocks.runCommandWithTimeout.mockReset();
   mocks.runGatewayUpdate.mockReset();
   mocks.resolveGatewayService.mockReturnValue({
@@ -75,6 +81,12 @@ beforeEach(async () => {
     installed: false,
     running: false,
     env: {},
+  });
+  mocks.summarizeGatewayServiceLayout.mockResolvedValue({
+    execStart: "node /repo/link/dist/index.js gateway run",
+    entrypoint: "/repo/link/dist/index.js",
+    packageRoot: "/repo/link",
+    packageRootReal: "/repo/link",
   });
   Object.defineProperty(process.stdin, "isTTY", {
     configurable: true,
@@ -170,7 +182,11 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     await expect(runOffer({ root: "/repo/link", confirm })).rejects.toThrow("update exploded");
 
     expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ progress, allowGatewayActivation: true }),
+      expect.objectContaining({
+        progress,
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      }),
     );
     expect(mocks.createUpdateProgress).toHaveBeenCalledWith(true);
     expect(stop).toHaveBeenCalledTimes(1);
@@ -241,6 +257,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       installed: true,
       running: true,
       env: { OPENCLAW_PROFILE: "work" },
+      command: {
+        programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+      },
     });
 
     await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
@@ -252,10 +271,118 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       env: { OPENCLAW_PROFILE: "work" },
       stdout: process.stdout,
     });
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewayServiceRepair: true,
+        allowGatewayActivation: true,
+      }),
+    );
     expect(mocks.note).toHaveBeenCalledWith(
       "Restarted the running gateway service after updating OpenClaw.",
       "Update",
     );
+  });
+
+  it("does not activate or restart a running gateway owned by another checkout", async () => {
+    mockGitCheckout();
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+    });
+    mocks.readGatewayServiceState.mockResolvedValue({
+      installed: true,
+      running: true,
+      env: { OPENCLAW_PROFILE: "work" },
+      command: {
+        programArguments: ["node", "/repo/other/dist/index.js", "gateway", "run"],
+      },
+    });
+    mocks.summarizeGatewayServiceLayout.mockResolvedValue({
+      execStart: "node /repo/other/dist/index.js gateway run",
+      entrypoint: "/repo/other/dist/index.js",
+      packageRoot: "/repo/other",
+      packageRootReal: "/repo/other",
+    });
+
+    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+      updated: true,
+      handled: true,
+    });
+
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      }),
+    );
+    expect(mocks.restartGatewayService).not.toHaveBeenCalled();
+  });
+
+  it("does not repair or restart a service with an ambiguous relative entrypoint", async () => {
+    mockGitCheckout();
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+    });
+    mocks.readGatewayServiceState.mockResolvedValue({
+      installed: true,
+      running: true,
+      env: { OPENCLAW_PROFILE: "work" },
+      command: {
+        programArguments: ["node", "dist/index.js", "gateway", "run"],
+      },
+    });
+    mocks.summarizeGatewayServiceLayout.mockResolvedValue({
+      execStart: "node dist/index.js gateway run",
+      entrypoint: "dist/index.js",
+      packageRoot: "/repo/link",
+      packageRootReal: "/repo/link",
+    });
+
+    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+      updated: true,
+      handled: true,
+    });
+
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      }),
+    );
+    expect(mocks.restartGatewayService).not.toHaveBeenCalled();
+  });
+
+  it("repairs without activating a stopped gateway owned by this checkout", async () => {
+    mockGitCheckout();
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+    });
+    mocks.readGatewayServiceState.mockResolvedValue({
+      installed: true,
+      running: false,
+      env: { OPENCLAW_PROFILE: "work" },
+      command: {
+        programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+      },
+    });
+
+    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+      updated: true,
+      handled: true,
+    });
+
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewayServiceRepair: true,
+        allowGatewayActivation: false,
+      }),
+    );
+    expect(mocks.restartGatewayService).not.toHaveBeenCalled();
   });
 
   it("leaves a running gateway alone when service repair is externally managed", async () => {

@@ -336,13 +336,14 @@ export const updateHandlers: GatewayRequestHandlers = {
             : undefined;
         // Supervised Windows gateways, including Startup-folder fallbacks, take
         // the detached handoff above. This direct path is unsupervised, so keep
-        // doctor activation disabled: it could terminate the RPC server before
-        // the response and restart sentinel become durable.
+        // doctor service mutation disabled: it could rewrite or terminate the
+        // RPC server before the response and restart sentinel become durable.
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          allowGatewayServiceRepair: false,
           allowGatewayActivation: false,
         });
         // The CLI `openclaw update` resumes post-core plugin convergence after a
@@ -351,6 +352,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         const finalizeOutcome = await runPostCoreFinalizeAfterGatewayUpdate({
           result,
           channel: configChannel ?? undefined,
+          serviceRepairPolicy: "external",
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(preUpdateConfig ? { preUpdateConfig } : {}),
         });

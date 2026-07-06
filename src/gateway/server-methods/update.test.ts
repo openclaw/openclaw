@@ -381,9 +381,14 @@ describe("update.run timeout normalization", () => {
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
     const [updateParams] = firstMockCall(runGatewayUpdateMock, "gateway update") as [
-      { timeoutMs?: number; allowGatewayActivation?: boolean },
+      {
+        timeoutMs?: number;
+        allowGatewayServiceRepair?: boolean;
+        allowGatewayActivation?: boolean;
+      },
     ];
     expect(updateParams?.timeoutMs).toBe(1000);
+    expect(updateParams?.allowGatewayServiceRepair).toBe(false);
     expect(updateParams?.allowGatewayActivation).toBe(false);
   });
 });
@@ -822,9 +827,10 @@ describe("update.run post-core plugin finalize", () => {
     const [finalizeParams] = firstMockCall(
       runPostCoreFinalizeAfterGatewayUpdateMock,
       "post-core finalize",
-    ) as [{ result?: UpdateRunResult }];
+    ) as [{ result?: UpdateRunResult; serviceRepairPolicy?: string }];
     expect(finalizeParams.result?.mode).toBe("git");
     expect(finalizeParams.result?.status).toBe("ok");
+    expect(finalizeParams.serviceRepairPolicy).toBe("external");
     // Convergence succeeded, so the gateway is allowed to restart onto the new core.
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
