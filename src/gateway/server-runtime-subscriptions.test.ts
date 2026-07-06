@@ -256,7 +256,7 @@ describe("startGatewayEventSubscriptions", () => {
 
     // The stale dispose must not clear the replacement's observer slot.
     await staleSubs.taskUnsub();
-    staleSubs.agentUnsub();
+    await staleSubs.agentUnsub();
     staleSubs.heartbeatUnsub();
     staleSubs.transcriptUnsub();
     staleSubs.lifecycleUnsub();
