@@ -9,11 +9,11 @@ type VitestWorkerMarkers = {
 let requestedExitCode: number | undefined;
 
 function resolveVitestWorkerMarkers(): VitestWorkerMarkers {
+  const processMarkers = process as NodeJS.Process & Record<string, unknown>;
+  const globalMarkers = globalThis as typeof globalThis & Record<string, unknown>;
   return {
-    tinypoolState: (process as NodeJS.Process & { __tinypool_state__?: unknown })
-      .__tinypool_state__,
-    vitestWorker: (globalThis as typeof globalThis & { __vitest_worker__?: unknown })
-      .__vitest_worker__,
+    tinypoolState: processMarkers["__tinypool_state__"],
+    vitestWorker: globalMarkers["__vitest_worker__"],
   };
 }
 
