@@ -290,13 +290,13 @@ export async function monitorLineProvider(
                   });
                   replyTokenUsed = deliveryResult.replyTokenUsed;
 
-                  if (deliveryResult.visiblePartialDeliveryError) {
+                  if (deliveryResult.status === "partial") {
                     // Text reached the user but a rich/media bubble did not.
                     // Surface the tagged partial failure after adopting the
                     // consumed reply-token state so later blocks in this turn
                     // route correctly; recordChannelRuntimeState is skipped
                     // because this delivery was not a clean success.
-                    throw deliveryResult.visiblePartialDeliveryError;
+                    throw deliveryResult.error;
                   }
 
                   recordChannelRuntimeState({

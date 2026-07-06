@@ -43,6 +43,20 @@ export type LineAutoReplyDeps = {
   | "onReplyError"
 >;
 
+export type LineAutoReplyDeliveryResult =
+  | { status: "delivered"; replyTokenUsed: boolean }
+  | { status: "partial"; replyTokenUsed: boolean; error: Error };
+
+function markLineVisibleDeliveryError(error: unknown): Error {
+  if (error instanceof Error && Object.isExtensible(error)) {
+    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+    return error;
+  }
+  const visibleError = new Error("LINE rich or media message send failed", { cause: error });
+  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
+  return visibleError;
+}
+
 export async function deliverLineAutoReply(params: {
   payload: ReplyPayload;
   lineData: LineChannelData;
@@ -53,13 +67,9 @@ export async function deliverLineAutoReply(params: {
   cfg: OpenClawConfig;
   textLimit: number;
   deps: LineAutoReplyDeps;
-}): Promise<{ replyTokenUsed: boolean; visiblePartialDeliveryError?: Error }> {
+}): Promise<LineAutoReplyDeliveryResult> {
   const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
   let replyTokenUsed = params.replyTokenUsed;
-  // Set when the text reached the user but a rich/media bubble did not. Returned
-  // (not thrown) so the caller adopts the consumed reply-token state before it
-  // surfaces the failure.
-  let visiblePartialDeliveryError: Error | undefined;
 
   const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {
     if (messages.length === 0) {
@@ -183,15 +193,13 @@ export async function deliverLineAutoReply(params: {
       }
     }
     if (richMediaError !== undefined) {
-      // Tag the failure as a visible partial delivery so the caller reports it
-      // instead of silent success; visibleReplySent marks the text as visibly
-      // delivered so the foreground fallback/freshness path does not re-send it
-      // (see isVisiblePartialDeliveryError in src/auto-reply/dispatch.ts).
-      const partialError =
-        richMediaError instanceof Error
-          ? richMediaError
-          : new Error("LINE rich or media message send failed", { cause: richMediaError });
-      visiblePartialDeliveryError = Object.assign(partialError, { visibleReplySent: true });
+      // Preserve both generic send evidence and foreground visibility: downstream
+      // callers must surface the failure without retrying text the user already saw.
+      return {
+        status: "partial",
+        replyTokenUsed,
+        error: markLineVisibleDeliveryError(richMediaError),
+      };
     }
   } else {
     const combined = [...richMessages, ...mediaMessages];
@@ -225,8 +233,5 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  return {
-    replyTokenUsed,
-    ...(visiblePartialDeliveryError ? { visiblePartialDeliveryError } : {}),
-  };
+  return { status: "delivered", replyTokenUsed };
 }

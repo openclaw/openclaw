@@ -280,7 +280,10 @@ describe("deliverLineAutoReply", () => {
     // The partial failure is returned (not thrown) so the caller can adopt the
     // consumed reply-token state before surfacing it. visibleReplySent is the
     // signal dispatch uses to keep the sent text yet still report the failure.
-    expect(result.visiblePartialDeliveryError).toMatchObject({ visibleReplySent: true });
+    expect(result).toMatchObject({
+      status: "partial",
+      error: { sentBeforeError: true, visibleReplySent: true },
+    });
     expect(result.replyTokenUsed).toBe(true);
     // Text still reached the user over the reply token despite the rich failure.
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
@@ -308,10 +311,37 @@ describe("deliverLineAutoReply", () => {
       deps,
     });
 
-    expect(result.visiblePartialDeliveryError).toMatchObject({ visibleReplySent: true });
+    expect(result).toMatchObject({
+      status: "partial",
+      error: { sentBeforeError: true, visibleReplySent: true },
+    });
     expect(result.replyTokenUsed).toBe(true);
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
     expect(failingPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("wraps a non-extensible rich failure without losing visible-send evidence", async () => {
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
+    const frozenError = Object.freeze(new Error("push failed"));
+    const { deps } = createDeps({
+      pushMessagesLine: vi.fn(async () => {
+        throw frozenError;
+      }) as LineAutoReplyDeps["pushMessagesLine"],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "hello", channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      error: { sentBeforeError: true, visibleReplySent: true, cause: frozenError },
+    });
   });
 
   it("falls back to push when reply token delivery fails", async () => {
