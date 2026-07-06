@@ -1632,6 +1632,24 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
+  it("registers the ring-zero crestodian tool directly in searchable loading", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    // Ring-zero Crestodian runs (gateway crestodian.chat, TUI) carry exactly
+    // one tool; searchable loading must never defer it behind tool_search.
+    params.crestodianTool = { surface: "gateway" };
+
+    const toolBridge = createCodexToolBridgeForTest(params, [
+      createRuntimeDynamicTool("crestodian"),
+    ]);
+
+    const specs = flattenSpecsWithNamespace(toolBridge.specs);
+    const crestodian = specs.find((tool) => tool.name === "crestodian");
+    expect(crestodian).toBeDefined();
+    expect(crestodian).not.toHaveProperty("namespace");
+    expect(crestodian).not.toHaveProperty("deferLoading");
+  });
+
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),

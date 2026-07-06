@@ -94,9 +94,10 @@ export function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClaw
       entries: {
         codex: {
           enabled: true,
-          // Crestodian carries a single ring-zero tool; advertise it directly
-          // instead of hiding it behind the Codex tool-search index.
-          config: { codexDynamicToolsLoading: "direct" },
+          // No codexDynamicToolsLoading override: the harness force-registers
+          // the ring-zero crestodian tool directly for every crestodian run
+          // (resolveCodexDynamicToolDirectNames), and a per-run config override
+          // never reaches the harness pluginConfig on the gateway anyway.
         },
       },
     },

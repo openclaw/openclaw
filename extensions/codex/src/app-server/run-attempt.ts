@@ -3914,10 +3914,18 @@ function handleApprovalRequest(params: {
 }
 
 function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
-    return [];
+  const names: string[] = [];
+  // Ring-zero Crestodian runs act ONLY through the single `crestodian` tool
+  // (see CRESTODIAN_AGENT_SYSTEM_PROMPT). Deferring it into the searchable
+  // tool_search namespace makes the agent report the tool as missing, so it
+  // must register directly regardless of codexDynamicToolsLoading.
+  if (params.crestodianTool) {
+    names.push("crestodian");
   }
-  return ["message"];
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    names.push("message");
+  }
+  return names;
 }
 
 export const testing = {
