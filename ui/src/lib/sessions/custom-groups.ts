@@ -35,28 +35,55 @@ export function saveStoredSessionCustomGroups(groups: readonly string[]) {
 
 type SessionGroupClient = Pick<SessionCapability, "list" | "patch">;
 
-/**
- * Enumerate every session assigned to the group. The shared sidebar/page lists
- * are windowed (recent, active-only, per-agent), so group mutations must not
- * derive membership from them: `sessions.list` filters archived rows either-or,
- * hence the two unbounded queries.
- */
-async function listSessionGroupMembers(
+// The gateway caps sessions.list at a 100-row default when no limit is sent
+// (SESSIONS_LIST_DEFAULT_LIMIT), so enumeration must page via nextOffset or a
+// silent cap strands members in the old group. The page cap only bounds runaway
+// servers; 50 x 200 rows is far past any realistic session store.
+const GROUP_MEMBER_PAGE_LIMIT = 200;
+const GROUP_MEMBER_PAGE_CAP = 50;
+
+async function collectSessionGroupWindow(
   sessions: SessionGroupClient,
   group: string,
-): Promise<GatewaySessionRow[]> {
-  const results = await Promise.all([
-    sessions.list({ activeMinutes: 0, limit: 0 }),
-    sessions.list({ activeMinutes: 0, limit: 0, showArchived: true }),
-  ]);
-  const members = new Map<string, GatewaySessionRow>();
-  for (const result of results) {
+  showArchived: boolean,
+  members: Map<string, GatewaySessionRow>,
+): Promise<void> {
+  let offset = 0;
+  for (let page = 0; page < GROUP_MEMBER_PAGE_CAP; page += 1) {
+    const result = await sessions.list({
+      activeMinutes: 0,
+      limit: GROUP_MEMBER_PAGE_LIMIT,
+      ...(offset > 0 ? { offset } : {}),
+      ...(showArchived ? { showArchived: true } : {}),
+    });
     for (const row of result?.sessions ?? []) {
       if (row.category?.trim() === group && !members.has(row.key)) {
         members.set(row.key, row);
       }
     }
+    const nextOffset = result?.hasMore ? result.nextOffset : null;
+    if (typeof nextOffset !== "number" || nextOffset <= offset) {
+      return;
+    }
+    offset = nextOffset;
   }
+}
+
+/**
+ * Enumerate every session assigned to the group. The shared sidebar/page lists
+ * are windowed (recent, active-only, per-agent), so group mutations must not
+ * derive membership from them: `sessions.list` filters archived rows either-or,
+ * hence the two paged queries.
+ */
+async function listSessionGroupMembers(
+  sessions: SessionGroupClient,
+  group: string,
+): Promise<GatewaySessionRow[]> {
+  const members = new Map<string, GatewaySessionRow>();
+  await Promise.all([
+    collectSessionGroupWindow(sessions, group, false, members),
+    collectSessionGroupWindow(sessions, group, true, members),
+  ]);
   return [...members.values()];
 }
 

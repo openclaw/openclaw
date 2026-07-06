@@ -13,21 +13,37 @@ function row(key: string, category?: string): GatewaySessionRow {
   return { key, kind: "direct", updatedAt: null, category };
 }
 
-function listResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return { sessions } as SessionsListResult;
+function listResult(
+  sessions: GatewaySessionRow[],
+  page: { hasMore?: boolean; nextOffset?: number | null } = {},
+): SessionsListResult {
+  return {
+    sessions,
+    hasMore: page.hasMore ?? false,
+    nextOffset: page.nextOffset ?? null,
+  } as SessionsListResult;
 }
 
 function fakeSessions(params: {
   active: GatewaySessionRow[];
   archived?: GatewaySessionRow[];
   failKeys?: readonly string[];
+  pageSize?: number;
 }) {
   const patches: Array<{ key: string; patch: SessionPatch; agentId?: string }> = [];
   return {
     patches,
-    list: vi.fn(async (options?: SessionListOptions) =>
-      listResult(options?.showArchived ? (params.archived ?? []) : params.active),
-    ),
+    list: vi.fn(async (options?: SessionListOptions) => {
+      const rows = options?.showArchived ? (params.archived ?? []) : params.active;
+      const pageSize = params.pageSize ?? (rows.length || 1);
+      const offset = options?.offset ?? 0;
+      const page = rows.slice(offset, offset + pageSize);
+      const nextOffset = offset + page.length;
+      return listResult(page, {
+        hasMore: nextOffset < rows.length,
+        nextOffset: nextOffset < rows.length ? nextOffset : null,
+      });
+    }),
     patch: vi.fn(async (key: string, patch: SessionPatch, options?: { agentId?: string }) => {
       if (params.failKeys?.includes(key)) {
         throw new Error(`patch failed: ${key}`);
@@ -67,9 +83,30 @@ describe("renameSessionGroup", () => {
       { key: "agent:main:paper-b", patch: { category: "Projects" }, agentId: "main" },
       { key: "agent:main:old-notes", patch: { category: "Projects" }, agentId: "main" },
     ]);
-    // Both windows are unbounded: archived rows keep their group on restore.
-    expect(sessions.list).toHaveBeenCalledWith({ activeMinutes: 0, limit: 0 });
-    expect(sessions.list).toHaveBeenCalledWith({ activeMinutes: 0, limit: 0, showArchived: true });
+    // Both windows page explicitly: an absent limit is capped at 100 rows
+    // server-side, and archived rows must keep their group on restore.
+    expect(sessions.list).toHaveBeenCalledWith({ activeMinutes: 0, limit: 200 });
+    expect(sessions.list).toHaveBeenCalledWith({
+      activeMinutes: 0,
+      limit: 200,
+      showArchived: true,
+    });
+  });
+
+  it("pages through nextOffset so members beyond the first window are renamed", async () => {
+    const active = Array.from({ length: 5 }, (_, index) =>
+      row(`agent:main:s-${index}`, index >= 3 ? "Research" : "Other"),
+    );
+    const sessions = fakeSessions({ active, pageSize: 2 });
+
+    await renameSessionGroup(sessions, "Research", "Projects");
+
+    expect(sessions.patches.map((entry) => entry.key)).toEqual([
+      "agent:main:s-3",
+      "agent:main:s-4",
+    ]);
+    expect(sessions.list).toHaveBeenCalledWith({ activeMinutes: 0, limit: 200, offset: 2 });
+    expect(sessions.list).toHaveBeenCalledWith({ activeMinutes: 0, limit: 200, offset: 4 });
   });
 
   it("remembers the new name when renaming a group only discovered from rows", async () => {
