@@ -378,6 +378,35 @@ async function readLiteralTildePreflightScript(params: {
     await handle?.close().catch(() => undefined);
   }
 }
+async function readPreflightScriptOutsideWorkspace(params: {
+  absPath: string;
+  fsSafe: FsSafeModule;
+}): Promise<string> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(params.absPath, SCRIPT_PREFLIGHT_OPEN_FLAGS);
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new params.fsSafe.FsSafeError("not-file", "not a file");
+    }
+    if (stat.size > SCRIPT_PREFLIGHT_MAX_BYTES) {
+      throw new params.fsSafe.FsSafeError(
+        "too-large",
+        `file exceeds limit of ${SCRIPT_PREFLIGHT_MAX_BYTES} bytes (got ${stat.size})`,
+      );
+    }
+    const buffer = await handle.readFile();
+    if (buffer.byteLength > SCRIPT_PREFLIGHT_MAX_BYTES) {
+      throw new params.fsSafe.FsSafeError(
+        "too-large",
+        `file exceeds limit of ${SCRIPT_PREFLIGHT_MAX_BYTES} bytes (got ${buffer.byteLength})`,
+      );
+    }
+    return buffer.toString("utf-8");
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
 
 function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
@@ -1203,29 +1232,32 @@ async function validateScriptFileForShellBleed(params: {
       rootDir: params.workdir,
       absPath,
     });
-    if (!relativePath) {
-      continue;
-    }
-
-    // Best-effort: only validate files that safely resolve within workdir and
-    // are reasonably small. This keeps preflight checks on a pinned file
-    // identity instead of trusting mutable pathnames across multiple ops.
-    // Use non-blocking open to avoid stalls if a path is swapped to a FIFO.
+    // Best-effort: only validate files that are reasonably small. This keeps
+    // preflight checks on a pinned file identity instead of trusting mutable
+    // pathnames across multiple ops. Use non-blocking open to avoid stalls if
+    // a path is swapped to a FIFO.
     let content: string;
     try {
-      content = hasLeadingTildePathSegment(relativePath)
-        ? await readLiteralTildePreflightScript({
-            absPath,
-            fsSafe,
-            workspaceRoot,
+      if (!relativePath) {
+        content = await readPreflightScriptOutsideWorkspace({
+          absPath,
+          fsSafe,
+        });
+      } else if (hasLeadingTildePathSegment(relativePath)) {
+        content = await readLiteralTildePreflightScript({
+          absPath,
+          fsSafe,
+          workspaceRoot,
+        });
+      } else {
+        content = (
+          await workspaceRoot.read(relativePath, {
+            nonBlockingRead: true,
+            symlinks: "follow-within-root",
+            maxBytes: SCRIPT_PREFLIGHT_MAX_BYTES,
           })
-        : (
-            await workspaceRoot.read(relativePath, {
-              nonBlockingRead: true,
-              symlinks: "follow-within-root",
-              maxBytes: SCRIPT_PREFLIGHT_MAX_BYTES,
-            })
-          ).buffer.toString("utf-8");
+        ).buffer.toString("utf-8");
+      }
     } catch (error) {
       if (shouldSkipScriptPreflightPathError(error, FsSafeError)) {
         // Preflight validation is best-effort: skip path/read failures and
