@@ -1546,6 +1546,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         const option = main.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
+        await main.getByRole("button", { name: "Save", exact: true }).click();
       };
 
       let modelSelect = await openModelSelect();
@@ -1666,7 +1667,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await modelSelect.click();
+      await main.locator('[data-chat-model-provider="openai"]').click();
       await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      await main.getByRole("button", { name: "Save", exact: true }).click();
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -1676,6 +1679,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await modelSelect.click();
       await main.locator('[data-chat-model-option=""]').click();
+      await main.getByRole("button", { name: "Save", exact: true }).click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -1790,6 +1794,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await main.locator('[data-chat-model-select="true"]').click();
       await main.locator('[data-chat-model-provider="bedrock"]').click();
       await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
+      await main.getByRole("button", { name: "Save", exact: true }).click();
       await gateway.waitForRequest("sessions.patch");
 
       const prompt = "send while the model save is pending";

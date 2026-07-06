@@ -3319,7 +3319,7 @@ describe("chat model controls", () => {
     ).not.toBeNull();
   });
 
-  it("keeps staged model settings bound to the session that opened the picker", async () => {
+  it("stages model, reasoning, and speed for the session that opened the picker", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3361,6 +3361,7 @@ describe("chat model controls", () => {
     ).find((button) => button.getAttribute("aria-selected") === "false");
     expect(modelOption).toBeInstanceOf(HTMLButtonElement);
     modelOption?.click();
+    expect(onModelSelect).not.toHaveBeenCalled();
 
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
@@ -3374,6 +3375,7 @@ describe("chat model controls", () => {
     ).find((button) => button.textContent?.trim() === "Fast");
     expect(fastButton).toBeInstanceOf(HTMLButtonElement);
     fastButton?.click();
+    expect(onModelSelect).not.toHaveBeenCalled();
 
     container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
     await vi.waitFor(() => {

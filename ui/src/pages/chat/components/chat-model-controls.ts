@@ -735,16 +735,20 @@ function renderChatModelReasoningSelect(params: {
           aria-selected=${selected ? "true" : "false"}
           type="button"
           ?disabled=${disabled}
-          @click=${async (event: MouseEvent) => {
+          @click=${(event: MouseEvent) => {
             event.stopPropagation();
             if (disabled || selected) {
               event.preventDefault();
               return;
             }
-            chatModelPickerDrafts.delete(sessionKey);
-            (event.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
+            const draft = ensureChatModelPickerDraft({
+              fastModeValue: initialFastModeValue,
+              modelValue: initialModelValue,
+              sessionKey,
+              thinkingValue: initialThinkingValue,
+            });
+            draft.modelValue = entry.value;
             onRequestUpdate?.();
-            await onModelSelect(entry.value, sessionKey);
           }}
         >
           <span class="chat-controls__model-option-icon">
