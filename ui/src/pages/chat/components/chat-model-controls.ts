@@ -703,15 +703,25 @@ function renderChatModelReasoningSelect(params: {
       providerGroups.set(option.provider, [option]);
     }
   }
+  const defaultModelOption = modelOptions.find((option) => option.value === "");
+  const orderedProviderGroups = [...providerGroups];
+  const defaultProviderIndex = orderedProviderGroups.findIndex(
+    ([provider]) => provider === defaultModelOption?.provider,
+  );
+  if (defaultProviderIndex > 0) {
+    const [defaultProviderGroup] = orderedProviderGroups.splice(defaultProviderIndex, 1);
+    if (defaultProviderGroup) {
+      orderedProviderGroups.unshift(defaultProviderGroup);
+    }
+  }
   const triggerProvider =
     modelOptions.find((option) => option.value === selectedModelValue)?.provider ??
     modelOptions[0]?.provider ??
     "other";
   const selectedProvider =
     selectedModelValue === ""
-      ? ([...providerGroups.keys()][0] ?? triggerProvider)
+      ? (orderedProviderGroups[0]?.[0] ?? triggerProvider)
       : triggerProvider;
-  const defaultModelOption = modelOptions.find((option) => option.value === "");
   const renderModelOption = (entry: ChatModelProviderOption) => {
     const selected = entry.value === selectedModelValue;
     return html`
@@ -816,9 +826,9 @@ function renderChatModelReasoningSelect(params: {
               ${t("sessionsView.provider")}
             </div>
             ${repeat(
-              [...providerGroups.keys()],
-              (provider) => provider,
-              (provider) => {
+              orderedProviderGroups,
+              ([provider]) => provider,
+              ([provider]) => {
                 const active = provider === selectedProvider;
                 return html`
                   <button
@@ -837,7 +847,7 @@ function renderChatModelReasoningSelect(params: {
           </div>
           <div class="chat-controls__provider-models">
             ${repeat(
-              [...providerGroups],
+              orderedProviderGroups,
               ([provider]) => provider,
               ([provider, options]) => html`
                 <div
