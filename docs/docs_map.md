@@ -5788,6 +5788,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/anvil-voice.md
+
+- Route: /plugins/reference/anvil-voice
+- Headings:
+  - H1: Anvil Voice plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/arcee.md
 
 - Route: /plugins/reference/arcee
@@ -7247,6 +7256,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Prompt caching
   - H2: Advanced configuration
   - H2: Troubleshooting
+  - H2: Related
+
+## providers/anvil-voice.md
+
+- Route: /providers/anvil-voice
+- Headings:
+  - H2: Capabilities
+  - H2: Control UI Talk
+  - H2: Voice Call
+  - H2: Settings
+  - H2: Operational notes
   - H2: Related
 
 ## providers/arcee.md

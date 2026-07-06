@@ -1,0 +1,50 @@
+{
+  "id": "anvil-voice",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "contracts": {
+    "realtimeVoiceProviders": ["anvil"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "realtimeUrl": {
+        "type": "string",
+        "description": "Anvil Voice realtime WebSocket URL."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Anvil Voice HTTP or WebSocket base URL; /v1/realtime is appended when needed."
+      },
+      "apiKey": {
+        "type": ["string", "object"],
+        "description": "Optional bearer token or secret reference for non-loopback Anvil Voice endpoints."
+      },
+      "token": {
+        "type": ["string", "object"],
+        "description": "Alias for apiKey."
+      },
+      "model": {
+        "type": "string"
+      },
+      "voice": {
+        "type": "string"
+      },
+      "speakerVoice": {
+        "type": "string"
+      },
+      "vadThreshold": {
+        "type": "number"
+      },
+      "silenceDurationMs": {
+        "type": "number"
+      },
+      "prefixPaddingMs": {
+        "type": "number"
+      }
+    }
+  }
+}

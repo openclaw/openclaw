@@ -72,18 +72,26 @@ function listChangedPaths(base, head = "HEAD") {
 }
 
 function listAvailableExtensionIdsFromGit() {
-  const packageFiles = runGit([
+  const metadataFiles = runGit([
     "ls-files",
     "--",
+    `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/openclaw.plugin.json`,
     `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`,
   ])
     .split("\n")
     .map((line) => normalizeRelative(line.trim()))
     .filter((line) => line.length > 0);
-  return packageFiles
-    .map((file) => file.match(new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/package\\.json$`)))
+  return metadataFiles
+    .map((file) =>
+      file.match(
+        new RegExp(
+          `^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/(?:openclaw\\.plugin\\.json|package\\.json)$`,
+        ),
+      ),
+    )
     .filter((match) => match)
     .map((match) => match[1])
+    .filter((extensionId, index, extensionIds) => extensionIds.indexOf(extensionId) === index)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -97,8 +105,12 @@ function listAvailableExtensionIdsFromDirectory() {
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .filter((extensionId) =>
-      fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json")),
+    .filter(
+      (extensionId) =>
+        fs.existsSync(
+          path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "openclaw.plugin.json"),
+        ) ||
+        fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json")),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

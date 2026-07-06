@@ -350,7 +350,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
             provider.isConfigured({ cfg: config, providerConfig }),
           ),
           modes: ["realtime"],
-          brains: capabilities?.supportsToolCalls === false ? ["none"] : ["agent-consult"],
+          brains: ["agent-consult"],
           supportsBrowserSession: Boolean(
             capabilities?.supportsBrowserSession ?? provider.createBrowserSession,
           ),

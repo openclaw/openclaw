@@ -220,6 +220,9 @@ describe("scripts/test-extension.mjs", () => {
     expect(resolveExtensionTestPlan({ targetArg: "qa-lab", cwd: process.cwd() }).config).toBe(
       "test/vitest/vitest.extension-qa.config.ts",
     );
+    expect(resolveExtensionTestPlan({ targetArg: "talk-voice", cwd: process.cwd() }).config).toBe(
+      "test/vitest/vitest.extension-media.config.ts",
+    );
     expect(resolveExtensionTestPlan({ targetArg: "vydra", cwd: process.cwd() }).config).toBe(
       "test/vitest/vitest.extension-media.config.ts",
     );
@@ -257,12 +260,13 @@ describe("scripts/test-extension.mjs", () => {
   it("maps changed paths back to extension ids", () => {
     const extensionIds = detectChangedExtensionIds([
       bundledPluginFile("slack", "src/channel.ts"),
+      bundledPluginFile("talk-voice", "index.ts"),
       "src/line/message.test.ts",
       bundledPluginFile("firecrawl", "package.json"),
       "src/not-a-plugin/file.ts",
     ]);
 
-    expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
+    expect(extensionIds).toEqual(["firecrawl", "line", "slack", "talk-voice"]);
   });
 
   it("lists available extension ids", () => {
@@ -270,6 +274,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(extensionIds).toContain("slack");
     expect(extensionIds).toContain("firecrawl");
+    expect(extensionIds).toContain("talk-voice");
     expect(extensionIds).toEqual(
       [...extensionIds].toSorted((left, right) => left.localeCompare(right)),
     );
@@ -285,12 +290,13 @@ describe("scripts/test-extension.mjs", () => {
       const ids = listAvailableExtensionIds();
       const changed = detectChangedExtensionIds([
         "extensions/slack/src/channel.ts",
+        "extensions/talk-voice/index.ts",
         "src/line/message.test.ts",
         "extensions/not-real/package.json",
       ]);
       return { changed, ids: ids.length };
     `);
-    expect(payload.changed).toEqual(["line", "slack"]);
+    expect(payload.changed).toEqual(["line", "slack", "talk-voice"]);
     expect(payload.ids).toBeGreaterThan(0);
   });
 
