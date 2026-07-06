@@ -27,6 +27,7 @@ export type RetryOptions = RetryConfig & {
   label?: string;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
+  retryAfterMaxDelayMs?: number;
   onRetry?: (info: RetryInfo) => void;
 };
 
@@ -136,6 +137,13 @@ export async function retryAsync<T>(
     Number.isFinite(resolved.maxDelayMs) && resolved.maxDelayMs > 0
       ? resolved.maxDelayMs
       : Number.POSITIVE_INFINITY;
+  const retryAfterMaxDelayMs =
+    options.retryAfterMaxDelayMs === undefined
+      ? maxDelayMs
+      : Math.max(
+          minDelayMs,
+          resolveRetryDelayMs(Math.round(clampNumber(options.retryAfterMaxDelayMs, maxDelayMs, 0))),
+        );
   const jitter = resolved.jitter;
   const shouldRetry = options.shouldRetry ?? (() => true);
   let lastErr: unknown;
@@ -154,7 +162,8 @@ export async function retryAsync<T>(
       const baseDelay = hasRetryAfter
         ? Math.max(retryAfterMs, minDelayMs)
         : minDelayMs * 2 ** (attempt - 1);
-      let delay = Math.min(baseDelay, maxDelayMs);
+      const delayCap = hasRetryAfter ? retryAfterMaxDelayMs : maxDelayMs;
+      let delay = Math.min(baseDelay, delayCap);
       // Server-supplied Retry-After is a lower-bound contract with the
       // upstream rate limiter; symmetric jitter would let roughly half the
       // retries land before the requested time and invite escalation. Use
@@ -181,9 +190,9 @@ export async function retryAsync<T>(
       // (`retryAfterMs > maxDelayMs`), where the contract is already
       // unsatisfiable and we gain spread without adding a violation.
       const canHonorRetryAfter =
-        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= maxDelayMs;
+        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= delayCap;
       delay = applyJitter(delay, jitter, canHonorRetryAfter ? "positive" : "symmetric");
-      delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
+      delay = Math.min(Math.max(delay, minDelayMs), delayCap);
 
       options.onRetry?.({
         attempt,

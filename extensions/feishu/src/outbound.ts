@@ -4,6 +4,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   interactiveReplyToPresentation,
   normalizeInteractiveReply,
@@ -27,7 +28,12 @@ import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
-import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
+import {
+  sendMediaFeishu,
+  shouldSuppressFeishuTextForVoiceMedia,
+  type SendMediaResult,
+} from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
 import {
@@ -292,11 +298,7 @@ function buildFeishuPayloadCard(params: {
         },
       ];
 
-  const identityTitle = params.identity
-    ? params.identity.emoji
-      ? `${params.identity.emoji} ${params.identity.name ?? ""}`.trim()
-      : (params.identity.name ?? "")
-    : "";
+  const identityTitle = resolveFeishuIdentityHeaderTitle(params.identity);
   const title = presentation?.title ?? identityTitle;
   const template = resolveFeishuCardTemplate(
     presentation?.tone === "danger"
@@ -323,6 +325,27 @@ function buildFeishuPayloadCard(params: {
   });
 }
 
+// Keep this aligned with the shared fallback renderer: guidance is valid only
+// when the fallback text exposes a command the user can copy.
+function hasVisibleFallbackCommand(
+  blocks: readonly MessagePresentationBlock[] | undefined,
+): boolean {
+  return (
+    blocks?.some(
+      (block) =>
+        block.type === "buttons" &&
+        block.buttons.some(
+          (button) =>
+            !button.disabled &&
+            button.action?.type === "command" &&
+            !button.url &&
+            !button.webApp?.url &&
+            !button.web_app?.url,
+        ),
+    ) ?? false
+  );
+}
+
 function renderFeishuPresentationPayload({
   payload,
   presentation,
@@ -339,6 +362,8 @@ function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
+  // Core consumes presentation before sendPayload; carry the fallback fact.
+  const fallbackHasCommand = hasVisibleFallbackCommand(presentation?.blocks);
   return {
     ...payload,
     text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
@@ -347,6 +372,7 @@ function renderFeishuPresentationPayload({
       feishu: {
         ...existingFeishuData,
         card,
+        ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
       },
     },
   };
@@ -508,21 +534,32 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     });
     const commentTarget = parseFeishuCommentTarget(ctx.to);
     if (commentTarget) {
+      const normalizedPresentation =
+        normalizeMessagePresentation(ctx.payload.presentation) ??
+        (() => {
+          const interactive = normalizeInteractiveReply(ctx.payload.interactive);
+          return interactive ? interactiveReplyToPresentation(interactive) : undefined;
+        })();
+      const presentationFallbackText = renderMessagePresentationFallbackText({
+        text: ctx.payload.text,
+        presentation: normalizedPresentation,
+      });
+      // Direct delivery retains blocks; core-rendered delivery carries the fact.
+      const fallbackHasCommand =
+        hasVisibleFallbackCommand(normalizedPresentation?.blocks) ||
+        (isRecord(ctx.payload.channelData?.feishu) &&
+          ctx.payload.channelData.feishu.fallbackHasCommand === true);
+      const text = fallbackHasCommand
+        ? `${presentationFallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
+        : presentationFallbackText;
+
       return await sendTextMediaPayload({
         channel: "feishu",
         ctx: {
           ...ctx,
           payload: {
             ...ctx.payload,
-            text: renderMessagePresentationFallbackText({
-              text: ctx.payload.text,
-              presentation:
-                normalizeMessagePresentation(ctx.payload.presentation) ??
-                (() => {
-                  const interactive = normalizeInteractiveReply(ctx.payload.interactive);
-                  return interactive ? interactiveReplyToPresentation(interactive) : undefined;
-                })(),
-            }),
+            text,
             interactive: undefined,
             presentation: undefined,
             channelData: undefined,
@@ -535,9 +572,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(ctx.payload));
     return attachChannelToResult(
       "feishu",
-      await sendPayloadMediaSequenceAndFinalize({
+      await sendPayloadMediaSequenceAndFinalize<
+        SendMediaResult,
+        Awaited<ReturnType<typeof sendCardFeishu>>
+      >({
         text: ctx.payload.text ?? "",
         mediaUrls,
+        onResult: async (deliveryResult) => {
+          await ctx.onDeliveryResult?.(attachChannelToResult("feishu", deliveryResult));
+        },
         send: async ({ mediaUrl }) =>
           await sendMediaFeishu({
             cfg: ctx.cfg,
@@ -616,9 +659,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       if (useCard) {
         const header = identity
           ? {
-              title: identity.emoji
-                ? `${identity.emoji} ${identity.name ?? ""}`.trim()
-                : (identity.name ?? ""),
+              title: resolveFeishuIdentityHeaderTitle(identity),
               template: "blue" as const,
             }
           : undefined;
@@ -651,6 +692,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       replyToId,
       threadId,
+      onDeliveryResult,
     }) => {
       const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
         replyToId,
@@ -675,10 +717,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           mediaUrl,
           audioAsVoice,
         });
+      const reportDelivery = async (result: Awaited<ReturnType<typeof sendOutboundText>>) => {
+        await onDeliveryResult?.(attachChannelToResult("feishu", result));
+      };
+      let textSent = false;
 
       // Send text first if provided, except for Feishu native voice bubbles.
       if (text?.trim() && !suppressTextForVoiceMedia) {
-        await sendOutboundText({
+        const textResult = await sendOutboundText({
           cfg,
           to,
           text,
@@ -686,12 +732,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           replyToMessageId,
           replyInThread,
         });
+        textSent = true;
+        await reportDelivery(textResult);
       }
 
       // Upload and send media if URL or local path provided
       if (mediaUrl) {
+        let mediaResult: Awaited<ReturnType<typeof sendMediaFeishu>>;
         try {
-          const result = await sendMediaFeishu({
+          mediaResult = await sendMediaFeishu({
             cfg,
             to,
             mediaUrl,
@@ -701,23 +750,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             replyInThread,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
-          if (result.voiceIntentDegradedToFile && text?.trim()) {
-            await sendOutboundText({
-              cfg,
-              to,
-              text,
-              accountId: accountId ?? undefined,
-              replyToMessageId,
-              replyInThread,
-            });
-          }
-          return result;
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
           // Fallback to URL link if upload fails
-          const fallbackText = [text?.trim(), `📎 ${mediaUrl}`].filter(Boolean).join("\n\n");
-          return await sendOutboundText({
+          const fallbackText = [textSent ? undefined : text?.trim(), `📎 ${mediaUrl}`]
+            .filter(Boolean)
+            .join("\n\n");
+          const fallbackResult = await sendOutboundText({
             cfg,
             to,
             text: fallbackText,
@@ -725,7 +765,25 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             replyToMessageId,
             replyInThread,
           });
+          await reportDelivery(fallbackResult);
+          return fallbackResult;
         }
+
+        // Upload fallback applies only to the platform send. Persistence and
+        // follow-up failures must not resend an attachment already accepted by Feishu.
+        await onDeliveryResult?.(attachChannelToResult("feishu", mediaResult));
+        if (mediaResult.voiceIntentDegradedToFile && text?.trim()) {
+          const textResult = await sendOutboundText({
+            cfg,
+            to,
+            text,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            replyInThread,
+          });
+          await reportDelivery(textResult);
+        }
+        return mediaResult;
       }
 
       // No media URL, just return text result

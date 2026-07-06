@@ -47,6 +47,7 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   createInMemoryAcpEventLedger,
@@ -127,18 +128,16 @@ function isTerminalChatSendAckSuccess(status: unknown): boolean {
   return normalizedChatSendAckStatus(status) === "ok";
 }
 
-let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
-let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
+const loadAcpCommandsModule = createLazyRuntimeModule(() => import("./commands.js"));
+const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
 async function getAvailableCommandsForAcp() {
-  acpCommandsModulePromise ??= import("./commands.js");
-  const { getAvailableCommands } = await acpCommandsModulePromise;
+  const { getAvailableCommands } = await loadAcpCommandsModule();
   return getAvailableCommands();
 }
 
 async function getAcpProtocolVersion() {
-  acpSdkModulePromise ??= import("@agentclientprotocol/sdk");
-  const { PROTOCOL_VERSION } = await acpSdkModulePromise;
+  const { PROTOCOL_VERSION } = await loadAcpSdkModule();
   return PROTOCOL_VERSION;
 }
 
@@ -801,8 +800,7 @@ export class AcpGatewayAgent implements Agent {
         const promptKey = this.pendingPromptKey(params.sessionId, runId);
         if (
           isGatewayCloseError(err) &&
-          (this.getPendingPrompt(params.sessionId, runId) ||
-            this.settlingPromptKeys.has(promptKey))
+          (this.getPendingPrompt(params.sessionId, runId) || this.settlingPromptKeys.has(promptKey))
         ) {
           return;
         }
@@ -1592,7 +1590,7 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch?: Record<string, string | boolean>;
+    patch?: Record<string, string | boolean | null>;
   } {
     if (typeof value !== "string") {
       throw new Error(
@@ -1630,11 +1628,13 @@ export class AcpGatewayAgent implements Agent {
           patch: { reasoningLevel: value },
           overrides: { reasoningLevel: value },
         };
-      case ACP_RESPONSE_USAGE_CONFIG_ID:
+      case ACP_RESPONSE_USAGE_CONFIG_ID: {
+        const next = value === "inherit" ? null : value;
         return {
-          patch: { responseUsage: value },
-          overrides: { responseUsage: value as GatewaySessionPresentationRow["responseUsage"] },
+          patch: { responseUsage: next },
+          overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
+      }
       case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
           patch: { elevatedLevel: value },

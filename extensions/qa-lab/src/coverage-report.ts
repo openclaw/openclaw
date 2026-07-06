@@ -66,6 +66,27 @@ type QaCoverageInventory = {
   scorecardTaxonomy: QaScorecardTaxonomyReport;
 };
 
+function assertUniqueQaScenarioIds(
+  scenarios: readonly QaSeedScenarioWithSource[],
+  nonYamlScenarios: readonly { id: string; sourcePath: string }[],
+): void {
+  const sourcePathsById = new Map<string, string[]>();
+  for (const { id, sourcePath } of [...scenarios, ...nonYamlScenarios]) {
+    const sourcePaths = sourcePathsById.get(id) ?? [];
+    sourcePaths.push(sourcePath);
+    sourcePathsById.set(id, sourcePaths);
+  }
+  const duplicates = [...sourcePathsById.entries()]
+    .filter(([, sourcePaths]) => sourcePaths.length > 1)
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  if (duplicates.length > 0) {
+    const details = duplicates
+      .map(([id, sourcePaths]) => `${id} (${sourcePaths.join(", ")})`)
+      .join("; ");
+    throw new Error(`duplicate qa scenario id(s): ${details}`);
+  }
+}
+
 function scenarioTheme(sourcePath: string) {
   const parts = sourcePath.split("/");
   return parts[2] ?? "unknown";
@@ -204,7 +225,9 @@ function buildScenarioPackSummaries(
 
 export function buildQaCoverageInventory(
   scenarios: readonly QaSeedScenarioWithSource[],
+  params?: { nonYamlScenarios?: readonly { id: string; sourcePath: string }[] },
 ): QaCoverageInventory {
+  assertUniqueQaScenarioIds(scenarios, params?.nonYamlScenarios ?? []);
   const byCoverageId = new Map<string, QaCoverageIdSummary>();
   const primaryCoverageIds = new Set<string>();
   const secondaryCoverageIds = new Set<string>();
@@ -331,7 +354,7 @@ function pushScorecardTaxonomyLines(lines: string[], report: QaScorecardTaxonomy
     `- Fulfilled taxonomy categories: ${report.fulfilledCategoryCount}/${report.requiredCategoryCount} (${report.categoryFulfillmentPercent}%)`,
   );
   lines.push(
-    `- Fulfilled taxonomy features: ${report.fulfilledFeatureCount}/${report.requiredFeatureCount} (${report.taxonomyFulfillmentPercent}%)`,
+    `- Fulfilled taxonomy coverage IDs: ${report.fulfilledCoverageIdCount}/${report.requiredCoverageIdCount} (${report.coverageIdFulfillmentPercent}%)`,
   );
   lines.push(`- Evidence refs: ${report.evidenceRefCount}`);
   lines.push(`- Scenario coverage IDs: ${report.scenarioCoverageIdCount}`);

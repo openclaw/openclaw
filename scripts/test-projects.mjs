@@ -28,6 +28,7 @@ import {
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
+  formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
@@ -182,21 +183,9 @@ function isFullExtensionsProjectRun(specs) {
 function printNoChangedTestTargets(args, cwd, baseEnv) {
   const plan = resolveChangedTestTargetPlanForArgs(args, cwd, undefined, { env: baseEnv });
   const skippedBroadFallbackPaths = plan?.skippedBroadFallbackPaths ?? [];
-  if (skippedBroadFallbackPaths.length === 0) {
-    console.error("[test] no changed test targets; skipping Vitest.");
-    return;
+  for (const line of formatNoChangedTestTargetLines(skippedBroadFallbackPaths)) {
+    console.error(line);
   }
-
-  console.error("[test] no precise changed test targets; skipping Vitest.");
-  console.error(
-    `[test] ${skippedBroadFallbackPaths.length} changed path${
-      skippedBroadFallbackPaths.length === 1 ? "" : "s"
-    } require broad Vitest fallback:`,
-  );
-  for (const changedPath of skippedBroadFallbackPaths) {
-    console.error(`[test]   ${changedPath}`);
-  }
-  console.error("[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.");
 }
 
 async function runVitestSpecsParallel(specs, concurrency) {
@@ -324,7 +313,6 @@ async function main() {
       );
     }
     if (concurrency > 1) {
-      const localFullSuiteProfile = resolveLocalFullSuiteProfile(baseEnv);
       const shardTimings = readShardTimings(process.cwd(), baseEnv);
       const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
         applyParallelVitestCachePaths(orderFullSuiteSpecsForParallelRun(runSpecs, shardTimings), {
@@ -333,16 +321,6 @@ async function main() {
         }),
         baseEnv,
       );
-      if (
-        !isCiLikeEnv(baseEnv) &&
-        !baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL &&
-        !baseEnv.OPENCLAW_VITEST_MAX_WORKERS &&
-        !baseEnv.OPENCLAW_TEST_WORKERS &&
-        localFullSuiteProfile.shardParallelism === 10 &&
-        localFullSuiteProfile.vitestMaxWorkers === 2
-      ) {
-        console.error("[test] using host-aware local full-suite profile: shards=10 workers=2");
-      }
       console.error(
         `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
       );

@@ -42,6 +42,7 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
+    ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
@@ -52,6 +53,8 @@ describe("method scope resolution", () => {
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
+    ["worktrees.list", ["operator.read"]],
+    ["worktrees.create", ["operator.admin"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],

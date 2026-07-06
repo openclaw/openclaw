@@ -190,6 +190,7 @@ describe("qa web runtime", () => {
     await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat", channel: "chrome" });
 
     const launchOptions = requireLaunchOptions();
+    expect(spawnSync).not.toHaveBeenCalled();
     expect(launchOptions?.channel).toBe("chrome");
     expect(launchOptions?.executablePath).toBeUndefined();
     await closeQaWebSessions();

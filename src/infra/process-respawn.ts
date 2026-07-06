@@ -118,13 +118,12 @@ export function restartGatewayProcessWithFreshPid(
 export function respawnGatewayProcessForUpdate(
   opts: GatewayRespawnOptions = {},
 ): GatewayUpdateRespawnResult {
-  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
-    return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
-  }
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
   if (supervisor) {
+    // Managed update handoffs require the original PID to exit before the
+    // detached helper can mutate the install, even when respawn is disabled.
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
@@ -135,6 +134,9 @@ export function respawnGatewayProcessForUpdate(
       }
     }
     return { mode: "supervised" };
+  }
+  if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
+    return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
   try {
     const { child, pid } = spawnDetachedGatewayProcess(opts);

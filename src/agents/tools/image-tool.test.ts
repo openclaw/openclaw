@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
@@ -350,32 +350,7 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 }
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
-  const defaultImageModels = new Map<string, string>([
-    ["anthropic", "claude-opus-4-6"],
-    ["minimax", "MiniMax-VL-01"],
-    ["minimax-cn", "MiniMax-VL-01"],
-    ["minimax-portal", "MiniMax-VL-01"],
-    ["minimax-portal-cn", "MiniMax-VL-01"],
-    ["codex", "gpt-5.5"],
-    ["openai", "gpt-5.4-mini"],
-    ["opencode", "gpt-5-nano"],
-    ["opencode-go", "kimi-k2.6"],
-    ["zai", "glm-4.6v"],
-  ]);
-  testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-      imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: describeGenericImageWithModel,
-    describeImagesWithModel: describeGenericImagesWithModel,
-    resolveAutoMediaKeyProviders: ({ capability }) =>
-      capability === "image" ? ["openai", "anthropic"] : [],
-    resolveDefaultMediaModel: ({ providerId, capability }) =>
-      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
-  });
+  installFastLocalImageProviderStubs(minimaxProvider, moonshotProvider);
   return createOpenClawCodingTools(options);
 }
 
@@ -472,32 +447,24 @@ function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string
 }
 
 function stubMinimaxOkFetch() {
-  const fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    headers: new Headers(),
-    json: async () => ({
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
       content: "ok",
       base_resp: { status_code: 0, status_msg: "" },
     }),
-  });
+  );
   global.fetch = withFetchPreconnect(fetch);
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
   return fetch;
 }
 
 function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string }, content = "ok") {
-  const fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    status: 200,
-    statusText: "OK",
-    headers: new Headers(),
-    json: async () => ({
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
       content,
       base_resp: baseResp,
     }),
-  });
+  );
   global.fetch = withFetchPreconnect(fetch);
   return fetch;
 }
@@ -780,20 +747,29 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
     }),
     loadImageWebMediaRuntime: async () => ({
       loadWebMedia: async (mediaUrl, options) => {
+        const localRoots =
+          options && typeof options !== "number" && "localRoots" in options
+            ? options.localRoots
+            : [];
         const inboundRoots =
           options && typeof options !== "number" && "inboundRoots" in options
             ? options.inboundRoots
             : [];
         if (
+          localRoots !== "any" &&
           !isInboundPathAllowed({
             filePath: mediaUrl,
-            roots: inboundRoots ?? [],
+            roots: [...(localRoots ?? []), ...(inboundRoots ?? [])],
           })
         ) {
           throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
         }
+        const readFile =
+          options && typeof options !== "number" && "readFile" in options
+            ? options.readFile
+            : undefined;
         return {
-          buffer: await fs.readFile(mediaUrl),
+          buffer: readFile ? await readFile(mediaUrl) : await fs.readFile(mediaUrl),
           contentType: "image/png",
           kind: "image",
           fileName: path.basename(mediaUrl),
@@ -981,6 +957,39 @@ describe("image tool implicit imageModel config", () => {
     "GH_TOKEN",
     "GITHUB_TOKEN",
   ]);
+
+  beforeAll(async () => {
+    await withTempAgentDir(async (agentDir) => {
+      installImageUnderstandingProviderStubs();
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      stubMinimaxOkFetch();
+      const tool = requireImageTool(
+        createImageTool({
+          agentDir,
+          config: {
+            agents: {
+              defaults: {
+                model: { primary: "minimax-portal/MiniMax-M2.7" },
+                imageModel: { primary: "minimax-portal/MiniMax-VL-01" },
+              },
+            },
+          },
+        }),
+      );
+      await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
+    });
+  });
 
   beforeEach(() => {
     installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider);
@@ -1226,7 +1235,7 @@ describe("image tool implicit imageModel config", () => {
         text: `ok ${params.provider}/${params.model}`,
         model: params.model,
       }));
-      installImageUnderstandingProviderStubs({
+      installFastLocalImageProviderStubs({
         id: "opencode-go",
         capabilities: ["image"],
         describeImage,
@@ -1454,7 +1463,7 @@ describe("image tool implicit imageModel config", () => {
           text: "ok",
           model: params.model,
         }));
-        installImageUnderstandingProviderStubs({
+        installFastLocalImageProviderStubs({
           id: "ollama",
           capabilities: ["image"],
           describeImage,
@@ -1487,7 +1496,7 @@ describe("image tool implicit imageModel config", () => {
           text: "ok",
           model: params.model,
         }));
-        installImageUnderstandingProviderStubs({
+        installFastLocalImageProviderStubs({
           id: "ollama",
           capabilities: ["image"],
           describeImage,
@@ -1755,7 +1764,7 @@ describe("image tool implicit imageModel config", () => {
         text: `ok ${params.model}`,
         model: params.model,
       }));
-      installImageUnderstandingProviderStubs({
+      installFastLocalImageProviderStubs({
         id: "ollama",
         capabilities: ["image"],
         describeImage,
@@ -1869,6 +1878,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("sends moonshot image requests with user+image payloads only", async () => {
     await withTempAgentDir(async (agentDir) => {
+      installFastLocalImageProviderStubs(minimaxProvider, moonshotProvider);
       vi.stubEnv("MOONSHOT_API_KEY", "moonshot-test");
       const fetch = stubOpenAiCompletionsOkFetch("ok moonshot");
       const cfg: OpenClawConfig = {

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
@@ -89,6 +89,7 @@ import {
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
+import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
@@ -462,10 +463,10 @@ describe("qa cli runtime", () => {
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
-          features?: { fulfilled?: unknown };
+          coverageIds?: { fulfilled?: unknown };
           categoryReports?: Array<{
             id?: unknown;
-            features?: { fulfilled?: unknown };
+            coverageIds?: { fulfilled?: unknown };
             missingCoverageIds?: unknown;
           }>;
         };
@@ -480,11 +481,11 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
+      expect(evidence.scorecard?.coverageIds?.fulfilled).toBe(1);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "channel-framework.conversation-routing-and-delivery",
-        features: {
-          fulfilled: 0,
+        coverageIds: {
+          fulfilled: 1,
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
@@ -558,6 +559,8 @@ describe("qa cli runtime", () => {
         "qa-channel-reconnect-dedupe",
         "reaction-edit-delete",
         "thread-follow-up",
+        "claude-cli-provider-capabilities",
+        "claude-cli-provider-capabilities-subscription",
         "image-generation-roundtrip",
         "image-understanding-attachment",
         "native-image-generation",
@@ -1634,11 +1637,18 @@ describe("qa cli runtime", () => {
     ).rejects.toThrow("--token-efficiency requires --runtime-axis.");
   });
 
-  it("prints a markdown coverage report from scenario metadata", async () => {
-    await runQaCoverageReportCommand({ repoRoot: process.cwd() });
+  describe("coverage inventory command", () => {
+    beforeAll(async () => {
+      listTelegramQaScenarioCatalog.mockReturnValue([]);
+      await loadNonYamlScenarioRefs();
+    });
 
-    expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
-    expectWriteContains(stdoutWrite, "memory.recall");
+    it("prints a markdown report from scenario metadata", async () => {
+      await runQaCoverageReportCommand({ repoRoot: process.cwd() });
+
+      expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
+      expectWriteContains(stdoutWrite, "memory.recall");
+    });
   });
 
   it("prints a focused scenario match report from coverage metadata", async () => {

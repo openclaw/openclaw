@@ -1235,6 +1235,33 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("rejects oversized Telegram API success bodies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              result: {
+                blob: "x".repeat(16 * 1024 * 1024),
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+              },
+            },
+          ),
+      ),
+    );
+
+    await expect(testing.callTelegramApi("token", "getMe")).rejects.toThrow(
+      "qa-lab-telegram-live.getMe: JSON response exceeds 16777216 bytes",
+    );
+  });
+
   it("treats transient Telegram getUpdates network errors as recoverable", () => {
     expect(testing.isRecoverableTelegramQaPollError(new TypeError("fetch failed"))).toBe(true);
     expect(testing.isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);

@@ -1,4 +1,5 @@
 // Model Catalog Core module implements provider model id normalization behavior.
+import { parseModelCatalogRef } from "./model-catalog-refs.js";
 import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 import {
   normalizeGooglePreviewModelId,
@@ -220,17 +221,17 @@ export function normalizeConfiguredProviderCatalogModelId(
 export function normalizeConfiguredProviderCatalogModelRef(providerModel: string): string {
   const googlePrefix = "google/";
   if (!providerModel.startsWith(googlePrefix)) {
-    const slash = providerModel.indexOf("/");
-    if (slash <= 0 || slash >= providerModel.length - 1) {
+    const parsed = parseModelCatalogRef(providerModel);
+    if (!parsed) {
       return providerModel;
     }
-    const prefix = providerModel.slice(0, slash + 1);
-    const suffix = providerModel.slice(slash + 1);
-    if (!suffix.startsWith(googlePrefix)) {
+    if (!parsed.modelId.startsWith(googlePrefix)) {
       return providerModel;
     }
-    const normalizedSuffix = normalizeGooglePreviewModelId(suffix);
-    return normalizedSuffix === suffix ? providerModel : `${prefix}${normalizedSuffix}`;
+    const normalizedModelId = normalizeGooglePreviewModelId(parsed.modelId);
+    return normalizedModelId === parsed.modelId
+      ? providerModel
+      : `${parsed.provider}/${normalizedModelId}`;
   }
   const modelId = providerModel.slice(googlePrefix.length);
   const normalizedModelId = normalizeGooglePreviewModelId(modelId);

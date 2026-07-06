@@ -50,6 +50,8 @@ export type GatewaySessionRow = {
   subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -60,6 +62,10 @@ export type GatewaySessionRow = {
   chatType?: ChatType;
   origin?: SessionEntry["origin"];
   updatedAt: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -84,6 +90,7 @@ export type GatewaySessionRow = {
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
+  activeRunIds?: string[];
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -92,6 +99,8 @@ export type GatewaySessionRow = {
   parentSessionKey?: string;
   childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
+  /** Resolved effective usage mode (session override → channel config → default → off). Populated by surfaces that have config access; absent from the raw session store row. */
+  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
   agentRuntime?: GatewayAgentRuntime;

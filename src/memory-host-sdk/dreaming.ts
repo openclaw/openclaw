@@ -1,5 +1,6 @@
 // Memory host dreaming helpers record and load memory dreaming artifacts.
 import path from "node:path";
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   lowercasePreservingWhitespace,
@@ -213,19 +214,7 @@ function normalizeOptionalPositiveInt(value: unknown): number | undefined {
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = normalizeLowercaseStringOrEmpty(value);
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return fallback;
+  return parseBoolean(value) ?? fallback;
 }
 
 function normalizeScore(value: unknown, fallback: number): number {

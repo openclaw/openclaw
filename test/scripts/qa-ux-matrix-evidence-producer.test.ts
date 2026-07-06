@@ -1,5 +1,4 @@
 // QA UX Matrix evidence producer tests cover operator-facing CLI behavior.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,19 +6,21 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ensureUxMatrixVideoDependencies,
   launchUxMatrixChromium,
+  runUxMatrixEvidenceProducerCli,
 } from "../../scripts/qa/ux-matrix-evidence-producer.js";
 
-const repoRoot = path.resolve(__dirname, "../..");
-
-function runCli(...args: string[]) {
-  return spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/qa/ux-matrix-evidence-producer.ts", ...args],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-    },
-  );
+async function runCli(...args: string[]) {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const status = await runUxMatrixEvidenceProducerCli(args, {
+    error: (message) => stderr.push(message),
+    log: (message) => stdout.push(message),
+  });
+  return {
+    status,
+    stderr: stderr.length > 0 ? `${stderr.join("\n")}\n` : "",
+    stdout: stdout.length > 0 ? `${stdout.join("\n")}\n` : "",
+  };
 }
 
 function expectNoNodeStack(stderr: string) {
@@ -28,8 +29,8 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("QA UX Matrix evidence producer CLI", () => {
-  it("prints help without generating evidence", () => {
-    const result = runCli("--help");
+  it("prints help without generating evidence", async () => {
+    const result = await runCli("--help");
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
@@ -38,8 +39,8 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("prints help after boolean options without consuming valued option slots", () => {
-    const result = runCli("--skip-visual-proof", "--help");
+  it("prints help after boolean options without consuming valued option slots", async () => {
+    const result = await runCli("--skip-visual-proof", "--help");
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
@@ -48,8 +49,8 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("reports invalid args without a Node stack trace", () => {
-    const result = runCli("--wat");
+  it("reports invalid args without a Node stack trace", async () => {
+    const result = await runCli("--wat");
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -57,8 +58,8 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expectNoNodeStack(result.stderr);
   });
 
-  it("reports missing valued args without a Node stack trace", () => {
-    const result = runCli("--artifact-base", "--repo-root", ".");
+  it("reports missing valued args without a Node stack trace", async () => {
+    const result = await runCli("--artifact-base", "--repo-root", ".");
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -66,7 +67,7 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expectNoNodeStack(result.stderr);
   });
 
-  it("reports duplicate evidence producer args without a Node stack trace", () => {
+  it("reports duplicate evidence producer args without a Node stack trace", async () => {
     const duplicateCases = [
       ["--artifact-base", ["--artifact-base", ".artifacts/a", "--artifact-base", ".artifacts/b"]],
       ["--repo-root", ["--artifact-base", ".artifacts/a", "--repo-root", ".", "--repo-root", ".."]],
@@ -77,7 +78,7 @@ describe("QA UX Matrix evidence producer CLI", () => {
     ] satisfies Array<[string, string[]]>;
 
     for (const [flag, args] of duplicateCases) {
-      const result = runCli(...args);
+      const result = await runCli(...args);
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
@@ -86,9 +87,14 @@ describe("QA UX Matrix evidence producer CLI", () => {
     }
   });
 
-  it("reports short flag values without treating them as help", () => {
-    const artifactBaseResult = runCli("--artifact-base", "-h");
-    const repoRootResult = runCli("--artifact-base", "/tmp/openclaw-ux-test", "--repo-root", "-h");
+  it("reports short flag values without treating them as help", async () => {
+    const artifactBaseResult = await runCli("--artifact-base", "-h");
+    const repoRootResult = await runCli(
+      "--artifact-base",
+      "/tmp/openclaw-ux-test",
+      "--repo-root",
+      "-h",
+    );
 
     expect(artifactBaseResult.status).toBe(1);
     expect(artifactBaseResult.stdout).toBe("");
@@ -100,11 +106,11 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expectNoNodeStack(repoRootResult.stderr);
   });
 
-  it("sanitizes local checkout paths from generated evidence artifacts", () => {
+  it("sanitizes local checkout paths from generated evidence artifacts", async () => {
     const artifactBase = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ux-evidence-test-"));
     const fakeRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ux-repo-test-"));
     try {
-      const result = runCli(
+      const result = await runCli(
         "--artifact-base",
         artifactBase,
         "--repo-root",
@@ -118,9 +124,21 @@ describe("QA UX Matrix evidence producer CLI", () => {
         path.join(artifactBase, "surfaces", "cli", "stages", "entrypoint-help", "logs.txt"),
         "utf8",
       );
+      const visualLog = fs.readFileSync(
+        path.join(
+          artifactBase,
+          "surfaces",
+          "control-ui",
+          "stages",
+          "screenshot-artifact",
+          "logs.txt",
+        ),
+        "utf8",
+      );
       expect(evidence).not.toContain(fakeRepoRoot);
       expect(cliLog).not.toContain(fakeRepoRoot);
       expect(`${evidence}\n${cliLog}`).toContain("<repo-root>");
+      expect(visualLog).toBe("blocked: --skip-visual-proof was set\n");
     } finally {
       fs.rmSync(artifactBase, { recursive: true, force: true });
       fs.rmSync(fakeRepoRoot, { recursive: true, force: true });
