@@ -2,7 +2,8 @@
  * Plugin node-capability route matching and surface listing tests.
  */
 import { describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../../../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import type { PluginRegistry } from "../../../plugins/registry.js";
 import { resolvePluginRoutePathContext } from "./path-context.js";
 import {
   findMatchingPluginNodeCapabilityRoute,

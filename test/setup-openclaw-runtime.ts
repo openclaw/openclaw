@@ -7,7 +7,8 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../src/plugins/registry.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import type { PluginRegistry } from "../src/plugins/registry.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 installSharedTestSetup();

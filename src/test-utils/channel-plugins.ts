@@ -6,7 +6,8 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 
 /** Registry entry shape used by channel tests without loading real plugins. */
 export type TestChannelRegistration = {

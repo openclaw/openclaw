@@ -1,6 +1,7 @@
 // Plugin registry test helpers provide a process-wide stub registry with default
 // channel and speech providers for gateway suites.
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createDefaultGatewayTestChannels } from "./test-helpers.channels.js";

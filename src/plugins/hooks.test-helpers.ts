@@ -1,7 +1,8 @@
 // Provides shared helpers for plugin hook tests.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createHookRunner } from "./hooks.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
 
