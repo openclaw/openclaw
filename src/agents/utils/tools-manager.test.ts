@@ -70,6 +70,26 @@ describe("ensureTool", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects release-check responses whose JSON body exceeds the safe read bound", async () => {
+    const { testing } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    const oversizedBody = JSON.stringify({
+      tag_name: "99.0.0",
+      body: "x".repeat(2 * 1024 * 1024),
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(oversizedBody, { status: 200 }),
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(testing.getLatestVersion("sharkdp/fd")).rejects.toThrow(
+      "GitHub release check: JSON response exceeds",
+    );
+
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("cancels download error bodies before releasing guarded fetches", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const releaseCheckRelease = vi.fn(async () => {});

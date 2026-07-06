@@ -23,10 +23,12 @@ import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_RELEASE_JSON_BYTES = 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 1_000;
@@ -156,7 +158,11 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const data = await readProviderJsonResponse<{ tag_name: string }>(
+      response,
+      "GitHub release check",
+      { maxBytes: MAX_RELEASE_JSON_BYTES },
+    );
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
@@ -419,4 +425,5 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
 
 export const testing = {
   downloadFile,
+  getLatestVersion,
 };
