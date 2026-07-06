@@ -171,6 +171,9 @@ export async function loadProviderUsageSummary(
     if (entry.billing && entry.billing.length > 0) {
       return true;
     }
+    if (entry.costHistory?.daily.length) {
+      return true;
+    }
     if (entry.summary?.trim()) {
       return true;
     }

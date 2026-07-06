@@ -346,7 +346,6 @@ class InvokeDispatcherTest {
       camera = CameraCaptureManager(appContext),
       externalAudioCaptureActive = MutableStateFlow(false),
       showCameraHud = { _, _, _ -> },
-      triggerCameraFlash = {},
       invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
     )
 }

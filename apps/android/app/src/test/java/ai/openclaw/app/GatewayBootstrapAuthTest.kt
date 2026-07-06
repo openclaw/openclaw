@@ -984,7 +984,7 @@ class GatewayBootstrapAuthTest {
     ownershipEpoch.set(41L)
 
     runtime.setMicEnabled(true)
-    val cleanup = runtime.javaClass.getDeclaredMethod("finishTalkCaptureIfIdle", Long::class.javaPrimitiveType)
+    val cleanup = runtime.javaClass.getDeclaredMethod("cleanupFailedTalkCapture", Long::class.javaPrimitiveType)
     cleanup.isAccessible = true
     cleanup.invoke(runtime, 41L)
 
@@ -1009,6 +1009,57 @@ class GatewayBootstrapAuthTest {
         assertNull(retry.error)
         assertEquals("""{"captureId":"capture-1","status":"busy"}""", retry.payloadJson)
         assertEquals("capture-1", talkMode.activePushToTalkCaptureId)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        preparationMutex.unlock()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun talkPttOnceRechecksFinishingTurnAfterPreparationWait() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime(app)
+      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
+      preparationMutex.lock()
+      try {
+        val request = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null) }
+        yield()
+        writeField(talkMode, "finishingPttCaptureId", "capture-finishing")
+        preparationMutex.unlock()
+
+        val result = withTimeout(5_000) { request.await() }
+
+        assertNull(result.error)
+        assertEquals("""{"captureId":"capture-finishing","status":"busy"}""", result.payloadJson)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+        assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+      } finally {
+        if (preparationMutex.isLocked) preparationMutex.unlock()
+      }
+    }
+
+  @Test
+  fun talkPttStartRejectsFinishingTurnWithoutPreparingCapture() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime(app)
+      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      writeField(talkMode, "finishingPttCaptureId", "capture-1")
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
+      preparationMutex.lock()
+      try {
+        val retry =
+          withTimeout(1_000) { dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null) }
+
+        assertEquals("PTT_BUSY", retry.error?.code)
+        assertEquals("PTT_BUSY: previous push-to-talk turn is still finishing", retry.error?.message)
         assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
       } finally {
         preparationMutex.unlock()

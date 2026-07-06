@@ -1062,6 +1062,31 @@ Notes:
 
 ---
 
+## Audit
+
+```json5
+{
+  audit: {
+    enabled: true,
+  },
+}
+```
+
+The Gateway records **metadata-only** audit events for agent runs and tool
+actions into the shared state database: identity, timing, tool names, and
+terminal outcomes — never prompts, messages, tool arguments, results, or raw
+error text. Records expire after 30 days and the ledger is capped at 100,000
+rows. Query them with [`openclaw audit`](/cli/audit) or the
+[`audit.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC.
+
+- `enabled`: record new audit events (default: `true`). The ledger is on by
+  default because an audit trail enabled only after an incident cannot explain
+  the incident. Setting `false` stops new writes immediately; existing records
+  stay readable until they expire. Turning it back on resumes recording from
+  that point — the gap is not backfilled.
+
+---
+
 ## Logging
 
 ```json5

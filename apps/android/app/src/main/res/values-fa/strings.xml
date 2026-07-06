@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">به این دروازه اعتماد دارید؟</string>
     <string name="trust_and_continue">اعتماد و ادامه</string>
     <string name="cancel">لغو</string>
+    <string name="new_chat_in_worktree">چت جدید در worktree</string>
     <string name="endpoint">نقطه پایانی</string>
     <string name="status">وضعیت</string>
     <string name="connected_gateway_ready">دروازه شما فعال و آماده است.</string>

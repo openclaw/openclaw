@@ -573,6 +573,7 @@ function mapAgentRunTerminalOutcomeToTaskStatus(
     case "aborted":
       return "cancelled";
     case "blocked":
+    case "abandoned":
     case "failed":
       return "failed";
     default:

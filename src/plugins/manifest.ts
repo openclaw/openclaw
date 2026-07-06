@@ -358,6 +358,8 @@ export type PluginManifest = {
    * compatibility adapter during the deprecation window.
    */
   providerAuthEnvVars?: Record<string, string[]>;
+  /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
+  providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
   /** Cheap channel env lookup without booting plugin runtime. */
@@ -1797,6 +1799,7 @@ export function loadPluginManifest(
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerUsageAuthEnvVars = normalizeStringListRecord(raw.providerUsageAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
@@ -1854,6 +1857,7 @@ export function loadPluginManifest(
       nonSecretAuthMarkers,
       commandAliases,
       providerAuthEnvVars,
+      providerUsageAuthEnvVars,
       providerAuthAliases,
       channelEnvVars,
       providerAuthChoices,

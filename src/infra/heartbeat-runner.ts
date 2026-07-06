@@ -845,6 +845,7 @@ type NormalizedHeartbeatDelivery = {
   text: string;
   hasMedia: boolean;
   isInternalPlaceholderOnly: boolean;
+  silent?: boolean;
 };
 
 function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
@@ -859,6 +860,16 @@ function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
   return remaining.length === 0;
 }
 
+const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
+
+function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; silent: boolean } {
+  const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(text);
+  if (!match) {
+    return { text, silent: false };
+  }
+  return { text: text.slice(0, match.index).trimEnd(), silent: true };
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
@@ -871,20 +882,29 @@ function normalizeHeartbeatReply(
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(stripped.text);
+  const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
+  const isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
   if ((stripped.shouldSkip || isInternalPlaceholderOnly) && !hasMedia) {
     return {
       shouldSkip: true,
       text: "",
       hasMedia,
       isInternalPlaceholderOnly,
+      ...(notifyFalse.silent ? { silent: true } : {}),
     };
   }
-  let finalText = isInternalPlaceholderOnly ? "" : stripped.text;
+  let finalText = isInternalPlaceholderOnly ? "" : notifyFalse.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia, isInternalPlaceholderOnly };
+  const shouldSkip = !hasMedia && finalText.trim().length === 0;
+  return {
+    shouldSkip,
+    text: finalText,
+    hasMedia,
+    isInternalPlaceholderOnly,
+    ...(notifyFalse.silent ? { silent: true } : {}),
+  };
 }
 
 function normalizeHeartbeatToolNotification(
@@ -2059,8 +2079,12 @@ export async function runHeartbeatOnce(opts: {
         ? replyPayload.text.trim()
         : null;
     if (execFallbackText) {
-      normalized.text = execFallbackText;
-      normalized.shouldSkip = false;
+      const execNotifyFalse = stripTrailingHeartbeatNotifyFalse(execFallbackText);
+      normalized.text = execNotifyFalse.text;
+      normalized.shouldSkip = !normalized.hasMedia && !normalized.text.trim();
+      if (execNotifyFalse.silent) {
+        normalized.silent = true;
+      }
     }
     const replacement = !heartbeatToolResponse
       ? replaceGenericExternalRunFailureText(normalized.text)
@@ -2081,7 +2105,7 @@ export async function runHeartbeatOnce(opts: {
         updatedAt: previousUpdatedAt,
       });
 
-      const okSent = await maybeSendHeartbeatOk();
+      const okSent = normalized.silent ? false : await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
@@ -2238,6 +2262,7 @@ export async function runHeartbeatOnce(opts: {
             ]),
       ],
       deps: opts.deps,
+      silent: normalized.silent,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
@@ -2292,6 +2317,7 @@ export async function runHeartbeatOnce(opts: {
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
+      ...(normalized.silent === true ? { silent: true } : {}),
       indicatorType: visibility.useIndicator ? resolveIndicatorType(eventStatus) : undefined,
     });
     await updateTaskTimestamps();

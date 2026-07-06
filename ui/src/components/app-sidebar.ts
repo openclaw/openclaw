@@ -271,7 +271,6 @@ export class AppSidebar extends LitElement {
         agentsList: context.agents.state.agentsList,
         chatAgentSessionRowsByAgent: this.sessionRowsByAgent,
         sessionsResult: this.sessionsResult,
-        sessionsResultAgentId: this.sessionsAgentId,
         sessionKey: routeSessionKey,
       },
       nextAgentId,
@@ -768,7 +767,6 @@ export class AppSidebar extends LitElement {
     const options = resolveSessionAgentFilterOptions({
       agentsList: this.context?.agents.state.agentsList,
       sessionsResult: this.sessionsResult,
-      sessionsResultAgentId: this.sessionsAgentId,
       sessionKey,
     });
     if (options.length <= 1) {

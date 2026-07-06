@@ -401,7 +401,9 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
-  clearSessionResetRuntimeState([...queueKeys]);
+  clearSessionResetRuntimeState([...queueKeys], {
+    activeReplySessionId: params.sessionId,
+  });
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     params.assertCurrent?.();

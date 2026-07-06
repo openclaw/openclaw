@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">इस गेटवे पर भरोसा करें?</string>
     <string name="trust_and_continue">भरोसा करें और जारी रखें</string>
     <string name="cancel">रद्द करें</string>
+    <string name="new_chat_in_worktree">worktree में नया चैट</string>
     <string name="endpoint">एंडपॉइंट</string>
     <string name="status">स्थिति</string>
     <string name="connected_gateway_ready">आपका गेटवे सक्रिय और तैयार है।</string>

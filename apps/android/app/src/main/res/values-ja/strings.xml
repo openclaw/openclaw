@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">このゲートウェイを信頼しますか？</string>
     <string name="trust_and_continue">信頼して続行</string>
     <string name="cancel">キャンセル</string>
+    <string name="new_chat_in_worktree">worktree で新規チャット</string>
     <string name="endpoint">エンドポイント</string>
     <string name="status">ステータス</string>
     <string name="connected_gateway_ready">ゲートウェイはアクティブで準備完了です。</string>

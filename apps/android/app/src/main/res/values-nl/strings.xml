@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Deze gateway vertrouwen?</string>
     <string name="trust_and_continue">Vertrouwen en doorgaan</string>
     <string name="cancel">Annuleren</string>
+    <string name="new_chat_in_worktree">Nieuwe chat in worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Je gateway is actief en klaar voor gebruik.</string>

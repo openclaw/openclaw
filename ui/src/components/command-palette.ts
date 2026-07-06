@@ -82,10 +82,6 @@ function getPaletteItemsInternal(): PaletteItem[] {
   return getPaletteBaseItems();
 }
 
-export function getPaletteItems(): readonly PaletteItem[] {
-  return getPaletteItemsInternal();
-}
-
 type CommandPaletteProps = {
   open: boolean;
   query: string;
@@ -110,10 +106,6 @@ function filteredItems(query: string, includeSlashCommands = true): PaletteItem[
       normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
       normalizeLowercaseStringOrEmpty(item.description).includes(q),
   );
-}
-
-export function getFilteredPaletteItems(query: string): readonly PaletteItem[] {
-  return filteredItems(query);
 }
 
 function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
