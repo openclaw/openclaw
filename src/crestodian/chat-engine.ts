@@ -345,6 +345,14 @@ export class CrestodianChatEngine {
       return { text: "Crestodian retracts into shell. Bye.", action: "exit" };
     }
 
+    // Secret hygiene: an exact `config set` on a sensitive path carries a raw
+    // token and must never reach a model. It runs on the deterministic path
+    // (redacted proposal + approval), matching the wizard's masked-input rules.
+    const typed = parseCrestodianOperation(text);
+    if (typed.kind === "config-set" && isSensitiveConfigPath(typed.path)) {
+      return await this.runOperation(typed, undefined);
+    }
+
     // Approval is judged from the user's own words, host-side. The classifier
     // only runs while a proposal is pending, and "other" (questions, new
     // requests) keeps the proposal pending and lets the AI carry on.

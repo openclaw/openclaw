@@ -302,6 +302,30 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("keeps an exact sensitive config set away from every model path", async () => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
+    const planner = vi.fn(async () => ({ reply: "should never run" }));
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner as never,
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+
+    const proposed = await engine.handle("config set channels.telegram.botToken 123:very-secret");
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(planner).not.toHaveBeenCalled();
+    expect(proposed.text).toContain("<redacted>");
+    expect(proposed.text).not.toContain("very-secret");
+    expect(engine.hasPendingProposal()).toBe(true);
+
+    const applied = await engine.handle("yes");
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(applied.text).toContain("[crestodian] done: config.set");
+  });
+
   it("redacts sensitive config-set values from the AI-visible history", async () => {
     const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
       reply: "noted",
@@ -309,6 +333,7 @@ describe("CrestodianChatEngine", () => {
     const engine = new CrestodianChatEngine({
       runAgentTurn: async () => null,
       planWithAssistant: planner as never,
+      classifyApproval: async () => "other",
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
