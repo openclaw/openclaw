@@ -109,8 +109,8 @@ async function prepareTriggerRuntime(params: {
   const agentDir = resolveAgentDir(config, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: selectedAgentConfig?.skipBootstrap !== true,
-    skipOptionalBootstrapFiles: selectedAgentConfig?.skipOptionalBootstrapFiles,
+    ensureBootstrapFiles: !agentDefaults.skipBootstrap,
+    skipOptionalBootstrapFiles: agentDefaults.skipOptionalBootstrapFiles,
   });
   params.signal?.throwIfAborted();
   const workspaceDir = workspace.dir;
@@ -335,37 +335,39 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
     toolsAllowKey: string;
     signal: AbortSignal;
   }): Promise<PreparedTriggerRuntime> => {
-    let entry = runtimeCache.get(request.jobId);
-    const matchesEpoch =
-      entry?.configEpoch === request.runtimeConfig &&
-      entry.agentId === request.agentId &&
-      entry.toolsAllowKey === request.toolsAllowKey;
-    if (!matchesEpoch) {
-      const promise = prepareRuntime({
-        runtimeConfig: request.runtimeConfig,
-        jobId: request.jobId,
-        agentId: request.requestedAgentId,
-        toolsAllow: request.toolsAllow,
-        signal: request.signal,
-      });
-      entry = {
-        promise,
-        configEpoch: request.runtimeConfig,
-        agentId: request.agentId,
-        toolsAllowKey: request.toolsAllowKey,
-      };
+    const cached = runtimeCache.get(request.jobId);
+    if (
+      cached &&
+      cached.configEpoch === request.runtimeConfig &&
+      cached.agentId === request.agentId &&
+      cached.toolsAllowKey === request.toolsAllowKey
+    ) {
       runtimeCache.delete(request.jobId);
-      runtimeCache.set(request.jobId, entry);
-      trimRuntimeCache();
-      void promise.catch(() => {
-        if (runtimeCache.get(request.jobId) === entry) {
-          runtimeCache.delete(request.jobId);
-        }
-      });
-    } else {
-      runtimeCache.delete(request.jobId);
-      runtimeCache.set(request.jobId, entry);
+      runtimeCache.set(request.jobId, cached);
+      return await awaitTriggerSignal(cached.promise, request.signal);
     }
+    const promise = prepareRuntime({
+      runtimeConfig: request.runtimeConfig,
+      jobId: request.jobId,
+      agentId: request.requestedAgentId,
+      toolsAllow: request.toolsAllow,
+      signal: request.signal,
+    });
+    const entry: TriggerRuntimeCacheEntry = {
+      promise,
+      configEpoch: request.runtimeConfig,
+      agentId: request.agentId,
+      toolsAllowKey: request.toolsAllowKey,
+    };
+    runtimeCache.delete(request.jobId);
+    runtimeCache.set(request.jobId, entry);
+    trimRuntimeCache();
+    // Failed preparations evict themselves so the next tick retries cold.
+    void promise.catch(() => {
+      if (runtimeCache.get(request.jobId) === entry) {
+        runtimeCache.delete(request.jobId);
+      }
+    });
     return await awaitTriggerSignal(entry.promise, request.signal);
   };
 
