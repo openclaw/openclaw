@@ -1,5 +1,6 @@
 // Device Pair plugin entrypoint registers its OpenClaw integration.
 import { rm } from "node:fs/promises";
+import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -189,7 +190,7 @@ function isLoopbackHost(host: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "localhost" || normalized === "0.0.0.0" || normalized === "::") {
+  if (normalized === "localhost") {
     return true;
   }
   const octets = parseIPv4Octets(normalized);
@@ -242,12 +243,24 @@ function isPrivateIPv4(address: string): boolean {
   return false;
 }
 
+function isPrivateLanIPv6(address: string): boolean {
+  if (isIP(address) !== 6) {
+    return false;
+  }
+  const firstHextet = address.split(":", 1)[0] ?? "";
+  if (!/^[0-9a-f]{4}$/.test(firstHextet)) {
+    return false;
+  }
+  const value = Number.parseInt(firstHextet, 16);
+  return (value & 0xfe00) === 0xfc00 || (value & 0xffc0) === 0xfe80;
+}
+
 function isPrivateLanCleartextHost(host: string): boolean {
   const normalized = normalizeHostForIpCheck(host);
   if (normalized.endsWith(".local")) {
     return true;
   }
-  if (isPrivateIPv4(normalized)) {
+  if (isPrivateIPv4(normalized) || isPrivateLanIPv6(normalized)) {
     return true;
   }
   const octets = parseIPv4Octets(normalized);

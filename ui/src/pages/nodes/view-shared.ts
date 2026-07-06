@@ -6,7 +6,7 @@ export type NodeTargetOption = {
   label: string;
 };
 
-export type ConfigAgentOption = {
+type ConfigAgentOption = {
   id: string;
   name?: string;
   isDefault: boolean;

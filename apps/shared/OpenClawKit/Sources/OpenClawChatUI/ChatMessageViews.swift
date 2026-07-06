@@ -308,6 +308,10 @@ private struct ChatMessageBody: View {
                     includesThinking: self.showsAssistantTrace)
             }
 
+            if self.showsLinkPreview, let previewURL = chatFirstPreviewURL(in: text) {
+                ChatLinkPreview(url: previewURL)
+            }
+
             if !self.inlineAttachments.isEmpty {
                 ForEach(self.inlineAttachments.indices, id: \.self) { idx in
                     AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
@@ -342,6 +346,11 @@ private struct ChatMessageBody: View {
         // Keep the guarded base condition; iOS additionally opts assistant
         // messages into bubbles via the clean-chrome environment flag.
         self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
+    }
+
+    private var showsLinkPreview: Bool {
+        let role = self.message.role.lowercased()
+        return role == "user" || role == "assistant"
     }
 
     private var primaryText: String {
@@ -615,6 +624,34 @@ struct ChatTypingIndicatorBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusable(false)
+    }
+}
+
+/// Inline playback state under an assistant bubble while Listen is active;
+/// tapping it stops speech.
+struct ChatSpeechStatusChip: View {
+    let isPreparing: Bool
+    let onStop: () -> Void
+
+    var body: some View {
+        Button(action: self.onStop) {
+            HStack(spacing: 4) {
+                Image(systemName: self.isPreparing ? "hourglass" : "speaker.wave.2.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                if self.isPreparing {
+                    Text("Preparing audio…")
+                        .font(OpenClawChatTypography.caption)
+                } else {
+                    Text("Speaking…")
+                        .font(OpenClawChatTypography.caption)
+                }
+            }
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.isPreparing
+            ? Text("Preparing audio, tap to cancel")
+            : Text("Speaking, tap to stop"))
     }
 }
 

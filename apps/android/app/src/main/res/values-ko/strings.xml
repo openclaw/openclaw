@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">확인된 엔드포인트</string>
     <string name="gateway_trust_first_seen">이 게이트웨이를 신뢰하기 전에 인증서 지문을 확인하세요.\n\n%1$s</string>
     <string name="gateway_trust_changed">게이트웨이 인증서가 변경되었습니다. 예상한 변경인 경우에만 계속하세요.\n\n이전 SHA-256:\n%1$s\n\n새 SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Gateway 전환</string>
+    <string name="select_gateway">Gateway 선택</string>
+    <string name="active_gateway">활성 Gateway</string>
 </resources>

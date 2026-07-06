@@ -186,12 +186,32 @@ struct OpenClawChatComposer: View {
 
             Spacer(minLength: 4)
 
+            if let fraction = self.viewModel.contextUsageFraction {
+                self.contextUsageIndicator(fraction)
+            }
+
             if self.style == .standard {
                 self.refreshButton
                 self.attachmentPicker
             }
         }
         .padding(.horizontal, 10)
+    }
+
+    private func contextUsageIndicator(_ fraction: Double) -> some View {
+        let percentage = Int((fraction * 100).rounded())
+        let color = fraction >= 0.8 ? OpenClawChatTheme.warning : OpenClawChatTheme.muted
+        return ZStack {
+            Circle()
+                .stroke(OpenClawChatTheme.muted.opacity(0.2), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: fraction)
+                .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Context \(percentage)% used")
     }
 
     private var thinkingPicker: some View {

@@ -1,6 +1,30 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    nonisolated static func chatContextUsageFraction(for session: OpenClawChatSessionEntry?) -> Double? {
+        guard session?.totalTokensFresh != false,
+              let totalTokens = session?.totalTokens,
+              totalTokens >= 0,
+              let contextTokens = session?.contextTokens,
+              contextTokens > 0
+        else {
+            return nil
+        }
+        return min(max(Double(totalTokens) / Double(contextTokens), 0), 1)
+    }
+
+    func syncContextUsageFraction() {
+        let mainSessionKey = self.resolvedMainSessionKey
+        let activeSessionKey = self.sessionKey == "main" && mainSessionKey != "main"
+            ? mainSessionKey
+            : self.sessionKey
+        let currentSession = self.sessions.first(where: { $0.key == activeSessionKey }) ??
+            self.sessions.first(where: {
+                self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
+            })
+        self.contextUsageFraction = Self.chatContextUsageFraction(for: currentSession)
+    }
+
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)

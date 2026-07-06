@@ -2,9 +2,9 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -14,6 +14,9 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -169,7 +172,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
-  "provider-model-shared": 29,
+  "provider-model-shared": 30,
   "provider-stream-family": 40,
   "provider-stream-shared": 29,
   "provider-stream": 40,
@@ -192,7 +195,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10454,
+      10455,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -279,6 +282,8 @@ function countWildcardReexports(entrypoints) {
 let exportStatsProgram;
 
 function collectExportStats(entrypoints) {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
   exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
     allowJs: false,
     declaration: true,

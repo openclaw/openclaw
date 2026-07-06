@@ -110,8 +110,13 @@ extension SettingsProTab {
 
     var gatewaySection: some View {
         Section("Gateway") {
-            NavigationLink(value: SettingsRoute.gateway) {
-                self.gatewayConnectionRow
+            HStack(spacing: 8) {
+                NavigationLink(value: SettingsRoute.gateway) {
+                    self.gatewayConnectionRow
+                }
+                if self.gatewayRegistry.entries.count > 1 {
+                    self.gatewayQuickSwitchMenu
+                }
             }
             SettingsDetailRow("Address", value: self.gatewayAddress)
             SettingsDetailRow("Server", value: self.gatewayServer)
@@ -297,6 +302,7 @@ extension SettingsProTab {
             }
 
             self.manualGatewayCard
+            self.pairedGatewaysCard
             self.deviceIdentityCard
             self.agentSelectionCard
             self.gatewaySetupCard
@@ -304,6 +310,31 @@ extension SettingsProTab {
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
+    }
+
+    var gatewayQuickSwitchMenu: some View {
+        Menu {
+            ForEach(self.gatewayRegistry.entries) { entry in
+                Button {
+                    Task { await self.switchGateway(to: entry) }
+                } label: {
+                    Label {
+                        Text(entry.name)
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: entry.stableID == self.gatewayRegistry.activeStableID
+                            ? "checkmark.circle.fill"
+                            : "circle")
+                    }
+                }
+                .disabled(entry.stableID == self.gatewayRegistry.activeStableID || self.connectingGatewayID != nil)
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(OpenClawType.subheadSemiBold)
+                .foregroundStyle(OpenClawBrand.accent)
+        }
+        .accessibilityLabel("Switch Gateway")
     }
 
     var approvalsDestination: some View {
@@ -819,6 +850,82 @@ extension SettingsProTab {
             } else {
                 ForEach(self.gatewayController.gateways) { gateway in
                     self.discoveredGatewayRow(gateway)
+                }
+            }
+        }
+    }
+
+    var pairedGatewaysCard: some View {
+        Section {
+            if self.gatewayRegistry.entries.isEmpty {
+                Text("Pair a gateway to make it available here.")
+                    .font(OpenClawType.subhead)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(self.gatewayRegistry.entries) { entry in
+                    self.pairedGatewayRow(entry)
+                }
+            }
+        } header: {
+            Text("Paired Gateways")
+                .font(OpenClawType.subheadSemiBold)
+        } footer: {
+            Text("Switch gateways without pairing again.")
+                .font(OpenClawType.footnote)
+        }
+    }
+
+    func pairedGatewayRow(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> some View {
+        let isActive = entry.stableID == self.gatewayRegistry.activeStableID
+        return Button {
+            guard !isActive else { return }
+            Task { await self.switchGateway(to: entry) }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.name)
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(.primary)
+                    Text(self.gatewayEndpointSummary(entry))
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if self.connectingGatewayID == entry.stableID {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawBrand.accent)
+                        .accessibilityLabel("Active Gateway")
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(self.connectingGatewayID != nil)
+        .swipeActions {
+            Button(role: .destructive) {
+                self.pendingForgetGateway = entry
+            } label: {
+                Label {
+                    Text("Forget")
+                        .font(OpenClawType.captionSemiBold)
+                } icon: {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                self.pendingForgetGateway = entry
+            } label: {
+                Label {
+                    Text("Forget Gateway")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "trash")
                 }
             }
         }

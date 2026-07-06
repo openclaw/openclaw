@@ -192,7 +192,16 @@ In the Android app:
 - Use **Setup Code** or **Manual** mode.
 - If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
-After the first successful pairing, Android auto-reconnects on launch: the manual endpoint (if enabled), otherwise the last discovered gateway (best-effort).
+After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+
+### Multiple gateways
+
+The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+
+- **Settings -> Gateways** lists paired gateways with the active one marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway.
+- The **Connect** tab shows a quick switcher when more than one gateway is paired.
+- Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per gateway. Switching never mixes state between gateways, and messages queued while offline are delivered only to the gateway they were written for.
+- **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
 ### Presence alive beacons
 
@@ -242,6 +251,7 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
+- Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
 ### 7. Canvas + camera
 
@@ -318,6 +328,8 @@ Android can forward device notifications to the gateway as `node.event` items. T
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
+
+WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notifications are always excluded. Their messages are already owned by native OpenClaw channel sessions; forwarding the Android notification as a separate node event could route a reply through the wrong conversation.
 
 ## Related
 

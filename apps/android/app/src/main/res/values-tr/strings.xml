@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Çözümlenen uç nokta</string>
     <string name="gateway_trust_first_seen">Bu ağ geçidine güvenmeden önce sertifika parmak izini doğrulayın.\n\n%1$s</string>
     <string name="gateway_trust_changed">Ağ geçidi sertifikası değişti. Yalnızca bu değişikliği bekliyorsanız devam edin.\n\nEski SHA-256:\n%1$s\n\nYeni SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Gateway değiştir</string>
+    <string name="select_gateway">Gateway seç</string>
+    <string name="active_gateway">Etkin Gateway</string>
 </resources>

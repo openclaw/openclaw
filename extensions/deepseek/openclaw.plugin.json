@@ -123,6 +123,7 @@
       "provider": "deepseek",
       "method": "api-key",
       "choiceId": "deepseek-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "DeepSeek API key",
       "groupId": "deepseek",
       "groupLabel": "DeepSeek",

@@ -83,6 +83,9 @@ interface ChatTranscriptCache {
     sessionKey: String,
   )
 
+  /** Removes every cached transcript row owned by one gateway identity. */
+  suspend fun clearGateway(gatewayId: String)
+
   /** Purges every cached row for all gateways; used when pairing/auth state is reset. */
   suspend fun clearAll()
 }
@@ -140,6 +143,9 @@ internal interface ChatCacheDao {
 
   @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId")
   suspend fun deleteSessions(gatewayId: String)
+
+  @Query("DELETE FROM cached_messages WHERE gatewayId = :gatewayId")
+  suspend fun deleteMessages(gatewayId: String)
 
   @Query("DELETE FROM cached_sessions")
   suspend fun deleteAllSessions()
@@ -342,6 +348,15 @@ class RoomChatTranscriptCache internal constructor(
     database.withTransaction {
       dao.deleteAllSessions()
       dao.deleteAllMessages()
+    }
+  }
+
+  override suspend fun clearGateway(gatewayId: String) {
+    val gateway = scopedGatewayId(gatewayId) ?: return
+    val dao = database.dao()
+    database.withTransaction {
+      dao.deleteMessages(gateway)
+      dao.deleteSessions(gateway)
     }
   }
 

@@ -263,6 +263,19 @@ export function createGrepToolDefinition(
             child.stderr?.on("data", (chunk) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
+            const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+              if (settled) {
+                return;
+              }
+              stopChild();
+              cleanup();
+              settle(() => reject(new Error(`ripgrep ${stream} error: ${error.message}`)));
+            };
+            // readline re-emits input failures, then drops its input listener on close.
+            // Keep the direct guard until child exit so later stdout errors stay handled.
+            rl.on("error", (error) => onStreamError("stdout", error));
+            child.stdout?.on("error", (error) => onStreamError("stdout", error));
+            child.stderr?.on("error", (error) => onStreamError("stderr", error));
 
             const formatBlock = async (filePath: string, lineNumber: number): Promise<string[]> => {
               const relativePath = formatPath(filePath);

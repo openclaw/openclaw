@@ -3,15 +3,21 @@ package ai.openclaw.app
 import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class SecurePrefsTest {
+  private fun testPrefs(context: android.app.Application): SecurePrefs =
+    SecurePrefs(
+      context,
+      context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE),
+    )
+
   @Test
   fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
     assertEquals(
@@ -38,7 +44,7 @@ class SecurePrefsTest {
       .putString("location.enabledMode", "always")
       .commit()
 
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     val expected =
       if (SensitiveFeatureConfig.backgroundLocationEnabled) LocationMode.Always else LocationMode.WhileUsing
@@ -56,7 +62,7 @@ class SecurePrefsTest {
       .putBoolean("talk.enabled", true)
       .commit()
 
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     assertFalse(prefs.voiceMicEnabled.value)
     assertFalse(plainPrefs.contains("voice.micEnabled"))
@@ -71,7 +77,7 @@ class SecurePrefsTest {
       .clear()
       .putBoolean("talk.enabled", false)
       .commit()
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     prefs.setVoiceMicEnabled(true)
 
@@ -85,7 +91,7 @@ class SecurePrefsTest {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().commit()
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     assertFalse(prefs.installedAppsSharingEnabled.value)
 
@@ -100,7 +106,7 @@ class SecurePrefsTest {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().commit()
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     assertFalse(prefs.cameraEnabled.value)
     assertFalse(plainPrefs.getBoolean("camera.enabled", true))
@@ -120,7 +126,7 @@ class SecurePrefsTest {
       .clear()
       .putString("node.instanceId", "existing-node")
       .commit()
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     assertTrue(prefs.cameraEnabled.value)
     assertTrue(plainPrefs.getBoolean("camera.enabled", false))
@@ -131,7 +137,7 @@ class SecurePrefsTest {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().commit()
-    val prefs = SecurePrefs(context)
+    val prefs = testPrefs(context)
 
     assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
     assertFalse(plainPrefs.contains("appearance.themeMode"))
@@ -142,48 +148,44 @@ class SecurePrefsTest {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().commit()
-    val prefs = SecurePrefs(context)
+    val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val prefs = SecurePrefs(context, securePrefs)
 
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Light)
 
     assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
     assertEquals("light", plainPrefs.getString("appearance.themeMode", null))
-    assertEquals(AppearanceThemeMode.Light, SecurePrefs(context).appearanceThemeMode.value)
+    assertEquals(AppearanceThemeMode.Light, SecurePrefs(context, securePrefs).appearanceThemeMode.value)
   }
 
   @Test
-  fun saveGatewayBootstrapToken_persistsSeparatelyFromSharedToken() {
+  fun gatewayCredentials_areIndependentAcrossGateways() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)
     securePrefs.edit().clear().commit()
     val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
 
-    prefs.setGatewayToken("shared-token")
-    prefs.setGatewayBootstrapToken("bootstrap-token")
+    prefs.saveGatewayCredentials("gateway-a", token = " shared-token ", bootstrapToken = "bootstrap-token")
+    prefs.saveGatewayCredentials("gateway-b", password = "password-token")
 
-    assertEquals("shared-token", prefs.loadGatewayToken())
-    assertEquals("bootstrap-token", prefs.loadGatewayBootstrapToken())
-    assertEquals("bootstrap-token", prefs.gatewayBootstrapToken.value)
+    assertEquals(GatewayCredentials(token = "shared-token", bootstrapToken = "bootstrap-token"), prefs.loadGatewayCredentials("gateway-a"))
+    assertEquals(GatewayCredentials(password = "password-token"), prefs.loadGatewayCredentials("gateway-b"))
   }
 
   @Test
-  fun clearGatewaySetupAuth_removesStoredGatewayAuth() {
+  fun clearGatewayCredentials_removesOnlyTargetGateway() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.clear", Context.MODE_PRIVATE)
     securePrefs.edit().clear().commit()
     val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
 
-    prefs.setGatewayToken("shared-token")
-    prefs.setGatewayBootstrapToken("bootstrap-token")
-    prefs.setGatewayPassword("password-token")
+    prefs.saveGatewayCredentials("gateway-a", token = "shared-token", bootstrapToken = "bootstrap-token")
+    prefs.saveGatewayCredentials("gateway-b", password = "password-token")
 
-    prefs.clearGatewaySetupAuth()
+    prefs.clearGatewayCredentials("gateway-a")
 
-    assertEquals("", prefs.gatewayToken.value)
-    assertEquals("", prefs.gatewayBootstrapToken.value)
-    assertNull(prefs.loadGatewayToken())
-    assertNull(prefs.loadGatewayBootstrapToken())
-    assertNull(prefs.loadGatewayPassword())
+    assertEquals(GatewayCredentials(), prefs.loadGatewayCredentials("gateway-a"))
+    assertEquals(GatewayCredentials(password = "password-token"), prefs.loadGatewayCredentials("gateway-b"))
   }
 
   @Test
@@ -288,10 +290,10 @@ class SecurePrefsTest {
     prefs.saveGatewayCustomHeaders("manual|two.example|443", mapOf("X-Two" to "secret-two"))
     prefs.putString("unrelated.secret", "keep")
 
-    prefs.clearGatewayCustomHeaders()
+    prefs.clearGatewayCustomHeaders("manual|one.example|443")
 
     assertTrue(prefs.loadGatewayCustomHeaders("manual|one.example|443").isEmpty())
-    assertTrue(prefs.loadGatewayCustomHeaders("manual|two.example|443").isEmpty())
+    assertEquals(mapOf("X-Two" to "secret-two"), prefs.loadGatewayCustomHeaders("manual|two.example|443"))
     assertEquals("keep", prefs.getString("unrelated.secret"))
   }
 }

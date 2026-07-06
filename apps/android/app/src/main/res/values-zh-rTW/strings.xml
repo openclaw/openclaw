@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">已解析的端點</string>
     <string name="gateway_trust_first_seen">請先驗證憑證指紋，再信任此閘道。\n\n%1$s</string>
     <string name="gateway_trust_changed">閘道憑證已變更。僅在這是您預期的變更時繼續。\n\n舊 SHA-256：\n%1$s\n\n新 SHA-256：\n%2$s</string>
+    <string name="switch_gateway">切換 gateway</string>
+    <string name="select_gateway">選取 gateway</string>
+    <string name="active_gateway">使用中的 gateway</string>
 </resources>

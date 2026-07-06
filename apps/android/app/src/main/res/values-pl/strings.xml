@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Rozpoznany punkt końcowy</string>
     <string name="gateway_trust_first_seen">Sprawdź odcisk certyfikatu, zanim zaufasz tej bramie.\n\n%1$s</string>
     <string name="gateway_trust_changed">Certyfikat bramy uległ zmianie. Kontynuuj tylko wtedy, gdy oczekujesz tej zmiany.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Przełącz Gateway</string>
+    <string name="select_gateway">Wybierz Gateway</string>
+    <string name="active_gateway">Aktywne Gateway</string>
 </resources>

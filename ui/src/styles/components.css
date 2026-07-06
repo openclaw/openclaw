@@ -2033,8 +2033,14 @@
 }
 
 .callout__dismiss svg {
+  display: block;
   width: 16px;
   height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .callout.danger {
@@ -3139,8 +3145,6 @@
   border-bottom: none;
 }
 
-
-
 /* Checkbox column */
 .data-table-checkbox-col {
   width: var(--data-table-checkbox-col-width);
@@ -3300,7 +3304,6 @@ td.data-table-key-col {
 .field-inline.checkbox input[type="checkbox"] {
   accent-color: var(--accent);
 }
-
 
 /* ===========================================
    Log Stream

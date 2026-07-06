@@ -1189,10 +1189,15 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps Crabbox runner script edits on their regression tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/crabbox-wrapper.mjs"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/crabbox-wrapper.test.ts"],
-    });
+    for (const scriptPath of [
+      "scripts/crabbox-wrapper.mjs",
+      "scripts/crabbox-wrapper-providers.mjs",
+    ]) {
+      expect(resolveChangedTestTargetPlan([scriptPath]), scriptPath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/crabbox-wrapper.test.ts"],
+      });
+    }
   });
 
   it("keeps build stamp script edits on the build stamp regression test", () => {

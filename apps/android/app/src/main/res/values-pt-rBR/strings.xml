@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Endpoint resolvido</string>
     <string name="gateway_trust_first_seen">Verifique a impressão digital do certificado antes de confiar neste gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">O certificado do gateway foi alterado. Continue somente se você esperava essa alteração.\n\nSHA-256 antigo:\n%1$s\n\nSHA-256 novo:\n%2$s</string>
+    <string name="switch_gateway">Trocar Gateway</string>
+    <string name="select_gateway">Selecionar Gateway</string>
+    <string name="active_gateway">Gateway ativo</string>
 </resources>

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  downloadClawHubGitHubSkillArchive,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
@@ -68,6 +69,92 @@ function createStalledBodyResponse(params: {
     cancel,
   };
 }
+
+function createOversizedArchiveResponse(
+  params: {
+    headers?: HeadersInit;
+  } = {},
+): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+} {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancel();
+    },
+  });
+  const headers = new Headers(params.headers);
+  headers.set("content-type", headers.get("content-type") ?? "application/zip");
+  headers.set("content-length", String(256 * 1024 * 1024 + 512 * 1024));
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers,
+    }),
+    cancel,
+  };
+}
+
+const oversizedArchiveCases: Array<{
+  name: string;
+  headers?: HeadersInit;
+  download: (response: Response) => Promise<unknown>;
+  expectedResource: string;
+}> = [
+  {
+    name: "package archive",
+    download: (response) =>
+      downloadClawHubPackageArchive({
+        name: "@hyf/zai-external-alpha",
+        version: "0.0.1",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "package archive download for @hyf/zai-external-alpha",
+  },
+  {
+    name: "ClawPack artifact",
+    headers: { "content-type": "application/octet-stream" },
+    download: (response) =>
+      downloadClawHubPackageArchive({
+        name: "demo",
+        version: "1.2.3",
+        artifact: "clawpack",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "ClawPack download for demo@1.2.3",
+  },
+  {
+    name: "skill archive",
+    download: (response) =>
+      downloadClawHubSkillArchive({
+        slug: "agentreceipt",
+        version: "1.0.0",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "skill archive download for agentreceipt",
+  },
+  {
+    name: "resolver URL archive",
+    download: (response) =>
+      downloadClawHubSkillArchiveUrl({
+        baseUrl: "https://clawhub.ai",
+        url: "https://downloads.example.com/skill.zip",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "skill archive download at /skill.zip",
+  },
+  {
+    name: "GitHub source archive",
+    download: (response) =>
+      downloadClawHubGitHubSkillArchive({
+        repo: "owner/repo",
+        commit: "abc123",
+        fetchImpl: async () => response,
+      }),
+    expectedResource: "GitHub source archive for owner/repo@abc123",
+  },
+];
 
 describe("clawhub helpers", () => {
   const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
@@ -844,6 +931,40 @@ describe("clawhub helpers", () => {
           }),
       }),
     ).rejects.toThrow(/declared sha256/);
+  });
+
+  it.each(oversizedArchiveCases)(
+    "rejects and cancels oversized $name downloads",
+    async ({ headers, download, expectedResource }) => {
+      const oversized = createOversizedArchiveResponse({ headers });
+
+      await expect(download(oversized.response)).rejects.toThrow(
+        `ClawHub ${expectedResource} exceeded 268435456 bytes (268959744 bytes declared)`,
+      );
+      expect(oversized.cancel).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("uses decoded stream bytes instead of encoded content length", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const archive = await downloadClawHubPackageArchive({
+      name: "encoded-package",
+      version: "1.0.0",
+      fetchImpl: async () =>
+        new Response(bytes, {
+          status: 200,
+          headers: {
+            "content-encoding": "gzip",
+            "content-length": String(256 * 1024 * 1024 + 1),
+            "content-type": "application/zip",
+          },
+        }),
+    });
+    try {
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from(bytes));
+    } finally {
+      await archive.cleanup();
+    }
   });
 
   it("annotates 429 errors with the reset hint and a sign-in hint when unauthenticated", async () => {

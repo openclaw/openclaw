@@ -62,15 +62,17 @@ export async function createWhatsAppQaTransportAdapter(
     throw error;
   }
   const accountId = options.sutAccountId?.trim() || "sut";
-  const targets = whatsappLive.resolveWhatsAppQaMessageTargets({
+  const directTargets = whatsappLive.resolveWhatsAppQaMessageTargets({
     driverPhoneE164: runtimeEnv.driverPhoneE164,
     scenarioTarget: "dm",
     sutPhoneE164: runtimeEnv.sutPhoneE164,
   });
+  let targets = directTargets;
   let observedCount = driver.getObservedMessages().length;
   let stopped = false;
   let pollingError: Error | undefined;
   let logicalConversationId = targets.gatewayTarget;
+  let logicalConversationKind: "direct" | "group" = "direct";
   const nativeMessageIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
   const polling = (async () => {
@@ -86,7 +88,7 @@ export async function createWhatsAppQaTransportAdapter(
         }
         await context.messages.addOutboundMessage({
           accountId,
-          to: `dm:${logicalConversationId}`,
+          to: `${logicalConversationKind === "direct" ? "dm" : "group"}:${logicalConversationId}`,
           senderId: message.fromPhoneE164,
           text: message.text,
           timestamp: Date.parse(message.observedAt),
@@ -120,6 +122,13 @@ export async function createWhatsAppQaTransportAdapter(
     async sendInbound(input) {
       heartbeat.throwIfFailed();
       logicalConversationId = input.conversation.id;
+      logicalConversationKind = input.conversation.kind === "group" ? "group" : "direct";
+      targets = whatsappLive.resolveWhatsAppQaMessageTargets({
+        driverPhoneE164: runtimeEnv.driverPhoneE164,
+        groupJid: runtimeEnv.groupJid,
+        scenarioTarget: logicalConversationKind === "group" ? "group" : "dm",
+        sutPhoneE164: runtimeEnv.sutPhoneE164,
+      });
       const quotedMessageId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
       const sent = await driver.sendText(
         targets.driverTarget,
@@ -146,7 +155,9 @@ export async function createWhatsAppQaTransportAdapter(
       return message;
     },
     resetTransport: () => {
-      logicalConversationId = targets.gatewayTarget;
+      targets = directTargets;
+      logicalConversationId = directTargets.gatewayTarget;
+      logicalConversationKind = "direct";
       nativeMessageIds.clear();
       busMessageIds.clear();
     },

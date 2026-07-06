@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Session browser for active, current, and archived chat sessions. */
@@ -85,8 +86,11 @@ internal fun SessionsScreen(
   var renameSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var groupSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
+  var searchText by rememberSaveable { mutableStateOf("") }
+  var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
+  val searchQuery = searchText.trim()
   val visibleSessions =
-    sessions
+    (if (searchQuery.isEmpty()) sessions else searchResults)
       .let { rows ->
         when (filter) {
           SessionFilter.Recent -> rows.filter { it.archived != true }
@@ -113,6 +117,23 @@ internal fun SessionsScreen(
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
     }
+  }
+
+  // Keyed on the live session list too: row actions (pin/rename/archive/delete)
+  // refresh live state, which re-runs the search so results never go stale.
+  LaunchedEffect(searchQuery, filter, sessions) {
+    if (searchQuery.isEmpty()) {
+      searchResults = emptyList()
+      return@LaunchedEffect
+    }
+    // Debounce keystrokes; the key change cancels superseded fetches, and the
+    // controller falls back to local filtering when the gateway is unreachable.
+    delay(250)
+    searchResults =
+      viewModel.fetchChatSessionList(
+        search = searchQuery,
+        archived = filter == SessionFilter.Archived,
+      )
   }
 
   ClawScaffold(
@@ -142,6 +163,16 @@ internal fun SessionsScreen(
           FilterPill(text = "Current", icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
           FilterPill(text = "Archived", icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
         }
+      }
+
+      item {
+        OutlinedTextField(
+          value = searchText,
+          onValueChange = { searchText = it },
+          modifier = Modifier.fillMaxWidth(),
+          placeholder = { Text(text = "Search sessions", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+          singleLine = true,
+        )
       }
 
       item {

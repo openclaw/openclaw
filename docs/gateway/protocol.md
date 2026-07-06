@@ -720,12 +720,18 @@ context.
 
 ## Versioning
 
-- `PROTOCOL_VERSION` and `MIN_CLIENT_PROTOCOL_VERSION` live in
-  `packages/gateway-protocol/src/version.ts`. Both are currently `4`.
-- Clients send `minProtocol` + `maxProtocol`; the gateway accepts a connect
-  when `maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION`
-  (`src/gateway/server/ws-connection/message-handler.ts`). Current clients and
-  servers both run protocol v4.
+- `PROTOCOL_VERSION`, `MIN_CLIENT_PROTOCOL_VERSION`,
+  `MIN_NODE_PROTOCOL_VERSION`, and `MIN_PROBE_PROTOCOL_VERSION` live in
+  `packages/gateway-protocol/src/version.ts`.
+- Clients send `minProtocol` + `maxProtocol`. Operator and UI clients must
+  include the current protocol in that range; current clients and servers run
+  protocol v4.
+- Authenticated clients with both `role: "node"` and `client.mode: "node"`
+  may use the N-1 node protocol (currently v3). Lightweight restart probes use
+  the same N-1 window. Device auth, pairing, scopes, command policy, and exec
+  approvals are unchanged by this compatibility window. Plugin-owned node
+  capabilities and commands are withheld until the node upgrades to the current
+  protocol because their hosted surfaces are not part of the N-1 contract.
 - Schemas and models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
@@ -742,6 +748,8 @@ third-party clients.
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `PROTOCOL_VERSION`                        | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
+| `MIN_NODE_PROTOCOL_VERSION`               | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
+| `MIN_PROBE_PROTOCOL_VERSION`              | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`requestTimeoutMs`)                                                              |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `packages/gateway-client/src/timeouts.ts` (`OPENCLAW_HANDSHAKE_TIMEOUT_MS` env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`backoffMs`)                                                                     |
