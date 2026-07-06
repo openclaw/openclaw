@@ -169,4 +169,24 @@ describe("durable Discord delivery", () => {
     expect(unresolved.status).toBe("unresolved");
     expect(unresolved.retryable).toBe(false);
   });
+
+  it("keeps ETIMEDOUT unresolved (can be post-dispatch response timeout)", async () => {
+    const durable = (discordPlugin.message as Record<string, unknown>).durableFinal as
+      | { reconcileUnknownSend?: Function }
+      | undefined;
+    expect(durable?.reconcileUnknownSend).toBeDefined();
+    const result = await durable!.reconcileUnknownSend!({
+      cfg: {},
+      queueId: "test-q",
+      channel: "discord",
+      to: "channel:1",
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      payloads: [{ text: "t" }],
+      lastError: "fetch failed | ETIMEDOUT",
+    });
+    const unresolved = result as { status: string; error: string; retryable: boolean };
+    expect(unresolved.status).toBe("unresolved");
+    expect(unresolved.retryable).toBe(false);
+  });
 });

@@ -114,7 +114,7 @@ const discordMessageAdapterBase = createChannelMessageAdapterFromOutbound({
  *  ENETUNREACH). Falls back to `unresolved` otherwise to avoid blindly
  *  duplicating messages that may have already been delivered. (#100979) */
 const PRE_DISPATCH_ERROR_RE =
-  /\b(UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ERR_CONNECT_TIMEOUT|EADDRNOTAVAIL|ETIMEDOUT)\b/iu;
+  /\b(UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ERR_CONNECT_TIMEOUT|EADDRNOTAVAIL)\b/iu;
 
 function reconcileDiscordUnknownSend(ctx: {
   lastError?: string | null;
