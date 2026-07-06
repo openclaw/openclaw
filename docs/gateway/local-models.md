@@ -284,4 +284,5 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
 ## Related
 
 - [Configuration reference](/gateway/configuration-reference)
+- [Local text workers](/gateway/local-text-workers)
 - [Model failover](/concepts/model-failover)
