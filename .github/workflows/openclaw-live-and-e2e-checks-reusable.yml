@@ -2316,6 +2316,11 @@ jobs:
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
             live-acp-bind-docker)
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
                 echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
               else
@@ -2551,6 +2556,11 @@ jobs:
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
             live-acp-bind-docker)
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
                 echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
               else
