@@ -33,7 +33,9 @@ import type {
   Model,
   TextContent,
 } from "../../llm/types.js";
-import { isRetryableAssistantError } from "../../llm/utils/retry.js";
+import { isReplayInvalidThinkingError, isRetryableAssistantError } from "../../llm/utils/retry.js";
+import { log } from "../embedded-agent-runner/logger.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../embedded-agent-runner/thinking.js";
 import type {
   Agent,
   AgentEvent,
@@ -1109,6 +1111,37 @@ export class AgentSession {
     this.lastAssistantMessage = undefined;
     if (!msg) {
       return false;
+    }
+
+    // Check for replay_invalid thinking signature error first (issue #99654)
+    // This happens when session history contains thinking blocks with stale signatures
+    // (e.g., after gateway restart with thinkingDefault: off). We need to strip the
+    // stale signatures before retrying, unlike generic retryable errors.
+    if (isReplayInvalidThinkingError(msg)) {
+      log.info(
+        `[session-recovery] Detected replay_invalid thinking signature error; stripping stale signatures from session history`,
+      );
+
+      // Strip stale thinking signatures from session history
+      const messages = this.agent.state.messages;
+      const strippedMessages = stripStaleThinkingSignaturesForCompactionReplay(messages);
+
+      if (strippedMessages !== messages) {
+        // Successfully stripped some signatures - update agent state and retry once
+        this.agent.state.messages = strippedMessages;
+
+        // Remove the error message from agent state (keep in session for history)
+        if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+          this.agent.state.messages = messages.slice(0, -1);
+        }
+
+        log.info(`[session-recovery] Stripped stale thinking signatures; retrying prompt once`);
+        return true; // Retry once after stripping
+      } else {
+        log.warn(
+          `[session-recovery] Replay_invalid thinking error detected but no stale signatures found to strip`,
+        );
+      }
     }
 
     if (this.isRetryableError(msg) && (await this.prepareRetry(msg))) {

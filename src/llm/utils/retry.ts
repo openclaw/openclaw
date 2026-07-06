@@ -49,6 +49,20 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
+/** Check if an error is a replay_invalid thinking signature error. */
+function isReplayInvalidThinkingError(message: AssistantMessage): boolean {
+  if (message.stopReason !== "error" || !message.errorMessage) {
+    return false;
+  }
+  // Match replay_invalid errors that mention thinking/signature issues
+  // Examples from issue #99654:
+  // - "messages.1.content.3: Invalid `signature` in `thinking` block"
+  // - "Invalid signature in thinking block"
+  return /\breplay_invalid\b.*\bthinking\b|\bthinking\b.*\bsignature\b.*\b(?:invalid|expired)\b|\binvalid.*signature.*in.*thinking\b/i.test(
+    message.errorMessage,
+  );
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
@@ -57,5 +71,13 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(message.errorMessage)) {
     return false;
   }
+  // Thinking signature errors need special handling (strip signatures before retry)
+  // so we don't classify them as generic retryable errors here.
+  if (isReplayInvalidThinkingError(message)) {
+    return false;
+  }
   return RETRYABLE_PROVIDER_ERROR_PATTERN.test(message.errorMessage);
 }
+
+/** Export the thinking signature checker for session-level recovery logic. */
+export { isReplayInvalidThinkingError };
