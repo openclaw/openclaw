@@ -2987,7 +2987,7 @@ private fun rememberPermissionState(
         null
       },
       if (smsAvailable) {
-        PermissionRowModel("SMS", "Read and send SMS messages", Icons.Default.Notifications, smsGranted) {
+        PermissionRowModel("SMS", "Device access; Gateway opt-in still required", Icons.Default.Notifications, smsGranted) {
           request(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
         }
       } else {
