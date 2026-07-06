@@ -609,6 +609,7 @@ describe("Google image-generation provider", () => {
           models: {
             providers: {
               google: {
+                baseUrl: "https://gateway.example.test/gemini/v1beta",
                 apiKey: "",
                 models: [],
               },
