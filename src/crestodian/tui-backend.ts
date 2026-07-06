@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -137,12 +138,7 @@ class CrestodianTuiBackend implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
     this.messages.push(message("user", opts.message));
-    void this.respond(runId, opts.sessionKey, text).catch((err: unknown) => {
-      // Defensive catch: respond already handles its own errors, but if the
-      // promise itself ever rejects (e.g. a future engine change), surface it
-      // as a chat error event instead of becoming an unhandled rejection.
-      this.emitError(runId, opts.sessionKey, err);
-    });
+    void this.respond(runId, opts.sessionKey, text);
     return { runId };
   }
 
@@ -261,7 +257,12 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   private emit(event: string, payload: unknown): void {
-    this.onEvent?.({
+    const listener = this.onEvent;
+    if (!listener) {
+      return;
+    }
+    // A renderer failure must not reject the backend's fire-and-forget response path.
+    notifyListeners([listener], {
       event,
       payload,
       seq: this.nextSeq(),

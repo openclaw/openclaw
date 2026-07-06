@@ -74,8 +74,7 @@ describe("runCrestodianTui", () => {
     }
   });
 
-  it("catches a rejecting respond promise in sendChat and emits an error event", async () => {
-    type ReplacableRespond = (runId: string, sessionKey: string, text: string) => Promise<void>;
+  it("isolates event consumer failures during sendChat", async () => {
     const backendWithEngine = await new Promise<{
       backend: {
         sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
@@ -83,8 +82,10 @@ describe("runCrestodianTui", () => {
           event: string;
           payload?: { state?: string; errorMessage?: string };
         }) => void;
-        engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
-        respond?: ReplacableRespond;
+        engine: {
+          handle: () => Promise<{ text: string; action: "none" }>;
+          dispose: () => Promise<void>;
+        };
       };
       dispose: () => Promise<void>;
     }>((resolve) => {
@@ -98,9 +99,11 @@ describe("runCrestodianTui", () => {
                 event: string;
                 payload?: { state?: string; errorMessage?: string };
               }) => void;
-              engine: { handle: () => Promise<unknown>; dispose: () => Promise<void> };
+              engine: {
+                handle: () => Promise<{ text: string; action: "none" }>;
+                dispose: () => Promise<void>;
+              };
               dispose: () => Promise<void>;
-              respond: ReplacableRespond;
             };
             resolve({ backend, dispose: async () => backend.dispose() });
             return { exitReason: "exit" };
@@ -111,14 +114,9 @@ describe("runCrestodianTui", () => {
     });
 
     const { backend, dispose } = backendWithEngine;
-    const events: Array<{ event: string; payload?: { state?: string; errorMessage?: string } }> =
-      [];
-    backend.onEvent = (evt) => events.push(evt);
-
-    // Make the private respond() method itself reject. Current main would leave
-    // this as an unhandled rejection because sendChat fires respond as void.
-    backend.respond = async () => {
-      throw new Error("simulated respond failure");
+    backend.engine.handle = async () => ({ text: "hello", action: "none" });
+    backend.onEvent = () => {
+      throw new Error("simulated render failure");
     };
 
     const unhandled: unknown[] = [];
@@ -126,19 +124,15 @@ describe("runCrestodianTui", () => {
     process.on("unhandledRejection", onUnhandled);
     try {
       await backend.sendChat({ message: "hello" });
-      // Wait for the fire-and-forget catch handler to run.
+      // Wait for the fire-and-forget response path to emit its final event.
       await new Promise((resolve) => {
         setTimeout(resolve, 50);
       });
     } finally {
       process.off("unhandledRejection", onUnhandled);
+      await dispose();
     }
 
     expect(unhandled).toHaveLength(0);
-    const errorEvent = events.find((e) => e.event === "chat" && e.payload?.state === "error");
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent?.payload?.errorMessage).toMatch(/simulated respond failure/);
-
-    await dispose();
   });
 });

@@ -1,8 +1,6 @@
-// Real behavior proof: CrestodianTuiBackend.sendChat catches a rejecting
-// this.respond promise and emits a chat error event instead of an unhandled
-// rejection. We replace the private respond() method itself so the error
-// escapes respond's internal try/catch and must be caught by sendChat's outer
-// .catch() -- which does not exist on current main.
+// Real behavior proof: CrestodianTuiBackend isolates a throwing TUI event
+// consumer so its fire-and-forget sendChat response does not become an
+// unhandled rejection.
 
 import { runCrestodianTui } from "../../src/crestodian/tui-backend.js";
 import type { RuntimeEnv } from "../../src/runtime.js";
@@ -37,13 +35,13 @@ const runtime: RuntimeEnv = {
   },
 };
 
-type ReplacableRespond = (runId: string, sessionKey: string, text: string) => Promise<void>;
-
 const { backend } = await new Promise<{
   backend: {
     sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
     onEvent?: (evt: { event: string; payload?: { state?: string; errorMessage?: string } }) => void;
-    respond?: ReplacableRespond;
+    engine: {
+      handle: () => Promise<{ text: string; action: "none" }>;
+    };
   };
 }>((resolve) => {
   void runCrestodianTui(
@@ -58,21 +56,17 @@ const { backend } = await new Promise<{
   );
 });
 
-const events: Array<{ event: string; payload?: { state?: string; errorMessage?: string } }> = [];
-backend.onEvent = (evt) => events.push(evt);
-
-// Replace the private respond() method so it rejects; current main would leak
-// this as an unhandled rejection because sendChat fires respond as void.
-backend.respond = async () => {
-  throw new Error("simulated respond failure");
+backend.engine.handle = async () => ({ text: "hello", action: "none" });
+backend.onEvent = () => {
+  throw new Error("simulated render failure");
 };
 
 const unhandled: unknown[] = [];
 const onUnhandled = (reason: unknown) => unhandled.push(reason);
 process.on("unhandledRejection", onUnhandled);
 
-console.log("=== Proof: crestodian sendChat respond rejection catch ===\n");
-console.log("Sending a chat message while respond() itself rejects...\n");
+console.log("=== Proof: crestodian TUI event consumer isolation ===\n");
+console.log("Sending a chat message while the TUI event consumer throws...\n");
 
 try {
   await backend.sendChat({ message: "hello" });
@@ -81,13 +75,10 @@ try {
     setTimeout(resolve, 100);
   });
 
-  const errorEvent = events.find((e) => e.event === "chat" && e.payload?.state === "error");
-
-  if (unhandled.length === 0 && errorEvent?.payload?.errorMessage?.includes("simulated respond failure")) {
-    console.log(`Caught error event: ${JSON.stringify(errorEvent.payload)}`);
-    console.log("\nPASS: rejecting respond is caught and emitted as a chat error.");
+  if (unhandled.length === 0) {
+    console.log("PASS: the listener failure was isolated without an unhandled rejection.");
   } else {
-    console.log(`FAIL: unhandled=${unhandled.length}, errorEvent=${JSON.stringify(errorEvent?.payload)}`);
+    console.log(`FAIL: unhandled=${String(unhandled.length)}`);
     process.exitCode = 1;
   }
 } finally {
