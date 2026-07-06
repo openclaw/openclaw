@@ -917,6 +917,26 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun revokedRecordAudioPermissionStopsGatewayPttBeforeMicStart() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = createTestRuntime(app)
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    writeField(talkMode, "activePttCaptureId", "capture-1")
+    talkMode.ttsOnAllResponses = true
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+    shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+
+    runtime.setMicEnabled(true)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertNull(talkMode.activePushToTalkCaptureId)
+    assertFalse(talkMode.ttsOnAllResponses)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+    assertFalse(runtime.prefs.voiceMicEnabled.value)
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
     runBlocking {

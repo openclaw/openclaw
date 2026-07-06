@@ -2081,16 +2081,13 @@ class NodeRuntime private constructor(
     synchronized(voiceCaptureOwnershipLock) {
       talkPttCommandEpoch.incrementAndGet()
       voiceCaptureOwnershipEpoch.incrementAndGet()
-      if (mode.requiresMicrophonePermission && !hasRecordAudioPermission()) {
-        _voiceCaptureMode.value = VoiceCaptureMode.Off
-        prefs.setVoiceMicEnabled(false)
-        externalAudioCaptureActive.value = false
-        return
-      }
-      if (_voiceCaptureMode.value == mode && isVoiceCaptureModeActive(mode)) return
+      val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
+      val captureMode = if (permissionDenied) VoiceCaptureMode.Off else mode
+      if (permissionDenied) prefs.setVoiceMicEnabled(false)
+      if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
       talkPttOwnership.set(null)
-      _voiceCaptureMode.value = mode
-      when (mode) {
+      _voiceCaptureMode.value = captureMode
+      when (captureMode) {
         VoiceCaptureMode.Off -> {
           talkMode.ttsOnAllResponses = false
           talkMode.stopAllCapture()
