@@ -1893,8 +1893,8 @@ type MessageActionDetails = {
   shouldFetchFullMessage: boolean;
 };
 
-function resolveDisplayedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
-  const markdown = normalizedMessage.content
+function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
+  return normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
         lines.push(item.text);
@@ -1903,9 +1903,6 @@ function resolveDisplayedMessageMarkdown(normalizedMessage: NormalizedMessage): 
     }, [])
     .join("\n")
     .trim();
-  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-    ? stripThinkingTags(markdown).trim()
-    : markdown;
 }
 
 function resolveMessageActionDetails(
@@ -1917,7 +1914,7 @@ function resolveMessageActionDetails(
   if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
     return null;
   }
-  const markdown = resolveDisplayedMessageMarkdown(normalizedMessage);
+  const markdown = stripThinkingTags(resolveNormalizedMessageMarkdown(normalizedMessage)).trim();
   if (!markdown) {
     return null;
   }
@@ -2014,7 +2011,7 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = resolveDisplayedMessageMarkdown(normalizedMessage);
+  const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );
