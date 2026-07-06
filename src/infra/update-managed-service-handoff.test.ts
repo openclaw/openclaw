@@ -500,6 +500,7 @@ describe("managed service update handoff", () => {
 
     const result = await startManagedServiceUpdateHandoff({
       root: "/tmp/openclaw",
+      restartDrainTimeoutMs: 300_000,
       channel: "extended-stable",
       parentPid: 12345,
       execPath: "/usr/local/bin/node",
