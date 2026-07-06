@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,6 +41,7 @@ class ChatController internal constructor(
   private val transcriptCache: ChatTranscriptCache? = null,
   private val cacheScope: () -> ChatCacheScope? = { null },
   private val commandOutbox: ChatCommandOutbox? = null,
+  private val recordModelRecent: (String) -> Unit = {},
 ) {
   internal constructor(
     scope: CoroutineScope,
@@ -48,6 +50,7 @@ class ChatController internal constructor(
     transcriptCache: ChatTranscriptCache? = null,
     cacheScope: () -> ChatCacheScope? = { null },
     commandOutbox: ChatCommandOutbox? = null,
+    recordModelRecent: (String) -> Unit = {},
   ) : this(
     scope = scope,
     json = json,
@@ -55,10 +58,12 @@ class ChatController internal constructor(
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
     commandOutbox = commandOutbox,
+    recordModelRecent = recordModelRecent,
   )
 
   private var appliedMainSessionKey = "main"
   private val cacheMutationMutex = Mutex()
+  private val modelSelectionMutex = Mutex()
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
 
@@ -83,6 +88,9 @@ class ChatController internal constructor(
 
   private val _thinkingLevel = MutableStateFlow("off")
   val thinkingLevel: StateFlow<String> = _thinkingLevel.asStateFlow()
+
+  private val _selectedModelRef = MutableStateFlow<String?>(null)
+  val selectedModelRef: StateFlow<String?> = _selectedModelRef.asStateFlow()
 
   private val _pendingRunCount = MutableStateFlow(0)
   val pendingRunCount: StateFlow<Int> = _pendingRunCount.asStateFlow()
@@ -427,6 +435,46 @@ class ChatController internal constructor(
     _thinkingLevel.value = normalized
   }
 
+  /** Patches the active session model without blocking the Compose caller. */
+  fun setSessionModel(
+    sessionKey: String,
+    modelRef: String?,
+  ) {
+    // Enter the model-selection queue before returning so an immediate send cannot overtake it.
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+      setSessionModelAwait(sessionKey = sessionKey, modelRef = modelRef)
+    }
+  }
+
+  /** Patches a session model and updates picker state only after gateway acceptance. */
+  internal suspend fun setSessionModelAwait(
+    sessionKey: String,
+    modelRef: String?,
+  ): Boolean =
+    modelSelectionMutex.withLock {
+      val key = normalizeRequestedSessionKey(sessionKey)
+      val normalizedModelRef = modelRef?.trim()?.takeIf { it.isNotEmpty() }
+      updateErrorText(null)
+      try {
+        val params =
+          buildJsonObject {
+            put("key", JsonPrimitive(key))
+            put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
+          }
+        requestGateway("sessions.patch", params.toString())
+        normalizedModelRef?.let(recordModelRecent)
+        if (_sessionKey.value == key) {
+          _selectedModelRef.value = normalizedModelRef
+        }
+        true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        updateErrorText(err.message ?: "Could not update model.")
+        false
+      }
+    }
+
   /** Switches to another gateway chat session and starts a fresh history load. */
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
@@ -450,6 +498,7 @@ class ChatController internal constructor(
   ): Long {
     val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
+    _selectedModelRef.value = null
     lastHandledTerminalRunId = null
     val nextAgentId = resolveAgentIdForSessionKey(key)
     if (commandsAgentId != nextAgentId) {
@@ -503,6 +552,9 @@ class ChatController internal constructor(
   ): Boolean {
     val trimmed = message.trim()
     if (trimmed.isEmpty() && attachments.isEmpty()) return false
+    // Model patches and sends share one ordering boundary; the first post-selection turn
+    // must not leave on the previous model while sessions.patch is still in flight.
+    modelSelectionMutex.withLock {}
     if (!_healthOk.value) {
       // Offline capture: text-only commands become durable outbox rows and flush on reconnect.
       // Attachments stay blocked (text-only v1) so large payloads never sit in the database.

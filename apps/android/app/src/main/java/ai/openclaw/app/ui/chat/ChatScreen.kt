@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatCommandEntry
@@ -57,10 +58,15 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -123,6 +129,10 @@ fun ChatScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val modelCatalog by viewModel.modelCatalog.collectAsState()
+  val modelFavorites by viewModel.modelFavorites.collectAsState()
+  val modelRecents by viewModel.modelRecents.collectAsState()
+  val selectedModelRef by viewModel.chatSelectedModelRef.collectAsState()
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
@@ -134,6 +144,20 @@ fun ChatScreen(
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
   val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
+  var showModelPicker by rememberSaveable { mutableStateOf(false) }
+  val modelSections =
+    remember(modelCatalog, modelFavorites, modelRecents) {
+      chatModelPickerSections(
+        catalog = modelCatalog,
+        favorites = modelFavorites,
+        recents = modelRecents,
+      )
+    }
+  val selectedModelLabel =
+    selectedModelRef?.let { selected ->
+      modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
+        ?: selected.substringAfterLast('/')
+    } ?: "Model"
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
@@ -180,6 +204,18 @@ fun ChatScreen(
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
     viewModel.clearChatDraft()
+  }
+
+  LaunchedEffect(showModelPicker) {
+    if (showModelPicker && modelCatalog.isEmpty()) {
+      viewModel.refreshModelCatalog()
+    }
+  }
+
+  LaunchedEffect(gatewayConnectionDisplay.isConnected) {
+    if (!gatewayConnectionDisplay.isConnected) {
+      showModelPicker = false
+    }
   }
 
   val newChatEnabled =
@@ -266,12 +302,15 @@ fun ChatScreen(
       attachments = attachments,
       thinkingLevel = thinkingLevel,
       contextUsage = contextUsage,
+      selectedModelLabel = selectedModelLabel,
+      modelPickerEnabled = gatewayConnectionDisplay.isConnected,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
+      onOpenModelPicker = { showModelPicker = true },
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       onVoice = onVoice,
@@ -310,6 +349,19 @@ fun ChatScreen(
           }
         }
       },
+    )
+  }
+
+  if (showModelPicker) {
+    ChatModelPickerSheet(
+      sections = modelSections,
+      favorites = modelFavorites.toSet(),
+      onDismiss = { showModelPicker = false },
+      onSelect = { modelRef ->
+        viewModel.setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
+        showModelPicker = false
+      },
+      onToggleFavorite = viewModel::toggleModelFavorite,
     )
   }
 }
@@ -903,12 +955,15 @@ private fun ChatComposer(
   attachments: List<PendingImageAttachment>,
   thinkingLevel: String,
   contextUsage: ChatContextUsage,
+  selectedModelLabel: String,
+  modelPickerEnabled: Boolean,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   offlineStatus: String,
   pendingRunCount: Int,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
+  onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   onVoice: () -> Unit,
@@ -927,11 +982,23 @@ private fun ChatComposer(
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    ChatContextMeter(
-      thinkingLevel = thinkingLevel,
-      contextUsage = contextUsage,
-      onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
-    )
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      ChatModelChip(
+        label = selectedModelLabel,
+        enabled = modelPickerEnabled,
+        onClick = onOpenModelPicker,
+        modifier = Modifier.weight(1f),
+      )
+      ChatContextMeter(
+        thinkingLevel = thinkingLevel,
+        contextUsage = contextUsage,
+        onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
+      )
+    }
 
     if (shouldShowSlashCommandMenu(value)) {
       SlashCommandPanel(
@@ -987,6 +1054,138 @@ private fun ChatComposer(
             Text(text = "Stop", style = ClawTheme.type.label)
           }
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatModelChip(
+  label: String,
+  enabled: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = ClawTheme.colors.canvas,
+    contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
+      Text(
+        text = label,
+        style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+        color = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatModelPickerSheet(
+  sections: ChatModelPickerSections,
+  favorites: Set<String>,
+  onDismiss: () -> Unit,
+  onSelect: (String?) -> Unit,
+  onToggleFavorite: (String) -> Unit,
+) {
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    containerColor = ClawTheme.colors.surface,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    LazyColumn(
+      modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+      contentPadding = PaddingValues(bottom = 24.dp),
+    ) {
+      item {
+        Surface(
+          onClick = { onSelect(null) },
+          modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
+          color = Color.Transparent,
+          contentColor = ClawTheme.colors.text,
+        ) {
+          Text(
+            text = "Default",
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            style = ClawTheme.type.body,
+          )
+        }
+      }
+      item {
+        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+      }
+      listOf(
+        "Pinned" to sections.pinned,
+        "Recent" to sections.recent,
+        "Models" to sections.remaining,
+      ).forEach { (title, models) ->
+        if (models.isNotEmpty()) {
+          item(key = "section-$title") {
+            Text(
+              text = title,
+              modifier = Modifier.padding(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 6.dp),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+          itemsIndexed(
+            items = models,
+            key = { _, model -> model.providerQualifiedRef() },
+          ) { _, model ->
+            val ref = model.providerQualifiedRef()
+            ChatModelPickerRow(
+              model = model,
+              pinned = ref in favorites,
+              onSelect = { onSelect(ref) },
+              onToggleFavorite = { onToggleFavorite(ref) },
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatModelPickerRow(
+  model: GatewayModelSummary,
+  pinned: Boolean,
+  onSelect: () -> Unit,
+  onToggleFavorite: () -> Unit,
+) {
+  Surface(
+    onClick = onSelect,
+    modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
+    color = Color.Transparent,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Row(
+      modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = model.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = model.provider, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+      IconButton(onClick = onToggleFavorite) {
+        Icon(
+          imageVector = if (pinned) Icons.Default.Star else Icons.Default.StarBorder,
+          contentDescription = if (pinned) "Unpin model" else "Pin model",
+          tint = if (pinned) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+        )
       }
     }
   }

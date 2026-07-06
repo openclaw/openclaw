@@ -41,6 +41,9 @@ class ConnectionManager(
 
     internal val nativeClientOperatorScopes: List<String> =
       listOf(
+        // admin matches iOS fresh token/password connects and is required for
+        // sessions.patch (model switching); stored tokens keep their granted scopes.
+        "operator.admin",
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",

@@ -358,7 +358,13 @@ class GatewayBootstrapAuthTest {
   @Test
   fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
     assertEquals(
-      ConnectionManager.nativeClientOperatorScopes,
+      listOf(
+        "operator.admin",
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ),
       operatorConnectScopesForAuth(
         usesStoredDeviceToken = false,
         storedOperatorScopes = null,

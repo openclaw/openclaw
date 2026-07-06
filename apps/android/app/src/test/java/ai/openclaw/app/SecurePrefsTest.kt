@@ -167,4 +167,48 @@ class SecurePrefsTest {
     assertNull(prefs.loadGatewayBootstrapToken())
     assertNull(prefs.loadGatewayPassword())
   }
+
+  @Test
+  fun modelFavorites_togglePersistsPinOrder() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    prefs.toggleModelFavorite(" anthropic/claude-opus-4 ")
+    prefs.toggleModelFavorite("openai/gpt-5")
+    prefs.toggleModelFavorite("anthropic/claude-opus-4")
+    prefs.toggleModelFavorite("anthropic/claude-opus-4")
+    prefs.toggleModelFavorite("  ")
+
+    assertEquals(
+      listOf("openai/gpt-5", "anthropic/claude-opus-4"),
+      prefs.modelFavorites.value,
+    )
+    assertEquals(prefs.modelFavorites.value, SecurePrefs(context).modelFavorites.value)
+  }
+
+  @Test
+  fun modelRecents_dedupesToFrontAndCapsAtFive() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    (1..6).forEach { index -> prefs.recordModelRecent("provider/model-$index") }
+    prefs.recordModelRecent(" provider/model-3 ")
+    prefs.recordModelRecent(" ")
+
+    assertEquals(
+      listOf(
+        "provider/model-3",
+        "provider/model-6",
+        "provider/model-5",
+        "provider/model-4",
+        "provider/model-2",
+      ),
+      prefs.modelRecents.value,
+    )
+    assertEquals(prefs.modelRecents.value, SecurePrefs(context).modelRecents.value)
+  }
 }
