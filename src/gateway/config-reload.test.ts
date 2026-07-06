@@ -12,6 +12,7 @@ import type {
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -223,6 +224,17 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toEqual([path]);
     expect(plan.noopPaths).toStrictEqual([]);
     expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it("keeps Gateway reload policy when an agent activates a scoped registry", () => {
+    pinActivePluginHttpRouteRegistry(registry);
+    setActivePluginRegistry(emptyRegistry);
+
+    const path = "browser.profiles.sandbox.cdpUrl";
+    expect(buildGatewayReloadPlan([path])).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+    });
   });
 
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
