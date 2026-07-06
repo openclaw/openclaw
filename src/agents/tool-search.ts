@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
+  rewrapToolWithBeforeToolCallHook,
   type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -710,6 +711,22 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
     return false;
   }
   return true;
+}
+
+/** Build policy-wrapped entries for a catalog owned only by an explicit ref. */
+export function buildToolSearchCatalogEntries(
+  tools: readonly AnyAgentTool[],
+  hookContext?: HookContext,
+): ToolSearchCatalogEntry[] {
+  return tools
+    .filter((tool) => shouldCatalogTool(tool))
+    .map((tool) => {
+      const scopedTool =
+        hookContext && isToolWrappedWithBeforeToolCallHook(tool)
+          ? rewrapToolWithBeforeToolCallHook(tool, hookContext)
+          : tool;
+      return toCatalogEntry(scopedTool, undefined, hookContext);
+    });
 }
 
 export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {

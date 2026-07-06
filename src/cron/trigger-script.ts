@@ -1,0 +1,435 @@
+import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import type { HookContext } from "../agents/agent-tools.before-tool-call.js";
+import {
+  createOpenClawCodingTools,
+  resolveToolLoopDetectionConfig,
+} from "../agents/agent-tools.js";
+import type { CodeModeNamespaceDescriptor } from "../agents/code-mode-namespaces.js";
+import {
+  runCodeModeScriptHeadless,
+  type CodeModeFailureCode,
+  type CodeModeHeadlessResult,
+} from "../agents/code-mode.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+} from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
+import { resolveSandboxContext } from "../agents/sandbox.js";
+import {
+  buildToolSearchCatalogEntries,
+  createToolSearchCatalogRef,
+  registerToolSearchCatalog,
+  type ToolSearchToolContext,
+} from "../agents/tool-search.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  buildCronAgentDefaultsConfig,
+  resolveCronActiveRuntimeConfig,
+} from "./isolated-agent/run-config.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+
+const MAX_CONCURRENT_TRIGGER_EVALS = 3;
+const MAX_TRIGGER_STATE_BYTES = 16 * 1024;
+const MAX_CACHED_TRIGGER_RUNTIMES = 128;
+const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
+const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
+
+let activeTriggerEvaluations = 0;
+
+export type CronTriggerFailureCode = CodeModeFailureCode | "tool_budget_exceeded";
+
+export type CronTriggerEvaluationResult =
+  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
+  | { kind: "busy" }
+  | { kind: "error"; code: CronTriggerFailureCode; error: string };
+
+type PreparedTriggerRuntime = {
+  tools: AnyAgentTool[];
+  ctx: Omit<ToolSearchToolContext, "catalogRef">;
+  hookContext: Omit<HookContext, "runId">;
+};
+
+type PrepareTriggerRuntime = (params: {
+  runtimeConfig: OpenClawConfig;
+  jobId: string;
+  agentId?: string;
+  toolsAllow?: string[];
+  signal?: AbortSignal;
+}) => Promise<PreparedTriggerRuntime>;
+
+type CronTriggerEvaluatorDeps = {
+  config: OpenClawConfig;
+  runHeadless?: typeof runCodeModeScriptHeadless;
+  prepareRuntime?: PrepareTriggerRuntime;
+};
+
+type TriggerRuntimeCacheEntry = {
+  promise: Promise<PreparedTriggerRuntime>;
+  configEpoch: OpenClawConfig;
+  agentId: string;
+  toolsAllowKey: string;
+};
+
+function resolveTriggerAgentId(config: OpenClawConfig, agentId?: string): string {
+  return agentId?.trim() ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
+}
+
+async function prepareTriggerRuntime(params: {
+  runtimeConfig: OpenClawConfig;
+  jobId: string;
+  agentId?: string;
+  toolsAllow?: string[];
+  signal?: AbortSignal;
+}): Promise<PreparedTriggerRuntime> {
+  params.signal?.throwIfAborted();
+  const agentId = resolveTriggerAgentId(params.runtimeConfig, params.agentId);
+  const selectedAgentConfig = resolveAgentConfig(params.runtimeConfig, agentId);
+  const agentConfigOverride = params.agentId?.trim() ? selectedAgentConfig : undefined;
+  const agentDefaults = buildCronAgentDefaultsConfig({
+    defaults: params.runtimeConfig.agents?.defaults,
+    agentConfigOverride,
+  });
+  const config: OpenClawConfig = {
+    ...params.runtimeConfig,
+    agents: Object.assign({}, params.runtimeConfig.agents, { defaults: agentDefaults }),
+  };
+  const workspaceDirRaw = resolveAgentWorkspaceDir(config, agentId);
+  const agentDir = resolveAgentDir(config, agentId);
+  const workspace = await ensureAgentWorkspace({
+    dir: workspaceDirRaw,
+    ensureBootstrapFiles: selectedAgentConfig?.skipBootstrap !== true,
+    skipOptionalBootstrapFiles: selectedAgentConfig?.skipOptionalBootstrapFiles,
+  });
+  params.signal?.throwIfAborted();
+  const workspaceDir = workspace.dir;
+  ensureRuntimePluginsLoaded({
+    config,
+    workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
+
+  const rawSessionKey = `cron:${params.jobId}:trigger`;
+  const sessionKey = resolveCronAgentSessionKey({
+    sessionKey: rawSessionKey,
+    agentId,
+    mainKey: config.session?.mainKey,
+    cfg: config,
+  });
+  const sandbox = await resolveSandboxContext({
+    config,
+    sessionKey,
+    workspaceDir,
+  });
+  params.signal?.throwIfAborted();
+  const effectiveWorkspace =
+    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
+  const toolPlan = resolveEmbeddedAttemptToolConstructionPlan({
+    toolsEnabled: true,
+    toolsAllow: params.toolsAllow,
+  });
+  // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
+  // LSP runtimes are session-scoped and intentionally outside trigger v1.
+  const allTools = toolPlan.constructTools
+    ? createOpenClawCodingTools({
+        agentId,
+        exec: { config },
+        sandbox,
+        sessionKey,
+        trigger: "cron",
+        jobId: params.jobId,
+        agentDir,
+        cwd: effectiveWorkspace,
+        workspaceDir: effectiveWorkspace,
+        spawnWorkspaceDir: workspaceDir,
+        config,
+        allowGatewaySubagentBinding: true,
+        includeCoreTools: toolPlan.includeCoreTools,
+        runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+        toolConstructionPlan: toolPlan.codingToolConstructionPlan,
+      })
+    : [];
+  const tools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+    toolMeta: (tool) => getPluginToolMeta(tool),
+  });
+  const hookContext: HookContext = {
+    agentId,
+    config,
+    cwd: effectiveWorkspace,
+    workspaceDir: effectiveWorkspace,
+    sessionKey,
+    loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
+  };
+  return {
+    tools,
+    hookContext,
+    ctx: {
+      config,
+      runtimeConfig: config,
+      agentId,
+      sessionKey,
+    },
+  };
+}
+
+function triggerStateNamespace(state: unknown): CodeModeNamespaceDescriptor {
+  return {
+    id: "cron:trigger",
+    globalName: "trigger",
+    scope: {
+      kind: "object",
+      entries: [["state", { kind: "value", value: state }]],
+    },
+  };
+}
+
+function triggerResultCandidate(result: Extract<CodeModeHeadlessResult, { status: "completed" }>) {
+  if (isRecord(result.value) && typeof result.value.fire === "boolean") {
+    return result.value;
+  }
+  for (let index = result.output.length - 1; index >= 0; index -= 1) {
+    const entry = result.output[index];
+    if (isRecord(entry) && entry.type === "json") {
+      return entry.value;
+    }
+  }
+  return undefined;
+}
+
+function parseTriggerResult(
+  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
+): CronTriggerEvaluationResult {
+  const candidate = triggerResultCandidate(result);
+  if (!isRecord(candidate) || typeof candidate.fire !== "boolean") {
+    return {
+      kind: "error",
+      code: "internal_error",
+      error: "cron trigger script must return an object with boolean fire",
+    };
+  }
+  if (candidate.message !== undefined && typeof candidate.message !== "string") {
+    return {
+      kind: "error",
+      code: "internal_error",
+      error: "cron trigger script message must be a string",
+    };
+  }
+  const hasState = Object.hasOwn(candidate, "state");
+  if (hasState) {
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(candidate.state);
+    } catch (error) {
+      return {
+        kind: "error",
+        code: "internal_error",
+        error: `cron trigger state is not JSON-serializable: ${String(error)}`,
+      };
+    }
+    if (serialized === undefined) {
+      return {
+        kind: "error",
+        code: "internal_error",
+        error: "cron trigger state is not JSON-serializable",
+      };
+    }
+    if (Buffer.byteLength(serialized, "utf8") > MAX_TRIGGER_STATE_BYTES) {
+      return {
+        kind: "error",
+        code: "output_limit_exceeded",
+        error: "cron trigger state exceeds the 16KB limit",
+      };
+    }
+  }
+  return {
+    kind: "evaluated",
+    fire: candidate.fire,
+    ...(typeof candidate.message === "string" ? { message: candidate.message } : {}),
+    ...(hasState ? { state: candidate.state } : {}),
+  };
+}
+
+class TriggerEvaluationTimeoutError extends Error {
+  constructor(message = "cron trigger evaluation timed out") {
+    super(message);
+    this.name = "TriggerEvaluationTimeoutError";
+  }
+}
+
+function createTriggerDeadlineScope(externalSignal?: AbortSignal) {
+  const controller = new AbortController();
+  const onExternalAbort = () =>
+    controller.abort(new TriggerEvaluationTimeoutError("cron trigger evaluation aborted"));
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (externalSignal?.aborted) {
+    onExternalAbort();
+  }
+  const timer = setTimeout(
+    () => controller.abort(new TriggerEvaluationTimeoutError()),
+    HEADLESS_TRIGGER_WALL_CLOCK_MS,
+  );
+  return {
+    deadline: Date.now() + HEADLESS_TRIGGER_WALL_CLOCK_MS,
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener("abort", onExternalAbort);
+    },
+  };
+}
+
+async function awaitTriggerSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new TriggerEvaluationTimeoutError();
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () =>
+        reject(
+          signal.reason instanceof Error ? signal.reason : new TriggerEvaluationTimeoutError(),
+        );
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
+export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
+  const runHeadless = deps.runHeadless ?? runCodeModeScriptHeadless;
+  const prepareRuntime = deps.prepareRuntime ?? prepareTriggerRuntime;
+  // Config identity is the reload epoch; caching the preparation promise makes
+  // concurrent cold evaluations for one job single-flight.
+  const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
+
+  const trimRuntimeCache = () => {
+    while (runtimeCache.size > MAX_CACHED_TRIGGER_RUNTIMES) {
+      const oldestJobId = runtimeCache.keys().next().value;
+      if (oldestJobId === undefined) {
+        return;
+      }
+      runtimeCache.delete(oldestJobId);
+    }
+  };
+  const resolveCachedRuntime = async (request: {
+    runtimeConfig: OpenClawConfig;
+    jobId: string;
+    requestedAgentId?: string;
+    agentId: string;
+    toolsAllow?: string[];
+    toolsAllowKey: string;
+    signal: AbortSignal;
+  }): Promise<PreparedTriggerRuntime> => {
+    let entry = runtimeCache.get(request.jobId);
+    const matchesEpoch =
+      entry?.configEpoch === request.runtimeConfig &&
+      entry.agentId === request.agentId &&
+      entry.toolsAllowKey === request.toolsAllowKey;
+    if (!matchesEpoch) {
+      const promise = prepareRuntime({
+        runtimeConfig: request.runtimeConfig,
+        jobId: request.jobId,
+        agentId: request.requestedAgentId,
+        toolsAllow: request.toolsAllow,
+        signal: request.signal,
+      });
+      entry = {
+        promise,
+        configEpoch: request.runtimeConfig,
+        agentId: request.agentId,
+        toolsAllowKey: request.toolsAllowKey,
+      };
+      runtimeCache.delete(request.jobId);
+      runtimeCache.set(request.jobId, entry);
+      trimRuntimeCache();
+      void promise.catch(() => {
+        if (runtimeCache.get(request.jobId) === entry) {
+          runtimeCache.delete(request.jobId);
+        }
+      });
+    } else {
+      runtimeCache.delete(request.jobId);
+      runtimeCache.set(request.jobId, entry);
+    }
+    return await awaitTriggerSignal(entry.promise, request.signal);
+  };
+
+  return async function evaluateCronTrigger(params: {
+    jobId: string;
+    agentId?: string;
+    script: string;
+    state: unknown;
+    toolsAllow?: string[];
+    abortSignal?: AbortSignal;
+  }): Promise<CronTriggerEvaluationResult> {
+    if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
+      return { kind: "busy" };
+    }
+    activeTriggerEvaluations += 1;
+    const evaluationScope = createTriggerDeadlineScope(params.abortSignal);
+    try {
+      const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
+      const agentId = resolveTriggerAgentId(runtimeConfig, params.agentId);
+      const toolsAllowKey = JSON.stringify(params.toolsAllow ?? null);
+      const runtime = await resolveCachedRuntime({
+        runtimeConfig,
+        jobId: params.jobId,
+        requestedAgentId: params.agentId,
+        agentId,
+        toolsAllow: params.toolsAllow,
+        toolsAllowKey,
+        signal: evaluationScope.signal,
+      });
+
+      const catalogRef = createToolSearchCatalogRef();
+      const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
+      registerToolSearchCatalog({
+        catalogRef,
+        entries: buildToolSearchCatalogEntries(runtime.tools, {
+          ...runtime.hookContext,
+          runId,
+        }),
+      });
+      const remainingWallClockMs = evaluationScope.deadline - Date.now();
+      if (remainingWallClockMs <= 0) {
+        throw new TriggerEvaluationTimeoutError();
+      }
+      const result = await runHeadless({
+        ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
+        code: params.script,
+        wallClockMs: remainingWallClockMs,
+        maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
+        extraNamespaces: [triggerStateNamespace(params.state)],
+        signal: evaluationScope.signal,
+      });
+      if (result.status === "failed") {
+        return { kind: "error", code: result.code, error: result.error };
+      }
+      return parseTriggerResult(result);
+    } catch (error) {
+      return {
+        kind: "error",
+        code: error instanceof TriggerEvaluationTimeoutError ? "timeout" : "internal_error",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      evaluationScope.cleanup();
+      activeTriggerEvaluations -= 1;
+    }
+  };
+}
