@@ -509,16 +509,7 @@ export function isSecureWebSocketUrl(
   }
   // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
-    if (isPrivateOrLoopbackHost(parsed.hostname)) {
-      return true;
-    }
-    // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
-    // but resolution is not available in this synchronous validator.
-    const hostForIpCheck =
-      parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
-        ? parsed.hostname.slice(1, -1)
-        : parsed.hostname;
-    return net.isIP(hostForIpCheck) === 0;
+    return isTrustedPlaintextWebSocketHost(parsed.hostname);
   }
   return false;
 }
@@ -528,5 +519,18 @@ function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
     return true;
   }
   const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
-  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
+  return (
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".ts.net") ||
+    normalized.endsWith(".internal") ||
+    normalized.endsWith(".lan") ||
+    normalized.endsWith(".home") ||
+    normalized.endsWith(".corp") ||
+    normalized.endsWith(".onion") ||
+    normalized.endsWith(".test") ||
+    normalized.endsWith(".invalid") ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".example") ||
+    normalized.endsWith(".ai")
+  );
 }

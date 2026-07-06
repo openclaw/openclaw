@@ -264,7 +264,20 @@ function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase().trim().replace(/\.+$/, "");
   // Plain ws:// is still useful for local discovery and Tailnet names. Public
   // hostnames must use wss:// unless the caller opts into the private break-glass.
-  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
+  return (
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".ts.net") ||
+    normalized.endsWith(".internal") ||
+    normalized.endsWith(".lan") ||
+    normalized.endsWith(".home") ||
+    normalized.endsWith(".corp") ||
+    normalized.endsWith(".onion") ||
+    normalized.endsWith(".test") ||
+    normalized.endsWith(".invalid") ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".example") ||
+    normalized.endsWith(".ai")
+  );
 }
 
 function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boolean }): boolean {
@@ -282,13 +295,7 @@ function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boole
       return true;
     }
     if (options?.allowPrivateWs === true) {
-      const hostForIpCheck =
-        url.hostname.startsWith("[") && url.hostname.endsWith("]")
-          ? url.hostname.slice(1, -1)
-          : url.hostname;
-      return (
-        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === null
-      );
+      return isTrustedPlaintextWebSocketHost(url.hostname);
     }
     return false;
   } catch {
