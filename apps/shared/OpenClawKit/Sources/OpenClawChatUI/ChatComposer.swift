@@ -823,7 +823,8 @@ struct OpenClawChatComposer: View {
                                 } label: {
                                     self.slashCommandRow(
                                         command,
-                                        isHighlighted: index == self.slashHighlightIndex)
+                                        isHighlighted: self.usesSlashKeyboardHighlight
+                                            && index == self.slashHighlightIndex)
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel(command.displayInvocation)
@@ -932,12 +933,25 @@ struct OpenClawChatComposer: View {
     }
 
     private var slashPanelCanPresent: Bool {
+        // Transports without a command catalog (e.g. onboarding) get no panel
+        // instead of an empty "No matching commands" box.
+        guard self.viewModel.transport.supportsSlashCommandCatalog else { return false }
         // macOS input is an NSTextView outside SwiftUI focus tracking; it is
         // the composer's only editable field, so enablement is the gate.
         #if os(macOS)
-        self.isComposerEnabled
+        return self.isComposerEnabled
         #else
-        self.isComposerEnabled && self.isFocused
+        return self.isComposerEnabled && self.isFocused
+        #endif
+    }
+
+    /// Keyboard-driven row highlight is macOS-only; on touch platforms a
+    /// persistent highlight on row 0 would read as a stray selection.
+    private var usesSlashKeyboardHighlight: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
         #endif
     }
 

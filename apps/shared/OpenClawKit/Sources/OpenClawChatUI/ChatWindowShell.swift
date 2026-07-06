@@ -34,6 +34,7 @@ public struct OpenClawChatWindowShell: View {
                 .navigationTitle(self.activeSessionTitle)
                 .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }
+                .background(self.keyboardShortcutHandlers)
         }
         .confirmationDialog(
             "Clear this session's history?",
@@ -52,6 +53,33 @@ public struct OpenClawChatWindowShell: View {
                     self.viewModel.refreshSessions(limit: 200)
                 }
             }
+    }
+
+    /// Key equivalents only fire for installed views; buttons inside a closed
+    /// toolbar Menu are not built yet, so the shortcuts live here and the menu
+    /// items carry matching labels for discoverability.
+    private var keyboardShortcutHandlers: some View {
+        Group {
+            Button("New Session") {
+                Task { await self.viewModel.startNewSession() }
+            }
+            .keyboardShortcut("n", modifiers: [.command])
+
+            Button("Refresh") {
+                self.viewModel.refresh()
+                self.viewModel.refreshSessions(limit: 200)
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button("Export Transcript") {
+                self.exportTranscript()
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(self.viewModel.messages.isEmpty)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     private var activeSessionTitle: String {
