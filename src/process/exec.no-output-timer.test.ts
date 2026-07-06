@@ -121,6 +121,35 @@ describe("runCommandWithTimeout no-output timer", () => {
     expect(result.termination).toBe("exit");
   });
 
+  it("unrefs the close fallback timer while waiting for close after exit", async () => {
+    const fake = createFakeSpawnedChild();
+    spawnMock.mockReturnValue(fake.child);
+    const originalSetTimeout = globalThis.setTimeout;
+    const closeFallbackUnref = vi.fn();
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      ...args: Parameters<typeof setTimeout>
+    ) => {
+      const timer = originalSetTimeout(...args);
+      if (args[1] === 250) {
+        const timeoutHandle = timer as NodeJS.Timeout;
+        const originalUnref = timeoutHandle.unref.bind(timeoutHandle);
+        timeoutHandle.unref = vi.fn(() => {
+          closeFallbackUnref();
+          return originalUnref();
+        }) as NodeJS.Timeout["unref"];
+      }
+      return timer;
+    }) as typeof setTimeout);
+
+    const runPromise = runCommandWithTimeout(["node", "-e", "ignored"], { timeoutMs: 1_000 });
+    fake.child.emit("exit", 0, null);
+
+    expect(closeFallbackUnref).toHaveBeenCalledTimes(1);
+
+    fake.child.emit("close", 0, null);
+    await expect(runPromise).resolves.toMatchObject({ termination: "exit" });
+  });
+
   it("marks no-output timeout when the spawned child goes silent", async () => {
     vi.useFakeTimers();
     const fake = createFakeSpawnedChild();
