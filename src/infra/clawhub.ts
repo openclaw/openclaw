@@ -706,7 +706,7 @@ async function clawhubRequest(
     const headers = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
-      ...(params.headers ?? {}),
+      ...params.headers,
     };
     const init: RequestInit = { signal: controller.signal };
     if (params.method) {

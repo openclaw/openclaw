@@ -291,13 +291,16 @@ export function readPromotionClaims(): PromotionClaimRecord[] {
       } catch {
         // Ignore malformed provenance rows; they only power annotations.
       }
-      return {
+      const record: PromotionClaimRecord = {
         slug: row.slug,
-        ...(row.provider ? { provider: row.provider } : {}),
         modelKeys,
         endsAtMs: row.ends_at_ms,
         claimedAtMs: row.claimed_at_ms,
       };
+      if (row.provider) {
+        record.provider = row.provider;
+      }
+      return record;
     });
   } catch {
     return [];
