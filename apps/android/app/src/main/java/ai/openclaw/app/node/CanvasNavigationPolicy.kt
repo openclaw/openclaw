@@ -64,8 +64,7 @@ internal object CanvasNavigationPolicy {
         it.all { char ->
           char in 'a'..'z' || char in '0'..'9' || char == '+' || char == '-' || char == '.'
         }
-      }
-      .orEmpty()
+      }.orEmpty()
   }
 
   private fun rawAuthority(rawUrl: String): String? {
@@ -73,7 +72,8 @@ internal object CanvasNavigationPolicy {
     if (schemeSeparator < 0) return null
     val authorityStart = schemeSeparator + 3
     val authorityEnd =
-      rawUrl.indexOfAny(charArrayOf('/', '\\', '?', '#'), startIndex = authorityStart)
+      rawUrl
+        .indexOfAny(charArrayOf('/', '\\', '?', '#'), startIndex = authorityStart)
         .takeIf { it >= 0 }
         ?: rawUrl.length
     return rawUrl.substring(authorityStart, authorityEnd)
@@ -123,7 +123,12 @@ internal object CanvasNavigationPolicy {
       rawHost.contains('%')
 
   private fun isDeviceLocalHost(rawHost: String): Boolean {
-    var host = rawHost.trim().lowercase().trim('[', ']').trimEnd('.')
+    var host =
+      rawHost
+        .trim()
+        .lowercase()
+        .trim('[', ']')
+        .trimEnd('.')
     host = host.substringBefore('%')
     if (host == "localhost" || host.endsWith(".localhost")) return true
 
@@ -149,8 +154,7 @@ internal object CanvasNavigationPolicy {
       (address[12] == 127.toByte() || address.copyOfRange(12, 16).all { it == 0.toByte() })
   }
 
-  private fun isIpv6LiteralChar(char: Char): Boolean =
-    char == ':' || char == '.' || char in '0'..'9' || char.lowercaseChar() in 'a'..'f'
+  private fun isIpv6LiteralChar(char: Char): Boolean = char == ':' || char == '.' || char in '0'..'9' || char.lowercaseChar() in 'a'..'f'
 
   /** Matches Chromium/WebView's accepted decimal, octal, hex, and shorthand IPv4 forms. */
   private fun parseWebViewIpv4Address(rawHost: String): Long? {
