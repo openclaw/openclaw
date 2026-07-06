@@ -568,11 +568,14 @@ describe("createPdfTool", () => {
     });
   });
 
-  it.each(["1.5", "1,2.5"])(
-    "rejects fractional page selection %s before fallback extraction",
-    async (pages) => {
+  it.each([
+    ["1.5", "1.5"],
+    ["1,2.5", "2.5"],
+  ])(
+    "rejects fractional page selection %s before loading or fallback extraction",
+    async (pages, invalidPage) => {
       await withTempPdfAgentDir(async (agentDir) => {
-        await stubPdfToolInfra(agentDir, {
+        const { loadSpy } = await stubPdfToolInfra(agentDir, {
           provider: "openai",
           api: "openai-responses",
           input: ["text"],
@@ -590,7 +593,8 @@ describe("createPdfTool", () => {
             pdf: "/tmp/doc.pdf",
             pages,
           }),
-        ).rejects.toThrow(`Invalid page number: "${pages.includes(",") ? "2.5" : pages}"`);
+        ).rejects.toThrow(`Invalid page number: "${invalidPage}"`);
+        expect(loadSpy).not.toHaveBeenCalled();
         expect(extractSpy).not.toHaveBeenCalled();
         expect(completeMock).not.toHaveBeenCalled();
       });
