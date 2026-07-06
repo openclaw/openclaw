@@ -53,22 +53,13 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   if (!text || text.length < MIN_DUPLICATE_USER_MESSAGE_CHARS) {
     return undefined;
   }
-  // Include sender identity in the dedup key so two different participants who
-  // happen to send the same message within the window are both kept (#98310).
-  // Sender metadata is set by buildPersistedUserTurnMessage in the transcript
-  // persist path (senderId, senderName, senderUsername under __openclaw).
-  // Fall back to empty prefix when no senderId is available (direct chats,
-  // legacy transcripts).
-  // Use bracket notation to avoid no-underscore-dangle lint on `__openclaw`.
-  const openclaw = isRecord((message as Record<string, unknown>)["__openclaw"])
-    ? (message as Record<string, unknown>)["__openclaw"]
-    : undefined;
-  const rawSenderId: unknown = openclaw
-    ? (openclaw as Record<string, unknown>).senderId
-    : undefined;
-  const senderId: string = typeof rawSenderId === "string" ? rawSenderId : "";
+  // Persisted sender identity keeps distinct participants separate while senderless legacy
+  // turns retain the old retry behavior. A JSON tuple avoids sender/text delimiter collisions.
+  const metadata = message["__openclaw"];
+  const senderId =
+    isRecord(metadata) && typeof metadata.senderId === "string" ? metadata.senderId : "";
   return {
-    key: `${senderId}|${text.normalize("NFC").toLowerCase()}`,
+    key: JSON.stringify([senderId, text.normalize("NFC").toLowerCase()]),
     timestamp: message.timestamp,
   };
 }
