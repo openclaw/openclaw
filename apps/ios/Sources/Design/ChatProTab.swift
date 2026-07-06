@@ -17,6 +17,10 @@ struct ChatProTab: View {
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
     @State private var viewModelRoutingContract = ""
+    @State private var viewModelPresentationAgentID = "main"
+    @State private var viewModelPresentationAgentName = "Main"
+    @State private var viewModelPresentationAgentBadge = "M"
+    @State private var viewModelHasVerifiedOfflineRoutingIdentity = false
     @State private var speech: OpenClawChatSpeechController?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
@@ -157,7 +161,7 @@ struct ChatProTab: View {
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
-                talkControl: self.talkControl,
+                talkControl: viewModel.isAttachmentOwnerPinned ? nil : self.talkControl,
                 voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
@@ -196,6 +200,7 @@ struct ChatProTab: View {
             self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelRoutingContract = routingContract
+            self.captureCurrentPresentationIdentity()
             self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
             return
         }
@@ -211,6 +216,7 @@ struct ChatProTab: View {
             self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelRoutingContract = routingContract
+            self.captureCurrentPresentationIdentity()
             self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
             return
         }
@@ -219,6 +225,16 @@ struct ChatProTab: View {
             viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
         }
         viewModel.syncSession(to: sessionKey)
+        if !viewModel.isAttachmentOwnerPinned {
+            self.captureCurrentPresentationIdentity()
+        }
+    }
+
+    private func captureCurrentPresentationIdentity() {
+        self.viewModelPresentationAgentID = self.currentAgentID
+        self.viewModelPresentationAgentName = self.currentAgentDisplayName
+        self.viewModelPresentationAgentBadge = self.currentAgentBadge
+        self.viewModelHasVerifiedOfflineRoutingIdentity = self.appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 
     private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
@@ -264,11 +280,6 @@ struct ChatProTab: View {
             isTalkActive: self.appModel.isTalkCaptureActive)
     }
 
-    private var activeAgentID: String {
-        self.normalized(self.appModel.chatAgentId)
-            ?? "main"
-    }
-
     @ViewBuilder
     private var connectionStatusButton: some View {
         if let openSettings {
@@ -308,7 +319,7 @@ struct ChatProTab: View {
                     Image(systemName: "plus.bubble")
                 }
             }
-            .disabled(self.viewModel == nil || !self.gatewayConnected)
+            .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
 
             if self.activeAgent?.workspacegit == true {
                 Button {
@@ -321,7 +332,7 @@ struct ChatProTab: View {
                         Image(systemName: "arrow.triangle.branch")
                     }
                 }
-                .disabled(self.viewModel == nil || !self.gatewayConnected)
+                .disabled(self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
             }
 
             Divider()
@@ -370,7 +381,23 @@ struct ChatProTab: View {
     }
 
     private var gatewayDisplayState: GatewayDisplayState {
-        GatewayStatusBuilder.build(appModel: self.appModel)
+        Self.presentationGatewayState(
+            current: GatewayStatusBuilder.build(appModel: self.appModel),
+            isAttachmentOwnerPinned: self.isAttachmentOwnerPinned,
+            capturedOwnerID: self.viewModelOwnerID,
+            currentOwnerID: self.appModel.chatViewModelOwnerID)
+    }
+
+    nonisolated static func presentationGatewayState(
+        current: GatewayDisplayState,
+        isAttachmentOwnerPinned: Bool,
+        capturedOwnerID: String,
+        currentOwnerID: String) -> GatewayDisplayState
+    {
+        if isAttachmentOwnerPinned, capturedOwnerID != currentOwnerID {
+            return .disconnected
+        }
+        return current
     }
 
     private var gatewayAccessibilityLabel: String {
@@ -415,7 +442,9 @@ struct ChatProTab: View {
 
     private var canQueueOffline: Bool {
         self.viewModel?.supportsOfflineTextOutbox == true &&
-            self.appModel.hasVerifiedChatOfflineRoutingIdentity
+            (self.isAttachmentOwnerPinned
+                ? self.viewModelHasVerifiedOfflineRoutingIdentity
+                : self.appModel.hasVerifiedChatOfflineRoutingIdentity)
     }
 
     private var headerDisplayTitle: String {
@@ -431,22 +460,50 @@ struct ChatProTab: View {
         OpenClawBrand.accent
     }
 
+    private var isAttachmentOwnerPinned: Bool {
+        self.viewModel?.isAttachmentOwnerPinned == true
+    }
+
+    private var currentAgentID: String {
+        self.normalized(self.appModel.chatAgentId) ?? "main"
+    }
+
+    private var currentActiveAgent: AgentSummary? {
+        self.appModel.gatewayAgents.first { $0.id == self.currentAgentID }
+    }
+
+    private var activeAgentID: String {
+        self.isAttachmentOwnerPinned ? self.viewModelPresentationAgentID : self.currentAgentID
+    }
+
     private var activeAgent: AgentSummary? {
         self.appModel.gatewayAgents.first { $0.id == self.activeAgentID }
     }
 
-    private var agentDisplayName: String {
-        self.normalized(self.activeAgent?.name) ?? self.appModel.chatAgentName
+    private var currentAgentDisplayName: String {
+        self.normalized(self.currentActiveAgent?.name) ?? self.appModel.chatAgentName
     }
 
-    private var agentBadge: String {
-        if let identity = activeAgent?.identity,
+    private var agentDisplayName: String {
+        self.isAttachmentOwnerPinned ? self.viewModelPresentationAgentName : self.currentAgentDisplayName
+    }
+
+    private var currentAgentBadge: String {
+        if let identity = self.currentActiveAgent?.identity,
            let emoji = identity["emoji"]?.value as? String,
            let normalizedEmoji = Self.normalizedBadgeEmoji(emoji)
         {
             return normalizedEmoji
         }
-        let words = self.agentDisplayName
+        return Self.initialsBadge(for: self.currentAgentDisplayName)
+    }
+
+    private var agentBadge: String {
+        self.isAttachmentOwnerPinned ? self.viewModelPresentationAgentBadge : self.currentAgentBadge
+    }
+
+    nonisolated static func initialsBadge(for displayName: String) -> String {
+        let words = displayName
             .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
             .prefix(2)
         let initials = words.compactMap(\.first).map(String.init).joined()
