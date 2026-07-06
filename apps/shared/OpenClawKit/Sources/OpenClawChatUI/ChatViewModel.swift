@@ -416,7 +416,17 @@ public final class OpenClawChatViewModel {
             if sessionKey == self.sessionKey {
                 // The active transcript just disappeared server-side; fall
                 // back to the main session instead of a dead key.
-                self.applySessionSwitch(to: self.resolvedMainSessionKey, intent: .userInitiated)
+                let fallback = self.resolvedMainSessionKey
+                if fallback != self.sessionKey {
+                    self.applySessionSwitch(to: fallback, intent: .userInitiated)
+                } else {
+                    // Deleting the active main session: the key stays the
+                    // address, so clear local state and re-bootstrap in place.
+                    self.advanceSessionGeneration()
+                    self.clearSessionOwnedState()
+                    self.errorText = nil
+                    self.startBootstrap()
+                }
             }
             await self.fetchSessions(limit: nil, sessionSnapshot: self.currentSessionSnapshot())
         }
