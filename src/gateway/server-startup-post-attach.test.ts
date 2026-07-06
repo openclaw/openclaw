@@ -1016,7 +1016,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1054,7 +1054,7 @@ describe("startGatewayPostAttachRuntime", () => {
     try {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: {},
         onGatewayLifetimeSidecars,
       });
@@ -1134,7 +1134,7 @@ describe("startGatewayPostAttachRuntime", () => {
           } as never,
         }),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1377,7 +1377,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onChannelsStarted: async () => {
               events.push("channels-started");
             },
@@ -1431,7 +1431,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onPluginServices,
             onSidecarsReady,
           }),
@@ -1536,7 +1536,7 @@ describe("startGatewayPostAttachRuntime", () => {
         const runtimePromise = startGatewayPostAttachRuntime(
           {
             ...createPostAttachParams({
-              deferSidecars: true,
+              sidecarStartup: "defer",
               onPluginServices,
               onSidecarsReady,
             }),
@@ -1986,7 +1986,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
-        deferSidecars: true,
+        sidecarStartup: "defer",
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
@@ -2028,7 +2028,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams({
-          deferSidecars: true,
+          sidecarStartup: "defer",
           loadStartupPlugins,
           onStartupPluginsLoaded,
         }),

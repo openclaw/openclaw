@@ -23,7 +23,11 @@ Production-ready for bot DMs and groups via grammY. Long polling is the default 
 
 <Steps>
   <Step title="Create the bot token in BotFather">
-    Open Telegram, chat with **@BotFather** (confirm the handle is exactly `@BotFather`), run `/newbot`, follow the prompts, and save the token.
+    Both flows end with a token you paste into OpenClaw — pick one:
+
+    - **Chat flow**: open Telegram, chat with **@BotFather** (confirm the handle is exactly `@BotFather`), run `/newbot`, follow the prompts, and save the token.
+    - **Web flow**: open [BotFather's web app](https://t.me/BotFather?startapp) — it runs in every Telegram client, including [web.telegram.org](https://web.telegram.org) — create the bot in the UI, and copy its token.
+
   </Step>
 
   <Step title="Configure token and DM policy">
@@ -98,6 +102,8 @@ Token resolution is account-aware: `tokenFile` beats `botToken` beats env, and c
 
     - `/setjoingroups` — allow/deny group adds
     - `/setprivacy` — group visibility behavior
+
+    The same settings are available in [BotFather's web app](https://t.me/BotFather?startapp) if you prefer a UI over chat commands.
 
   </Accordion>
 </AccordionGroup>

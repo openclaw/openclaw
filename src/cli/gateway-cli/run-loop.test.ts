@@ -1081,6 +1081,7 @@ describe("runGatewayLoop", () => {
         const close = vi.fn(async () => {});
         const startupNeverReturns = new Promise<void>(() => {});
         const { runtime, exited } = createRuntimeWithExitSignal();
+        const completeBoot = vi.fn();
         const start = vi.fn(async () => {
           await startupNeverReturns;
           return { close };
@@ -1090,6 +1091,7 @@ describe("runGatewayLoop", () => {
         void runGatewayLoop({
           start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
           runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          completeBoot,
         });
         await vi.advanceTimersByTimeAsync(0);
         const sigusr1 = captureSignal("SIGUSR1");
@@ -1105,6 +1107,10 @@ describe("runGatewayLoop", () => {
         await vi.advanceTimersByTimeAsync(1);
 
         await expect(exited).resolves.toBe(1);
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "forced_stop",
+          reason: "gateway.restart_startup_request_timeout",
+        });
         expect(close).not.toHaveBeenCalled();
         expect(start).toHaveBeenCalledTimes(1);
         expect(gatewayLog.error).toHaveBeenCalledWith(

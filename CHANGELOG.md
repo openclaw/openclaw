@@ -22,17 +22,15 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
-- **Session usage logs:** normalize malformed transcript timestamps before sorting and Gateway serialization so invalid dates cannot surface as null usage-log times. (#99418) Thanks @sheyanmin.
-- **Control UI terminal reset:** isolate each web terminal's Ghostty WASM runtime so closing a tab and reopening starts with an empty screen instead of reusing freed terminal cells.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
+- **Session usage logs:** normalize malformed transcript timestamps before sorting and Gateway serialization so invalid dates cannot surface as null usage-log times. (#99418) Thanks @sheyanmin.
 - **Config size-drop guard:** compare writes against canonical bytes for parseable object configs instead of raw BOM and indentation overhead, while preserving raw audit telemetry and the conservative malformed-input fallback. (#100591, #71865) Thanks @vincentkoc.
 - **Control UI coalesced updates:** show a clear queued-restart completion banner when an update joins an already-running Gateway restart. (#93082) Thanks @goutamadwant.
 - **Control UI connection errors:** preserve structured pairing and authentication failures for pending RPC callers while keeping generic disconnect behavior unchanged. (#54758) Thanks @ruanrrn.
 - **TUI startup status:** show `starting up` during post-connect initialization without overwriting active-run or reconnect state. (#93999) Thanks @ml12580.
 - **Control UI restart recovery:** recover stale bundle pages through a bounded whole-document refresh after Gateway updates or restarts. (#99111) Thanks @ZengWen-DT.
 - **TUI active Gateway ports:** follow the verified active local Gateway port when no explicit URL, port, or remote target is configured. (#73338, #42461) Thanks @haishmg and @vincentkoc.
-- **Windows remote browser diagnostics:** distinguish WSL2 portproxy self-loops from Chromium's IPv6 fallback using host listener checks, document source-accurate `v4tov6` recovery, require a non-default profile for Chrome 136+ command-line debugging, and warn against broad CDP exposure. (#54669) Thanks @Owlock and @ZengWen-DT.
 - **Apple chat run recovery:** restore active responses from canonical Gateway history after reconnects, foreground resumes, and event gaps, while preserving gateway user-turn identity across Codex and Copilot transcript mirrors to prevent duplicate rows. (#100277)
 - **Claude CLI streamed replies:** preserve assistant text already received from Claude CLI when its terminal result envelope is empty, preventing false empty-response failover after a complete streamed answer. (#90450) Thanks @totobusnello.
 - **Phone identity normalization:** canonicalize stray plus signs, preserve non-phone iMessage handles, and reject digit-free Signal identities across shared channel routing. (#100467) Thanks @morluto.

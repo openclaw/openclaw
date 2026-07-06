@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -103,6 +104,8 @@ const {
   CONTROL_UI_OPERATOR_SCOPES,
   GatewayBrowserClient,
   GatewayRequestError,
+  isNonRecoverableConnectError,
+  resolveGatewayErrorDetailCode,
   shouldRetryWithDeviceToken,
 } = await import("./gateway.ts");
 
@@ -388,6 +391,8 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
+    expect(resolveGatewayErrorDetailCode(error)).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+    expect(isNonRecoverableConnectError(error)).toBe(true);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
@@ -1256,6 +1261,35 @@ describe("GatewayBrowserClient", () => {
         code: "INVALID_REQUEST",
         message: "unauthorized",
         details: { code: "AUTH_TOKEN_MISSING" },
+      },
+    });
+    await expectSocketClosed(ws1);
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
+    useNodeFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws: ws1, connectFrame: connect } = await startConnect(client);
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: "PROTOCOL_MISMATCH" },
       },
     });
     await expectSocketClosed(ws1);

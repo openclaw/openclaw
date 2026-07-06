@@ -25,6 +25,7 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import type { GatewaySidecarStartupMode } from "./server.impl.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
@@ -1111,8 +1112,7 @@ export async function startGatewayPostAttachRuntime(
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
-    deferSidecars?: boolean;
-    logReadyOnSidecars?: boolean;
+    sidecarStartup?: GatewaySidecarStartupMode;
     providerAuthPrewarm?: {
       enabled?: boolean;
       delayMs?: number;
@@ -1213,7 +1213,7 @@ export async function startGatewayPostAttachRuntime(
   };
   const waitForSidecarStartTurn = () =>
     new Promise<void>((resolve) => {
-      if (params.deferSidecars === true) {
+      if (params.sidecarStartup === "defer") {
         // Give startup logging and bind observers a deterministic head start
         // when tests or callers request deferred sidecar startup.
         const timer = setTimeout(resolve, DEFERRED_SIDECAR_START_DELAY_MS);
@@ -1318,7 +1318,7 @@ export async function startGatewayPostAttachRuntime(
           ["postReadySidecarCount", postReadySidecars.length + gatewayLifetimeSidecars.length],
         ]);
         params.startupTrace?.mark("sidecars.ready");
-        if (params.logReadyOnSidecars !== false) {
+        if (params.sidecarStartup !== "defer") {
           params.log.info("gateway ready");
         }
         return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
@@ -1364,7 +1364,7 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.deferSidecars !== true) {
+  if (params.sidecarStartup !== "defer") {
     const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
       startupLogPromise,
       tailscaleCleanupPromise,
