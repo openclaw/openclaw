@@ -170,8 +170,7 @@ export async function startSshPortForward(opts: {
     const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
-  // stderr is only diagnostic; ignore its own stream errors so ssh teardown
-  // does not crash the gateway with an unhandled "error" event.
+  // The diagnostic pipe can fail independently; child exit remains authoritative.
   child.stderr?.on("error", () => {});
 
   const stop = async () => {
