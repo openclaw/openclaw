@@ -42,7 +42,10 @@ final class WebChatManager {
     func show(sessionKey: String) {
         self.closePanel()
         if let controller = self.windowController {
-            if self.windowSessionKey == sessionKey {
+            // The window shell can switch sessions in place (sidebar), so an
+            // existing window already showing the requested session must not
+            // be torn down and re-bootstrapped.
+            if self.windowSessionKey == sessionKey || self.currentChatSessionKey == sessionKey {
                 controller.show()
                 return
             }
