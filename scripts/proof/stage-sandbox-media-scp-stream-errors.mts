@@ -36,7 +36,9 @@ try {
   const resultPromise = scpFile("example.com", "/remote/path", "/tmp/stage-sandbox-media-proof-download");
 
   // Wait for listeners to attach, then emit a stderr stream error.
-  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 50);
+  });
   emitError?.();
 
   await resultPromise;
