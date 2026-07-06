@@ -75,7 +75,7 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
 private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     let task = FakeWebSocketTask()
 
-    func makeWebSocketTask(url _: URL) -> WebSocketTaskBox {
+    func makeWebSocketTask(request _: URLRequest) -> WebSocketTaskBox {
         WebSocketTaskBox(task: self.task)
     }
 }

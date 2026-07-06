@@ -77,12 +77,12 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 }
 
 public protocol WebSocketSessioning: AnyObject {
-    func makeWebSocketTask(url: URL) -> WebSocketTaskBox
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox
 }
 
 extension URLSession: WebSocketSessioning {
-    public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        let task = self.webSocketTask(with: url)
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        let task = self.webSocketTask(with: request)
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
         task.maximumMessageSize = 16 * 1024 * 1024 // 16 MB
         return WebSocketTaskBox(task: task)
@@ -275,6 +275,7 @@ public actor GatewayChannelActor {
     private var issuedDeviceAuthRoles = Set<String>()
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
+    private let extraHeadersProvider: (@Sendable () -> [String: String])?
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String) async -> Void)?
@@ -287,12 +288,14 @@ public actor GatewayChannelActor {
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
-        disconnectHandler: (@Sendable (String) async -> Void)? = nil)
+        disconnectHandler: (@Sendable (String) async -> Void)? = nil,
+        extraHeadersProvider: (@Sendable () -> [String: String])? = nil)
     {
         self.url = url
         self.token = token
         self.bootstrapToken = bootstrapToken
         self.password = password
+        self.extraHeadersProvider = extraHeadersProvider
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
@@ -367,6 +370,18 @@ public actor GatewayChannelActor {
         }
     }
 
+    /// Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
+    /// request. Read from the provider at connect time so edits apply on the next reconnect
+    /// without re-pairing. Values are credentials: never log them.
+    private func makeUpgradeRequest() -> URLRequest {
+        var request = URLRequest(url: self.url)
+        guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
+        for (name, value) in GatewayCustomHeaders.sanitized(headers) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
+    }
+
     public func connect() async throws {
         if self.connected, self.task?.state == .running { return }
         if self.isConnecting {
@@ -379,7 +394,7 @@ public actor GatewayChannelActor {
         defer { self.isConnecting = false }
 
         self.task?.cancel(with: .goingAway, reason: nil)
-        self.task = self.session.makeWebSocketTask(url: self.url)
+        self.task = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
         self.task?.resume()
         do {
             try await AsyncTimeout.withTimeout(

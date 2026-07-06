@@ -95,6 +95,36 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 }
 
 @Suite(.serialized) struct GatewaySettingsStoreTests {
+    @Test func `custom headers round trip per gateway`() {
+        let gatewayID = "manual|headers.example.com|443|\(UUID().uuidString)"
+        let otherGatewayID = "manual|other.example.com|443|\(UUID().uuidString)"
+        defer { GatewaySettingsStore.saveGatewayCustomHeaders([:], gatewayStableID: gatewayID) }
+
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID).isEmpty)
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["CF-Access-Client-Id": "client-id", "CF-Access-Client-Secret": "client-secret"],
+            gatewayStableID: gatewayID))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID) == [
+            "CF-Access-Client-Id": "client-id",
+            "CF-Access-Client-Secret": "client-secret",
+        ])
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: otherGatewayID).isEmpty)
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders([:], gatewayStableID: gatewayID))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID).isEmpty)
+    }
+
+    @Test func `custom header storage drops reserved names`() {
+        let gatewayID = "manual|reserved.example.com|443|\(UUID().uuidString)"
+        defer { GatewaySettingsStore.saveGatewayCustomHeaders([:], gatewayStableID: gatewayID) }
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["Host": "smuggled.example", "X-Allowed": "yes"],
+            gatewayStableID: gatewayID))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID)
+            == ["X-Allowed": "yes"])
+    }
+
     @Test func `credentials stay bound to their gateway`() {
         let instanceID = "credential-owner-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }

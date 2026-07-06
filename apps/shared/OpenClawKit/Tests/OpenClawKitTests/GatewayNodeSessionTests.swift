@@ -326,6 +326,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var tasks: [FakeGatewayWebSocketTask] = []
+    private var requests: [URLRequest] = []
     private var makeCount = 0
 
     init(
@@ -346,10 +347,14 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         self.lock.withLock { self.tasks.last }
     }
 
-    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        _ = url
-        return self.lock.withLock {
+    func latestRequest() -> URLRequest? {
+        self.lock.withLock { self.requests.last }
+    }
+
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        self.lock.withLock {
             self.makeCount += 1
+            self.requests.append(request)
             let task = FakeGatewayWebSocketTask(
                 helloAuth: self.helloAuth,
                 connectError: self.connectError,
@@ -357,6 +362,23 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
             self.tasks.append(task)
             return WebSocketTaskBox(task: task)
         }
+    }
+}
+
+private final class MutableHeaderValue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String
+
+    init(value: String) {
+        self.value = value
+    }
+
+    func get() -> String {
+        self.lock.withLock { self.value }
+    }
+
+    func set(_ value: String) {
+        self.lock.withLock { self.value = value }
     }
 }
 
@@ -453,6 +475,62 @@ struct GatewayNodeSessionTests {
         }
         let finalDisconnects = await disconnects.values()
         #expect(finalDisconnects.isEmpty)
+    }
+
+    @Test
+    func `upgrade request carries sanitized custom headers read per connect`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let secret = MutableHeaderValue(value: "first-secret")
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+        let url = try #require(URL(string: "ws://gateway.example.invalid"))
+        let provider: @Sendable () -> [String: String] = {
+            [
+                "CF-Access-Client-Id": "client-id",
+                "CF-Access-Client-Secret": secret.get(),
+                "Host": "smuggled.example.invalid",
+            ]
+        }
+        let connectOnce: () async throws -> Void = {
+            try await gateway.connect(
+                url: url,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                extraHeadersProvider: provider,
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+        }
+
+        try await connectOnce()
+        let request = try #require(session.latestRequest())
+        #expect(request.url == url)
+        #expect(request.value(forHTTPHeaderField: "CF-Access-Client-Id") == "client-id")
+        #expect(request.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "first-secret")
+        #expect(request.value(forHTTPHeaderField: "Host") == nil)
+
+        // Header edits must ride the next upgrade without re-pairing or a new channel identity.
+        secret.set("second-secret")
+        await gateway.disconnect()
+        try await connectOnce()
+        let reconnectRequest = try #require(session.latestRequest())
+        #expect(reconnectRequest.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "second-secret")
+
+        await gateway.disconnect()
     }
 
     @Test

@@ -63,8 +63,8 @@ private final class TrustedDeviceRetryGatewaySession: WebSocketSessioning, Gatew
         self.allowsDeviceTokenRetryAuth = allowsDeviceTokenRetryAuth
     }
 
-    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        _ = url
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        _ = request
         let attemptIndex = self.lock.withDeviceRetryLock { () -> Int in
             let current = self.makeCount
             self.makeCount += 1

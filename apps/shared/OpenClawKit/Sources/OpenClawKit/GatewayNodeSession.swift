@@ -205,6 +205,7 @@ public actor GatewayNodeSession {
         password: String?,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
+        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
@@ -250,7 +251,11 @@ public actor GatewayNodeSession {
                 connectOptions: connectOptions,
                 disconnectHandler: { [weak self] reason in
                     await self?.handleChannelDisconnected(reason, channelGeneration: channelGeneration)
-                })
+                },
+                // Intentionally outside the shouldReconnect identity key: the channel re-reads
+                // the provider on every upgrade, so header edits ride the next reconnect
+                // without forcing a new channel.
+                extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
             self.activeURL = url
             self.activeToken = token
