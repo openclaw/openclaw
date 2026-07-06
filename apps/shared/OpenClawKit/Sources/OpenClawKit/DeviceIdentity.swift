@@ -97,7 +97,7 @@ enum DeviceIdentityPaths {
     }
 
     private static func hasAppGroupEntitlement(_ identifier: String) -> Bool {
-        #if canImport(Security)
+        #if os(macOS) && canImport(Security)
         guard
             let task = SecTaskCreateFromSelf(nil),
             let value = SecTaskCopyValueForEntitlement(
