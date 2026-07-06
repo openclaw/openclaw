@@ -22,6 +22,8 @@ export type AgentRuntimeAcpConfig = {
   backend?: string;
   /** Optional ACP session mode override. */
   mode?: "persistent" | "oneshot";
+  /** Optional model/config-option value passed to the ACP harness runtime. */
+  model?: string;
   /** Optional runtime working directory override. */
   cwd?: string;
 };

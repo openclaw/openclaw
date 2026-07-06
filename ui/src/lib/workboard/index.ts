@@ -237,6 +237,17 @@ export type WorkboardAutomation = {
   lastDispatchAt?: number;
 };
 
+export type WorkboardBoard = {
+  id: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number;
+};
+
 export type WorkboardMetadata = {
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
@@ -375,12 +386,14 @@ export type WorkboardUiState = {
   mutationReadiness: "ready" | "canonical_reload_required" | "stale_edit_draft";
   error: string | null;
   cards: WorkboardCard[];
+  boards: WorkboardBoard[];
   statuses: readonly WorkboardStatus[];
   tasksByCardId: Map<string, WorkboardTaskSummary>;
   missingTaskIds: Set<string>;
   lastDispatchSummary: WorkboardDispatchSummary | null;
   dispatching: boolean;
   query: string;
+  boardFilter: "all" | string;
   priorityFilter: "all" | WorkboardPriority;
   agentFilter: string;
   viewPreset: WorkboardViewPresetId;
@@ -412,8 +425,16 @@ export type WorkboardUiState = {
   draftLabels: string;
   draftAgentId: string;
   draftSessionKey: string;
+  draftBoardId: string;
   draftTemplateId: WorkboardTemplateId | "";
   draftCommentBody: string;
+  boardDraftOpen: boolean;
+  boardDraftSaving: boolean;
+  boardDraftName: string;
+  boardDraftId: string;
+  boardDraftDescription: string;
+  boardDraftIcon: string;
+  boardDraftColor: string;
   detailCardId: string | null;
   detailCommentBody: string;
   busyCardIds: Set<string>;
@@ -755,12 +776,14 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    boards: [],
     statuses: WORKBOARD_STATUSES,
     tasksByCardId: new Map(),
     missingTaskIds: new Set(),
     lastDispatchSummary: null,
     dispatching: false,
     query: "",
+    boardFilter: "all",
     priorityFilter: "all",
     agentFilter: "all",
     viewPreset: "all",
@@ -792,8 +815,16 @@ function createDefaultState(): WorkboardUiState {
     draftLabels: "",
     draftAgentId: "",
     draftSessionKey: "",
+    draftBoardId: "default",
     draftTemplateId: "",
     draftCommentBody: "",
+    boardDraftOpen: false,
+    boardDraftSaving: false,
+    boardDraftName: "",
+    boardDraftId: "",
+    boardDraftDescription: "",
+    boardDraftIcon: "",
+    boardDraftColor: "",
     detailCardId: null,
     detailCommentBody: "",
     busyCardIds: new Set(),
@@ -1494,6 +1525,53 @@ function normalizeCardsPayload(payload: unknown): {
   return { cards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES };
 }
 
+function normalizeBoard(value: unknown): WorkboardBoard | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = typeof value.id === "string" && value.id.trim() ? value.id.trim() : "";
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    ...(typeof value.name === "string" && value.name.trim() ? { name: value.name } : {}),
+    ...(typeof value.description === "string" && value.description.trim()
+      ? { description: value.description }
+      : {}),
+    ...(typeof value.icon === "string" && value.icon.trim() ? { icon: value.icon } : {}),
+    ...(typeof value.color === "string" && value.color.trim() ? { color: value.color } : {}),
+    createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
+    updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+    ...(typeof value.archivedAt === "number" ? { archivedAt: value.archivedAt } : {}),
+  };
+}
+
+function normalizeBoardsPayload(payload: unknown): WorkboardBoard[] {
+  if (!isRecord(payload) || !Array.isArray(payload.boards)) {
+    return [];
+  }
+  return payload.boards
+    .map(normalizeBoard)
+    .filter((board): board is WorkboardBoard => board !== null);
+}
+
+function normalizeBoardPayload(payload: unknown): WorkboardBoard {
+  const board = isRecord(payload) ? normalizeBoard(payload.board) : null;
+  if (!board) {
+    throw new Error("workboard response did not include a board");
+  }
+  return board;
+}
+
+export function workboardCardBoardId(card: WorkboardCard): string {
+  return card.metadata?.automation?.boardId ?? "default";
+}
+
+function activeWorkboardDraftBoardId(state: WorkboardUiState): string {
+  return state.boardFilter === "all" ? "default" : state.boardFilter;
+}
+
 function normalizeCardPayload(payload: unknown): WorkboardCard {
   const card = isRecord(payload) ? normalizeCard(payload.card) : null;
   if (!card) {
@@ -2118,8 +2196,12 @@ async function loadWorkboardInternal(
           }
         }
       }
-      const payload = await client.request("workboard.cards.list", {});
-      const normalized = normalizeCardsPayload(payload);
+      const [cardsPayload, boardsPayload] = await Promise.all([
+        client.request("workboard.cards.list", {}),
+        client.request("workboard.boards.list", {}),
+      ]);
+      const normalized = normalizeCardsPayload(cardsPayload);
+      const boards = normalizeBoardsPayload(boardsPayload);
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
@@ -2233,6 +2315,7 @@ async function loadWorkboardInternal(
         }
       }
       state.cards = taskLinkState.cards;
+      state.boards = boards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;
@@ -2560,6 +2643,7 @@ function resetDraftState(state: WorkboardUiState) {
   state.draftLabels = "";
   state.draftAgentId = "";
   state.draftSessionKey = "";
+  state.draftBoardId = activeWorkboardDraftBoardId(state);
   state.draftTemplateId = "";
   state.draftCommentBody = "";
   if (resolveStaleEdit) {
@@ -2582,6 +2666,7 @@ function normalizeDraftLabels(value: string): string[] {
 }
 
 function draftPayload(state: WorkboardUiState) {
+  const boardId = state.draftBoardId || "default";
   return {
     title: state.draftTitle,
     notes: state.draftNotes,
@@ -2590,6 +2675,7 @@ function draftPayload(state: WorkboardUiState) {
     labels: normalizeDraftLabels(state.draftLabels),
     agentId: state.draftAgentId,
     sessionKey: state.draftSessionKey,
+    boardId,
     ...(state.draftTemplateId ? { templateId: state.draftTemplateId } : {}),
   };
 }
@@ -3048,6 +3134,7 @@ export async function captureSessionToWorkboard(params: {
       priority: "normal",
       agentId: "",
       sessionKey: params.session.key,
+      boardId: "default",
     });
     const card = normalizeCardPayload(payload);
     replaceCard(state, card);
@@ -3429,6 +3516,69 @@ export async function createWorkboardCard(params: {
   } finally {
     state.draftSaving = false;
     state.loading = false;
+    params.requestUpdate?.();
+  }
+}
+
+function boardIdFromName(name: string): string {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[^a-z0-9]+$/, "")
+    .slice(0, 80);
+  return normalized || "board";
+}
+
+export async function createWorkboardBoard(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  name: string;
+  id?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  const name = params.name.trim();
+  if (
+    !params.client ||
+    !workboardMutationsReady(state) ||
+    !name ||
+    state.dispatching ||
+    state.boardDraftSaving
+  ) {
+    return;
+  }
+  state.boardDraftSaving = true;
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    const payload = await params.client.request("workboard.boards.upsert", {
+      id: params.id?.trim() || boardIdFromName(name),
+      name,
+      ...(params.description?.trim() ? { description: params.description.trim() } : {}),
+      ...(params.icon?.trim() ? { icon: params.icon.trim() } : {}),
+      ...(params.color?.trim() ? { color: params.color.trim() } : {}),
+    });
+    const board = normalizeBoardPayload(payload);
+    state.boards = [board, ...state.boards.filter((entry) => entry.id !== board.id)].sort(
+      (left, right) => left.id.localeCompare(right.id),
+    );
+    state.boardFilter = board.id;
+    state.draftBoardId = board.id;
+    state.boardDraftOpen = false;
+    state.boardDraftName = "";
+    state.boardDraftId = "";
+    state.boardDraftDescription = "";
+    state.boardDraftIcon = "";
+    state.boardDraftColor = "";
+  } catch (error) {
+    state.error = formatError(error);
+  } finally {
+    state.boardDraftSaving = false;
     params.requestUpdate?.();
   }
 }

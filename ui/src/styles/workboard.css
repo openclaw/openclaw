@@ -296,6 +296,41 @@
   box-shadow: var(--shadow-xl);
 }
 
+.workboard-board-draft {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  width: min(560px, calc(100vw - 56px));
+  max-height: min(720px, calc(100vh - 56px));
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg) 4%);
+  box-shadow: var(--shadow-xl);
+}
+
+.workboard-board-draft__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.45fr);
+  gap: 10px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.workboard textarea.input.workboard-board-draft__description {
+  min-height: 92px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.workboard-field--color input[type="color"] {
+  padding: 4px;
+}
+
 .workboard-modal__header {
   display: flex;
   justify-content: space-between;
@@ -395,9 +430,18 @@
   max-width: 176px;
 }
 
+.workboard-select--toolbar-board {
+  width: min(192px, 100%);
+  max-width: 192px;
+}
+
 .workboard-select--toolbar-agent {
   width: min(236px, 100%);
   max-width: 236px;
+}
+
+.workboard-board-add {
+  flex: 0 0 auto;
 }
 
 .workboard-select > summary {

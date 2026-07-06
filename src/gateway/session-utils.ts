@@ -2062,13 +2062,14 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
   });
   const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
+  const isAcpRuntimeRow = acpMeta != null || isAcpSessionKey(key) || isAcpSessionKey(acpSessionKey);
   const agentRuntime = resolveModelAgentRuntimeMetadata({
     cfg,
     agentId: sessionAgentId,
     provider: rowModelProvider,
     model: rowModel,
     sessionKey: acpSessionKey,
-    acpRuntime: acpMeta != null,
+    acpRuntime: isAcpRuntimeRow,
     acpBackend: acpMeta?.backend,
   });
   const estimatedCostUsd = lightweight
@@ -2208,8 +2209,8 @@ export function buildGatewaySessionRow(params: {
       cfg.messages?.responseUsage,
       channel,
     ),
-    modelProvider: rowModelProvider,
-    model: rowModel,
+    modelProvider: isAcpRuntimeRow ? undefined : rowModelProvider,
+    model: isAcpRuntimeRow ? undefined : rowModel,
     agentRuntime,
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,

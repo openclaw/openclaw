@@ -774,7 +774,10 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-empty-state")?.textContent).toContain(
       "No cards match this view",
     );
-    const viewSelect = container.querySelector(".workboard-toolbar__filters .workboard-select");
+    const viewSelect = container
+      .querySelector(".workboard-toolbar__filters")
+      ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
+      .item(1);
     const runningOption = [
       ...(viewSelect?.querySelectorAll<HTMLButtonElement>("button") ?? []),
     ].find((button) => button.textContent?.includes("Running"));
@@ -821,6 +824,121 @@ describe("renderWorkboard", () => {
     );
   });
 
+  it("filters cards by board", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boardFilter = "client";
+    state.boards = [{ id: "client", name: "Client", createdAt: 1, updatedAt: 1 }];
+    state.cards = [
+      {
+        id: "default-card",
+        title: "Default card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: "client-card",
+        title: "Client card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 2000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { automation: { boardId: "client" } },
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Client card");
+    expect(container.textContent).not.toContain("Default card");
+    expect(container.querySelector(".workboard-select--toolbar-board")?.textContent).toContain(
+      "Client",
+    );
+  });
+
+  it("creates custom boards from a modal", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    const request = vi.fn(async () => ({
+      board: {
+        id: "client-work",
+        name: "Client work",
+        description: "Client jobs",
+        icon: "folder",
+        color: "#3b82f6",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    }));
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    renderInto(container, props);
+    buttonByLabel(container, "Add board")?.click();
+    await nextFrame();
+
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.textContent).toContain("New board");
+    const inputs = [
+      ...container.querySelectorAll<HTMLInputElement>(".workboard-board-draft input"),
+    ];
+    const description = container.querySelector<HTMLTextAreaElement>(
+      ".workboard-board-draft textarea",
+    );
+    inputs[0]!.value = "Client work";
+    inputs[0]!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    inputs[1]!.value = "client-work";
+    inputs[1]!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    inputs[2]!.value = "folder";
+    inputs[2]!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    description!.value = "Client jobs";
+    description!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    inputs[3]!.value = "#3b82f6";
+    inputs[3]!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    container.querySelector<HTMLButtonElement>(".workboard-board-draft .btn.primary")?.click();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("workboard.boards.upsert", {
+        id: "client-work",
+        name: "Client work",
+        description: "Client jobs",
+        icon: "folder",
+        color: "#3b82f6",
+      });
+    });
+
+    expect(state.boardFilter).toBe("client-work");
+    expect(state.boardDraftOpen).toBe(false);
+  });
+
   it("uses the same custom dropdown control for Workboard toolbar filters", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -846,12 +964,14 @@ describe("renderWorkboard", () => {
     );
 
     const toolbarFilters = container.querySelector(".workboard-toolbar__filters");
-    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
+    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(4);
     expect(toolbarFilters?.querySelectorAll("select")).toHaveLength(0);
+    expect(toolbarFilters?.textContent).toContain("All boards");
+    expect(toolbarFilters?.textContent).toContain("Default");
     expect(toolbarFilters?.textContent).toContain("All cards");
     expect(toolbarFilters?.textContent).toContain("All priorities");
     expect(toolbarFilters?.textContent).toContain("All agents");
-    const priorityFilter = toolbarFilters?.querySelectorAll(".workboard-select--toolbar").item(1);
+    const priorityFilter = toolbarFilters?.querySelectorAll(".workboard-select--toolbar").item(2);
     expect(priorityFilter?.textContent).toContain("Low");
     expect(priorityFilter?.textContent).toContain("Normal");
     expect(priorityFilter?.textContent).toContain("High");
@@ -882,7 +1002,7 @@ describe("renderWorkboard", () => {
         ".workboard-toolbar__filters .workboard-select",
       ),
     ];
-    expect(selects).toHaveLength(3);
+    expect(selects).toHaveLength(4);
 
     selects[0].open = true;
     selects[0].dispatchEvent(new Event("toggle"));
@@ -892,6 +1012,7 @@ describe("renderWorkboard", () => {
     expect(selects[0]?.open).toBe(false);
     expect(selects[1]?.open).toBe(true);
     expect(selects[2]?.open).toBe(false);
+    expect(selects[3]?.open).toBe(false);
   });
 
   it("closes open Workboard dropdowns on outside pointer and Escape", () => {
@@ -959,7 +1080,7 @@ describe("renderWorkboard", () => {
     const selects = [
       ...container.querySelectorAll<HTMLElement>(".workboard-toolbar__filters .workboard-select"),
     ];
-    expect(selects).toHaveLength(3);
+    expect(selects).toHaveLength(4);
     for (const select of selects) {
       const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
       const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
@@ -993,7 +1114,7 @@ describe("renderWorkboard", () => {
       const select = container
         .querySelector(".workboard-toolbar__filters")
         ?.querySelectorAll<HTMLDetailsElement>(".workboard-select")
-        .item(1);
+        .item(2);
       const trigger = select?.querySelector<HTMLElement>(".workboard-select__trigger");
       const options = [
         ...(select?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),

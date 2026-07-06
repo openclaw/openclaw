@@ -54,8 +54,8 @@ import {
   repairProviderWrappedModelOverride,
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -82,6 +82,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
+  listAgentEntries,
   resolveAgentConfig,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
@@ -773,12 +774,37 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const runId = opts.runId?.trim() || sessionId;
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
+  let acpResolution = sessionKey
     ? acpManager.resolveSession({
         cfg,
         sessionKey,
       })
     : null;
+  // Auto-initialize ACP sessions for agents configured with runtime.type="acp".
+  // This closes the gap where workboard dispatch (or other subagent.run callers)
+  // create sessions with agent-scoped keys but never go through the ACP spawn
+  // control plane, leaving the session without ACP metadata and falling back
+  // to the native LLM path instead of using the configured ACP harness.
+  if (acpResolution?.kind === "none" && sessionKey && sessionAgentId && !isRawModelRun) {
+    const agentEntry = listAgentEntries(cfg).find(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(sessionAgentId),
+    );
+    if (agentEntry?.runtime?.type === "acp") {
+      const acpAgentId = normalizeAgentId(agentEntry.runtime.acp?.agent) ?? sessionAgentId;
+      const acpMode = agentEntry.runtime.acp?.mode === "persistent" ? "persistent" : "oneshot";
+      const acpModel = normalizeOptionalString(agentEntry.runtime.acp?.model);
+      await acpManager.initializeSession({
+        cfg,
+        sessionKey,
+        agent: acpAgentId,
+        mode: acpMode,
+        ...(acpModel ? { runtimeOptions: { model: acpModel } } : {}),
+        ...(workspaceDir ? { cwd: workspaceDir } : {}),
+        ...(cfg.acp?.backend ? { backendId: cfg.acp.backend } : {}),
+      });
+      acpResolution = acpManager.resolveSession({ cfg, sessionKey });
+    }
+  }
   const body =
     !isRawModelRun && acpResolution?.kind === "ready"
       ? resolveAcpPromptBody(message, opts.internalEvents)
@@ -956,9 +982,7 @@ async function agentCommandInternal(
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
-        const entry = isSessionRollover
-          ? clearRotatedSessionMetadata(initialEntry)
-          : initialEntry;
+        const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
         currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
           cfg,
           opts,
@@ -1741,27 +1765,27 @@ async function agentCommandInternal(
         lifecycleEnded: false,
       };
       const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
-    const suppressUserTurnPersistence =
-      opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
-    const recorderTranscriptText = transcriptBody || undefined;
-    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-      ...(!suppressUserTurnPersistence && recorderTranscriptText
-        ? { input: { text: recorderTranscriptText } }
-        : {}),
-      target: {
-        transcriptPath: attemptSessionFile,
-        sessionId,
-        agentId: sessionAgentId,
-        ...(sessionKey ? { sessionKey } : {}),
-        cwd: cwd ?? workspaceDir,
-        config: cfg,
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      errorContext: "agent command user turn transcript",
-    });
-    if (suppressUserTurnPersistence) {
-      userTurnTranscriptRecorder.markBlocked();
-    }
+      const suppressUserTurnPersistence =
+        opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
+      const recorderTranscriptText = transcriptBody || undefined;
+      const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        ...(!suppressUserTurnPersistence && recorderTranscriptText
+          ? { input: { text: recorderTranscriptText } }
+          : {}),
+        target: {
+          transcriptPath: attemptSessionFile,
+          sessionId,
+          agentId: sessionAgentId,
+          ...(sessionKey ? { sessionKey } : {}),
+          cwd: cwd ?? workspaceDir,
+          config: cfg,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        errorContext: "agent command user turn transcript",
+      });
+      if (suppressUserTurnPersistence) {
+        userTurnTranscriptRecorder.markBlocked();
+      }
       let lifecycleFinishingEmitted = false;
       const emitLifecycleFinishing = (runResult: AgentAttemptResult) => {
         if (
@@ -1916,7 +1940,7 @@ async function agentCommandInternal(
           });
 
           let fallbackAttemptIndex = 0;
-        const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
+          const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
           attemptLifecycleState.currentTurnUserMessagePersisted = false;
           const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
             cfg,

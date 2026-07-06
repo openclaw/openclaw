@@ -7,6 +7,7 @@ import {
   archiveWorkboardCard,
   captureSessionToWorkboard,
   configureWorkboardPolling,
+  createWorkboardBoard,
   createWorkboardCard,
   deleteWorkboardCard,
   dispatchWorkboard,
@@ -93,12 +94,52 @@ describe("workboard controller", () => {
     const host = {};
     const client = createClient({
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "workboard.boards.list": {
+        boards: [{ id: "client", name: "Client", createdAt: 1, updatedAt: 2 }],
+      },
     });
 
     await loadWorkboard({ host, client: client as never, force: true });
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(client.request).toHaveBeenCalledWith("workboard.boards.list", {});
     expect(getWorkboardState(host).cards).toEqual([sampleCard]);
+    expect(getWorkboardState(host).boards).toEqual([
+      { id: "client", name: "Client", createdAt: 1, updatedAt: 2 },
+    ]);
+  });
+
+  it("creates custom boards and selects them", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const client = createClient({
+      "workboard.boards.upsert": {
+        board: { id: "client-work", name: "Client work", createdAt: 1, updatedAt: 1 },
+      },
+    });
+
+    await createWorkboardBoard({
+      host,
+      client: client as never,
+      name: "Client work",
+      id: "client-work",
+      description: "Client-specific work",
+      icon: "folder",
+      color: "#3b82f6",
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+      id: "client-work",
+      name: "Client work",
+      description: "Client-specific work",
+      icon: "folder",
+      color: "#3b82f6",
+    });
+    expect(state.boards).toEqual([
+      { id: "client-work", name: "Client work", createdAt: 1, updatedAt: 1 },
+    ]);
+    expect(state.boardFilter).toBe("client-work");
+    expect(state.draftBoardId).toBe("client-work");
   });
 
   it("refreshes diagnostics before listing cards when requested", async () => {
@@ -2744,6 +2785,7 @@ describe("workboard controller", () => {
       labels: [],
       agentId: "",
       sessionKey: "agent:main:dashboard:1",
+      boardId: "default",
     });
     expect(state.cards[0]).toMatchObject({ id: "card-2", title: "Write tests" });
     expect(state.draftOpen).toBe(false);
@@ -2813,6 +2855,7 @@ describe("workboard controller", () => {
         labels: ["ui", "polish"],
         agentId: "dev",
         sessionKey: sampleSession.key,
+        boardId: "default",
       },
     });
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
@@ -2961,7 +3004,7 @@ describe("workboard controller", () => {
       sessions: [{ ...sampleSession, status: "running", hasActiveRun: true }],
     });
 
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledTimes(2);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     loadResponse.resolve({ cards: [sampleCard] });
     await loading;
@@ -3100,12 +3143,13 @@ describe("workboard controller", () => {
 
     expect(card).toMatchObject({ title: "Fix login", status: "review" });
     expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.list", {});
-    expect(client.request).toHaveBeenNthCalledWith(2, "chat.history", {
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.boards.list", {});
+    expect(client.request).toHaveBeenNthCalledWith(3, "chat.history", {
       sessionKey: sampleSession.key,
       limit: 40,
       maxChars: 6000,
     });
-    expect(client.request).toHaveBeenNthCalledWith(3, "workboard.cards.create", {
+    expect(client.request).toHaveBeenNthCalledWith(4, "workboard.cards.create", {
       title: "Fix login",
       notes: [
         `Session: ${sampleSession.key}`,
@@ -3118,6 +3162,7 @@ describe("workboard controller", () => {
       priority: "normal",
       agentId: "",
       sessionKey: sampleSession.key,
+      boardId: "default",
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ sessionKey: sampleSession.key });
   });
@@ -3331,7 +3376,7 @@ describe("workboard controller", () => {
     });
 
     expect(card).toBeNull();
-    expect(client.request).toHaveBeenCalledOnce();
+    expect(client.request).toHaveBeenCalledTimes(2);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
   });
 
@@ -3360,7 +3405,7 @@ describe("workboard controller", () => {
     });
 
     await Promise.resolve();
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledTimes(2);
     list.resolve({ cards: [], statuses: ["todo"] });
     await loading;
 
@@ -3463,7 +3508,7 @@ describe("workboard controller", () => {
     });
 
     expect(client.request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "workboard.cards.create",
       expect.objectContaining({
         title: `${"x".repeat(177)}...`,

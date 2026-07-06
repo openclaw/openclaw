@@ -993,6 +993,7 @@ const AgentRuntimeAcpSchema = z
     agent: z.string().optional(),
     backend: z.string().optional(),
     mode: z.enum(["persistent", "oneshot"]).optional(),
+    model: z.string().optional(),
     cwd: z.string().optional(),
   })
   .strict()
