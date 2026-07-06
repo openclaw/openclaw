@@ -31,7 +31,7 @@ import type {
   ToolCall,
   ToolResultMessage,
 } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
@@ -569,7 +569,7 @@ export const streamSimpleOpenAICompletions: StreamFunction<
 > = (model: Model<"openai-completions">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);

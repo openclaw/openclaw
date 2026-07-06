@@ -10,7 +10,7 @@ import type {
   StreamFunction,
   StreamOptions,
 } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
@@ -102,7 +102,7 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
 > = (model: Model<"azure-openai-responses">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);

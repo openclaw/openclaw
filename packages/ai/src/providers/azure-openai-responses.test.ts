@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
-import { testing } from "./azure-openai-responses.js";
+import { streamSimpleAzureOpenAIResponses, testing } from "./azure-openai-responses.js";
 
 const azureResponsesModel = {
   id: "gpt-5.5",
@@ -69,5 +69,39 @@ describe("azure-openai-responses", () => {
         "https://gateway.example.com/proxy/openai/v1",
       ),
     ).toBe(false);
+  });
+
+  it("returns stream immediately and emits error event asynchronously when apiKey is missing", async () => {
+    let syncError: unknown = null;
+    let stream: any;
+    try {
+      stream = streamSimpleAzureOpenAIResponses(
+        azureResponsesModel,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        },
+        {
+          apiKey: "",
+        },
+      );
+    } catch (err) {
+      syncError = err;
+    }
+
+    expect(syncError).toBeNull();
+    expect(stream).toBeDefined();
+
+    const events: any[] = [];
+    try {
+      for await (const event of stream) {
+        events.push(event);
+      }
+    } catch {
+      // Stream itself doesn't throw, it emits 'error' event
+    }
+
+    expect(events.length).toBe(1);
+    expect(events[0].type).toBe("error");
+    expect(events[0].error.errorMessage).toBe("No API key for provider: azure");
   });
 });

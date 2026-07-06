@@ -32,7 +32,7 @@ import type {
   ToolResultMessage,
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -995,7 +995,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 ) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);
