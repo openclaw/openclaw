@@ -53,6 +53,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   });
 
   let agent: AcpGatewayAgent | null = null;
+  // eslint-disable-next-line prefer-const -- hoisted for closure capture, assigned once at initialization
   let eventLedger: ReturnType<typeof createSqliteAcpEventLedger> | undefined;
   let onClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
