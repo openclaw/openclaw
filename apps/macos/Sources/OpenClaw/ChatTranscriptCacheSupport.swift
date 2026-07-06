@@ -71,8 +71,8 @@ enum MacChatTranscriptCache {
     /// Offline transcript cache scoped to the currently configured gateway.
     /// Nil when the app is unconfigured or the remote target cannot be
     /// resolved, so foreign rows can never leak into another gateway's scope.
-    // Concrete return: the same SQLite store also backs the offline command
-    // outbox, and callers wire both protocol facets from one instance.
+    /// Concrete return type: the same SQLite store also backs the offline
+    /// command outbox, and callers wire both protocol facets from one instance.
     static func make() -> OpenClawChatSQLiteTranscriptCache? {
         let root = OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root).mode
