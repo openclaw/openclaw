@@ -149,6 +149,7 @@ describe("session accessor boundary guard", () => {
         "src/commands/tasks.ts",
         "src/config/sessions/cleanup-service.ts",
         "src/gateway/boot.ts",
+        "src/gateway/server-methods/sessions.ts",
         "src/gateway/server-node-events.ts",
         "src/gateway/session-compaction-checkpoints.ts",
         "src/plugins/host-hook-cleanup.ts",
@@ -163,6 +164,7 @@ describe("session accessor boundary guard", () => {
       new Set([
         "src/agents/command/attempt-execution.ts",
         "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
+        "src/auto-reply/reply/session-fork.runtime.ts",
         "src/config/sessions/transcript.ts",
         "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/chat-transcript-inject.ts",

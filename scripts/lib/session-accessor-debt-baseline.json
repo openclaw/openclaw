@@ -37,7 +37,7 @@
     "src/config/sessions/store.ts": 15,
     "src/config/sessions/test-helpers.ts": 2,
     "src/config/sessions/transcript.ts": 6,
-    "src/cron/isolated-agent/session.ts": 3,
+    "src/cron/isolated-agent/session.ts": 2,
     "src/infra/approval-request-account-binding.ts": 2,
     "src/infra/heartbeat-runner.ts": 4,
     "src/plugins/runtime/runtime-agent.ts": 1
@@ -60,7 +60,6 @@
     "src/config/sessions/session-registry-maintenance.ts": 2,
     "src/gateway/server-methods/agent.ts": 2,
     "src/gateway/server-methods/chat.ts": 2,
-    "src/gateway/server-methods/sessions.ts": 3,
     "src/gateway/session-lifecycle-state.ts": 2,
     "src/gateway/test-helpers.mocks.ts": 1,
     "src/plugins/runtime/runtime-agent.ts": 2

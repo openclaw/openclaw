@@ -186,6 +186,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
   "src/gateway/boot.ts",
+  "src/gateway/server-methods/sessions.ts",
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
   "src/plugins/host-hook-cleanup.ts",
@@ -196,6 +197,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
 export const migratedTranscriptWriterFiles = new Set([
   "src/agents/command/attempt-execution.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
+  "src/auto-reply/reply/session-fork.runtime.ts",
   "src/config/sessions/transcript.ts",
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",
@@ -569,6 +571,7 @@ const writeSourceRootPaths = [
 const transcriptWriterSourceRootPaths = [
   "src/agents/command",
   "src/agents/embedded-agent-runner",
+  "src/auto-reply/reply",
   "src/config/sessions",
   "src/gateway/server-methods",
   "src/sessions",
