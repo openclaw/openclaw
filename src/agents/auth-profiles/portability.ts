@@ -60,9 +60,9 @@ export function isAuthProfileCredentialPortableForAgentCopy(
   return resolveAuthProfilePortability(credential).portable;
 }
 
-/** Builds an agent-copy store containing only portable credentials. */
-export function buildPortableAuthProfileSecretsStoreForAgentCopy(store: AuthProfileStore): {
-  store: AuthProfileSecretsStore & Pick<AuthProfileStore, "order">;
+/** Builds an agent-copy store containing only portable credentials and their order. */
+export function buildPortableAuthProfileStoreForAgentCopy(store: AuthProfileStore): {
+  store: AuthProfileStore;
   copiedProfileIds: string[];
   skippedProfileIds: string[];
 } {
@@ -80,16 +80,18 @@ export function buildPortableAuthProfileSecretsStoreForAgentCopy(store: AuthProf
   ) as AuthProfileSecretsStore["profiles"];
 
   const copiedSet = new Set(copiedProfileIds);
-  const order = store.order
-    ? Object.fromEntries(
-        Object.entries(store.order)
-          .map(([provider, ids]) => [provider, ids.filter((id) => copiedSet.has(id))] as const)
-          .filter(([, ids]) => ids.length > 0),
-      )
-    : undefined;
+  const order = Object.fromEntries(
+    Object.entries(store.order ?? {})
+      .map(([provider, ids]) => [provider, ids.filter((id) => copiedSet.has(id))] as const)
+      .filter(([, ids]) => ids.length > 0),
+  );
 
   return {
-    store: { version: AUTH_STORE_VERSION, profiles, ...(order && { order }) },
+    store: {
+      version: AUTH_STORE_VERSION,
+      profiles,
+      ...(Object.keys(order).length > 0 ? { order } : {}),
+    },
     copiedProfileIds,
     skippedProfileIds,
   };
