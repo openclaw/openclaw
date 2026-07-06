@@ -211,6 +211,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     commandBody: string;
     timestamp?: number;
     messageId?: string;
+    replyToId?: string;
     isBatched?: boolean;
     mediaPath?: string;
     mediaType?: string;
@@ -342,7 +343,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       reply: {
         to: signalTo,
-        replyToId: entry.messageId,
+        replyToId: entry.replyToId ?? entry.messageId,
       },
       message: {
         body: combinedBody,
@@ -1184,7 +1185,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId =
+    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
+    const replyToId =
       typeof nativeReplyTargetTimestamp === "number"
         ? String(nativeReplyTargetTimestamp)
         : undefined;
@@ -1200,6 +1202,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       commandBody: messageText,
       timestamp: inboundTimestamp,
       messageId,
+      replyToId,
       mediaPath,
       mediaType,
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
