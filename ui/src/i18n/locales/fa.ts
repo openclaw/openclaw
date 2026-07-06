@@ -1126,6 +1126,15 @@ export const fa: TranslationMap = {
       session: "نشست",
       sessions: "نشست‌ها",
     },
+    providerUsage: {
+      title: "Provider plans & billing",
+      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      balance: "Balance",
+      spend: "Usage",
+      budget: "Budget",
+      remaining: "{percent}% left",
+      resets: "Resets {date}",
+    },
     presets: {
       today: "امروز",
       last7d: "۷روز",

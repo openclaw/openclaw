@@ -1122,6 +1122,15 @@ export const ko: TranslationMap = {
       session: "세션",
       sessions: "세션",
     },
+    providerUsage: {
+      title: "Provider plans & billing",
+      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      balance: "Balance",
+      spend: "Usage",
+      budget: "Budget",
+      remaining: "{percent}% left",
+      resets: "Resets {date}",
+    },
     presets: {
       today: "오늘",
       last7d: "7일",

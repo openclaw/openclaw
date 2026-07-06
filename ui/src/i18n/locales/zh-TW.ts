@@ -1113,6 +1113,15 @@ export const zh_TW: TranslationMap = {
       session: "工作階段",
       sessions: "工作階段",
     },
+    providerUsage: {
+      title: "Provider plans & billing",
+      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      balance: "Balance",
+      spend: "Usage",
+      budget: "Budget",
+      remaining: "{percent}% left",
+      resets: "Resets {date}",
+    },
     presets: {
       today: "今天",
       last7d: "7 天",

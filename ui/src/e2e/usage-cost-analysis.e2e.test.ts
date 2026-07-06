@@ -178,6 +178,43 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
           daily,
           totals,
         },
+        "usage.status": {
+          updatedAt: Date.now(),
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              plan: "Plus",
+              windows: [
+                { label: "5h", usedPercent: 35 },
+                { label: "Week", usedPercent: 62 },
+              ],
+              billing: [{ type: "balance", amount: 18, unit: "credits" }],
+            },
+            {
+              provider: "openrouter",
+              displayName: "OpenRouter",
+              plan: "Production",
+              windows: [{ label: "API key budget", usedPercent: 25 }],
+              billing: [
+                {
+                  type: "balance",
+                  label: "Account balance",
+                  amount: 64.5,
+                  unit: "USD",
+                },
+                {
+                  type: "budget",
+                  label: "API key budget",
+                  used: 5,
+                  limit: 20,
+                  unit: "USD",
+                },
+              ],
+              summary: "$1.25 today · $5.00 this month",
+            },
+          ],
+        },
       },
     });
 
@@ -209,16 +246,27 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await expect
         .poll(() => page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent())
         .toContain("openai");
+      const providerCards = page.locator(".provider-usage-card");
+      await expect.poll(() => providerCards.count()).toBe(2);
+      await expect
+        .poll(async () => (await gateway.getRequests("usage.status")).length)
+        .toBeGreaterThan(0);
+      await expect
+        .poll(() => providerCards.filter({ hasText: "OpenRouter" }).textContent())
+        .toContain("$64.50");
+      await expect
+        .poll(() => providerCards.filter({ hasText: "OpenAI" }).textContent())
+        .toContain("18 credits");
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const artifactDir = path.join(
           process.cwd(),
           ".artifacts",
           "control-ui-e2e",
-          "cost-analysis",
+          "provider-plans",
         );
         await mkdir(artifactDir, { recursive: true });
-        await page.locator(".usage-left-card").screenshot({
+        await page.locator(".usage-page").screenshot({
           path: path.join(artifactDir, "after.png"),
         });
       }

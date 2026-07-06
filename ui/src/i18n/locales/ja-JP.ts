@@ -1130,6 +1130,15 @@ export const ja_JP: TranslationMap = {
       session: "セッション",
       sessions: "セッション",
     },
+    providerUsage: {
+      title: "Provider plans & billing",
+      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      balance: "Balance",
+      spend: "Usage",
+      budget: "Budget",
+      remaining: "{percent}% left",
+      resets: "Resets {date}",
+    },
     presets: {
       today: "今日",
       last7d: "7日",
