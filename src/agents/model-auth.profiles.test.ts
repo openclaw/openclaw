@@ -781,6 +781,36 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("prioritizes explicit models.json apiKey over store profiles", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "demo-local",
+      store: {
+        version: 1,
+        profiles: {
+          "demo-local:default": {
+            type: "api_key",
+            provider: "demo-local",
+            key: "profile-key-to-ignore",
+          },
+        },
+      },
+      cfg: {
+        models: {
+          providers: {
+            "demo-local": {
+              baseUrl: "https://explicit.example",
+              apiKey: "explicit-literal-key",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+    expect(resolved.apiKey).toBe("explicit-literal-key");
+    expect(resolved.source).toBe("models.json");
+    expect(resolved.profileId).toBeUndefined();
+  });
+
   it("supports env-first precedence for live auth probes", async () => {
     await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
       const resolved = await resolveApiKeyForProvider({

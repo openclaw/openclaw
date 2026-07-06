@@ -1169,6 +1169,13 @@ export async function resolveApiKeyForProvider(params: {
     store: scopedStore,
     agentDir,
   });
+  if (providerEntryBinding.kind === "literal") {
+    return {
+      apiKey: providerEntryBinding.apiKey,
+      source: providerEntryBinding.source,
+      mode: "api-key",
+    };
+  }
   if (providerEntryBinding.kind === "profile-resolved") {
     assertAuthModeAllowedForModel({
       provider,
