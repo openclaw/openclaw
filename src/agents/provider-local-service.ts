@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { toErrorObject } from "../infra/errors.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -228,8 +229,17 @@ async function probeHealth(
   const onAbort = () => controller.abort(toAbortError(signal));
   signal?.addEventListener("abort", onAbort, { once: true });
   let response: Response | undefined;
+  let releaseGuarded: (() => Promise<void>) | undefined;
   try {
-    response = await fetch(url, { headers, signal: controller.signal });
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      init: { headers, signal: controller.signal },
+      mode: GUARDED_FETCH_MODE.STRICT,
+      policy: { allowedHostnames: [new URL(url).hostname] },
+      auditContext: "local-service-probe",
+    });
+    response = guarded.response;
+    releaseGuarded = guarded.release;
     return response.ok;
   } catch {
     if (signal?.aborted) {
@@ -237,6 +247,11 @@ async function probeHealth(
     }
     return false;
   } finally {
+    try {
+      await releaseGuarded?.();
+    } catch {
+      // Guarded fetch release failures must not replace the primary probe result.
+    }
     clearTimeout(timeout);
     signal?.removeEventListener("abort", onAbort);
     await response?.body?.cancel?.().catch(() => undefined);
