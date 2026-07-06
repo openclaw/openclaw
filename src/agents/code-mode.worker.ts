@@ -344,7 +344,7 @@ const CONTROLLER_SOURCE = String.raw`
   for (const tool of catalog) {
     const name = typeof tool?.name === "string" ? tool.name : "";
     const id = typeof tool?.id === "string" ? tool.id : "";
-    if (!id || safeNameCounts.get(name) !== 1 || Object.prototype.hasOwnProperty.call(baseTools, name)) {
+    if (!id || safeNameCounts.get(name) !== 1 || Object.hasOwn(baseTools, name)) {
       continue;
     }
     Object.defineProperty(baseTools, name, {

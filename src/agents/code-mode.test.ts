@@ -1160,6 +1160,37 @@ describe("Code Mode", () => {
     });
   });
 
+  it("rejects prototype-named tool identifiers in baseTools registration", () => {
+    // Tool names matching Object.prototype properties (toString, __proto__, etc.)
+    // should not be registered as baseTools entries to avoid prototype pollution.
+    // Uses Object.hasOwn (not `in`) so inherited prototype keys are correctly skipped.
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const protoTools = ["toString", "__proto__", "constructor", "hasOwnProperty"].map((name) =>
+      mcpTool({
+        name,
+        serverName: "proto-test",
+        toolName: name,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      }),
+    );
+
+    // Must not throw when prototype-named tools are present in the catalog
+    expect(() =>
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, ...protoTools],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      }),
+    ).not.toThrow();
+  });
+
   it("exposes registered namespace globals through the QuickJS bridge", async () => {
     registerTestNamespace({
       id: "tickets",
