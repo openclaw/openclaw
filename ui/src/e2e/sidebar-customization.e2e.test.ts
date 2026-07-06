@@ -69,9 +69,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Overview", "Workboard", "Agents"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
+      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(0);
+      const settingsLink = sidebar.getByRole("link", { name: "Settings" });
+      await expect.poll(() => settingsLink.isVisible()).toBe(true);
+      await settingsLink.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/config");
+      await expect.poll(() => settingsLink.getAttribute("aria-current")).toBe("page");
+      await sidebar.getByRole("link", { name: "Overview" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
       await captureUiProof(page, "01-default-pinned.png");
 
       const moreButton = sidebar.getByRole("button", { name: "More" });
@@ -98,9 +104,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "02-customize-menu.png");
 
       await overviewItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Workboard", "Agents"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Workboard", "Agents"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
@@ -113,9 +119,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
 
       await customizeButton.click();
       await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
-      await expect
-        .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Overview", "Workboard", "Agents"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
 
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
       await collapseButton.click();
@@ -143,6 +147,11 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toBe(false);
       await expect.poll(() => moreButton.isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().left),
+        )
+        .toBe(0);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
     } finally {
       await context.close();

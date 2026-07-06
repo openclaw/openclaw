@@ -1,14 +1,18 @@
 package ai.openclaw.app.chat
 
+import android.content.ContextWrapper
 import androidx.room.Room
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.io.File
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class RoomChatTranscriptCacheTest {
@@ -23,6 +27,41 @@ class RoomChatTranscriptCacheTest {
   }
 
   private fun cache(): RoomChatTranscriptCache = RoomChatTranscriptCache(database = database)
+
+  @Test
+  fun databaseDeleteFailsWhenCompanionFileSurvives() {
+    val app = RuntimeEnvironment.getApplication()
+    val databaseName = "chat-cache-delete-test-${UUID.randomUUID()}.db"
+    val databasePath = app.getDatabasePath(databaseName)
+    databasePath.parentFile?.mkdirs()
+    val walFile = File(databasePath.path + "-wal")
+    walFile.writeText("stale cache")
+    val noOpDeleteContext =
+      object : ContextWrapper(app) {
+        override fun deleteDatabase(name: String): Boolean = true
+      }
+
+    assertFalse(deleteDatabaseFiles(noOpDeleteContext, databaseName))
+    assertTrue(walFile.exists())
+    assertTrue(deleteDatabaseFiles(app, databaseName))
+    assertFalse(walFile.exists())
+  }
+
+  @Test
+  fun databaseDeleteSucceedsBeforeDatabaseDirectoryExists() {
+    val app = RuntimeEnvironment.getApplication()
+    val missingParent = File(app.cacheDir, "missing-database-dir-${UUID.randomUUID()}")
+    val databasePath = File(missingParent, "chat-cache.db")
+    val freshInstallContext =
+      object : ContextWrapper(app) {
+        override fun getDatabasePath(name: String): File = databasePath
+
+        override fun deleteDatabase(name: String): Boolean = true
+      }
+
+    assertFalse(missingParent.exists())
+    assertTrue(deleteDatabaseFiles(freshInstallContext, databasePath.name))
+  }
 
   private fun message(
     text: String,
@@ -124,6 +163,58 @@ class RoomChatTranscriptCacheTest {
       val sessionKeys = store.loadSessions("gateway-a").map { it.key }
       assertEquals(MAX_CACHED_SESSIONS, sessionKeys.size)
       assertTrue(sessionKeys.contains("deep-session"))
+    }
+
+  @Test
+  fun activeDeepTranscriptSurvivesSessionListRefresh() =
+    runTest {
+      val store = cache()
+      val listedSessions =
+        (0 until MAX_CACHED_SESSIONS).map { index ->
+          ChatSessionEntry(key = "session-$index", updatedAtMs = 1000L - index)
+        }
+      store.saveSessions(gatewayId = "gateway-a", sessions = listedSessions)
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "deep-session",
+        messages = listOf(message("deep text")),
+      )
+
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        sessions = listedSessions,
+        retainedSessionKey = "deep-session",
+      )
+
+      assertEquals(MAX_CACHED_SESSIONS, store.loadSessions("gateway-a").size)
+      assertTrue(store.loadSessions("gateway-a").any { it.key == "deep-session" })
+      assertEquals(
+        listOf("deep text"),
+        store.loadTranscript("gateway-a", "deep-session").map { it.content.single().text },
+      )
+    }
+
+  @Test
+  fun completeSessionListRefreshDropsMissingDeepTranscript() =
+    runTest {
+      val store = cache()
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        sessions = listOf(ChatSessionEntry(key = "deep-session", updatedAtMs = 1)),
+      )
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "deep-session",
+        messages = listOf(message("deleted remotely")),
+      )
+
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = 2)),
+      )
+
+      assertEquals(listOf("main"), store.loadSessions("gateway-a").map { it.key })
+      assertTrue(store.loadTranscript("gateway-a", "deep-session").isEmpty())
     }
 
   @Test

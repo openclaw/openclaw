@@ -9786,6 +9786,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Chat behavior
+  - H2: Connection loss and reconnect
   - H2: PWA install and web push
   - H2: Hosted embeds
   - H2: Chat message width

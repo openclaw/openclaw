@@ -1464,6 +1464,12 @@ export const uk: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "З’єднання з Gateway втрачено",
+    reconnecting: "Повторне підключення…",
+    offlineHint: "Оновлення в реальному часі та дії призупинено, доки з’єднання не відновиться.",
+    retryNow: "Повторити зараз",
+  },
   chat: {
     disconnected: "Відключено від шлюзу.",
     archivedSessionDisabled: "Відновіть цей сеанс, щоб надсилати повідомлення.",

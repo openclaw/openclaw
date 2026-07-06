@@ -1599,6 +1599,7 @@ When a Slack message with file attachments arrives:
 When a message arrives in a thread (has a `thread_ts` parent):
 
 - If the reply itself has no direct media and the included root message has files, Slack can hydrate the root files as thread-starter context.
+- Root files are hydrated only while seeding a new or reset thread session. Later text-only replies reuse the existing session context and do not reattach root files as fresh media.
 - Direct reply attachments take precedence over root-message attachments.
 - A root message that has only files and no text is represented with an attachment placeholder so the fallback can still include its files.
 

@@ -22,7 +22,6 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
-import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
 import "./session-picker.ts";
 import "./tooltip.ts";
@@ -32,11 +31,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import {
-  compareSessionRowsByUpdatedAt,
-  resolveSessionNavigation,
-  searchForSession,
-} from "../lib/sessions/index.ts";
+import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
@@ -60,7 +55,6 @@ type SidebarRecentSession = {
   hasActiveRun: boolean;
   kind?: string;
   pinned: boolean;
-  pinnedAt?: number | null;
 };
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -90,11 +84,9 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
     DEFAULT_SIDEBAR_PINNED_ROUTES;
   @property({ attribute: false }) sidebarMoreExpanded = false;
-  @property({ attribute: false }) recentSessionsCollapsed = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
-  @property({ attribute: false }) onToggleRecentSessions?: () => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -224,14 +216,12 @@ export class AppSidebar extends LitElement {
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
-      pinnedAt: row.pinnedAt,
     });
     const activeSession = navigation.selectedSession
       ? toSidebarSession(navigation.selectedSession)
       : null;
     const recentSessions = navigation.recentSessions
       .slice(activeSession ? 1 : 0)
-      .toSorted(compareSessionRowsByUpdatedAt)
       .map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
@@ -673,6 +663,11 @@ export class AppSidebar extends LitElement {
             >`}
       </button>
     `;
+    // Pinned rows stay separate from the recency-capped chat list; the active
+    // session leads whichever group owns it.
+    const allRows = [...(activeSession ? [activeSession] : []), ...recentSessions];
+    const pinnedRows = allRows.filter((session) => session.pinned);
+    const chatRows = allRows.filter((session) => !session.pinned);
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
         ${this.collapsed
@@ -683,66 +678,64 @@ export class AppSidebar extends LitElement {
         ${this.collapsed
           ? nothing
           : html`
-              <div
-                class="sidebar-recent-sessions ${this.recentSessionsCollapsed
-                  ? "sidebar-recent-sessions--collapsed"
-                  : ""}"
-                aria-label=${t("overview.cards.recentSessions")}
-              >
-                <div class="sidebar-recent-sessions__head">
-                  <button
-                    class="sidebar-recent-sessions__label"
-                    type="button"
-                    aria-expanded=${String(!this.recentSessionsCollapsed)}
-                    @click=${() => this.onToggleRecentSessions?.()}
-                  >
-                    <span class="sidebar-recent-sessions__label-text"
-                      >${t("usage.sessions.recentShort")}</span
-                    >
-                    <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-                  </button>
-                  <openclaw-session-picker
-                    .sessions=${context?.sessions}
-                    .sessionsResult=${this.sessionsResult}
-                    .currentSessionKey=${routeSessionKey}
-                    .agentId=${selectedAgentId}
-                    .defaultAgentId=${defaultAgentId}
-                    .mainKey=${resolveUiConfiguredMainKey({
-                      agentsList: context?.agents.state.agentsList,
-                      hello: context?.gateway.snapshot.hello,
-                    })}
-                    .connected=${this.connected}
-                    .onSelectSession=${this.selectSession}
-                    .onReplaceCurrentSession=${this.replaceCurrentSession}
-                  ></openclaw-session-picker>
-                </div>
-                ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
-                ${activeSession
-                  ? this.renderRecentSession(activeSession)
-                  : this.renderChatFallback()}
-                ${recentSessions.length === 0
+              <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+                ${pinnedRows.length === 0
                   ? nothing
                   : html`
-                      <div class="sidebar-recent-sessions__list">
-                        ${recentSessions.map((session) => this.renderRecentSession(session))}
+                      <div class="sidebar-recent-sessions__group">
+                        <div class="sidebar-recent-sessions__head">
+                          <span class="sidebar-recent-sessions__label-text"
+                            >${t("sessionsView.pinned")}</span
+                          >
+                        </div>
+                        <div class="sidebar-recent-sessions__list">
+                          ${pinnedRows.map((session) => this.renderRecentSession(session))}
+                        </div>
                       </div>
                     `}
-                <a
-                  href=${pathForRoute("sessions", this.basePath)}
-                  class="sidebar-recent-sessions__all"
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    this.onNavigate?.("sessions");
-                  }}
-                >
-                  <span>${t("chat.sidebar.allSessions")}</span>
-                  <span class="sidebar-recent-sessions__all-icon" aria-hidden="true"
-                    >${icons.chevronRight}</span
+                <div class="sidebar-recent-sessions__group">
+                  <div class="sidebar-recent-sessions__head">
+                    <span class="sidebar-recent-sessions__label-text"
+                      >${t("sessionsView.title")}</span
+                    >
+                    <openclaw-session-picker
+                      .sessions=${context?.sessions}
+                      .sessionsResult=${this.sessionsResult}
+                      .currentSessionKey=${routeSessionKey}
+                      .agentId=${selectedAgentId}
+                      .defaultAgentId=${defaultAgentId}
+                      .mainKey=${resolveUiConfiguredMainKey({
+                        agentsList: context?.agents.state.agentsList,
+                        hello: context?.gateway.snapshot.hello,
+                      })}
+                      .connected=${this.connected}
+                      .onSelectSession=${this.selectSession}
+                      .onReplaceCurrentSession=${this.replaceCurrentSession}
+                    ></openclaw-session-picker>
+                  </div>
+                  ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
+                  <div class="sidebar-recent-sessions__list">
+                    ${allRows.length === 0
+                      ? this.renderChatFallback()
+                      : chatRows.map((session) => this.renderRecentSession(session))}
+                  </div>
+                  <a
+                    href=${pathForRoute("sessions", this.basePath)}
+                    class="sidebar-recent-sessions__all"
+                    @click=${(event: MouseEvent) => {
+                      if (!shouldHandleNavigationClick(event)) {
+                        return;
+                      }
+                      event.preventDefault();
+                      this.onNavigate?.("sessions");
+                    }}
                   >
-                </a>
+                    <span>${t("chat.sidebar.allSessions")}</span>
+                    <span class="sidebar-recent-sessions__all-icon" aria-hidden="true"
+                      >${icons.chevronRight}</span
+                    >
+                  </a>
+                </div>
               </div>
             `}
       </section>
@@ -846,25 +839,11 @@ export class AppSidebar extends LitElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const settingsActive =
+      this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <div class="sidebar-shell">
-          <div class="sidebar-shell__header">
-            <div class="sidebar-brand">
-              <img
-                class="sidebar-brand__logo"
-                src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
-                alt="OpenClaw"
-              />
-              ${this.collapsed
-                ? nothing
-                : html`
-                    <span class="sidebar-brand__copy">
-                      <span class="sidebar-brand__title">OpenClaw</span>
-                    </span>
-                  `}
-            </div>
-          </div>
           <div class="sidebar-shell__body">
             ${this.renderSessions()}
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
@@ -876,72 +855,71 @@ export class AppSidebar extends LitElement {
             </nav>
           </div>
           <div class="sidebar-shell__footer">
-            <div class="sidebar-utility-group">
-              ${this.renderRoute("config")}
-              ${this.collapsed
-                ? html`
-                    <openclaw-tooltip
-                      .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-                    >
-                      <a
-                        class="nav-item nav-item--external sidebar-utility-link"
-                        href="https://docs.openclaw.ai"
-                        target=${EXTERNAL_LINK_TARGET}
-                        rel=${buildExternalLinkRel()}
-                      >
-                        <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                      </a>
-                    </openclaw-tooltip>
-                  `
-                : html`
-                    <a
-                      class="nav-item nav-item--external sidebar-utility-link"
-                      href="https://docs.openclaw.ai"
-                      target=${EXTERNAL_LINK_TARGET}
-                      rel=${buildExternalLinkRel()}
-                    >
-                      <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                      <span class="nav-item__text">${t("common.docs")}</span>
-                      <span class="nav-item__external-icon">${icons.externalLink}</span>
-                    </a>
-                  `}
-              <div class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
-              </div>
-              <div class="sidebar-footer-row">
-                <div class="sidebar-status">
-                  <openclaw-tooltip .content=${gatewayStatus}>
-                    <span
-                      class="sidebar-status__dot ${this.connected
-                        ? "sidebar-connection-status--online"
-                        : "sidebar-connection-status--offline"}"
-                      role="img"
-                      aria-live="polite"
-                      aria-label=${gatewayStatus}
-                    ></span>
-                  </openclaw-tooltip>
-                  ${this.collapsed
-                    ? nothing
-                    : html`<span class="sidebar-status__text"
-                        >${this.connected ? t("common.online") : t("common.offline")}</span
-                      >`}
-                </div>
-                <openclaw-tooltip
-                  .content=${this.canPairDevice
-                    ? t("nodes.pairing.button")
-                    : t("nodes.pairing.adminRequired")}
+            <div class="sidebar-footer-bar">
+              <openclaw-tooltip .content=${gatewayStatus}>
+                <span
+                  class="sidebar-status__dot ${this.connected
+                    ? "sidebar-connection-status--online"
+                    : "sidebar-connection-status--offline"}"
+                  role="img"
+                  aria-live="polite"
+                  aria-label=${gatewayStatus}
+                ></span>
+              </openclaw-tooltip>
+              <span class="sidebar-footer-bar__spacer"></span>
+              <openclaw-tooltip .content=${titleForRoute("config")}>
+                <a
+                  href=${pathForRoute("config", this.basePath)}
+                  class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
+                  aria-label=${titleForRoute("config")}
+                  aria-current=${settingsActive ? "page" : nothing}
+                  @focus=${(event: Event) => this.preloadRoute("config", event)}
+                  @blur=${this.cancelPreload}
+                  @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
+                  @pointerleave=${this.cancelPreload}
+                  @touchstart=${(event: TouchEvent) => this.preloadRoute("config", event, true)}
+                  @click=${(event: MouseEvent) => {
+                    if (!shouldHandleNavigationClick(event)) {
+                      return;
+                    }
+                    event.preventDefault();
+                    this.onNavigate?.("config");
+                  }}
                 >
-                  <button
-                    class="sidebar-pair-mobile"
-                    type="button"
-                    aria-label=${t("nodes.pairing.button")}
-                    ?disabled=${!this.canPairDevice}
-                    @click=${() => this.onPairMobile?.()}
-                  >
-                    <span aria-hidden="true">${icons.smartphone}</span>
-                  </button>
-                </openclaw-tooltip>
-              </div>
+                  ${icons.settings}
+                </a>
+              </openclaw-tooltip>
+              <openclaw-tooltip
+                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
+              >
+                <a
+                  class="sidebar-footer-icon"
+                  href="https://docs.openclaw.ai"
+                  target=${EXTERNAL_LINK_TARGET}
+                  rel=${buildExternalLinkRel()}
+                  aria-label=${t("common.docs")}
+                >
+                  ${icons.book}
+                </a>
+              </openclaw-tooltip>
+              <openclaw-tooltip
+                .content=${this.canPairDevice
+                  ? t("nodes.pairing.button")
+                  : t("nodes.pairing.adminRequired")}
+              >
+                <button
+                  class="sidebar-footer-icon sidebar-pair-mobile"
+                  type="button"
+                  aria-label=${t("nodes.pairing.button")}
+                  ?disabled=${!this.canPairDevice}
+                  @click=${() => this.onPairMobile?.()}
+                >
+                  ${icons.smartphone}
+                </button>
+              </openclaw-tooltip>
+              <span class="sidebar-mode-switch">
+                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
+              </span>
             </div>
           </div>
         </div>

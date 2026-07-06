@@ -173,11 +173,6 @@
     border-radius: 0;
   }
 
-  .sidebar-shell__header {
-    min-height: 0;
-    padding: 0 4px 16px;
-  }
-
   .sidebar-nav,
   .sidebar--collapsed .sidebar-nav {
     flex: 1 1 auto;
@@ -230,10 +225,9 @@
     padding: 12px 8px 0;
   }
 
-  .sidebar--collapsed .sidebar-status {
-    width: auto;
-    min-height: 32px;
-    padding: 0 12px;
+  .sidebar--collapsed .sidebar-footer-bar {
+    flex-direction: row;
+    padding: 0 10px;
   }
 }
 

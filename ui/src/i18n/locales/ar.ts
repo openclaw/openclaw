@@ -1444,6 +1444,12 @@ export const ar: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "فُقد الاتصال بـ Gateway",
+    reconnecting: "جارٍ إعادة الاتصال…",
+    offlineHint: "تم إيقاف التحديثات المباشرة والإجراءات مؤقتًا حتى يعود الاتصال.",
+    retryNow: "إعادة المحاولة الآن",
+  },
   chat: {
     disconnected: "تم قطع الاتصال بـ Gateway.",
     archivedSessionDisabled: "استعِد هذه الجلسة لإرسال الرسائل.",

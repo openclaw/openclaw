@@ -457,18 +457,8 @@
   flex: 0 0 var(--shell-nav-rail-width);
 }
 
-.sidebar-shell__header,
 .sidebar-shell__footer {
   flex-shrink: 0;
-}
-
-.sidebar-shell__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 0;
-  padding: 0 8px 18px;
 }
 
 .sidebar-shell__body {
@@ -481,39 +471,6 @@
 .sidebar-shell__footer {
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.sidebar-brand__logo {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
-}
-
-.sidebar-brand__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.sidebar-brand__title {
-  font-size: 15px;
-  line-height: 1.1;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .sidebar-nav {
@@ -588,8 +545,13 @@
 
 .sidebar-recent-sessions {
   display: grid;
-  gap: 6px;
+  gap: 10px;
   margin: 0 -8px;
+}
+
+.sidebar-recent-sessions__group {
+  display: grid;
+  gap: 2px;
 }
 
 /* Anchors the session-picker popover to the full header width. */
@@ -598,9 +560,11 @@
   display: flex;
   align-items: center;
   gap: 2px;
+  min-height: 24px;
+  padding: 0 10px;
 }
 
-.sidebar-recent-sessions__head .sidebar-recent-sessions__label {
+.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
 }
 
@@ -671,62 +635,13 @@
   stroke-linejoin: round;
 }
 
-.sidebar-recent-sessions__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0 10px;
-  min-height: 28px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  cursor: pointer;
-  text-align: left;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__label:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
-}
-
 .sidebar-recent-sessions__label-text {
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
   opacity: 0.85;
-}
-
-.sidebar-recent-sessions__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.5;
-  transition: transform var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__chevron {
-  transform: rotate(-90deg);
-}
-
-.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__list {
-  display: none;
 }
 
 .sidebar-recent-sessions__list {
@@ -1126,13 +1041,6 @@
   padding: 12px 8px 10px;
 }
 
-.sidebar--collapsed .sidebar-shell__header {
-  justify-content: center;
-  align-items: center;
-  gap: 0;
-  padding: 0 2px 16px;
-}
-
 .sidebar--collapsed .sidebar-nav {
   padding: 0;
 }
@@ -1208,44 +1116,67 @@
     0 10px 20px color-mix(in srgb, black 18%, transparent);
 }
 
-.sidebar--collapsed .sidebar-brand__logo {
-  width: 34px;
-  height: 34px;
+/* Single compact icon row: status dot, then utility icons right-aligned.
+   The footer signals connectivity only; gateway version lives in Settings. */
+.sidebar-footer-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.sidebar-footer-bar__spacer {
+  flex: 1 1 auto;
+}
+
+.sidebar-footer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: none;
   border-radius: var(--radius-md);
-  box-shadow:
-    0 10px 20px color-mix(in srgb, black 20%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
-}
-
-.sidebar-utility-group {
-  display: grid;
-  gap: 8px;
-}
-
-.sidebar-utility-link {
-  min-height: 42px;
-}
-
-.sidebar-footer-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-/* Borderless status line: the sidebar footer signals connectivity only;
-   the gateway version moved into Settings (Quick Settings footer). */
-.sidebar-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-  padding: 0 12px;
-}
-
-.sidebar-status__text {
-  font-size: 12px;
+  background: transparent;
   color: var(--muted);
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-footer-icon:hover:not(:disabled),
+.sidebar-footer-icon:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.sidebar-footer-icon:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-footer-icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-footer-icon--active {
+  color: var(--accent);
+}
+
+.sidebar-footer-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-status__dot {
@@ -1265,48 +1196,6 @@
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
-.sidebar-pair-mobile {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 auto;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-pair-mobile:hover:not(:disabled),
-.sidebar-pair-mobile:focus-visible {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--border) 76%, transparent);
-  background: var(--bg-hover);
-}
-
-.sidebar-pair-mobile:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
-}
-
-.sidebar-pair-mobile:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
-}
-
-.sidebar-pair-mobile svg {
-  width: 17px;
-  height: 17px;
-  stroke: currentColor;
-  fill: none;
-}
-
 .sidebar-pair-mobile svg * {
   stroke: currentColor;
   fill: none;
@@ -1316,20 +1205,15 @@
   padding: 8px 0 2px;
 }
 
-.sidebar--collapsed .sidebar-utility-group {
-  justify-items: center;
-  gap: 6px;
-}
-
-.sidebar--collapsed .sidebar-status {
-  width: 44px;
-  min-height: 36px;
-  padding: 0;
-  justify-content: center;
-}
-
-.sidebar--collapsed .sidebar-footer-row {
+/* Rail mode stacks the footer icons vertically. */
+.sidebar--collapsed .sidebar-footer-bar {
   flex-direction: column-reverse;
+  gap: 6px;
+  padding: 0;
+}
+
+.sidebar--collapsed .sidebar-footer-bar__spacer {
+  display: none;
 }
 
 /* Mode switch in sidebar — hidden on desktop, shown on mobile */

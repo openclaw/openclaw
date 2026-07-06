@@ -4,8 +4,6 @@
  * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
  * console/network/page state, role refs, and safe navigation handling.
  */
-import crypto from "node:crypto";
-import path from "node:path";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -46,11 +44,9 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { writeViaSiblingTempPath } from "./output-atomic.js";
-import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
+import { saveBrowserDownload, type PlaywrightDownload } from "./pw-download-capture.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
-import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 const { chromium } = playwrightCore;
 
@@ -145,6 +141,10 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
+type DownloadPayload = PlaywrightDownload & {
+  path?: () => Promise<string>;
+};
+
 type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
@@ -225,10 +225,15 @@ function resolveCdpConnectRetryDelayMs(attempt: number): number {
   return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
 }
 
-function buildManagedDownloadPath(fileName: string): string {
-  const id = crypto.randomUUID();
-  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
-  return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
+export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: string): boolean {
+  const message = formatErrorMessage(err).toLowerCase();
+  if (message.includes("download is starting")) {
+    return true;
+  }
+  const normalizedUrl = normalizeOptionalString(expectedUrl)?.toLowerCase();
+  return Boolean(
+    normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
+  );
 }
 
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
@@ -693,35 +698,14 @@ export function ensurePageState(page: Page): PageState {
     page.on("dialog", (dialog: Dialog) => {
       observeDialog(state, dialog);
     });
-    page.on(
-      "download",
-      (download: {
-        suggestedFilename?: () => string;
-        saveAs?: (outPath: string) => Promise<void>;
-        path?: () => Promise<string>;
-      }) => {
-        if (state.downloadWaiterDepth > 0) {
-          return;
-        }
-        const suggested = sanitizeUntrustedFileName(
-          download.suggestedFilename?.() || "download.bin",
-          "download.bin",
-        );
-        const managedPath = buildManagedDownloadPath(suggested);
-        const managedSave = (async () => {
-          await writeViaSiblingTempPath({
-            rootDir: DEFAULT_DOWNLOAD_DIR,
-            targetPath: managedPath,
-            writeTemp: async (tempPath) => {
-              await download.saveAs?.(tempPath);
-            },
-          });
-          return managedPath;
-        })();
-        managedSave.catch(() => {});
-        download.path = async () => await managedSave;
-      },
-    );
+    page.on("download", (download: DownloadPayload) => {
+      if (state.downloadWaiterDepth > 0) {
+        return;
+      }
+      const managedSave = saveBrowserDownload(download);
+      managedSave.catch(() => {});
+      download.path = async () => (await managedSave).path;
+    });
     page.on("close", () => {
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {

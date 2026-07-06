@@ -30,6 +30,7 @@ function createGatewayHarness(initialClient: GatewayBrowserClient) {
     assistantAgentId: "main",
     client: initialClient,
     connected: true,
+    reconnecting: false,
     hello: null,
     lastError: null,
     lastErrorCode: null,

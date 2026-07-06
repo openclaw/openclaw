@@ -320,6 +320,7 @@ async function expectListedSessionActiveRun(
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
+  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
 }
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
@@ -524,6 +525,24 @@ test("sessions.changed mutation events refresh effective fast metadata", async (
 
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
+});
+
+test("sessions.changed publishes visible active run ids", async () => {
+  await writeMainSessionStore();
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Active main" },
+    context: {
+      chatAbortControllers: new Map([["run-1", { sessionKey: "agent:main:main" }]]),
+    },
+  });
+
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+  });
 });
 
 test("sessions.list ignores terminal abortable runs kept for retry guards", async () => {

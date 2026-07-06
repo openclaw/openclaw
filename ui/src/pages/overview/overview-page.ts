@@ -248,7 +248,6 @@ export class OverviewPage extends LitElement {
       navCollapsed: navigation.navCollapsed,
       sidebarPinnedRoutes: [...navigation.sidebarPinnedRoutes],
       sidebarMoreExpanded: navigation.sidebarMoreExpanded,
-      recentSessionsCollapsed: navigation.recentSessionsCollapsed,
       locale,
     };
     this.settings = nextDraft;
