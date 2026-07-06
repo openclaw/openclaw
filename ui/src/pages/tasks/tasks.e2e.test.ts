@@ -68,6 +68,18 @@ const failedTask = {
   error: "Worker exited",
 };
 
+const cancelledTask = {
+  id: "task-cancelled",
+  taskId: "task-cancelled",
+  kind: "cli",
+  runtime: "cli",
+  status: "cancelled",
+  title: "Cancelled old task",
+  createdAt: baseTime - 50_000,
+  updatedAt: baseTime - 40_000,
+  error: "Stopped by operator",
+};
+
 let server: ControlUiE2eServer;
 let browser: Browser;
 
@@ -104,7 +116,16 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "tasks.list": {
-            tasks: [runningTask, queuedTask, completedTask, failedTask],
+            cases: [
+              {
+                match: { status: ["queued", "running"], limit: 500 },
+                response: { tasks: [runningTask, queuedTask] },
+              },
+              {
+                match: { status: ["completed", "failed", "timed_out", "cancelled"], limit: 200 },
+                response: { tasks: [completedTask, failedTask] },
+              },
+            ],
           },
           "tasks.cancel": {
             found: true,
@@ -118,6 +139,17 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
       expect(response?.status()).toBe(200);
       const active = page.locator('[data-task-section="active"]');
       const recent = page.locator('[data-task-section="recent"]');
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("tasks.list");
+          return requests.map((request) => request.params);
+        })
+        .toEqual(
+          expect.arrayContaining([
+            { status: ["queued", "running"], limit: 500 },
+            { status: ["completed", "failed", "timed_out", "cancelled"], limit: 200 },
+          ]),
+        );
       await active.locator('[data-task-id="task-running"]').waitFor({ state: "visible" });
       await active.locator('[data-task-id="task-queued"]').waitFor({ state: "visible" });
       await recent.locator('[data-task-id="task-completed"]').waitFor({ state: "visible" });
@@ -158,6 +190,62 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
         await copyFile(await video.path(), path.join(artifactDir, "tasks-flow.webm"));
       }
       await rm(rawVideoDir, { force: true, recursive: true });
+    }
+  });
+
+  it("ignores stale cancel task snapshots after a newer refresh wins", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    try {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["tasks.cancel"],
+        methodResponses: {
+          "tasks.list": {
+            cases: [
+              {
+                match: { status: ["queued", "running"], limit: 500 },
+                response: { tasks: [runningTask, queuedTask] },
+              },
+              {
+                match: { status: ["completed", "failed", "timed_out", "cancelled"], limit: 200 },
+                response: { tasks: [cancelledTask] },
+              },
+            ],
+          },
+        },
+      });
+
+      const response = await page.goto(`${server.baseUrl}tasks`);
+      expect(response?.status()).toBe(200);
+      const active = page.locator('[data-task-section="active"]');
+      const recent = page.locator('[data-task-section="recent"]');
+      await active.locator('[data-task-id="task-queued"]').waitFor({ state: "visible" });
+
+      await active
+        .locator('[data-task-id="task-queued"]')
+        .getByRole("button", { name: "Cancel Nightly cleanup" })
+        .click();
+      await gateway.waitForRequest("tasks.cancel");
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("tasks.list")).length)
+        .toBeGreaterThanOrEqual(4);
+      await recent.locator('[data-task-id="task-cancelled"]').waitFor({ state: "visible" });
+
+      await gateway.resolveDeferred("tasks.cancel", {
+        found: true,
+        cancelled: true,
+        task: { ...queuedTask, status: "cancelled", updatedAt: baseTime + 5_000 },
+      });
+
+      expect(await recent.locator('[data-task-id="task-queued"]').count()).toBe(0);
+      await active.locator('[data-task-id="task-queued"]').waitFor({ state: "visible" });
+    } finally {
+      await context.close();
     }
   });
 });

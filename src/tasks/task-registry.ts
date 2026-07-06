@@ -1989,6 +1989,8 @@ function updateTaskStateByRunId(params: {
     }
     if (params.lastEventAt != null) {
       patch.lastEventAt = params.lastEventAt;
+    } else if (params.endedAt != null && isTerminalTaskStatus(nextStatus)) {
+      patch.lastEventAt = Math.max(params.endedAt, current.lastEventAt ?? params.endedAt);
     }
     if (
       current.status === "cancelled" &&

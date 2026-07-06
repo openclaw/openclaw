@@ -810,6 +810,39 @@ describe("task-registry", () => {
     });
   });
 
+  it("uses endedAt as terminal activity time when run finalizers omit lastEventAt", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-ended-at-activity",
+        task: "Finish after progress",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+        lastEventAt: 150,
+      });
+
+      finalizeTaskRunByRunId({
+        runId: "run-ended-at-activity",
+        runtime: "cli",
+        status: "succeeded",
+        endedAt: 300,
+        terminalSummary: "completed",
+      });
+
+      expectRecordFields(requireTaskByRunId("run-ended-at-activity"), {
+        status: "succeeded",
+        endedAt: 300,
+        lastEventAt: 300,
+      });
+    });
+  });
+
   it("uses shared agent terminal precedence for lifecycle task projection", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();

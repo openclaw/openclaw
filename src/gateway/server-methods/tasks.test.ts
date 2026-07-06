@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTaskRecord as createTaskRecordOrNull,
+  finalizeTaskRunByRunId,
   getTaskById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
@@ -199,6 +200,49 @@ describe("tasks gateway handlers", () => {
     expect(ids?.indexOf(oldButJustFinished.taskId)).toBeLessThan(
       ids?.indexOf(newerQuietTask.taskId) ?? -1,
     );
+  });
+
+  it("orders endedAt-only terminal finalizers by their completion time", async () => {
+    const first = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-first-finished",
+      task: "Finished first",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      lastEventAt: 100,
+    });
+    const second = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-second-finished",
+      task: "Finished second",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      lastEventAt: 200,
+    });
+
+    finalizeTaskRunByRunId({
+      runId: first.runId!,
+      runtime: "cli",
+      status: "succeeded",
+      endedAt: 1_000,
+    });
+    finalizeTaskRunByRunId({
+      runId: second.runId!,
+      runtime: "cli",
+      status: "succeeded",
+      endedAt: 500,
+    });
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+
+    expect(payload?.tasks?.map((task) => task.id)).toEqual([first.taskId, second.taskId]);
+    expect(payload?.tasks?.[0]?.updatedAt).toBe(1_000);
   });
 
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {

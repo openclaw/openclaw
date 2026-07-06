@@ -104,7 +104,10 @@ class TasksPage extends LitElement {
       // long-running task can hide behind newer terminal records on page one.
       const [activePayload, recentPayload] = await Promise.all([
         client.request("tasks.list", { status: ["queued", "running"], limit: 500 }),
-        client.request("tasks.list", { limit: 200 }),
+        client.request("tasks.list", {
+          status: ["completed", "failed", "timed_out", "cancelled"],
+          limit: 200,
+        }),
       ]);
       const active = normalizeTasksListResult(activePayload);
       const recent = normalizeTasksListResult(recentPayload);
@@ -131,10 +134,14 @@ class TasksPage extends LitElement {
     if (!this.connected || !client || this.cancellingTaskIds.has(taskId)) {
       return;
     }
+    const generation = this.loadGeneration;
     this.cancellingTaskIds = new Set([...this.cancellingTaskIds, taskId]);
     this.error = null;
     try {
       const payload = await client.request("tasks.cancel", { taskId });
+      if (generation !== this.loadGeneration || client !== this.client) {
+        return;
+      }
       const result = normalizeTasksCancelResult(payload);
       if (result?.task) {
         this.tasks = applyTaskEvent(this.tasks, { action: "upserted", task: result.task }).tasks;
@@ -145,8 +152,14 @@ class TasksPage extends LitElement {
         this.error = result?.reason?.trim() || t("tasksPage.cancelFailed");
       }
     } catch (error) {
+      if (generation !== this.loadGeneration || client !== this.client) {
+        return;
+      }
       this.error = formatTaskError(error, t("tasksPage.cancelFailed"));
     } finally {
+      if (client !== this.client) {
+        return;
+      }
       const next = new Set(this.cancellingTaskIds);
       next.delete(taskId);
       this.cancellingTaskIds = next;
