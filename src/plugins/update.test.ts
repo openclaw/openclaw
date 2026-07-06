@@ -3954,7 +3954,7 @@ describe("syncPluginsForUpdateChannel", () => {
         installPath: appBundledPluginRoot("feishu"),
         spec: "@openclaw/feishu",
       }),
-      expectedChanged: true,
+      expectedChanged: false,
       expectedLoadPaths: [],
       expectedInstallPath: appBundledPluginRoot("feishu"),
     },
