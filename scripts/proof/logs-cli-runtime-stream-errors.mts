@@ -38,7 +38,9 @@ try {
     { maxBytes: 1024 },
   );
 
-  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 50);
+  });
   emitError?.();
 
   const result = await resultPromise;
