@@ -388,8 +388,9 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 }
 
 // Items flagged disableCollectBatching (e.g. the #85714 stranded-reply retry)
-// must drain individually so their exact prompt and summaryLine marker survive
-// instead of being merged into a collect batch.
+// must drain individually so their exact prompt survives instead of being merged
+// into a collect batch. The retry's one-shot loop guard rides on the private
+// strandedReplyRetry field, not on the display summaryLine.
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
 }

@@ -78,6 +78,8 @@ export type FollowupRun = {
    * attempt and keep its summaryLine marker).
    */
   disableCollectBatching?: boolean;
+  /** #85714: Private loop guard marking the single stranded-reply recovery retry turn. Distinct from summaryLine (a human/queue display field) so queue summarization/overflow cannot leak or drift the guard. */
+  strandedReplyRetry?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];

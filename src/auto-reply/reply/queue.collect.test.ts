@@ -1855,7 +1855,8 @@ describe("followup queue collect routing", () => {
 
   it("drains a disableCollectBatching retry individually instead of collecting it", async () => {
     // #85714: A stranded-reply retry must run as its own exact-once delivery
-    // attempt and keep its summaryLine marker, never merged into a collect batch.
+    // attempt and keep its display summaryLine, never merged into a collect
+    // batch. The private strandedReplyRetry boolean is the one-shot loop guard.
     const strandedReplyRetryMarker = "stranded-reply-retry";
     const key = `test-collect-disable-batching-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1882,6 +1883,7 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: retryPrompt, ...route }),
+        strandedReplyRetry: true,
         summaryLine: strandedReplyRetryMarker,
         disableCollectBatching: true,
       },
@@ -1898,6 +1900,8 @@ describe("followup queue collect routing", () => {
     // The retry ran as its own exact call, not folded into a collect batch.
     expect(retryCall?.prompt).not.toContain("[Queued messages while agent was busy]");
     expect(retryCall?.prompt).not.toContain("Queued #");
+    // The private loop guard and the display summaryLine both ride the retry.
+    expect(retryCall?.strandedReplyRetry).toBe(true);
     expect(retryCall?.summaryLine).toBe(strandedReplyRetryMarker);
     // No single call merged the retry prompt with a normal prompt.
     for (const call of calls) {

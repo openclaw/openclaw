@@ -27,8 +27,8 @@ import {
 } from "../../plugins/memory-state.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { VerboseLevel } from "../thinking.shared.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { enqueueFollowupRun } from "./queue.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
@@ -3453,6 +3453,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     inboundEventKind?: string;
     transcriptPrompt?: string;
     summaryLine?: string;
+    strandedReplyRetry?: boolean;
     strandedReplyRecovery?: boolean;
     replyOperation?: ReturnType<typeof createReplyOperation>;
   }) {
@@ -3492,6 +3493,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       prompt: "hello",
       summaryLine: params.summaryLine ?? "hello",
       enqueuedAt: Date.now(),
+      ...(params.strandedReplyRetry ? { strandedReplyRetry: params.strandedReplyRetry } : {}),
       ...(params.transcriptPrompt ? { transcriptPrompt: params.transcriptPrompt } : {}),
       run: {
         agentId: "main",
@@ -3639,16 +3641,20 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     // so the enqueued run must suppress user-message persistence at run.* level.
     const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
     expect(retryRun?.run?.suppressNextUserMessagePersistence).toBe(true);
-    // The retry must drain individually so its exact prompt and summaryLine
-    // marker survive instead of being merged into a collect batch.
+    // The retry must drain individually so its exact prompt survives instead of
+    // being merged into a collect batch. The private strandedReplyRetry guard
+    // (not the display summaryLine) is what bounds the recovery to one attempt.
     expect(retryRun?.disableCollectBatching).toBe(true);
+    expect(retryRun?.strandedReplyRetry).toBe(true);
+    expect(retryRun?.summaryLine).toBe("stranded-reply-retry");
   });
 
   it("does not enqueue a second retry when a stranded-reply retry strands again (#85714)", async () => {
     // The retry turn itself can fail to call message(action=send). Bound the
-    // recovery to a single attempt: a run already marked as a stranded-reply
-    // retry must not enqueue another retry, or it loops forever.
-    await runPrivateFinalCase({ strandedReplyRecovery: true, summaryLine: "stranded-reply-retry" });
+    // recovery to a single attempt: a run already marked with the private
+    // strandedReplyRetry guard must not enqueue another retry, or it loops
+    // forever. The guard is the boolean field, not the display summaryLine.
+    await runPrivateFinalCase({ strandedReplyRecovery: true, strandedReplyRetry: true });
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

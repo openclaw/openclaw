@@ -140,9 +140,9 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const RESTART_LIFECYCLE_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
-// #85714: marks a followup turn enqueued to recover a stranded message_tool_only
-// reply. Reused at the enqueue site and the one-shot guard so a retry that
-// strands again cannot enqueue another retry (unbounded loop).
+// #85714: Human/queue display label for a followup turn enqueued to recover a
+// stranded message_tool_only reply. Display-only: the one-shot loop guard reads
+// the private FollowupRun.strandedReplyRetry boolean, not this summaryLine text.
 const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 function scheduleFollowupDrainAfterReplyOperationClear(params: {
@@ -2607,7 +2607,7 @@ export async function runReplyAgent(params: {
         // stranded-reply retry that stranded again, do NOT enqueue another
         // retry — that would loop forever and re-attempt channel delivery each
         // turn. Fall back to the existing message_tool_only suppression.
-        const isRetryRun = followupRun.summaryLine === STRANDED_REPLY_RETRY_MARKER;
+        const isRetryRun = followupRun.strandedReplyRetry === true;
         // #85714: Recovery is opt-in. Default-off preserves the documented
         // message_tool_only contract (no message call = no source reply; the
         // private final text is never auto-published). The diagnostic WARN above
@@ -2627,11 +2627,17 @@ export async function runReplyAgent(params: {
             {
               ...followupRun,
               prompt: retryPrompt,
+              // #85714: Private loop guard bounding recovery to one retry turn.
+              // The one-shot guard above reads this boolean, never summaryLine,
+              // so queue summarization/overflow of the display label cannot leak
+              // or drift the guard. summaryLine below is only the display label.
+              strandedReplyRetry: true,
               summaryLine: STRANDED_REPLY_RETRY_MARKER,
               // #85714: This synthetic retry is the single exact-once delivery
               // attempt. It must drain as its own follow-up so its exact prompt
-              // and summaryLine loop-guard marker survive; never let collect mode
-              // merge it into a batch with other queued prompts.
+              // survives; never let collect mode merge it into a batch with other
+              // queued prompts. The strandedReplyRetry guard above bounds the
+              // retry; disableCollectBatching just keeps it draining individually.
               disableCollectBatching: true,
               // Clear transcript/persistence fields so the retry turn uses the
               // retry prompt, not the original user message. The followup runner
