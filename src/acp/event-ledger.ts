@@ -12,6 +12,7 @@ import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isRecord } from "../utils.js";
 
 const LEDGER_VERSION = 1;
@@ -102,6 +103,17 @@ type MutableLedgerState = {
   maxSerializedBytes: number;
   now: () => number;
 };
+
+type SqliteLedgerByteCache = {
+  dataVersion?: number;
+  serializedBytes?: number;
+};
+
+type SqliteLedgerState = Omit<MutableLedgerState, "store"> & {
+  byteCache: SqliteLedgerByteCache;
+};
+
+const sqliteLedgerByteCaches = new Map<string, SqliteLedgerByteCache>();
 
 function createEmptyStore(): LedgerStore {
   return {
@@ -556,6 +568,101 @@ type AcpReplayEventRow = {
   update_json: string;
 };
 
+const SQLITE_LEDGER_ROW_OVERHEAD = 32;
+
+function getSqliteTextLength(value: string | null | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  // SQLite length(TEXT) counts code points before NUL; mirror the old SQL estimate.
+  return Array.from(value.split("\0", 1)[0] ?? "").length;
+}
+
+function estimateSqliteSessionRowBytes(
+  row: Pick<AcpReplaySessionRow, "session_id" | "session_key" | "cwd">,
+): number {
+  return (
+    getSqliteTextLength(row.session_id) +
+    getSqliteTextLength(row.session_key) +
+    getSqliteTextLength(row.cwd) +
+    SQLITE_LEDGER_ROW_OVERHEAD
+  );
+}
+
+function estimateSqliteEventRowBytes(
+  row: Pick<AcpReplayEventRow, "session_id" | "session_key" | "run_id" | "update_json">,
+): number {
+  return (
+    getSqliteTextLength(row.session_id) +
+    getSqliteTextLength(row.session_key) +
+    getSqliteTextLength(row.update_json) +
+    getSqliteTextLength(row.run_id) +
+    SQLITE_LEDGER_ROW_OVERHEAD
+  );
+}
+
+function readSqliteEventRowsForSession(db: DatabaseSync, sessionId: string): AcpReplayEventRow[] {
+  return db
+    .prepare(
+      `SELECT session_id, seq, at, session_key, run_id, update_json
+         FROM acp_replay_events
+        WHERE session_id = ?`,
+    )
+    .all(sessionId) as AcpReplayEventRow[];
+}
+
+function estimateSqliteSessionTreeBytes(db: DatabaseSync, session: AcpReplaySessionRow): number {
+  return (
+    estimateSqliteSessionRowBytes(session) +
+    readSqliteEventRowsForSession(db, session.session_id).reduce(
+      (total, event) => total + estimateSqliteEventRowBytes(event),
+      0,
+    )
+  );
+}
+
+function applySqliteLedgerBytesDelta(
+  state: { byteCache: SqliteLedgerByteCache },
+  delta: number,
+): void {
+  if (state.byteCache.serializedBytes === undefined || delta === 0) {
+    return;
+  }
+  state.byteCache.serializedBytes = Math.max(0, state.byteCache.serializedBytes + delta);
+}
+
+function readSqliteDataVersion(db: DatabaseSync): number | undefined {
+  const row = db.prepare("PRAGMA data_version").get() as
+    | Record<string, number | bigint | undefined>
+    | undefined;
+  const value = row ? Object.values(row)[0] : undefined;
+  return value === undefined ? undefined : normalizeSqliteInteger(value);
+}
+
+function syncSqliteLedgerByteCache(db: DatabaseSync, state: { byteCache: SqliteLedgerByteCache }) {
+  const dataVersion = readSqliteDataVersion(db);
+  if (dataVersion === undefined) {
+    state.byteCache.serializedBytes = undefined;
+    return;
+  }
+  if (
+    state.byteCache.serializedBytes !== undefined &&
+    state.byteCache.dataVersion !== undefined &&
+    state.byteCache.dataVersion !== dataVersion
+  ) {
+    state.byteCache.serializedBytes = undefined;
+  }
+  state.byteCache.dataVersion = dataVersion;
+}
+
+function getSqliteLedgerBytes(
+  db: DatabaseSync,
+  state: { byteCache: SqliteLedgerByteCache },
+): number {
+  state.byteCache.serializedBytes ??= estimateSqliteLedgerBytes(db);
+  return state.byteCache.serializedBytes;
+}
+
 function sqliteRowToLedgerSession(db: DatabaseSync, row: AcpReplaySessionRow): LedgerSession {
   const events = db
     .prepare(
@@ -598,14 +705,21 @@ function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | u
   });
 }
 
-function readSqliteSessionById(db: DatabaseSync, sessionId: string): LedgerSession | undefined {
-  const row = db
+function readSqliteSessionMetadataById(
+  db: DatabaseSync,
+  sessionId: string,
+): AcpReplaySessionRow | undefined {
+  return db
     .prepare(
       `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
          FROM acp_replay_sessions
         WHERE session_id = ?`,
     )
     .get(sessionId) as AcpReplaySessionRow | undefined;
+}
+
+function readSqliteSessionById(db: DatabaseSync, sessionId: string): LedgerSession | undefined {
+  const row = readSqliteSessionMetadataById(db, sessionId);
   return row ? sqliteRowToLedgerSession(db, row) : undefined;
 }
 
@@ -627,7 +741,7 @@ function readLatestCompleteSqliteSessionByKey(
 
 function upsertSqliteSession(
   db: DatabaseSync,
-  state: Pick<MutableLedgerState, "now">,
+  state: Pick<SqliteLedgerState, "now" | "byteCache">,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -637,27 +751,49 @@ function upsertSqliteSession(
   },
 ): LedgerSession {
   const now = state.now();
-  const existing = readSqliteSessionById(db, params.sessionId);
+  const existing = readSqliteSessionMetadataById(db, params.sessionId);
   if (!params.reset && existing) {
     const cwd = params.cwd || existing.cwd;
     const complete = existing.complete || params.complete ? 1 : 0;
+    const nextRow = {
+      ...existing,
+      session_key: params.sessionKey,
+      cwd,
+    };
     db.prepare(
       `UPDATE acp_replay_sessions
           SET session_key = ?, cwd = ?, complete = ?, updated_at = ?
         WHERE session_id = ?`,
     ).run(params.sessionKey, cwd, complete, now, params.sessionId);
+    applySqliteLedgerBytesDelta(
+      state,
+      estimateSqliteSessionRowBytes(nextRow) - estimateSqliteSessionRowBytes(existing),
+    );
     return {
-      ...existing,
+      sessionId: existing.session_id,
       sessionKey: params.sessionKey,
       cwd,
       complete: complete === 1,
+      createdAt: normalizeSqliteInteger(existing.created_at),
       updatedAt: now,
+      nextSeq: normalizeSqliteInteger(existing.next_seq),
+      events: [],
     };
   }
 
   if (params.reset) {
+    const removedEventBytes = readSqliteEventRowsForSession(db, params.sessionId).reduce(
+      (total, row) => total + estimateSqliteEventRowBytes(row),
+      0,
+    );
     db.prepare("DELETE FROM acp_replay_events WHERE session_id = ?").run(params.sessionId);
+    applySqliteLedgerBytesDelta(state, -removedEventBytes);
   }
+  const nextRow = {
+    session_id: params.sessionId,
+    session_key: params.sessionKey,
+    cwd: params.cwd,
+  };
   db.prepare(
     `INSERT INTO acp_replay_sessions (
        session_id, session_key, cwd, complete, created_at, updated_at, next_seq
@@ -669,12 +805,17 @@ function upsertSqliteSession(
        updated_at = excluded.updated_at,
        next_seq = excluded.next_seq`,
   ).run(params.sessionId, params.sessionKey, params.cwd, params.complete ? 1 : 0, now, now);
+  applySqliteLedgerBytesDelta(
+    state,
+    estimateSqliteSessionRowBytes(nextRow) -
+      (existing ? estimateSqliteSessionRowBytes(existing) : 0),
+  );
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cwd: params.cwd,
     complete: params.complete,
-    createdAt: existing?.createdAt ?? now,
+    createdAt: existing ? normalizeSqliteInteger(existing.created_at) : now,
     updatedAt: now,
     nextSeq: 1,
     events: [],
@@ -696,7 +837,10 @@ function estimateSqliteLedgerBytes(db: DatabaseSync): number {
 
 function trimSqliteLedger(
   db: DatabaseSync,
-  state: Pick<MutableLedgerState, "maxEventsPerSession" | "maxSessions" | "maxSerializedBytes">,
+  state: Pick<
+    SqliteLedgerState,
+    "maxEventsPerSession" | "maxSessions" | "maxSerializedBytes" | "byteCache"
+  >,
 ): void {
   const sessionsWithCounts = db
     .prepare(
@@ -713,18 +857,19 @@ function trimSqliteLedger(
     }
     const oldEvents = db
       .prepare(
-        `SELECT seq
+        `SELECT session_id, seq, at, session_key, run_id, update_json
            FROM acp_replay_events
           WHERE session_id = ?
           ORDER BY seq ASC
           LIMIT ?`,
       )
-      .all(row.session_id, overage) as Array<{ seq: number | bigint }>;
+      .all(row.session_id, overage) as AcpReplayEventRow[];
     const deleteEvent = db.prepare(
       "DELETE FROM acp_replay_events WHERE session_id = ? AND seq = ?",
     );
     for (const event of oldEvents) {
       deleteEvent.run(row.session_id, normalizeSqliteInteger(event.seq));
+      applySqliteLedgerBytesDelta(state, -estimateSqliteEventRowBytes(event));
     }
     db.prepare("UPDATE acp_replay_sessions SET complete = 0 WHERE session_id = ?").run(
       row.session_id,
@@ -733,27 +878,34 @@ function trimSqliteLedger(
 
   const oldSessions = db
     .prepare(
-      `SELECT session_id
+      `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
          FROM acp_replay_sessions
         ORDER BY updated_at DESC, session_id ASC
         LIMIT -1 OFFSET ?`,
     )
-    .all(state.maxSessions) as Array<{ session_id: string }>;
+    .all(state.maxSessions) as AcpReplaySessionRow[];
   for (const session of oldSessions) {
+    const removedBytes = estimateSqliteSessionTreeBytes(db, session);
     db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
+    applySqliteLedgerBytesDelta(state, -removedBytes);
   }
 
-  let serializedBytes = estimateSqliteLedgerBytes(db);
+  let serializedBytes = getSqliteLedgerBytes(db, state);
   while (serializedBytes > state.maxSerializedBytes) {
     const event = db
       .prepare(
-        `SELECT e.session_id AS session_id, e.seq AS seq
+        `SELECT e.session_id AS session_id,
+                e.seq AS seq,
+                e.at AS at,
+                e.session_key AS session_key,
+                e.run_id AS run_id,
+                e.update_json AS update_json
            FROM acp_replay_events e
            JOIN acp_replay_sessions s ON s.session_id = e.session_id
           ORDER BY s.updated_at ASC, e.seq ASC
           LIMIT 1`,
       )
-      .get() as { session_id: string; seq: number | bigint } | undefined;
+      .get() as AcpReplayEventRow | undefined;
     if (!event) {
       break;
     }
@@ -761,35 +913,35 @@ function trimSqliteLedger(
       event.session_id,
       normalizeSqliteInteger(event.seq),
     );
+    applySqliteLedgerBytesDelta(state, -estimateSqliteEventRowBytes(event));
     db.prepare("UPDATE acp_replay_sessions SET complete = 0 WHERE session_id = ?").run(
       event.session_id,
     );
-    serializedBytes = estimateSqliteLedgerBytes(db);
+    serializedBytes = getSqliteLedgerBytes(db, state);
   }
 
   while (serializedBytes > state.maxSerializedBytes) {
     const session = db
       .prepare(
-        `SELECT session_id
+        `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
            FROM acp_replay_sessions
           ORDER BY updated_at ASC, session_id ASC
           LIMIT 1`,
       )
-      .get() as { session_id: string } | undefined;
+      .get() as AcpReplaySessionRow | undefined;
     if (!session) {
       break;
     }
+    const removedBytes = estimateSqliteSessionTreeBytes(db, session);
     db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
-    serializedBytes = estimateSqliteLedgerBytes(db);
+    applySqliteLedgerBytesDelta(state, -removedBytes);
+    serializedBytes = getSqliteLedgerBytes(db, state);
   }
 }
 
 function appendSqliteUpdate(
   db: DatabaseSync,
-  state: Pick<
-    MutableLedgerState,
-    "now" | "maxEventsPerSession" | "maxSessions" | "maxSerializedBytes"
-  >,
+  state: SqliteLedgerState,
   params: {
     sessionId: string;
     sessionKey: string;
@@ -804,6 +956,7 @@ function appendSqliteUpdate(
     complete: false,
   });
   const now = state.now();
+  const updateJson = JSON.stringify(cloneJsonValue(params.update));
   db.prepare(
     `INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -813,7 +966,16 @@ function appendSqliteUpdate(
     now,
     params.sessionKey,
     params.runId ?? null,
-    JSON.stringify(cloneJsonValue(params.update)),
+    updateJson,
+  );
+  applySqliteLedgerBytesDelta(
+    state,
+    estimateSqliteEventRowBytes({
+      session_id: params.sessionId,
+      session_key: params.sessionKey,
+      run_id: params.runId ?? null,
+      update_json: updateJson,
+    }),
   );
   db.prepare(
     `UPDATE acp_replay_sessions
@@ -835,31 +997,55 @@ function buildSqliteReplay(session: LedgerSession | undefined): AcpEventLedgerRe
   };
 }
 
+function getSqliteLedgerByteCache(options: OpenClawStateDatabaseOptions): SqliteLedgerByteCache {
+  const cacheKey = path.resolve(
+    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
+  );
+  let cache = sqliteLedgerByteCaches.get(cacheKey);
+  if (!cache) {
+    cache = {};
+    sqliteLedgerByteCaches.set(cacheKey, cache);
+  }
+  return cache;
+}
+
 /** Creates the SQLite-backed ACP event ledger used by the state database. */
 export function createSqliteAcpEventLedger(
   params: OpenClawStateDatabaseOptions & LedgerOptions = {},
 ): AcpEventLedger {
   const normalized = normalizeLedgerOptions(params);
   const dbOptions = { env: params.env, path: params.path };
-  const state = {
+  const byteCache = getSqliteLedgerByteCache(dbOptions);
+  const state: SqliteLedgerState = {
     ...normalized,
+    byteCache,
   };
-  const mutate = (fn: (db: DatabaseSync) => void) =>
-    runOpenClawStateWriteTransaction((database) => fn(database.db), dbOptions);
+  const mutate = (fn: (db: DatabaseSync, transactionState: SqliteLedgerState) => void) => {
+    const transactionState = {
+      ...state,
+      byteCache: { ...state.byteCache },
+    };
+    runOpenClawStateWriteTransaction((database) => {
+      syncSqliteLedgerByteCache(database.db, transactionState);
+      fn(database.db, transactionState);
+    }, dbOptions);
+    state.byteCache.serializedBytes = transactionState.byteCache.serializedBytes;
+    state.byteCache.dataVersion = transactionState.byteCache.dataVersion;
+  };
   const read = <T>(fn: (db: DatabaseSync) => T): T => fn(openOpenClawStateDatabase(dbOptions).db);
 
   return {
     async startSession(sessionParams) {
-      mutate((db) => {
-        upsertSqliteSession(db, state, sessionParams);
-        trimSqliteLedger(db, state);
+      mutate((db, transactionState) => {
+        upsertSqliteSession(db, transactionState, sessionParams);
+        trimSqliteLedger(db, transactionState);
       });
     },
 
     async recordUserPrompt(promptParams) {
-      mutate((db) => {
+      mutate((db, transactionState) => {
         for (const update of createUserPromptUpdates(promptParams.prompt)) {
-          appendSqliteUpdate(db, state, {
+          appendSqliteUpdate(db, transactionState, {
             sessionId: promptParams.sessionId,
             sessionKey: promptParams.sessionKey,
             runId: promptParams.runId,
@@ -870,8 +1056,8 @@ export function createSqliteAcpEventLedger(
     },
 
     async recordUpdate(updateParams) {
-      mutate((db) => {
-        appendSqliteUpdate(db, state, updateParams);
+      mutate((db, transactionState) => {
+        appendSqliteUpdate(db, transactionState, updateParams);
       });
     },
 

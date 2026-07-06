@@ -1,6 +1,7 @@
 /** Tests ACP event ledger recording, replay, retention, and SQLite migration. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -428,4 +429,272 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
+  it("marks SQLite-backed replay incomplete when serialized byte retention trims payloads", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const ledger = createSqliteAcpEventLedger({
+        path: path.join(dir, "openclaw.sqlite"),
+        maxSerializedBytes: 1024,
+      });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          rawOutput: { content: "x".repeat(5_000) },
+        },
+      });
+
+      await expect(
+        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("does not rescan replay table byte totals for each SQLite-backed update", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      type SqlitePrepare = DatabaseSync["prepare"];
+      const prepareDescriptor = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare");
+      if (typeof prepareDescriptor?.value !== "function") {
+        throw new Error("Expected DatabaseSync.prototype.prepare to be patchable");
+      }
+      const originalPrepare = prepareDescriptor.value as SqlitePrepare;
+      let byteEstimateQueries = 0;
+      Object.defineProperty(DatabaseSync.prototype, "prepare", {
+        ...prepareDescriptor,
+        value: function prepareWithQueryCount(this: DatabaseSync, sql: string) {
+          if (sql.includes("COALESCE(SUM(length(session_id)")) {
+            byteEstimateQueries++;
+          }
+          return Reflect.apply(originalPrepare, this, [sql]) as ReturnType<SqlitePrepare>;
+        },
+      });
+      try {
+        const ledger = createSqliteAcpEventLedger({
+          path: path.join(dir, "openclaw.sqlite"),
+          maxSerializedBytes: 1024 * 1024,
+        });
+        await ledger.startSession({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          cwd: "/work",
+          complete: true,
+        });
+        expect(byteEstimateQueries).toBe(1);
+
+        for (let index = 0; index < 5; index++) {
+          await ledger.recordUpdate({
+            sessionId: "session-1",
+            sessionKey: "agent:main:work",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `Answer ${index}` },
+            },
+          });
+        }
+
+        expect(byteEstimateQueries).toBe(1);
+      } finally {
+        Object.defineProperty(DatabaseSync.prototype, "prepare", prepareDescriptor);
+      }
+    });
+  });
+
+  it("shares SQLite byte estimate cache across ledger instances for one database", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      const trimmingLedger = createSqliteAcpEventLedger({
+        path: databasePath,
+        maxSerializedBytes: 1024,
+      });
+      await trimmingLedger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+
+      const permissiveLedger = createSqliteAcpEventLedger({
+        path: databasePath,
+        maxSerializedBytes: 1024 * 1024,
+      });
+      await permissiveLedger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          rawOutput: { content: "x".repeat(5_000) },
+        },
+      });
+
+      await trimmingLedger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Answer" },
+        },
+      });
+
+      await expect(
+        trimmingLedger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("invalidates SQLite byte estimate cache after another connection writes", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      const ledger = createSqliteAcpEventLedger({
+        path: databasePath,
+        maxSerializedBytes: 1024,
+      });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+
+      const externalDb = new DatabaseSync(databasePath);
+      try {
+        externalDb
+          .prepare(
+            `INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            "session-1",
+            1,
+            1001,
+            "agent:main:work",
+            null,
+            JSON.stringify({
+              sessionUpdate: "tool_call_update",
+              toolCallId: "tool-1",
+              status: "completed",
+              rawOutput: { content: "x".repeat(5_000) },
+            }),
+          );
+        externalDb
+          .prepare(
+            "UPDATE acp_replay_sessions SET updated_at = ?, next_seq = ? WHERE session_id = ?",
+          )
+          .run(1001, 2, "session-1");
+      } finally {
+        externalDb.close();
+      }
+
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Answer" },
+        },
+      });
+
+      await expect(
+        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("does not publish SQLite byte estimate deltas from failed writes", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      type SqlitePrepare = DatabaseSync["prepare"];
+      type SqliteStatement = ReturnType<SqlitePrepare>;
+      const prepareDescriptor = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare");
+      if (typeof prepareDescriptor?.value !== "function") {
+        throw new Error("Expected DatabaseSync.prototype.prepare to be patchable");
+      }
+      const originalPrepare = prepareDescriptor.value as SqlitePrepare;
+      let failNextSessionAdvance = false;
+      Object.defineProperty(DatabaseSync.prototype, "prepare", {
+        ...prepareDescriptor,
+        value: function prepareWithSessionAdvanceFailure(this: DatabaseSync, sql: string) {
+          const statement = Reflect.apply(originalPrepare, this, [sql]) as SqliteStatement;
+          if (!sql.includes("UPDATE acp_replay_sessions") || !sql.includes("next_seq = ?")) {
+            return statement;
+          }
+          return new Proxy(statement, {
+            get(target, property, receiver) {
+              if (property !== "run") {
+                return Reflect.get(target, property, receiver) as unknown;
+              }
+              return (...args: Parameters<SqliteStatement["run"]>) => {
+                if (failNextSessionAdvance) {
+                  failNextSessionAdvance = false;
+                  throw new Error("injected session advance failure");
+                }
+                const run = Reflect.get(target, "run", target) as SqliteStatement["run"];
+                return Reflect.apply(run, target, args) as ReturnType<SqliteStatement["run"]>;
+              };
+            },
+          });
+        },
+      });
+      try {
+        const ledger = createSqliteAcpEventLedger({
+          path: path.join(dir, "openclaw.sqlite"),
+          maxSerializedBytes: 1024,
+        });
+        await ledger.startSession({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          cwd: "/work",
+          complete: true,
+        });
+
+        failNextSessionAdvance = true;
+        await expect(
+          ledger.recordUpdate({
+            sessionId: "session-1",
+            sessionKey: "agent:main:work",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "tool-1",
+              status: "completed",
+              rawOutput: { content: "x".repeat(5_000) },
+            },
+          }),
+        ).rejects.toThrow("injected session advance failure");
+
+        await ledger.recordUpdate({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Answer" },
+          },
+        });
+
+        await expect(
+          ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+        ).resolves.toMatchObject({
+          complete: true,
+          events: [
+            {
+              seq: 1,
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: "Answer" },
+              },
+            },
+          ],
+        });
+      } finally {
+        Object.defineProperty(DatabaseSync.prototype, "prepare", prepareDescriptor);
+      }
+    });
+  });
 });
