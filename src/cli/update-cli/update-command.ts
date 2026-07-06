@@ -924,6 +924,14 @@ class UpdateCommandAbort extends Error {
   }
 }
 
+function createAggregateErrorWithCause(
+  errors: unknown[],
+  message: string,
+  cause: unknown,
+): AggregateError {
+  return new AggregateError(errors, message, { cause });
+}
+
 type ManagedServiceRootRedirect = {
   root: string;
   previousRoot: string;
@@ -1252,10 +1260,10 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       try {
         await windowsTaskAutoStartRecovery.restore();
       } catch (resumeErr) {
-        throw new AggregateError(
+        throw createAggregateErrorWithCause(
           [err, resumeErr],
           `Failed to stop the managed gateway (${String(err)}) and restore Windows Scheduled Task autostart (${String(resumeErr)})`,
-          { cause: err },
+          err,
         );
       } finally {
         windowsTaskAutoStartRecovery.complete();
@@ -4213,10 +4221,10 @@ async function updateCommandInternal(
     } catch (resumeErr) {
       recoveryState.windowsTaskAutoStartRecovery?.complete();
       recoveryState.windowsTaskAutoStartRecovery = undefined;
-      throw new AggregateError(
+      throw createAggregateErrorWithCause(
         [err, resumeErr],
         `Update failed (${String(err)}) and Windows Scheduled Task autostart could not be restored (${String(resumeErr)})`,
-        { cause: err },
+        err,
       );
     }
     await maybeRestartServiceAfterFailedMutableUpdate({
