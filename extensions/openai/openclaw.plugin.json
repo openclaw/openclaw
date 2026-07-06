@@ -5,6 +5,9 @@
   },
   "enabledByDefault": true,
   "providers": ["openai"],
+  "providerUsageAuthEnvVars": {
+    "openai": ["OPENAI_ADMIN_KEY"]
+  },
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },

@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Percayai gateway ini?</string>
     <string name="trust_and_continue">Percayai dan lanjutkan</string>
     <string name="cancel">Batal</string>
+    <string name="new_chat_in_worktree">Chat baru di worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Gateway Anda aktif dan siap.</string>

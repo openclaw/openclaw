@@ -91,6 +91,8 @@ export type CliThinkingProgress = {
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
+  // Preserve the producer kind: a server-native start without its result is not a failed local call.
+  kind: "tool_use" | "server_tool_use" | "mcp_tool_use";
   args: Record<string, unknown>;
 };
 
@@ -588,6 +590,7 @@ function parseClaudeCliStreamingDelta(params: {
 type PendingToolUse = {
   toolCallId: string;
   name: string;
+  kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
 };
 
@@ -611,6 +614,7 @@ function emitToolStartOnce(
   tracker: ToolUseTracker,
   toolCallId: string,
   name: string,
+  kind: CliToolUseStartDelta["kind"],
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
@@ -620,7 +624,7 @@ function emitToolStartOnce(
   }
   tracker.startedIds.add(toolCallId);
   tracker.nameById.set(toolCallId, name);
-  onToolUseStart?.({ toolCallId, name, args });
+  onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
 function emitToolResultOnce(
@@ -643,7 +647,7 @@ function emitToolResultOnce(
   });
 }
 
-function isClaudeToolUseBlockType(type: unknown): boolean {
+function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
   return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
 }
 
@@ -692,7 +696,12 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
-          tracker.pendingByIndex.set(event.index, { toolCallId, name, inputJsonParts: [] });
+          tracker.pendingByIndex.set(event.index, {
+            toolCallId,
+            name,
+            kind: block.type,
+            inputJsonParts: [],
+          });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
         const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
@@ -726,6 +735,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
           tracker,
           pending.toolCallId,
           pending.name,
+          pending.kind,
           parseToolInputJson(pending.inputJsonParts),
           params.onToolUseStart,
         );
@@ -749,7 +759,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
           continue;
         }
         const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
-        emitToolStartOnce(tracker, toolCallId, name, args, params.onToolUseStart);
+        emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
         const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
         if (!toolCallId) {
@@ -1014,7 +1024,7 @@ function dispatchGeminiCliStreamingToolEvent(params: {
       return;
     }
     const args = isRecord(params.parsed.parameters) ? params.parsed.parameters : {};
-    emitToolStartOnce(params.tracker, toolCallId, name, args, params.onToolUseStart);
+    emitToolStartOnce(params.tracker, toolCallId, name, "tool_use", args, params.onToolUseStart);
     return;
   }
   if (params.parsed.type === "tool_result") {

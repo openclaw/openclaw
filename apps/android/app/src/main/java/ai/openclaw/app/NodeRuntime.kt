@@ -405,7 +405,6 @@ class NodeRuntime private constructor(
       camera = camera,
       externalAudioCaptureActive = externalAudioCaptureActive,
       showCameraHud = ::showCameraHud,
-      triggerCameraFlash = ::triggerCameraFlash,
       invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
     )
 
@@ -598,9 +597,6 @@ class NodeRuntime private constructor(
   private val cameraHudSeq = AtomicLong(0)
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
   val cameraHud: StateFlow<CameraHudState?> = _cameraHud.asStateFlow()
-
-  private val _cameraFlashToken = MutableStateFlow(0L)
-  val cameraFlashToken: StateFlow<Long> = _cameraFlashToken.asStateFlow()
 
   private val _canvasA2uiHydrated = MutableStateFlow(false)
   val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
@@ -1734,6 +1730,12 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
+      talkMode.finishingPushToTalkCaptureId?.let {
+        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+          code = "PTT_BUSY",
+          message = "PTT_BUSY: previous push-to-talk turn is still finishing",
+        )
+      }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
@@ -1772,14 +1774,17 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      talkMode.activePushToTalkCaptureId?.let { captureId ->
-        val payload = TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy")
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      currentTalkPttOnceBusy()?.let { busy ->
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
       }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       val start =
-        withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
+        withPreparedTalkPttCommand(
+          lifecycleEpoch = lifecycleEpoch,
+          commandEpoch = commandEpoch,
+          beforePrepare = ::currentTalkPttOnceBusy,
+        ) { ownershipEpoch ->
           val started =
             talkMode.beginPushToTalkOnce(
               canStartCapture = {
@@ -1789,12 +1794,11 @@ class NodeRuntime private constructor(
                   voiceCaptureOwnershipEpoch.get() == ownershipEpoch
               },
             )
-          val captureId =
-            when (started) {
-              is TalkPttOnceStart.Busy -> started.payload.captureId
-              is TalkPttOnceStart.Started -> started.captureId
-            }
-          recordTalkPttOwnership(captureId = captureId, ownershipEpoch = ownershipEpoch)
+          when (started) {
+            is TalkPttOnceStart.Busy -> cleanupFailedTalkCapture(ownershipEpoch)
+            is TalkPttOnceStart.Started ->
+              recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          }
           started
         }
       val payload =
@@ -1808,9 +1812,17 @@ class NodeRuntime private constructor(
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
+  private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
+    val captureId = talkMode.activePushToTalkCaptureId ?: talkMode.finishingPushToTalkCaptureId ?: return null
+    return TalkPttOnceStart.Busy(
+      TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy"),
+    )
+  }
+
   private suspend fun <T> withPreparedTalkPttCommand(
     lifecycleEpoch: Long,
     commandEpoch: Long,
+    beforePrepare: () -> T? = { null },
     block: suspend (ownershipEpoch: Long) -> T,
   ): T =
     voiceCapturePreparationMutex.withLock {
@@ -1823,6 +1835,7 @@ class NodeRuntime private constructor(
       ) {
         throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
       }
+      beforePrepare()?.let { return@withLock it }
       val ownershipEpoch = prepareTalkCapture(lifecycleEpoch, commandEpoch)
       try {
         if (
@@ -1941,12 +1954,6 @@ class NodeRuntime private constructor(
       val ownership = talkPttOwnership.get()
       if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
       finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
-    }
-  }
-
-  private fun finishTalkCaptureIfIdle(ownershipEpoch: Long) {
-    synchronized(voiceCaptureOwnershipLock) {
-      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
     }
   }
 
@@ -3854,11 +3861,6 @@ class NodeRuntime private constructor(
   private fun normalized(value: String?): String? {
     val trimmed = value?.trim().orEmpty()
     return trimmed.ifEmpty { null }
-  }
-
-  private fun triggerCameraFlash() {
-    // Token is used as a pulse trigger; value doesn't matter as long as it changes.
-    _cameraFlashToken.value = SystemClock.elapsedRealtimeNanos()
   }
 
   private fun showCameraHud(

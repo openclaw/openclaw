@@ -1469,11 +1469,6 @@
       "translated": "Não concedida"
     },
     {
-      "id": "native.android.561d07951dc36959",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.3b7e036da1b10671",
       "source": "Back",
       "translated": "Voltar"
@@ -3537,11 +3532,6 @@
       "id": "native.android.994ac738d819f2e6",
       "source": "Nothing needs your attention",
       "translated": "Nada precisa da sua atenção"
-    },
-    {
-      "id": "native.android.75e509075f59deaa",
-      "source": "Needs attention",
-      "translated": "Precisa de atenção"
     },
     {
       "id": "native.android.c5e56f0e8af094fb",
@@ -12717,6 +12707,31 @@
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "Modelo"
+    },
+    {
+      "id": "native.apple.745b004e0b5b6b80",
+      "source": "Pinned",
+      "translated": "Fixado"
+    },
+    {
+      "id": "native.apple.69381a0a462ccd84",
+      "source": "Recent",
+      "translated": "Recentes"
+    },
+    {
+      "id": "native.apple.aa321cf4820426ef",
+      "source": "Models",
+      "translated": "Modelos"
+    },
+    {
+      "id": "native.apple.75550b03f06d6abc",
+      "source": "Pin model",
+      "translated": "Fixar modelo"
+    },
+    {
+      "id": "native.apple.af4df27bdbacb5de",
+      "source": "Unpin model",
+      "translated": "Desafixar modelo"
     },
     {
       "id": "native.apple.5dfc0700d8dff8de",
