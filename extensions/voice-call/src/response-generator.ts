@@ -348,7 +348,8 @@ export async function generateVoiceResponse(
         const runId = `voice:${callId}:${Date.now()}`;
 
         const blockReplyPayloads: VoiceResponsePayload[] = [];
-        let blockReplyMessageIndex: number | undefined;
+        let latestToolBoundaryMessageIndex: number | undefined;
+        let blockReplyBoundariesReliable = true;
         let deliveredEarly = false;
         let lastFlushedText: string | null = null;
 
@@ -380,35 +381,40 @@ export async function generateVoiceResponse(
           abortSignal,
           blockReplyBreak: "text_end",
           onBlockReply: (payload, context) => {
-            const messageIndex = context?.assistantMessageIndex;
-            if (
-              messageIndex !== undefined &&
-              (blockReplyMessageIndex === undefined || messageIndex > blockReplyMessageIndex)
-            ) {
-              blockReplyPayloads.length = 0;
-              blockReplyMessageIndex = messageIndex;
-            }
-            if (
-              messageIndex !== undefined &&
-              blockReplyMessageIndex !== undefined &&
-              messageIndex < blockReplyMessageIndex
-            ) {
-              return;
+            if (latestToolBoundaryMessageIndex !== undefined) {
+              const messageIndex = context?.assistantMessageIndex;
+              if (messageIndex === undefined) {
+                blockReplyBoundariesReliable = false;
+                return;
+              }
+              if (messageIndex <= latestToolBoundaryMessageIndex) {
+                return;
+              }
             }
             blockReplyPayloads.push(payload);
           },
           onBlockReplyFlush: async (context) => {
+            if (context.reason === "tool_start") {
+              // Deferred replies can arrive after this callback. Retain the
+              // assistant index at the actual tool boundary to reject them.
+              blockReplyPayloads.length = 0;
+              latestToolBoundaryMessageIndex = context.assistantMessageIndex;
+              blockReplyBoundariesReliable = true;
+              return;
+            }
             if (context.reason !== "pre_compaction") {
               return;
             }
             const pendingPayloads = blockReplyPayloads.splice(0);
-            blockReplyMessageIndex = undefined;
+            const boundariesReliable = blockReplyBoundariesReliable;
+            latestToolBoundaryMessageIndex = undefined;
+            blockReplyBoundariesReliable = true;
             if (!context.attemptAccepted) {
               return;
             }
             // Call-control APIs acknowledge a playback request, not playback
             // completion. Never let a later retry flush replace in-flight audio.
-            if (deliveredEarly || !onEarlyText) {
+            if (deliveredEarly || !onEarlyText || !boundariesReliable) {
               return;
             }
             const text = extractSpokenTextFromPayloads(pendingPayloads);

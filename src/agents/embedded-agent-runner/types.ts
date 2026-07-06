@@ -20,7 +20,12 @@ import type { ContextUsage } from "../usage.js";
 export type BlockReplyFlushContext =
   | {
       /** Boundary that requested the flush. */
-      reason: "tool_start" | "message_end" | "terminal";
+      reason: "message_end" | "terminal";
+    }
+  | {
+      /** Tool boundary separating pre-tool narration from the eventual answer. */
+      reason: "tool_start";
+      assistantMessageIndex: number;
     }
   | {
       /** Pre-compaction delivery is safe only for a completed assistant attempt. */

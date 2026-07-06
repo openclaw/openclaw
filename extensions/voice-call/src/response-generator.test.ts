@@ -41,7 +41,8 @@ type EmbeddedAgentArgs = {
   ) => void;
   onBlockReplyFlush?: (
     context:
-      | { reason: "tool_start" | "message_end" | "terminal" }
+      | { reason: "message_end" | "terminal" }
+      | { reason: "tool_start"; assistantMessageIndex: number }
       | { reason: "pre_compaction"; attemptAccepted: boolean },
   ) => void | Promise<void>;
 };
@@ -311,7 +312,7 @@ describe("generateVoiceResponse", () => {
     });
   });
 
-  it("combines multiple reply blocks into one early transport handoff", async () => {
+  it("combines multiple final-answer items into one early transport handoff", async () => {
     const { runtime } = createAgentRuntime([], {
       blockReplyPayloads: [
         { text: '{"spoken":"First block."}' },
@@ -333,15 +334,14 @@ describe("generateVoiceResponse", () => {
     });
   });
 
-  it("hands off only the newest assistant message after tool use", async () => {
+  it("discards pre-tool narration before the completed answer", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
     runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
       args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
       args.onBlockReply?.(
         { text: '{"spoken":"The result is ready."}' },
-        {
-          assistantMessageIndex: 1,
-        },
+        { assistantMessageIndex: 1 },
       );
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
       return {
@@ -355,6 +355,48 @@ describe("generateVoiceResponse", () => {
 
     expect(onEarlyText).toHaveBeenCalledWith("The result is ready.");
     expect(result).toEqual({ text: "The result is ready.", deliveredEarly: true });
+  });
+
+  it("discards deferred pre-tool narration delivered after the tool boundary", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
+      args.onBlockReply?.(
+        { text: '{"spoken":"The deferred result is ready."}' },
+        { assistantMessageIndex: 1 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"The deferred result is ready."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledWith("The deferred result is ready.");
+    expect(result).toEqual({ text: "The deferred result is ready.", deliveredEarly: true });
+  });
+
+  it("keeps final delivery when a post-tool payload has no boundary metadata", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.({ text: '{"spoken":"Unclassified response."}' });
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"Complete fallback response."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Complete fallback response.", deliveredEarly: false });
   });
 
   it("discards rejected-attempt audio before delivering the accepted retry", async () => {
@@ -379,6 +421,33 @@ describe("generateVoiceResponse", () => {
       text: "Retry response.",
       deliveredEarly: true,
     });
+  });
+
+  it("resets a rejected attempt tool boundary before the accepted retry", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
+    runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
+      await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
+      args.onBlockReply?.(
+        { text: '{"spoken":"Rejected tool response."}' },
+        { assistantMessageIndex: 1 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: false });
+      args.onBlockReply?.(
+        { text: '{"spoken":"Accepted retry response."}' },
+        { assistantMessageIndex: 0 },
+      );
+      await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
+      return {
+        payloads: [{ text: '{"spoken":"Accepted retry response."}' }],
+        meta: { durationMs: 20_000, aborted: false },
+      };
+    });
+    const onEarlyText = vi.fn(async () => true);
+
+    const { result } = await runGenerateVoiceResponse([], { runtime, onEarlyText });
+
+    expect(onEarlyText).toHaveBeenCalledWith("Accepted retry response.");
+    expect(result).toEqual({ text: "Accepted retry response.", deliveredEarly: true });
   });
 
   it("keeps final delivery enabled when the early transport handoff fails", async () => {
