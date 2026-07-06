@@ -3349,6 +3349,11 @@
       "translated": "새 채팅"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "더 많은 새 채팅 옵션"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "채팅 새로고침"
@@ -3657,6 +3662,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "취소"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "worktree에서 새 채팅"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4642,6 +4652,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "설정 / Gateway를 엽니다"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "새 채팅"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Worktree에서 새 채팅"
     },
     {
       "id": "native.apple.ced228bb4d20a726",

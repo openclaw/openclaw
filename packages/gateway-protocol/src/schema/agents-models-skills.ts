@@ -43,6 +43,7 @@ export const AgentSummarySchema = Type.Object(
       ),
     ),
     workspace: Type.Optional(NonEmptyString),
+    workspaceGit: Type.Optional(Type.Boolean()),
     model: Type.Optional(
       Type.Object(
         {

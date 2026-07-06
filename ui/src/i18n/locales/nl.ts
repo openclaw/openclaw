@@ -1543,6 +1543,7 @@ export const nl: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "Nieuwe chat in worktree",
       export: "Exporteren",
       exportChat: "Export chat",
       queue: "Queue",

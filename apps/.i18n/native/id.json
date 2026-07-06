@@ -3349,6 +3349,11 @@
       "translated": "Chat baru"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "Lebih banyak opsi chat baru"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Segarkan chat"
@@ -3657,6 +3662,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "Batal"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "Chat baru di worktree"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4642,6 +4652,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Membuka Pengaturan / Gateway"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "Chat Baru"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Chat Baru di Worktree"
     },
     {
       "id": "native.apple.ced228bb4d20a726",

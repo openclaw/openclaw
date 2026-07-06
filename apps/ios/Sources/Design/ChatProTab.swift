@@ -257,6 +257,34 @@ struct ChatProTab: View {
     private var chatActionsMenu: some View {
         Menu {
             Button {
+                Task { await self.viewModel?.startNewSession() }
+            } label: {
+                Label {
+                    Text("New Chat")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "plus.bubble")
+                }
+            }
+            .disabled(self.viewModel == nil || !self.gatewayConnected)
+
+            if self.activeAgent?.workspacegit == true {
+                Button {
+                    Task { await self.viewModel?.startNewSession(worktree: true) }
+                } label: {
+                    Label {
+                        Text("New Chat in Worktree")
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: "arrow.triangle.branch")
+                    }
+                }
+                .disabled(self.viewModel == nil || !self.gatewayConnected)
+            }
+
+            Divider()
+
+            Button {
                 self.exportTranscript()
             } label: {
                 Label {

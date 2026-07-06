@@ -1550,6 +1550,7 @@ export const ru: TranslationMap = {
     },
     runControls: {
       newSession: "Новый сеанс",
+      newSessionWorktree: "Новый чат в worktree",
       export: "Экспорт",
       exportChat: "Экспортировать чат",
       queue: "Очередь",

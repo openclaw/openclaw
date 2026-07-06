@@ -1,19 +1,24 @@
 // Session delete lifecycle tests protect transcript deletion, ACP metadata,
 // active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -35,6 +40,29 @@ const {
   openClient,
   resetConfiguredGlobalAgentSessionStore,
 } = setupGatewaySessionsTestHarness();
+const execFileAsync = promisify(execFile);
+
+async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  const remote = path.join(root, "remote.git");
+  await fs.mkdir(workspace, { recursive: true });
+  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
+  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Test"]);
+  await execFileAsync("git", [
+    "-C",
+    workspace,
+    "config",
+    "user.email",
+    "openclaw-test@example.invalid",
+  ]);
+  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
+  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
+  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
+  await execFileAsync("git", ["clone", "--bare", workspace, remote]);
+  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
+  await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
+  return await fs.realpath(workspace);
+}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -83,6 +111,69 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
     reason: "session-delete",
   });
 }
+
+test("sessions.delete removes clean session worktrees and keeps dirty ones", async () => {
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-delete-worktree-"),
+  );
+  const workspace = await initializeRemoteBackedGitWorkspace(root);
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let dirtyWorktreeId: string | undefined;
+  try {
+    const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+    const clean = await directSessionReq<{
+      key: string;
+      worktree: { id: string; path: string };
+    }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
+    expect(clean.ok).toBe(true);
+    const cleanKey = clean.payload?.key;
+    const cleanWorktree = clean.payload?.worktree;
+    expect(cleanKey).toBeTruthy();
+    expect(cleanWorktree).toBeTruthy();
+
+    await expectSessionDeleteSucceeds({ key: cleanKey! });
+
+    await expect(fs.access(cleanWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, cleanWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+
+    const dirty = await directSessionReq<{
+      key: string;
+      worktree: { id: string; path: string };
+    }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
+    expect(dirty.ok).toBe(true);
+    const dirtyKey = dirty.payload?.key;
+    const dirtyWorktree = dirty.payload?.worktree;
+    dirtyWorktreeId = dirtyWorktree?.id;
+    await fs.writeFile(path.join(dirtyWorktree!.path, "dirty.txt"), "keep me\n");
+
+    await expectSessionDeleteSucceeds({ key: dirtyKey! });
+
+    await expect(fs.access(dirtyWorktree!.path)).resolves.toBeUndefined();
+    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)?.removedAt).toBeUndefined();
+  } finally {
+    if (
+      dirtyWorktreeId &&
+      getRegistryWorktree(process.env, dirtyWorktreeId)?.removedAt === undefined
+    ) {
+      await managedWorktrees.remove({ id: dirtyWorktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    testState.agentConfig = undefined;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();

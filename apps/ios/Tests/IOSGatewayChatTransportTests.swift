@@ -75,10 +75,12 @@ struct IOSGatewayChatTransportTests {
                 key: "agent:reviewer:ios-new",
                 agentId: "reviewer",
                 label: nil,
-                parentSessionKey: "global"))
+                parentSessionKey: "global",
+                worktree: true))
         #expect(params["key"] as? String == "agent:reviewer:ios-new")
         #expect(params["agentId"] as? String == "reviewer")
         #expect(params["parentSessionKey"] as? String == "global")
+        #expect(params["worktree"] as? Bool == true)
     }
 
     @Test func `chat send params omit empty attachments and keep session fields`() throws {

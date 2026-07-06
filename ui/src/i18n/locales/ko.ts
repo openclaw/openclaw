@@ -1527,6 +1527,7 @@ export const ko: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "worktree에서 새 채팅",
       export: "내보내기",
       exportChat: "Export chat",
       queue: "Queue",

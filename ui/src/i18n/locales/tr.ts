@@ -1544,6 +1544,7 @@ export const tr: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "Çalışma ağacında yeni sohbet",
       export: "Dışa aktar",
       exportChat: "Export chat",
       queue: "Queue",

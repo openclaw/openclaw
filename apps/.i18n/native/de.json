@@ -3349,6 +3349,11 @@
       "translated": "Neuer Chat"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "Weitere neue Chat-Optionen"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Chat aktualisieren"
@@ -3657,6 +3662,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "Abbrechen"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "Neuer Chat im Worktree"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4642,6 +4652,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Öffnet Einstellungen / Gateway"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "Neuer Chat"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Neuer Chat im Worktree"
     },
     {
       "id": "native.apple.ced228bb4d20a726",

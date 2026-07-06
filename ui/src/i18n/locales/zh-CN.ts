@@ -1499,6 +1499,7 @@ export const zh_CN: TranslationMap = {
     },
     runControls: {
       newSession: "新会话",
+      newSessionWorktree: "在工作树中新建聊天",
       export: "导出",
       exportChat: "导出聊天",
       queue: "排队",

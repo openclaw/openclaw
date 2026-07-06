@@ -16,6 +16,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         var agentId: String?
         var label: String?
         var parentSessionKey: String?
+        var worktree: Bool?
     }
 
     private struct RunParams: Codable {
@@ -142,13 +143,15 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         key: String,
         agentId: String? = nil,
         label: String?,
-        parentSessionKey: String?) throws -> String
+        parentSessionKey: String?,
+        worktree: Bool?) throws -> String
     {
         let params = CreateSessionParams(
             key: key,
             agentId: agentId,
             label: label,
-            parentSessionKey: parentSessionKey)
+            parentSessionKey: parentSessionKey,
+            worktree: worktree)
         return try self.encodeParams(params)
     }
 
@@ -195,14 +198,16 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     func createSession(
         key: String,
         label: String?,
-        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey: String?,
+        worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
         let json = try Self.makeCreateSessionParamsJSON(
             key: key,
             agentId: Self.agentID(fromSessionKey: key) ??
                 parentSessionKey.flatMap { self.selectedGlobalAgentId(for: $0) },
             label: label,
-            parentSessionKey: parentSessionKey)
+            parentSessionKey: parentSessionKey,
+            worktree: worktree)
         let res = try await self.gateway.request(method: "sessions.create", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: res)
     }

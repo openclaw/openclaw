@@ -1098,6 +1098,20 @@ describe("package artifact reuse", () => {
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
     );
+    const acpBindScript = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
+    expect(acpBindScript).toContain(
+      "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH must be one of: auto, api-key, subscription.",
+    );
+    expect(acpBindScript).toContain(
+      'if [[ "$ACP_AGENT" == "claude" && "$CLAUDE_AUTH_MODE" == "subscription" ]]; then',
+    );
+    expect(acpBindScript).toContain(
+      "unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN",
+    );
+    expect(acpBindScript).toContain('-e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"');
+    expect(acpBindScript).not.toContain("    -e ANTHROPIC_API_KEY \\\n");
+    expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription/g)).toHaveLength(2);
+    expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key/g)).toHaveLength(2);
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
     );
@@ -1283,7 +1297,7 @@ describe("package artifact reuse", () => {
       reusableWorkflow.match(
         /if \[\[ -n "\$\{OPENCLAW_CLAUDE_CREDENTIALS_JSON:-\}" \|\| -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   });
 
   it("finalizes Testbox delegation even when setup or the remote command fails", () => {

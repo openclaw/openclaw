@@ -629,8 +629,8 @@ class MainViewModel(
     ensureRuntime().abortChat()
   }
 
-  fun startNewChat() {
-    ensureRuntime().startNewChat()
+  fun startNewChat(worktree: Boolean = false) {
+    ensureRuntime().startNewChat(worktree = worktree)
   }
 
   fun refreshChatCommands() {

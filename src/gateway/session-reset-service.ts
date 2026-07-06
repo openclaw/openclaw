@@ -848,6 +848,10 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
+  spawnedCwd?: string;
+  // A plain New Chat must return to the agent workspace instead of inheriting the previous
+  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
+  clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
   assertCurrent?: () => void;
@@ -1104,7 +1108,9 @@ export async function performGatewaySessionReset(params: {
             queueDrop: currentEntry?.queueDrop,
             spawnedBy: currentEntry?.spawnedBy,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-            spawnedCwd: currentEntry?.spawnedCwd,
+            spawnedCwd: params.clearSpawnedCwd
+              ? undefined
+              : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
             parentSessionKey: currentEntry?.parentSessionKey,
             forkedFromParent: currentEntry?.forkedFromParent,
             spawnDepth: currentEntry?.spawnDepth,

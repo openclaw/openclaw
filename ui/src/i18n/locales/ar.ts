@@ -1520,6 +1520,7 @@ export const ar: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "محادثة جديدة في worktree",
       export: "تصدير",
       exportChat: "Export chat",
       queue: "Queue",

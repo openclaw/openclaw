@@ -508,7 +508,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func createSession(
         key: String,
         label _: String?,
-        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey: String?,
+        worktree _: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
         if let createSessionHook {
             try await createSessionHook(key, parentSessionKey)

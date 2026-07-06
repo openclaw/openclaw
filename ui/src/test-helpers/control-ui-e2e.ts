@@ -60,6 +60,7 @@ export type ControlUiMockGatewayScenario = {
   models?: Array<{ id: string; name: string; provider: string }>;
   sessionKey?: string;
   terminalEnabled?: boolean;
+  workspaceGit?: boolean;
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -218,6 +219,7 @@ function normalizeScenario(
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionKey,
     terminalEnabled: scenario.terminalEnabled ?? false,
+    workspaceGit: scenario.workspaceGit ?? false,
   };
 }
 
@@ -427,6 +429,7 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              workspaceGit: scenario.workspaceGit,
             },
           ],
           defaultId: scenario.defaultAgentId,
@@ -475,6 +478,7 @@ function installControlUiMockGateway(input: {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
                 name: scenario.assistantName,
+                workspaceGit: scenario.workspaceGit,
               },
             ],
             defaultId: scenario.defaultAgentId,
