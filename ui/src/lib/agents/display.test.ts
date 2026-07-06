@@ -8,10 +8,21 @@ import {
 import {
   assistantAvatarFallbackUrl,
   buildAgentContext,
+  formatBytes,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./display.ts";
+
+describe("formatBytes", () => {
+  it("preserves the Control UI byte-size display contract", () => {
+    expect(formatBytes(undefined)).toBe("-");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(12 * 1024)).toBe("12 KB");
+    expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
+  });
+});
 
 describe("resolveEffectiveModelFallbacks", () => {
   it("inherits defaults when no entry fallbacks are configured", () => {

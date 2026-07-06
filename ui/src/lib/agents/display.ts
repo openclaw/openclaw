@@ -1,4 +1,5 @@
 // Control UI view renders agents utils screen content.
+import { formatByteSize } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
@@ -236,17 +237,12 @@ export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
     return "-";
   }
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB", "TB"];
-  let size = bytes / 1024;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  return `${size.toFixed(size < 10 ? 1 : 0)} ${units[unitIndex]}`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "tera",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
+  });
 }
 
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {

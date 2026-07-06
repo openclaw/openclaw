@@ -128,7 +128,7 @@ async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => 
 }
 
 function snapshotEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv();
+  return snapshotLiveEnv(["OPENCLAW_ALLOW_SLOW_REPLY_TESTS"]);
 }
 
 function restoreEnv(snapshot: LiveEnvSnapshot): void {
@@ -1058,6 +1058,9 @@ describeLive("gateway live (Codex harness)", () => {
         delete process.env.OPENAI_BASE_URL;
       }
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      // This live lane exercises the full config-loaded runtime inside Vitest's
+      // fast-test envelope, so config-override completeness checks do not apply.
+      setTestEnvValue("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
