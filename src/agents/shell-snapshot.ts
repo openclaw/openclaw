@@ -469,6 +469,9 @@ async function runShell(opts: {
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
+    child.stdout.on("error", () => {
+      finish(null);
+    });
     child.on("error", () => {
       finish(null);
     });
@@ -507,3 +510,7 @@ async function cleanupStaleSnapshots(snapshotDir: string): Promise<void> {
       }),
   );
 }
+
+export const testing = {
+  runShell,
+} as const;
