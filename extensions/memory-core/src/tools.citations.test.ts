@@ -666,4 +666,42 @@ describe("memory tools", () => {
       lineCount: 5,
     });
   });
+
+  it("preserves an empty in-file range for memory_get corpus=all", async () => {
+    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+      from: params.from ?? 1,
+      lines: 0,
+    }));
+    const getSupplement = vi.fn(async () => ({
+      corpus: "wiki" as const,
+      path: "memory/entities/alpha.md",
+      title: "Alpha",
+      kind: "entity",
+      content: "Alpha wiki entry",
+      fromLine: 10,
+      lineCount: 5,
+    }));
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: getSupplement,
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_empty_range", {
+      path: "memory/entities/alpha.md",
+      from: 10,
+      lines: 5,
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      text: "",
+      path: "memory/entities/alpha.md",
+      from: 10,
+      lines: 0,
+    });
+    expect(getSupplement).not.toHaveBeenCalled();
+  });
 });

@@ -1,6 +1,9 @@
 // Memory Core plugin module implements tools behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemoryReadResult,
+  MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -360,34 +363,12 @@ async function resolveMemoryReadFailureResult(params: {
   return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
 }
 
-function isMissingMemoryReadResult(value: unknown, relPath: string): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const result = value as {
-    text?: unknown;
-    path?: unknown;
-    disabled?: unknown;
-    error?: unknown;
-    from?: unknown;
-    lines?: unknown;
-    truncated?: unknown;
-    nextFrom?: unknown;
-  };
-  return (
-    result.path === relPath &&
-    result.text === "" &&
-    result.disabled === undefined &&
-    result.error === undefined &&
-    result.from === undefined &&
-    result.lines === undefined &&
-    result.truncated === undefined &&
-    result.nextFrom === undefined
-  );
+function isMissingMemoryReadResult(result: MemoryReadResult, relPath: string): boolean {
+  return result.path === relPath && result.text === "" && result.from === undefined;
 }
 
-async function executeMemoryReadResult<T>(params: {
-  read: () => Promise<T>;
+async function executeMemoryReadResult(params: {
+  read: () => Promise<MemoryReadResult>;
   requestedCorpus?: "memory" | "wiki" | "all";
   relPath: string;
   from?: number;
