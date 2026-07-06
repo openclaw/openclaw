@@ -124,6 +124,21 @@ describe("crabline transport", () => {
     });
   });
 
+  it("rejects canonical sender-policy flows on non-Telegram Crabline bridges", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      await expect(
+        createQaCrablineTransportAdapter({
+          outputDir,
+          scenarioIds: ["channel-sender-allowlist"],
+          selection: createSelection("matrix"),
+          state: createQaBusState(),
+        }),
+      ).rejects.toThrow(
+        "Crabline matrix does not support canonical sender-policy scenario(s): channel-sender-allowlist",
+      );
+    });
+  });
+
   it("injects Telegram native commands through the shared transport adapter", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({

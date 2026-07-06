@@ -42,6 +42,10 @@ import type {
 const CRABLINE_TRANSPORT_ID = "crabline";
 const TELEGRAM_QA_DRIVER_ID = "100001";
 const TELEGRAM_QA_OBSERVER_ID = "100002";
+const TELEGRAM_ONLY_SENDER_POLICY_SCENARIO_IDS = new Set([
+  "channel-multi-actor-ordering",
+  "channel-sender-allowlist",
+]);
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -445,6 +449,19 @@ export async function createQaCrablineTransportAdapter(params: {
   selection: OpenClawCrablineChannelDriverSelection;
   state?: QaBusState;
 }) {
+  const unsupportedScenarioIds =
+    params.selection.channel === "telegram"
+      ? []
+      : (params.scenarioIds ?? []).filter((scenarioId) =>
+          TELEGRAM_ONLY_SENDER_POLICY_SCENARIO_IDS.has(scenarioId),
+        );
+  if (unsupportedScenarioIds.length > 0) {
+    throw new Error(
+      `Crabline ${params.selection.channel} does not support canonical sender-policy scenario(s): ${unsupportedScenarioIds.join(
+        ", ",
+      )}; use the Crabline Telegram bridge or a live channel adapter`,
+    );
+  }
   const recorderPath = path.join(
     params.outputDir,
     "artifacts",
