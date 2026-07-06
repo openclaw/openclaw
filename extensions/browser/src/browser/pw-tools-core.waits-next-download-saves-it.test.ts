@@ -178,12 +178,11 @@ describe("pw-tools-core", () => {
         suggestedFilename: () => string;
         saveAs: (outPath: string) => Promise<void>;
       };
-      let download: DownloadFixture;
       const saveAs = vi.fn(async function (this: DownloadFixture, outPath: string) {
         expect(this).toBe(download);
         await fs.writeFile(outPath, "file-content", "utf8");
       });
-      download = {
+      const download: DownloadFixture = {
         url: () => "https://example.com/file.bin",
         suggestedFilename: () => "file.bin",
         saveAs,
