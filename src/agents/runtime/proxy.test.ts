@@ -1,6 +1,7 @@
 // Runtime proxy tests cover SSE parsing, terminal error handling, and request
 // payload scrubbing before proxying model streams.
-import { createServer, type AddressInfo } from "node:http";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { streamProxy } from "./proxy.js";
@@ -582,7 +583,9 @@ describe("streamProxy", () => {
         res.end(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`);
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
     const port = (server.address() as AddressInfo).port;
     const proxyUrl = `http://127.0.0.1:${port}`;
 
@@ -591,8 +594,8 @@ describe("streamProxy", () => {
         authToken: "token-abc",
         proxyUrl,
       });
-      for await (const _event of stream) {
-        /* drain */
+      for await (const event of stream) {
+        void event;
       }
       await stream.result();
 
@@ -607,7 +610,9 @@ describe("streamProxy", () => {
       expect(body.model?.provider).toBe(model.provider);
       expect(body.options).not.toHaveProperty("headers");
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });
