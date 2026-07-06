@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
+
 Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
 
 Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
