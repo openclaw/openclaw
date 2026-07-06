@@ -833,6 +833,7 @@ describe("sendMessageDiscord", () => {
     expectNoReplyReference(secondBody);
     expect(result.receipt.replyToId).toBe("orig-123");
     expect(result.receipt.parts.map((part) => part.replyToId)).toEqual(["orig-123", undefined]);
+    expect(() => JSON.stringify(result.receipt)).not.toThrow();
   });
 
   it("preserves reply reference for follow-up text chunks after media caption split by default", async () => {

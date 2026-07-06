@@ -26,7 +26,7 @@ export function createDiscordSendReceipt(params: {
     .filter((messageId) => messageId && messageId !== "unknown");
   const results: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }> =
     platformMessageIds.map((messageId, index) => {
-      const result: MessageReceiptSourceResult = {
+      const result: MessageReceiptSourceResult & { receipt?: MessageReceipt } = {
         channel: "discord",
         messageId,
       };
@@ -36,15 +36,19 @@ export function createDiscordSendReceipt(params: {
       if (params.replyToFirstMessageOnly && index === 0 && params.replyToId) {
         // A top-level replyToId would be copied onto every receipt part. Nest the
         // first receipt so persisted metadata matches Discord's one message_reference.
-        return {
-          ...result,
-          receipt: createMessageReceiptFromOutboundResults({
-            results: [result],
-            kind: params.kind,
-            threadId: params.threadId,
-            replyToId: params.replyToId,
-          }),
+        const rawResult: MessageReceiptSourceResult = {
+          channel: "discord",
+          messageId,
         };
+        if (params.channelId) {
+          rawResult.channelId = params.channelId;
+        }
+        result.receipt = createMessageReceiptFromOutboundResults({
+          results: [rawResult],
+          kind: params.kind,
+          threadId: params.threadId,
+          replyToId: params.replyToId,
+        });
       }
       return result;
     });
