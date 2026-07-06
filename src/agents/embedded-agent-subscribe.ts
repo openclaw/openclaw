@@ -1256,7 +1256,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
-    state.currentAttemptReplayState = createEmbeddedRunReplayState();
+    // currentAttemptReplayState must survive compaction retries so side
+    // effects from before compaction remain tracked within the same attempt.
+    // It starts clean at subscription init and is never reset mid-attempt.
     state.livenessState = "working";
     resetAssistantMessageState(0);
   };
