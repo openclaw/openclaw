@@ -796,10 +796,12 @@ export async function uploadDirectoryToSshTarget(params: {
 
     tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
     tar.stderr.on("error", fail);
+    tar.stdout.on("error", fail);
     ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
     ssh.stdout.on("error", fail);
     ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
     ssh.stderr.on("error", fail);
+    ssh.stdin?.on("error", fail);
 
     const fail = (error: unknown) => {
       tar.kill("SIGKILL");
