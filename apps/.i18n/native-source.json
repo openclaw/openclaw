@@ -7355,7 +7355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 64,
+      "line": 72,
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Skills",
       "surface": "apple",
@@ -7363,7 +7363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 110,
+      "line": 118,
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -7371,7 +7371,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 140,
+      "line": 148,
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Usage",
       "surface": "apple",
@@ -7523,7 +7523,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 209,
+      "line": 192,
+      "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.f48d33a93f53ae56"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 194,
+      "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
+      "source": "Workspace files",
+      "surface": "apple",
+      "id": "native.apple.b84aa382768fe819"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 216,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -7531,7 +7547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 223,
+      "line": 230,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Scheduled Work",
       "surface": "apple",
@@ -7539,7 +7555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 309,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Selected agent",
       "surface": "apple",
@@ -7547,7 +7563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 309,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Selects this agent",
       "surface": "apple",
@@ -7555,7 +7571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 443,
+      "line": 450,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Cron unavailable",
       "surface": "apple",
@@ -7563,7 +7579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 443,
+      "line": 450,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "No scheduled jobs",
       "surface": "apple",
@@ -7571,7 +7587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 446,
+      "line": 453,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Connect a gateway to load scheduled work.",
       "surface": "apple",
@@ -7579,7 +7595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 446,
+      "line": 453,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "The gateway has no visible cron jobs.",
       "surface": "apple",
@@ -7587,7 +7603,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 566,
+      "line": 573,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading skill status.",
       "surface": "apple",
@@ -7595,7 +7611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 566,
+      "line": 573,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Skill status is available from the gateway.",
       "surface": "apple",
@@ -7603,7 +7619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 588,
+      "line": 595,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Instance presence is available.",
       "surface": "apple",
@@ -7611,7 +7627,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 588,
+      "line": 595,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading instance presence.",
       "surface": "apple",
@@ -7619,7 +7635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 607,
+      "line": 614,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "\\(cronStatus.jobs)",
       "surface": "apple",
@@ -7627,7 +7643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 613,
+      "line": 620,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Cron status is available.",
       "surface": "apple",
@@ -7635,7 +7651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 613,
+      "line": 620,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading cron status.",
       "surface": "apple",
@@ -7643,7 +7659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 618,
+      "line": 625,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Scheduler disabled",
       "surface": "apple",
@@ -7651,7 +7667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 618,
+      "line": 625,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Scheduler enabled",
       "surface": "apple",
@@ -7659,7 +7675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 643,
+      "line": 650,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading recent usage.",
       "surface": "apple",
@@ -7667,7 +7683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 643,
+      "line": 650,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Recent usage is available.",
       "surface": "apple",
@@ -7675,7 +7691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 662,
+      "line": 669,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Background memory status is available.",
       "surface": "apple",
@@ -7683,7 +7699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 662,
+      "line": 669,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading dreaming status.",
       "surface": "apple",
@@ -8067,7 +8083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 58,
+      "line": 59,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Enabled",
       "surface": "apple",
@@ -8075,7 +8091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 59,
+      "line": 60,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Off",
       "surface": "apple",
@@ -8083,7 +8099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 60,
+      "line": 61,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Setup",
       "surface": "apple",
@@ -8091,7 +8107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 61,
+      "line": 62,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Blocked",
       "surface": "apple",
@@ -8099,7 +8115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 78,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "All",
       "surface": "apple",
@@ -8107,7 +8123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 79,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Online",
       "surface": "apple",
@@ -8115,11 +8131,67 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 79,
+      "line": 80,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Ready",
       "surface": "apple",
       "id": "native.apple.a97cdae7c8e13f0e"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 23,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.9c4e8b82edf0b324"
+    },
+    {
+      "kind": "ui-call",
+      "line": 82,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "This folder is empty.",
+      "surface": "apple",
+      "id": "native.apple.ada58d7ce8866f71"
+    },
+    {
+      "kind": "ui-call",
+      "line": 145,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Load More",
+      "surface": "apple",
+      "id": "native.apple.35512c4d46a2da28"
+    },
+    {
+      "kind": "ui-call",
+      "line": 151,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "surface": "apple",
+      "id": "native.apple.e617cdacc3bce5ea"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 254,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Share file",
+      "surface": "apple",
+      "id": "native.apple.336a7eeb12d6e5f4"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 261,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Could not share this file.",
+      "surface": "apple",
+      "id": "native.apple.0ab324ff650d720c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 265,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "OK",
+      "surface": "apple",
+      "id": "native.apple.8218f673399060cc"
     },
     {
       "kind": "ui-localized-call",
@@ -9621,13 +9693,21 @@
       "kind": "ui-named-argument",
       "line": 165,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.3f2726ccd1acd987"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 170,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Dreaming",
       "surface": "apple",
       "id": "native.apple.614c9b40919fb103"
     },
     {
       "kind": "ui-named-argument",
-      "line": 170,
+      "line": 175,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Usage",
       "surface": "apple",
@@ -9635,7 +9715,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 175,
+      "line": 180,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -9643,7 +9723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 249,
+      "line": 254,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Online",
       "surface": "apple",
@@ -9651,7 +9731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 250,
+      "line": 255,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -9659,7 +9739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 251,
+      "line": 256,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Attention",
       "surface": "apple",
@@ -9667,7 +9747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 252,
+      "line": 257,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Offline",
       "surface": "apple",
@@ -13109,13 +13189,21 @@
       "kind": "ui-named-argument",
       "line": 487,
       "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.d1a5c9b0c4acbfe2"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 494,
+      "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
       "id": "native.apple.ad3c65353227b63e"
     },
     {
       "kind": "ui-named-argument",
-      "line": 494,
+      "line": 501,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -13123,7 +13211,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 501,
+      "line": 508,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -13131,7 +13219,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 634,
+      "line": 641,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -13139,7 +13227,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 761,
+      "line": 768,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -13147,7 +13235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1010,
+      "line": 1017,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -13155,7 +13243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1010,
+      "line": 1017,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -13163,7 +13251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1046,
+      "line": 1053,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -13171,7 +13259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1046,
+      "line": 1053,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -13179,7 +13267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 63,
+      "line": 64,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Chat",
       "surface": "apple",
@@ -13187,7 +13275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 64,
+      "line": 65,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Talk",
       "surface": "apple",
@@ -13195,7 +13283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 65,
+      "line": 66,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Overview",
       "surface": "apple",
@@ -13203,7 +13291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 66,
+      "line": 67,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Activity",
       "surface": "apple",
@@ -13211,7 +13299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 67,
+      "line": 68,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Agents",
       "surface": "apple",
@@ -13219,7 +13307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 68,
+      "line": 69,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Workboard",
       "surface": "apple",
@@ -13227,7 +13315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 69,
+      "line": 70,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Skill Workshop",
       "surface": "apple",
@@ -13235,7 +13323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 70,
+      "line": 71,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Instances",
       "surface": "apple",
@@ -13243,7 +13331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 71,
+      "line": 72,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -13251,7 +13339,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 72,
+      "line": 73,
+      "path": "apps/ios/Sources/RootTabsNavigation.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.253cb2debeb51859"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 74,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -13259,7 +13355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 73,
+      "line": 75,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Usage",
       "surface": "apple",
@@ -13267,7 +13363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 74,
+      "line": 76,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -13275,7 +13371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 75,
+      "line": 77,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Terminal",
       "surface": "apple",
@@ -13283,7 +13379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 76,
+      "line": 78,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Docs",
       "surface": "apple",
@@ -13291,7 +13387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 79,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings",
       "surface": "apple",
@@ -13299,7 +13395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 80,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings / Gateway",
       "surface": "apple",
@@ -13307,7 +13403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 84,
+      "line": 86,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Connection",
       "surface": "apple",
