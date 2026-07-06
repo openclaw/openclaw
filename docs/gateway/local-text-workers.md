@@ -198,12 +198,12 @@ until the orchestrator chooses to act on it.
 Local models can cold-load slowly or stream for a long time. Set timeouts at the
 surface that owns the wait:
 
-| Surface | Timeout knob |
-| ------- | ------------ |
-| Local provider request | `models.providers.<id>.timeoutSeconds` |
+| Surface                        | Timeout knob                                        |
+| ------------------------------ | --------------------------------------------------- |
+| Local provider request         | `models.providers.<id>.timeoutSeconds`              |
 | On-demand local server startup | `models.providers.<id>.localService.readyTimeoutMs` |
-| Native sub-agent run | `agents.defaults.subagents.runTimeoutSeconds` |
-| `llm-task` plugin call | `plugins.entries.llm-task.config.timeoutMs` |
+| Native sub-agent run           | `agents.defaults.subagents.runTimeoutSeconds`       |
+| `llm-task` plugin call         | `plugins.entries.llm-task.config.timeoutMs`         |
 
 Keep the worker prompt short enough that a timeout points to a real local model
 problem, not an oversized orchestration request.
@@ -244,13 +244,13 @@ to reduce tool pressure with lean mode or model compatibility settings.
 
 ## Troubleshooting
 
-| Symptom | Check |
-| ------- | ----- |
-| Worker tries to call tools as text | Keep the task text-only, use `llm-task`, or disable tool support for that model in local model config. |
-| Local server is slow to start | Use `localService.readyTimeoutMs` and keep the model warm for frequent work. |
-| Sub-agent can see more tools than expected | Inspect the effective tool policy and narrow with `tools.subagents.tools.allow`. |
-| Orchestrator trusts a bad draft | Add an explicit review step before write/send/exec actions. |
-| Full local agent turns are unstable | Keep the hosted model as primary and delegate only bounded text work. |
+| Symptom                                    | Check                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Worker tries to call tools as text         | Keep the task text-only, use `llm-task`, or disable tool support for that model in local model config. |
+| Local server is slow to start              | Use `localService.readyTimeoutMs` and keep the model warm for frequent work.                           |
+| Sub-agent can see more tools than expected | Inspect the effective tool policy and narrow with `tools.subagents.tools.allow`.                       |
+| Orchestrator trusts a bad draft            | Add an explicit review step before write/send/exec actions.                                            |
+| Full local agent turns are unstable        | Keep the hosted model as primary and delegate only bounded text work.                                  |
 
 ## Related
 
