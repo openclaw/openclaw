@@ -719,6 +719,9 @@ export class CodexAppServerEventProjector {
       case "item/autoApprovalReview/completed":
         this.handleGuardianReviewNotification(notification.method, params);
         break;
+      case "guardianWarning":
+        this.handleGuardianWarning(params);
+        break;
       case "hook/started":
       case "hook/completed":
         this.handleHookNotification(notification.method, params);
@@ -1253,6 +1256,27 @@ export class CodexAppServerEventProjector {
         userAuthorization: review ? readString(review, "userAuthorization") : undefined,
         rationale: review ? readNullableString(review, "rationale") : undefined,
         actionType: action ? readString(action, "type") : undefined,
+      },
+    });
+  }
+
+  private handleGuardianWarning(params: JsonObject): void {
+    // Codex emits `guardianWarning` from its rejection circuit-breaker (e.g. 3
+    // consecutive or 10 total denials in a turn) right before ending the turn
+    // as interrupted. Project it on the guardian stream so callers can see why
+    // the turn degraded instead of silently dropping the notification. The exact
+    // v2 param shape is not bundled in OpenClaw's protocol schemas, so read the
+    // human-readable reason defensively across the names Codex has used.
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        phase: "warning",
+        message:
+          readNullableString(params, "message") ??
+          readNullableString(params, "warning") ??
+          readNullableString(params, "reason"),
+        reviewId: readString(params, "reviewId"),
+        targetItemId: readNullableString(params, "targetItemId"),
       },
     });
   }
@@ -2771,9 +2795,7 @@ function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAu
   return "unknown";
 }
 
-function auditNativeToolUnfinishedStatus(
-  item: CodexThreadItem,
-): CodexNativeToolUnfinishedStatus {
+function auditNativeToolUnfinishedStatus(item: CodexThreadItem): CodexNativeToolUnfinishedStatus {
   // Search and image generation publish explicit terminal states. An enclosing
   // run outcome cannot substitute when that dependency-owned state is absent.
   return item.type === "webSearch" || item.type === "imageGeneration" ? "unknown" : "failed";
