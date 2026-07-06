@@ -147,7 +147,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 193,
+      "line": 192,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Mic off",
       "surface": "android",
@@ -155,7 +155,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 203,
+      "line": 202,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Off",
       "surface": "android",
@@ -195,7 +195,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 578,
+      "line": 577,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2457,
+      "line": 2447,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2459,
+      "line": 2449,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2461,
+      "line": 2451,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -2344,14 +2344,6 @@
       "source": "Not granted",
       "surface": "android",
       "id": "native.android.cf8344d3562e28e3"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 271,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/PostOnboardingTabs.kt",
-      "source": "OpenClaw",
-      "surface": "android",
-      "id": "native.android.561d07951dc36959"
     },
     {
       "kind": "ui-named-argument",
@@ -5656,14 +5648,6 @@
       "source": "Nothing needs your attention",
       "surface": "android",
       "id": "native.android.994ac738d819f2e6"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 96,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawSurfaces.kt",
-      "source": "Needs attention",
-      "surface": "android",
-      "id": "native.android.75e509075f59deaa"
     },
     {
       "kind": "conditional-branch",
