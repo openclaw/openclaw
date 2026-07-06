@@ -8,6 +8,7 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { getVisibleSessionRows } from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { icons, type IconName } from "./icons.ts";
 
@@ -494,10 +495,13 @@ export class CommandPalette extends LitElement {
       globalThis.clearTimeout(this.sessionSearchTimer);
       this.sessionSearchTimer = null;
     }
+    // Invalidate any in-flight search and drop the previous query's rows
+    // immediately; otherwise a late-resolving request repopulates the list
+    // and its stale rows stay selectable during the debounce window.
+    this.sessionSearchId += 1;
+    this.sessionItems = [];
     const search = normalizeOptionalString(query);
     if (!search || !this.onSelectSession) {
-      this.sessionSearchId += 1;
-      this.sessionItems = [];
       return;
     }
     this.sessionSearchTimer = globalThis.setTimeout(() => {
@@ -518,7 +522,15 @@ export class CommandPalette extends LitElement {
       if (requestId !== this.sessionSearchId || !this.open) {
         return;
       }
-      this.sessionItems = (result?.sessions ?? []).slice(0, SESSION_SEARCH_LIMIT).map((row) => ({
+      // Same hidden-row rules as the sidebar list (archived/global/unknown/
+      // cron/subagent rows stay hidden); the agent-tie filter stays off, so
+      // the scope ids are unused.
+      const rows = getVisibleSessionRows(result ?? null, {
+        agentId: "",
+        defaultAgentId: "",
+        filterByAgent: false,
+      });
+      this.sessionItems = rows.slice(0, SESSION_SEARCH_LIMIT).map((row) => ({
         id: `session-${row.key}`,
         label: resolveSessionDisplayName(row.key, row),
         icon: "messageSquare" as const,

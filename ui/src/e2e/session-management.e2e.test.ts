@@ -25,7 +25,13 @@ function sessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: { pinned?: boolean; pinnedAt?: number; hasActiveRun?: boolean; status?: string } = {},
+  options: {
+    archived?: boolean;
+    pinned?: boolean;
+    pinnedAt?: number;
+    hasActiveRun?: boolean;
+    status?: string;
+  } = {},
 ) {
   return {
     contextTokens: null,
@@ -145,6 +151,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             status: "running",
           }),
           sessionRow("agent:main:research", "Research notes", baseTime - 120_000),
+          // Hidden row classes: the static mock returns them for every
+          // sessions.list call, so the palette must filter them client-side.
+          sessionRow("subagent:release-helper", "Release subagent", baseTime - 200_000),
+          sessionRow("agent:main:old-release", "Release archive", baseTime - 300_000, {
+            archived: true,
+          }),
         ]),
         "sessions.patch": {},
       },
@@ -246,6 +258,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .locator(".cmd-palette__item")
         .filter({ hasText: "Release planning" });
       await paletteOption.waitFor({ state: "visible", timeout: 10_000 });
+      // Subagent and archived rows never surface as palette chats.
+      await expect
+        .poll(() => page.locator(".cmd-palette__item").filter({ hasText: "Release subagent" }).count())
+        .toBe(0);
+      await expect
+        .poll(() => page.locator(".cmd-palette__item").filter({ hasText: "Release archive" }).count())
+        .toBe(0);
       const searchRequests = await gateway.getRequests("sessions.list");
       expect(
         searchRequests.some((request) => requireRecord(request.params).search === "release"),
