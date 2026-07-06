@@ -106,7 +106,8 @@ const BROWSER_TOOL_MODEL_HINT =
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
 const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
-const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 16 * 1024 * 1024;
+// `response/body` supports 5M characters; 32 MiB covers worst-case JSON escaping while staying bounded.
+const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;

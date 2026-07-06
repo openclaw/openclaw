@@ -23,8 +23,8 @@ const { fetchBrowserJson } = await import("./client-fetch.js");
 const STREAM_CHUNK = Buffer.alloc(4 * 1024, "x");
 const STREAM_BODY_BYTES = 1024 * 1024;
 const SUCCESS_STREAM_CHUNK = Buffer.alloc(64 * 1024, "x");
-const SUCCESS_STREAM_BODY_BYTES = 17 * 1024 * 1024;
-const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 16 * 1024 * 1024;
+const SUCCESS_STREAM_BODY_BYTES = 33 * 1024 * 1024;
+const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
 describe("fetchHttpJson error body boundary", () => {
   let server: http.Server;
@@ -62,6 +62,11 @@ describe("fetchHttpJson error body boundary", () => {
     streamCompleted = false;
     successStreamCompleted = false;
     server = http.createServer((req, res) => {
+      if (req.url === "/success-small") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end('{"payload":"control"}');
+        return;
+      }
       if (req.url === "/success-large") {
         let written = 0;
         let closed = false;
@@ -165,6 +170,12 @@ describe("fetchHttpJson error body boundary", () => {
     });
     await expect(successStreamClosed).resolves.toBeUndefined();
     expect(successStreamCompleted).toBe(false);
+  });
+
+  it("preserves a normal successful JSON response", async () => {
+    await expect(fetchBrowserJson(`${baseUrl}/success-small`)).resolves.toEqual({
+      payload: "control",
+    });
   });
 
   it("preserves a complete diagnostic body within the limit", async () => {
