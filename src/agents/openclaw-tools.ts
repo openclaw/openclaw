@@ -63,6 +63,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
+import { createSleepTool } from "./tools/sleep-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -527,6 +528,33 @@ export function createOpenClawTools(
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onYield: options?.onYield,
+    }),
+    createSleepTool({
+      sessionId: options?.sessionId,
+      onYield: options?.onYield,
+      scheduleWake: options?.onYield
+        ? (seconds, message) => {
+            // Schedule a one-shot cron `at` job that fires a systemEvent wake.
+            // The wake message is injected into the session, resuming the agent
+            // turn with full context intact.
+            const at = new Date(Date.now() + seconds * 1000).toISOString();
+            return openClawToolsDeps.callGateway({
+              method: "POST",
+              path: "/cron",
+              body: {
+                action: "add",
+                job: {
+                  name: `sleep-${Date.now()}`,
+                  schedule: { kind: "at", at },
+                  payload: { kind: "systemEvent", text: message },
+                  deleteAfterRun: true,
+                  enabled: true,
+                },
+                sessionKey: options?.agentSessionKey,
+              },
+            });
+          }
+        : undefined,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

@@ -1,0 +1,14 @@
+feat: sleep tool — pause execution without burning tokens
+
+Adds a sleep tool that allows the agent to suspend the current turn for
+N seconds (1-600) without burning tokens or spamming poll loops.
+
+How it works:
+1. Agent calls sleep({ seconds: 300, message: "Check status" })
+2. Tool schedules a one-shot cron at job to fire a systemEvent wake
+3. Tool returns status yielded - existing yield detector maps to end_turn
+4. When the timer fires the wake event resumes the session
+
+Same pattern as sessions_yield but with an automatic timer.
+
+Closes #101190
