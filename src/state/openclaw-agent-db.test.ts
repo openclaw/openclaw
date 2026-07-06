@@ -409,4 +409,57 @@ describe("openclaw agent database", () => {
       }),
     ).toThrow(/newer schema version 2/);
   });
+
+  it("closes cached handles on normal process exit so no stale WAL remains", () => {
+    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import os from "node:os";
+          import path from "node:path";
+          import { openOpenClawAgentDatabase } from ${JSON.stringify(agentModuleUrl)};
+
+          const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-exit-"));
+          const database = openOpenClawAgentDatabase({
+            agentId: "worker-1",
+            env: { OPENCLAW_STATE_DIR: stateDir },
+          });
+          const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
+          console.log(JSON.stringify({
+            stateDir,
+            agentDatabasePath: database.path,
+            agentWalBytesBeforeExit: fs.statSync(database.path + "-wal").size,
+            stateWalBytesBeforeExit: fs.statSync(stateDatabasePath + "-wal").size,
+            stateDatabasePath,
+          }));
+        `,
+      ],
+      { encoding: "utf8" },
+    );
+    const result = JSON.parse(output) as {
+      agentDatabasePath: string;
+      agentWalBytesBeforeExit: number;
+      stateDatabasePath: string;
+      stateDir: string;
+      stateWalBytesBeforeExit: number;
+    };
+    const walBytes = (databasePath: string): number =>
+      fs.existsSync(`${databasePath}-wal`) ? fs.statSync(`${databasePath}-wal`).size : 0;
+    try {
+      // The child never closes explicitly; only the exit hooks can retire the
+      // agent and shared-state WALs (opening an agent DB touches both caches).
+      expect(result.agentWalBytesBeforeExit).toBeGreaterThan(0);
+      expect(result.stateWalBytesBeforeExit).toBeGreaterThan(0);
+      expect(walBytes(result.agentDatabasePath)).toBe(0);
+      expect(walBytes(result.stateDatabasePath)).toBe(0);
+    } finally {
+      fs.rmSync(result.stateDir, { recursive: true, force: true });
+    }
+  });
 });

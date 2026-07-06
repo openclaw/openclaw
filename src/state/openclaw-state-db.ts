@@ -950,6 +950,7 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  registerProcessExitClose();
   return database;
 }
 
@@ -967,6 +968,26 @@ export function runOpenClawStateWriteTransaction<T>(
     // callers never retry an operation that is durable in SQLite.
   }
   return result;
+}
+
+let exitCloseRegistered = false;
+
+// The cache is process-global with no other end-of-life owner, so close on
+// normal exit: every process (gateway, CLI, ACP bridge) then releases handles
+// and runs the final WAL truncate checkpoint instead of leaving stale WAL/-shm
+// files for the next opener to recover. Unclean exits rely on WAL recovery.
+function registerProcessExitClose(): void {
+  if (exitCloseRegistered) {
+    return;
+  }
+  exitCloseRegistered = true;
+  process.once("exit", () => {
+    try {
+      closeOpenClawStateDatabase();
+    } catch {
+      // Exit-time close is best-effort and must never mask the exit path.
+    }
+  });
 }
 
 /** Close all cached shared state database handles. */

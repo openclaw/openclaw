@@ -271,6 +271,7 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
+  registerProcessExitClose();
   registerAgentDatabase({ agentId, path: pathname, env: options.env });
   return database;
 }
@@ -286,12 +287,36 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
-/** Close cached agent databases so tests can remove temp dirs and reopen cleanly. */
-export function closeOpenClawAgentDatabasesForTest(): void {
+let exitCloseRegistered = false;
+
+// Same contract as the shared state DB cache: cached per-agent handles have no
+// other end-of-life owner, so close them on normal process exit; unclean exits
+// rely on SQLite WAL recovery on the next open.
+function registerProcessExitClose(): void {
+  if (exitCloseRegistered) {
+    return;
+  }
+  exitCloseRegistered = true;
+  process.once("exit", () => {
+    try {
+      closeOpenClawAgentDatabases();
+    } catch {
+      // Exit-time close is best-effort and must never mask the exit path.
+    }
+  });
+}
+
+/** Close all cached agent database handles. */
+export function closeOpenClawAgentDatabases(): void {
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(database.db);
-    database.db.close();
+    if (database.db.isOpen) {
+      database.db.close();
+    }
   }
   cachedDatabases.clear();
 }
+
+/** Test alias for closing cached agent database handles from teardown code. */
+export const closeOpenClawAgentDatabasesForTest = closeOpenClawAgentDatabases;

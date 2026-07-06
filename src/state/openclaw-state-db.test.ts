@@ -969,4 +969,58 @@ describe("openclaw state database", () => {
       }, options),
     ).not.toThrow();
   });
+
+  it("registers at most one process exit close hook across opens", () => {
+    openOpenClawStateDatabase({ path: path.join(createTempStateDir(), "first.sqlite") });
+    const exitListenerCount = process.listeners("exit").length;
+    openOpenClawStateDatabase({ path: path.join(createTempStateDir(), "second.sqlite") });
+    expect(process.listeners("exit").length).toBe(exitListenerCount);
+  });
+
+  it("closes cached handles on normal process exit so no stale WAL remains", () => {
+    const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import os from "node:os";
+          import path from "node:path";
+          import { openOpenClawStateDatabase } from ${JSON.stringify(moduleUrl)};
+
+          const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-exit-"));
+          const databasePath = path.join(root, "state.sqlite");
+          const database = openOpenClawStateDatabase({ path: databasePath });
+          database.db
+            .prepare("INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at) VALUES (?, ?, ?, ?)")
+            .run("exit-close", "before-exit", "{}", 1);
+          console.log(JSON.stringify({
+            root,
+            databasePath,
+            walBytesBeforeExit: fs.statSync(databasePath + "-wal").size,
+          }));
+        `,
+      ],
+      { encoding: "utf8" },
+    );
+    const result = JSON.parse(output) as {
+      root: string;
+      databasePath: string;
+      walBytesBeforeExit: number;
+    };
+    try {
+      // The child never closes explicitly; only the exit hook can retire the WAL.
+      expect(result.walBytesBeforeExit).toBeGreaterThan(0);
+      const walPath = `${result.databasePath}-wal`;
+      const walBytesAfterExit = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
+      expect(walBytesAfterExit).toBe(0);
+      expect(fs.statSync(result.databasePath).size).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(result.root, { recursive: true, force: true });
+    }
+  });
 });
