@@ -16083,7 +16083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 239,
+      "line": 263,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "New Mac wants to connect",
       "surface": "apple",
@@ -16091,7 +16091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 239,
+      "line": 263,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "New device wants to connect",
       "surface": "apple",
@@ -16099,7 +16099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 243,
+      "line": 267,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "this Mac app",
       "surface": "apple",
@@ -16107,7 +16107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 243,
+      "line": 267,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "this device",
       "surface": "apple",
@@ -16115,7 +16115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 248,
+      "line": 272,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "Approve Device",
       "surface": "apple",
@@ -16123,7 +16123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 248,
+      "line": 272,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "Approve Mac",
       "surface": "apple",
@@ -16131,7 +16131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 308,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "New device",
       "surface": "apple",
@@ -16139,7 +16139,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 308,
       "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
       "source": "OpenClaw Mac app",
       "surface": "apple",
@@ -17779,7 +17779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 395,
+      "line": 399,
       "path": "apps/macos/Sources/OpenClaw/NodePairingApprovalPrompter.swift",
       "source": "Node pairing approved",
       "surface": "apple",
@@ -17787,7 +17787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 395,
+      "line": 399,
       "path": "apps/macos/Sources/OpenClaw/NodePairingApprovalPrompter.swift",
       "source": "Node pairing rejected",
       "surface": "apple",
