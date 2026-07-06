@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramPlugin } from "./channel.js";
@@ -6,12 +8,12 @@ vi.mock("./api-fetch.js", () => ({
   lookupTelegramChatId: vi.fn(),
 }));
 
-describe("telegram resolveTargets integration", () => {
-  it("passes proxy and apiRoot config parameters to lookupTelegramChatId", async () => {
+describe("telegram target resolution", () => {
+  it("uses configured runtime routing for a channel username lookup", async () => {
     const lookupMock = vi.mocked(lookupTelegramChatId);
-    lookupMock.mockResolvedValue("99999");
+    lookupMock.mockResolvedValue("-1001234567890");
 
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         telegram: {
           botToken: "123456:ABC-DEF",
@@ -19,25 +21,28 @@ describe("telegram resolveTargets integration", () => {
           apiRoot: "https://my-api-root",
         },
       },
-    } as any;
+    };
 
     const resolveTargets = telegramPlugin.resolver?.resolveTargets;
-    expect(resolveTargets).toBeDefined();
+    if (!resolveTargets) {
+      throw new Error("expected Telegram target resolver");
+    }
 
-    const results = await resolveTargets!({
+    const results = await resolveTargets({
       cfg,
       accountId: "default",
-      inputs: ["@testuser"],
+      inputs: ["@testchannel"],
+      // Generic target detection classifies @names before Telegram resolves the chat type.
       kind: "user",
-      runtime: { log: vi.fn(), error: vi.fn() } as any,
+      runtime: createNonExitingRuntimeEnv(),
     });
 
     expect(results).toEqual([
       {
-        input: "@testuser",
+        input: "@testchannel",
         resolved: true,
-        id: "99999",
-        name: "@testuser",
+        id: "-1001234567890",
+        name: "@testchannel",
       },
     ]);
 
