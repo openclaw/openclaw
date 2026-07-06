@@ -16,7 +16,10 @@ export type SignalEnvelope = {
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
-  editMessage?: { dataMessage?: SignalDataMessage | null } | null;
+  editMessage?: {
+    targetSentTimestamp?: number | null;
+    dataMessage?: SignalDataMessage | null;
+  } | null;
   syncMessage?: unknown;
   reactionMessage?: SignalReactionMessage | null;
 };

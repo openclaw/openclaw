@@ -259,6 +259,36 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.Timestamp).toBe(1700000000002);
   });
 
+  it("uses editMessage.targetSentTimestamp as the native reply target", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000999,
+        editMessage: {
+          targetSentTimestamp: 1700000000002,
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited hello",
+            attachments: [],
+          },
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.MessageSid).toBe("1700000000002");
+    expect(context.ReplyToId).toBe("1700000000002");
+    expect(context.Timestamp).toBe(1700000000999);
+  });
+
   it("preserves the last debounced message body for native reply quote metadata", async () => {
     vi.useFakeTimers();
     const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);

@@ -1159,6 +1159,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : typeof dataMessage.timestamp === "number"
           ? dataMessage.timestamp
           : undefined;
+    const nativeReplyTargetTimestamp =
+      typeof envelope.editMessage?.targetSentTimestamp === "number"
+        ? envelope.editMessage.targetSentTimestamp
+        : inboundTimestamp;
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
@@ -1180,7 +1184,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
+    const messageId =
+      typeof nativeReplyTargetTimestamp === "number"
+        ? String(nativeReplyTargetTimestamp)
+        : undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
