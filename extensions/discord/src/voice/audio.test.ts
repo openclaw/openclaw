@@ -8,8 +8,6 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
 }));
-// resolveFfmpegBin requires a real ffmpeg on PATH; stub only that lookup so the
-// playback stream construction reaches the stdio stream-error wiring under test.
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   resolveFfmpegBin: () => "ffmpeg",
@@ -22,9 +20,6 @@ import {
   decodeOpusStreamChunks,
 } from "./audio.js";
 
-// Mirrors the ffmpeg child's stdio shape so we can emit stream `error` events.
-// On a raw stream an unhandled `error` throws synchronously (the real gateway
-// uncaughtException crash path).
 function createFakeFfmpeg() {
   const child = new EventEmitter() as EventEmitter & {
     stdout: PassThrough;
@@ -121,7 +116,9 @@ describe("createDiscordOpusPlaybackStream child stream errors", () => {
       spawnMock.mockReturnValue(ffmpeg);
 
       const playback = createDiscordOpusPlaybackStream("input.mp3");
-      const errorSeen = new Promise<Error>((resolve) => playback.once("error", resolve));
+      const errorSeen = new Promise<Error>((resolve) => {
+        playback.once("error", resolve);
+      });
 
       const streamError = new Error(`${streamName} broke`);
       expect(() => ffmpeg[streamName].emit("error", streamError)).not.toThrow();
