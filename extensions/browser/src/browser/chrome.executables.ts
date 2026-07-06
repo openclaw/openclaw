@@ -784,8 +784,20 @@ const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
 function readWindowsBrowserVersion(executablePath: string): string | null {
   // Read the inspected executable's authoritative PE metadata. Pass the path as
   // data so a configured path cannot become part of the PowerShell program.
-  const metadataVersion = execText(
+  const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
+  const systemRoot =
+    configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
+      ? configuredSystemRoot
+      : "C:\\Windows";
+  const powershellPath = path.win32.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
     "powershell.exe",
+  );
+  const metadataVersion = execText(
+    powershellPath,
     [
       "-NoProfile",
       "-NonInteractive",

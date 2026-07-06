@@ -107,8 +107,16 @@ describe("readBrowserVersion", () => {
 
       expect(readBrowserVersion(exePath)).toBe("148.0.7778.179");
       expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-      expect(execFileSyncMock).toHaveBeenCalledWith(
+      const powershellPath = path.win32.join(
+        process.env.SystemRoot ?? "C:\\Windows",
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
         "powershell.exe",
+      );
+      expect(path.win32.isAbsolute(powershellPath)).toBe(true);
+      expect(execFileSyncMock).toHaveBeenCalledWith(
+        powershellPath,
         [
           "-NoProfile",
           "-NonInteractive",
