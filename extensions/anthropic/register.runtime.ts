@@ -30,6 +30,7 @@ import {
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -62,7 +63,7 @@ const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
-const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_CLAUDE_5_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -347,15 +348,19 @@ function isAnthropicFable5Model(modelId: string): boolean {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
+function isAnthropicSonnet5Model(modelId: string): boolean {
+  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
+}
+
 function resolveAnthropicFixedContextWindow(modelId: string): number | undefined {
-  if (isAnthropicFable5Model(modelId)) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  if (isAnthropicFable5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
+    return ANTHROPIC_CLAUDE_5_CONTEXT_TOKENS;
   }
   return isAnthropicGa1MModel(modelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : undefined;
 }
 
 function isAnthropic128kOutputModel(modelId: string): boolean {
-  if (isAnthropicFable5Model(modelId)) {
+  if (isAnthropicFable5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
     return true;
   }
   return /^claude-opus-4-8(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
@@ -425,7 +430,9 @@ function applyAnthropicFixedContextWindow(params: {
   if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
     return undefined;
   }
-  const exactContextWindow = isAnthropicFable5Model(params.contractModelId);
+  const exactContextWindow =
+    isAnthropicFable5Model(params.contractModelId) ||
+    isAnthropicSonnet5Model(params.contractModelId);
   const nextContextWindow = exactContextWindow
     ? fixedContextWindow
     : Math.max(params.model.contextWindow ?? 0, fixedContextWindow);

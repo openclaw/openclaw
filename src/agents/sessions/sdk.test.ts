@@ -603,6 +603,66 @@ describe("createAgentSession thinking level defaults", () => {
     });
   });
 
+  it.each([
+    {
+      name: "omits Sonnet reasoning for a provider-default off level",
+      settingsManager: SettingsManager.inMemory(),
+      expectedReasoning: undefined,
+    },
+    {
+      name: "preserves Sonnet reasoning off from configured settings",
+      settingsManager: SettingsManager.inMemory({ defaultThinkingLevel: "off" }),
+      expectedReasoning: "off",
+    },
+  ])("$name", async ({ settingsManager, expectedReasoning }) => {
+    thinkingMocks.resolveThinkingDefaultForModel.mockReturnValueOnce("off").mockReturnValue("high");
+    const model = {
+      ...testModel,
+      id: "claude-sonnet-5",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      reasoning: true,
+    } satisfies Model;
+    const sessionManager = SessionManager.inMemory();
+    const { session } = await createAgentSession({
+      model,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager,
+      settingsManager,
+      modelRegistry: ModelRegistry.inMemory(
+        AuthStorage.inMemory({ anthropic: { type: "api_key", key: "sk-test" } }),
+      ),
+    });
+    const observedReasoning: Array<string | undefined> = [];
+    session.agent.streamFn = async (_model, _context, options) => {
+      observedReasoning.push(options?.reasoning);
+      throw new Error("stop after capturing request options");
+    };
+
+    await session.agent.prompt("hello");
+
+    expect(observedReasoning).toEqual([expectedReasoning]);
+    const hasThinkingEntry = () =>
+      sessionManager.getEntries().some((entry) => entry.type === "thinking_level_change");
+    expect(hasThinkingEntry()).toBe(expectedReasoning === "off");
+
+    if (expectedReasoning === undefined) {
+      await session.setModel({
+        ...model,
+        id: "claude-sonnet-5-alternate",
+        params: { canonicalModelId: "claude-sonnet-5" },
+      });
+      expect(session.agent.state.thinkingLevelSource).toBe("default");
+      expect(session.thinkingLevel).toBe("medium");
+      expect(hasThinkingEntry()).toBe(false);
+
+      session.setThinkingLevel("off");
+      expect(hasThinkingEntry()).toBe(true);
+      await session.agent.prompt("explicit off");
+      expect(observedReasoning).toEqual([undefined, "off"]);
+    }
+  });
+
   it("settings default overrides provider thinking default", async () => {
     thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue("off");
 

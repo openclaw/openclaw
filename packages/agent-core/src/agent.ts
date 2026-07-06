@@ -25,6 +25,8 @@ import type {
   BeforeToolCallResult,
   QueueMode,
   StreamFn,
+  ThinkingLevel,
+  ThinkingLevelSource,
   ToolExecutionMode,
 } from "./types.js";
 
@@ -63,6 +65,7 @@ type MutableAgentState = Omit<
   AgentState,
   "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"
 > & {
+  setThinkingLevel(level: ThinkingLevel, source: ThinkingLevelSource): void;
   isStreaming: boolean;
   streamingMessage?: AgentMessage;
   pendingToolCalls: Set<string>;
@@ -73,14 +76,33 @@ function createMutableAgentState(
   initialState?: Partial<
     Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">
   >,
+  initialThinkingLevelSource?: ThinkingLevelSource,
 ): MutableAgentState {
   let tools = initialState?.tools?.slice() ?? [];
   let messages = initialState?.messages?.slice() ?? [];
+  let thinkingLevel: ThinkingLevel = initialState?.thinkingLevel ?? "off";
+  let thinkingLevelSource: ThinkingLevelSource =
+    initialState?.thinkingLevel === undefined
+      ? "default"
+      : (initialThinkingLevelSource ?? "explicit");
+  const setThinkingLevel = (level: ThinkingLevel, source: ThinkingLevelSource) => {
+    thinkingLevel = level;
+    thinkingLevelSource = source;
+  };
 
   return {
     systemPrompt: initialState?.systemPrompt ?? "",
     model: initialState?.model ?? DEFAULT_MODEL,
-    thinkingLevel: initialState?.thinkingLevel ?? "off",
+    get thinkingLevel() {
+      return thinkingLevel;
+    },
+    set thinkingLevel(nextLevel: ThinkingLevel) {
+      setThinkingLevel(nextLevel, "explicit");
+    },
+    get thinkingLevelSource() {
+      return thinkingLevelSource;
+    },
+    setThinkingLevel,
     get tools() {
       return tools;
     },
@@ -106,6 +128,8 @@ export interface AgentOptions {
   initialState?: Partial<
     Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">
   >;
+  /** Source of an initial thinking level that was resolved before constructing the agent. */
+  initialThinkingLevelSource?: ThinkingLevelSource;
   /** Convert agent-owned transcript messages into provider-facing messages. */
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
   /** Optionally rewrite context before each provider request. */
@@ -244,7 +268,10 @@ export class Agent {
   public toolExecution: ToolExecutionMode;
 
   constructor(options: AgentOptions = {}) {
-    this.mutableState = createMutableAgentState(options.initialState);
+    this.mutableState = createMutableAgentState(
+      options.initialState,
+      options.initialThinkingLevelSource,
+    );
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = options.transformContext;
     this.runtime = options.runtime;
@@ -289,6 +316,11 @@ export class Agent {
    */
   get state(): AgentState {
     return this.mutableState;
+  }
+
+  /** Update the logical thinking level while preserving its default-vs-explicit provenance. */
+  setThinkingLevel(level: ThinkingLevel, source: ThinkingLevelSource = "explicit"): void {
+    this.mutableState.setThinkingLevel(level, source);
   }
 
   /** Controls how queued steering messages are drained. */
@@ -476,9 +508,11 @@ export class Agent {
     return {
       model: this.mutableState.model,
       thinkingLevel: this.mutableState.thinkingLevel,
+      thinkingLevelSource: this.mutableState.thinkingLevelSource,
       reasoning: resolveAgentReasoningOption(
         this.mutableState.model,
         this.mutableState.thinkingLevel,
+        this.mutableState.thinkingLevelSource,
       ),
       sessionId: this.sessionId,
       onPayload: this.onPayload,

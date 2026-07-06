@@ -4,7 +4,7 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "../../llm-core/src/index.js";
-import type { ThinkingLevel } from "./types.js";
+import type { ThinkingLevel, ThinkingLevelSource } from "./types.js";
 
 type StreamReasoningLevel = NonNullable<SimpleStreamOptions["reasoning"]>;
 
@@ -25,6 +25,7 @@ function isStreamReasoningLevel(value: unknown): value is StreamReasoningLevel {
 export function resolveAgentReasoningOption(
   model: Model,
   thinkingLevel: ThinkingLevel,
+  thinkingLevelSource: ThinkingLevelSource = "explicit",
 ): SimpleStreamOptions["reasoning"] {
   if (thinkingLevel !== "off") {
     return thinkingLevel;
@@ -40,6 +41,8 @@ export function resolveAgentReasoningOption(
   }
   return model.api === "anthropic-messages" &&
     resolveClaudeSonnet5ModelIdentity(model) !== undefined
-    ? "off"
+    ? thinkingLevelSource === "explicit"
+      ? "off"
+      : undefined
     : undefined;
 }

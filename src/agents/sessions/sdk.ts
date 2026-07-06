@@ -5,10 +5,6 @@
  */
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import {
-  resolveThinkingDefaultForModel,
-  type ThinkingCatalogEntry,
-} from "../../auto-reply/thinking.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
@@ -17,11 +13,12 @@ import {
   type AgentMessage,
   type AgentOptions,
   type ThinkingLevel,
+  type ThinkingLevelSource,
 } from "../runtime/index.js";
 import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import { DEFAULT_THINKING_LEVEL, resolveSessionThinkingDefault } from "./defaults.js";
 import type {
   ExtensionRunner,
   LoadExtensionsResult,
@@ -49,28 +46,6 @@ import {
   type ToolName,
   withFileMutationQueue,
 } from "./tools/index.js";
-
-type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
-
-function projectThinkingCatalogCompat(compat: Model["compat"]) {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const projected: ThinkingCatalogCompat = {};
-  if (typeof record.thinkingFormat === "string") {
-    projected.thinkingFormat = record.thinkingFormat;
-  }
-  if (record.supportedReasoningEfforts === null) {
-    projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
-    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
-  }
-  return Object.keys(projected).length > 0 ? projected : undefined;
-}
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -302,42 +277,40 @@ export async function createAgentSession(
   }
 
   let thinkingLevel = options.thinkingLevel;
+  let thinkingLevelSource: ThinkingLevelSource =
+    thinkingLevel === undefined ? "default" : "explicit";
 
   // Use "off" when a provider explicitly opts out of thinking (e.g. Ollama). Non-off
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
-  const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
-  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
-  const resolvedProviderDefault =
-    model && modelThinkingProvider
-      ? resolveThinkingDefaultForModel({
-          provider: modelThinkingProvider,
-          model: model.id,
-          catalog: [
-            {
-              provider: modelThinkingProvider,
-              id: model.id,
-              api: model.api,
-              reasoning: model.reasoning,
-              ...(model.params ? { params: model.params } : {}),
-              ...(modelThinkingCompat ? { compat: modelThinkingCompat } : {}),
-            },
-          ],
-        })
-      : undefined;
-  const modelThinkingDefault: ThinkingLevel =
-    resolvedProviderDefault === "off" ? "off" : DEFAULT_THINKING_LEVEL;
+  const modelThinkingDefault = model
+    ? resolveSessionThinkingDefault(model)
+    : DEFAULT_THINKING_LEVEL;
+  const configuredThinkingDefault = settingsManager.getDefaultThinkingLevel();
 
   // If session has data, restore thinking level from it
   if (thinkingLevel === undefined && hasExistingSession) {
-    thinkingLevel = hasThinkingEntry
-      ? (existingSession.thinkingLevel as ThinkingLevel)
-      : (settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault);
+    if (hasThinkingEntry) {
+      thinkingLevel = existingSession.thinkingLevel as ThinkingLevel;
+      thinkingLevelSource = "explicit";
+    } else if (configuredThinkingDefault !== undefined) {
+      thinkingLevel = configuredThinkingDefault;
+      thinkingLevelSource = "explicit";
+    } else {
+      thinkingLevel = modelThinkingDefault;
+      thinkingLevelSource = "default";
+    }
   }
 
   // Fall back to settings default
   if (thinkingLevel === undefined) {
-    thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault;
+    if (configuredThinkingDefault !== undefined) {
+      thinkingLevel = configuredThinkingDefault;
+      thinkingLevelSource = "explicit";
+    } else {
+      thinkingLevel = modelThinkingDefault;
+      thinkingLevelSource = "default";
+    }
   }
 
   // Clamp to model capabilities
@@ -410,6 +383,7 @@ export async function createAgentSession(
       thinkingLevel,
       tools: [],
     },
+    initialThinkingLevelSource: thinkingLevelSource,
     convertToLlm: convertToLlmWithBlockImages,
     streamFn: async (modelResult, context, optionsLocal) => {
       const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
@@ -474,15 +448,18 @@ export async function createAgentSession(
   // Restore messages if session has existing data
   if (hasExistingSession) {
     agent.state.messages = existingSession.messages;
-    if (!hasThinkingEntry) {
+    if (!hasThinkingEntry && thinkingLevelSource === "explicit") {
       sessionManager.appendThinkingLevelChange(thinkingLevel);
     }
   } else {
-    // Save initial model and thinking level for new sessions so they can be restored on resume
+    // Persist caller/config choices. Provider defaults stay implicit so they can be
+    // recomputed on resume instead of becoming indistinguishable from explicit off.
     if (model) {
       sessionManager.appendModelChange(model.provider, model.id);
     }
-    sessionManager.appendThinkingLevelChange(thinkingLevel);
+    if (thinkingLevelSource === "explicit") {
+      sessionManager.appendThinkingLevelChange(thinkingLevel);
+    }
   }
 
   const session = new AgentSession({

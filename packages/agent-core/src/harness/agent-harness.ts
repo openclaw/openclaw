@@ -17,6 +17,7 @@ import type {
   QueueMode,
   StreamFn,
   ThinkingLevel,
+  ThinkingLevelSource,
 } from "../types.js";
 import {
   collectEntriesForBranchSummary,
@@ -209,6 +210,7 @@ interface AgentHarnessTurnState<
   systemPrompt: string;
   model: Model;
   thinkingLevel: ThinkingLevel;
+  thinkingLevelSource: ThinkingLevelSource;
   tools: TTool[];
   activeTools: TTool[];
 }
@@ -227,6 +229,7 @@ export class CoreAgentHarness<
   private pendingSessionWrites: PendingSessionWrite[] = [];
   private model: Model;
   private thinkingLevel: ThinkingLevel;
+  private thinkingLevelSource: ThinkingLevelSource;
   private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
   private streamOptions: AgentHarnessStreamOptions;
   private getApiKeyAndHeaders?: AgentHarnessOptions["getApiKeyAndHeaders"];
@@ -254,6 +257,8 @@ export class CoreAgentHarness<
     }
     this.model = options.model;
     this.thinkingLevel = options.thinkingLevel ?? "off";
+    this.thinkingLevelSource =
+      options.thinkingLevel === undefined ? "default" : (options.thinkingLevelSource ?? "explicit");
     this.activeToolNames =
       options.activeToolNames ?? (options.tools ?? []).map((tool) => tool.name);
     this.steeringQueueMode = options.steeringMode ?? "one-at-a-time";
@@ -411,6 +416,7 @@ export class CoreAgentHarness<
       systemPrompt,
       model: this.model,
       thinkingLevel: this.thinkingLevel,
+      thinkingLevelSource: this.thinkingLevelSource,
       tools,
       activeTools,
     };
@@ -491,7 +497,12 @@ export class CoreAgentHarness<
     return {
       model: turnState.model,
       thinkingLevel: turnState.thinkingLevel,
-      reasoning: resolveAgentReasoningOption(turnState.model, turnState.thinkingLevel),
+      thinkingLevelSource: turnState.thinkingLevelSource,
+      reasoning: resolveAgentReasoningOption(
+        turnState.model,
+        turnState.thinkingLevel,
+        turnState.thinkingLevelSource,
+      ),
       convertToLlm,
       transformContext: async (messages) => {
         const result = await this.emitHook({ type: "context", messages: [...messages] });
@@ -533,6 +544,7 @@ export class CoreAgentHarness<
           context: this.createContext(nextTurnState),
           model: nextTurnState.model,
           thinkingLevel: nextTurnState.thinkingLevel,
+          thinkingLevelSource: nextTurnState.thinkingLevelSource,
         };
       },
       getSteeringMessages: async () =>
@@ -856,6 +868,7 @@ export class CoreAgentHarness<
             this.thinkingLevel,
             undefined,
             this.runtime,
+            this.thinkingLevelSource,
           );
       if (!compactResult.ok) {
         throw compactResult.error;
@@ -1058,6 +1071,7 @@ export class CoreAgentHarness<
         this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
       }
       this.thinkingLevel = level;
+      this.thinkingLevelSource = "explicit";
       await this.emitOwn({ type: "thinking_level_select", level, previousLevel });
     } catch (error) {
       throw normalizeHarnessError(error, "session");

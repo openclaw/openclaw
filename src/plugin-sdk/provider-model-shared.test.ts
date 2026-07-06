@@ -9,6 +9,7 @@ import {
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -48,6 +49,9 @@ describe("Claude model contracts", () => {
   });
 
   it("recognizes claude-sonnet-5 as GA 1M model", () => {
+    expect(resolveClaudeSonnet5ModelIdentity({ id: "claude-sonnet-5-20260701" })).toBe(
+      "claude-sonnet-5-20260701",
+    );
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-5" })).toBe(true);
     expect(supportsClaudeNativeMaxEffort({ id: "claude-sonnet-5" })).toBe(true);
     expect(supportsClaudeNativeXhighEffort({ id: "anthropic.claude-sonnet-5" })).toBe(true);

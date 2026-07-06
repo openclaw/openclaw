@@ -181,6 +181,66 @@ describe("generateSummary thinking options", () => {
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { source: "default" as const, expected: undefined },
+    { source: "explicit" as const, expected: "off" },
+  ])("preserves Sonnet 5 $source off provenance for compaction", async ({ source, expected }) => {
+    const model: Model = {
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+    const summaryMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "summary" }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    const streamFn = vi.fn<StreamFn>((_model, _context, options) => {
+      expect(options?.reasoning).toBe(expected);
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "stop", message: summaryMessage });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "off",
+      streamFn,
+      undefined,
+      source,
+    );
+
+    expect(result).toEqual({ ok: true, value: "summary" });
+    expect(streamFn).toHaveBeenCalledOnce();
+  });
 });
 
 describe("split-turn compaction", () => {

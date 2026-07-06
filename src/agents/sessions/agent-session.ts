@@ -48,6 +48,7 @@ import type {
   BranchSummaryResult as CoreBranchSummaryResult,
   CompactionResult,
   ThinkingLevel,
+  ThinkingLevelSource,
 } from "../runtime/index.js";
 import {
   calculateContextTokens,
@@ -63,7 +64,7 @@ import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import { DEFAULT_THINKING_LEVEL, resolveSessionThinkingDefault } from "./defaults.js";
 import {
   type ContextUsage,
   type ExtensionCommandContextActions,
@@ -1637,13 +1638,13 @@ export class AgentSession {
     }
 
     const previousModel = this.model;
-    const thinkingLevel = this.getThinkingLevelForModelSwitch();
+    const thinking = this.getThinkingSelectionForModelSwitch(model);
     this.agent.state.model = model;
     this.sessionManager.appendModelChange(model.provider, model.id);
     this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 
     // Re-clamp thinking level for new model's capabilities
-    this.setThinkingLevel(thinkingLevel);
+    this.applyThinkingLevel(thinking.level, thinking.source);
 
     await this.emitModelSelect(model, previousModel, "set");
   }
@@ -1683,7 +1684,7 @@ export class AgentSession {
     const nextIndex =
       direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
     const next = scopedModels[nextIndex];
-    const thinkingLevel = this.getThinkingLevelForModelSwitch(next.thinkingLevel);
+    const thinking = this.getThinkingSelectionForModelSwitch(next.model, next.thinkingLevel);
 
     // Apply model
     this.agent.state.model = next.model;
@@ -1694,7 +1695,7 @@ export class AgentSession {
     // - Explicit scoped model thinking level overrides current session level
     // - Undefined scoped model thinking level inherits the current session preference
     // setThinkingLevel clamps to model capabilities.
-    this.setThinkingLevel(thinkingLevel);
+    this.applyThinkingLevel(thinking.level, thinking.source);
 
     await this.emitModelSelect(next.model, currentModel, "cycle");
 
@@ -1720,13 +1721,13 @@ export class AgentSession {
       direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
     const nextModel = availableModels[nextIndex];
 
-    const thinkingLevel = this.getThinkingLevelForModelSwitch();
+    const thinking = this.getThinkingSelectionForModelSwitch(nextModel);
     this.agent.state.model = nextModel;
     this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
     this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
 
     // Re-clamp thinking level for new model's capabilities
-    this.setThinkingLevel(thinkingLevel);
+    this.applyThinkingLevel(thinking.level, thinking.source);
 
     await this.emitModelSelect(nextModel, currentModel, "cycle");
 
@@ -1740,23 +1741,29 @@ export class AgentSession {
   /**
    * Set thinking level.
    * Clamps to model capabilities based on available thinking levels.
-   * Saves to session and settings only if the level actually changes.
+   * Saves an explicit selection even when it matches an implicit provider default.
    */
   setThinkingLevel(level: ThinkingLevel): void {
+    this.applyThinkingLevel(level, "explicit");
+  }
+
+  private applyThinkingLevel(level: ThinkingLevel, source: ThinkingLevelSource): void {
     const availableLevels = this.getAvailableThinkingLevels();
     const effectiveLevel = availableLevels.includes(level) ? level : this.clampThinkingLevel(level);
 
-    // Only persist if actually changing
     const previousLevel = this.agent.state.thinkingLevel;
-    const isChanging = effectiveLevel !== previousLevel;
+    const levelChanged = effectiveLevel !== previousLevel;
+    const sourceChanged = this.agent.state.thinkingLevelSource !== source;
 
-    this.agent.state.thinkingLevel = effectiveLevel;
+    this.agent.setThinkingLevel(effectiveLevel, source);
 
-    if (isChanging) {
+    if (source === "explicit" && (levelChanged || sourceChanged)) {
       this.sessionManager.appendThinkingLevelChange(effectiveLevel);
       if (this.supportsThinking() || effectiveLevel !== "off") {
         this.settingsManager.setDefaultThinkingLevel(effectiveLevel);
       }
+    }
+    if (levelChanged) {
       this.emit({ type: "thinking_level_changed", level: effectiveLevel });
       void this.currentExtensionRunner.emit({
         type: "thinking_level_select",
@@ -1802,14 +1809,29 @@ export class AgentSession {
     return Boolean(this.model?.reasoning);
   }
 
-  private getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
+  private getThinkingSelectionForModelSwitch(
+    targetModel: Model,
+    explicitLevel?: ThinkingLevel,
+  ): {
+    level: ThinkingLevel;
+    source: ThinkingLevelSource;
+  } {
     if (explicitLevel !== undefined) {
-      return explicitLevel;
+      return { level: explicitLevel, source: "explicit" };
+    }
+    if (this.agent.state.thinkingLevelSource === "default") {
+      return { level: resolveSessionThinkingDefault(targetModel), source: "default" };
     }
     if (!this.supportsThinking()) {
-      return this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
+      return {
+        level: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+        source: "explicit",
+      };
     }
-    return this.thinkingLevel;
+    return {
+      level: this.thinkingLevel,
+      source: "explicit",
+    };
   }
 
   private clampThinkingLevel(level: ThinkingLevel): ThinkingLevel {
@@ -2000,6 +2022,8 @@ export class AgentSession {
         options.signal,
         this.thinkingLevel,
         this.agent.streamFn,
+        undefined,
+        this.agent.state.thinkingLevelSource,
       ),
     );
 

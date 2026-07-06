@@ -26,7 +26,12 @@ import {
   type ContextUsageEstimate,
   type Result,
 } from "../../runtime/index.js";
-import type { AgentMessage, StreamFn, ThinkingLevel } from "../../runtime/index.js";
+import type {
+  AgentMessage,
+  StreamFn,
+  ThinkingLevel,
+  ThinkingLevelSource,
+} from "../../runtime/index.js";
 import type { SessionEntry } from "../session-manager.js";
 
 export {
@@ -74,6 +79,7 @@ export async function generateSummary(
   previousSummary?: string,
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
+  thinkingLevelSource?: ThinkingLevelSource,
 ): Promise<string> {
   return unwrapCompactionResult(
     await generateSummaryCore(
@@ -88,6 +94,7 @@ export async function generateSummary(
       thinkingLevel,
       streamFn as unknown as CoreStreamFn | undefined,
       openClawAgentCoreRuntime,
+      thinkingLevelSource,
     ),
   );
 }
@@ -102,6 +109,7 @@ export async function compact(
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
+  thinkingLevelSource?: ThinkingLevelSource,
 ): Promise<CompactionResult> {
   return unwrapCompactionResult(
     await compactCore(
@@ -114,6 +122,7 @@ export async function compact(
       thinkingLevel,
       streamFn as unknown as CoreStreamFn | undefined,
       openClawAgentCoreRuntime,
+      thinkingLevelSource,
     ),
   );
 }

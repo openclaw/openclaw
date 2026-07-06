@@ -389,16 +389,21 @@ async function runLoop(
         currentContext = nextTurnSnapshot.context ?? currentContext;
         const nextModel = nextTurnSnapshot.model ?? config.model;
         const nextThinkingLevel = nextTurnSnapshot.thinkingLevel ?? config.thinkingLevel;
+        const nextThinkingLevelSource =
+          nextTurnSnapshot.thinkingLevelSource ??
+          (nextTurnSnapshot.thinkingLevel !== undefined ? "explicit" : config.thinkingLevelSource);
         const shouldResolveReasoning =
           nextTurnSnapshot.thinkingLevel !== undefined ||
+          nextTurnSnapshot.thinkingLevelSource !== undefined ||
           (nextTurnSnapshot.model !== undefined && nextThinkingLevel !== undefined);
         const nextReasoning =
           shouldResolveReasoning && nextThinkingLevel !== undefined
-            ? resolveAgentReasoningOption(nextModel, nextThinkingLevel)
+            ? resolveAgentReasoningOption(nextModel, nextThinkingLevel, nextThinkingLevelSource)
             : config.reasoning;
         config = Object.assign({}, config, {
           model: nextModel,
           thinkingLevel: nextThinkingLevel,
+          thinkingLevelSource: nextThinkingLevelSource,
           reasoning: nextReasoning,
         });
       }

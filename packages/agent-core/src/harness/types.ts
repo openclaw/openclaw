@@ -7,7 +7,14 @@ import type {
   TextContent,
   Transport,
 } from "../../../llm-core/src/index.js";
-import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentTool,
+  QueueMode,
+  ThinkingLevel,
+  ThinkingLevelSource,
+} from "../index.js";
 import type { AgentCoreCompletionRuntimeDeps, AgentCoreRuntimeDeps } from "../runtime-deps.js";
 import type { Session } from "./session/session.js";
 
@@ -834,6 +841,7 @@ export interface AgentHarnessOptions<
   streamOptions?: AgentHarnessStreamOptions;
   model: Model;
   thinkingLevel?: ThinkingLevel;
+  thinkingLevelSource?: ThinkingLevelSource;
   activeToolNames?: string[];
   steeringMode?: QueueMode;
   followUpMode?: QueueMode;

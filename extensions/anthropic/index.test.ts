@@ -645,6 +645,23 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("resolves dated Sonnet 5 refs with exact context and output limits", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5-20260701",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-sonnet-5-20260701",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("uses canonical model identity instead of a Fable-looking deployment alias", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const model = {
@@ -864,6 +881,33 @@ describe("anthropic provider replay hooks", () => {
     expectFields(normalized, {
       contextWindow: 1_048_576,
       contextTokens: 1_048_576,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("normalizes Claude Sonnet 5 to exact context and output limits", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5-20260701",
+      model: {
+        id: "claude-sonnet-5-20260701",
+        name: "Claude Sonnet 5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        contextTokens: 1_048_576,
+        maxTokens: 64_000,
+      },
+    } as never);
+
+    expectFields(normalized, {
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
       maxTokens: 128_000,
     });
   });

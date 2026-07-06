@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm-core/src/index.js";
+import { Agent } from "./agent.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
+import type { StreamFn } from "./types.js";
 
 function makeModel(
   thinkingLevelMap?: Model["thinkingLevelMap"],
@@ -71,5 +73,38 @@ describe("resolveAgentReasoningOption", () => {
         "off",
       ),
     ).toBe("off");
+  });
+
+  it("uses Claude Sonnet 5 provider-default reasoning when off is only the agent default", () => {
+    expect(
+      resolveAgentReasoningOption(
+        makeModel(undefined, {
+          id: "production-deployment",
+          params: { canonicalModelId: "claude-sonnet-5" },
+        }),
+        "off",
+        "default",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("distinguishes Agent's default thinking level from a later explicit off choice", async () => {
+    const model = makeModel(undefined, { id: "claude-sonnet-5" });
+    const observedReasoning: Array<string | undefined> = [];
+    const streamFn: StreamFn = async (_model, _context, options) => {
+      observedReasoning.push(options?.reasoning);
+      throw new Error("stop after capturing request options");
+    };
+    const agent = new Agent({
+      initialState: { model, thinkingLevel: "off" },
+      initialThinkingLevelSource: "default",
+      streamFn,
+    });
+
+    await agent.prompt("default");
+    agent.state.thinkingLevel = "off";
+    await agent.prompt("explicit");
+
+    expect(observedReasoning).toEqual([undefined, "off"]);
   });
 });

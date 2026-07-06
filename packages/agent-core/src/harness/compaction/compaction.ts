@@ -13,7 +13,7 @@ import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
-import type { AgentMessage, ThinkingLevel } from "../../types.js";
+import type { AgentMessage, ThinkingLevel, ThinkingLevelSource } from "../../types.js";
 import {
   asAgentMessage,
   convertToLlm,
@@ -527,13 +527,14 @@ function createSummarizationOptions(
   headers: Record<string, string> | undefined,
   signal: AbortSignal | undefined,
   thinkingLevel: ThinkingLevel | undefined,
+  thinkingLevelSource: ThinkingLevelSource | undefined,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
   const fableReasoning =
     (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
     resolveClaudeFable5ModelIdentity(model) !== undefined;
   if ((model.reasoning || fableReasoning) && thinkingLevel) {
-    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
+    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel, thinkingLevelSource);
   }
   return options;
 }
@@ -560,6 +561,7 @@ async function runSummarizationCompletion(params: {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   thinkingLevel?: ThinkingLevel;
+  thinkingLevelSource?: ThinkingLevelSource;
   streamFn?: StreamFn;
   runtime?: AgentCoreCompletionRuntimeDeps;
   errorLabel: string;
@@ -582,6 +584,7 @@ async function runSummarizationCompletion(params: {
       params.headers,
       params.signal,
       params.thinkingLevel,
+      params.thinkingLevelSource,
     ),
     params.streamFn,
     params.runtime,
@@ -621,6 +624,7 @@ export async function generateSummary(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
+  thinkingLevelSource?: ThinkingLevelSource,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.8 * reserveTokens),
@@ -646,6 +650,7 @@ export async function generateSummary(
     headers,
     signal,
     thinkingLevel,
+    thinkingLevelSource,
     streamFn,
     runtime,
     errorLabel: "Summarization",
@@ -779,6 +784,7 @@ export async function compact(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
+  thinkingLevelSource?: ThinkingLevelSource,
 ): Promise<Result<CompactionResult, CompactionError>> {
   const {
     firstKeptEntryId,
@@ -817,6 +823,7 @@ export async function compact(
             thinkingLevel,
             streamFn,
             runtime,
+            thinkingLevelSource,
           )
         : ok<string, CompactionError>("No prior history.");
     if (!historyResult.ok) {
@@ -832,6 +839,7 @@ export async function compact(
       thinkingLevel,
       streamFn,
       runtime,
+      thinkingLevelSource,
     );
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
@@ -850,6 +858,7 @@ export async function compact(
       thinkingLevel,
       streamFn,
       runtime,
+      thinkingLevelSource,
     );
     if (!summaryResult.ok) {
       return err(summaryResult.error);
@@ -877,6 +886,7 @@ async function generateTurnPrefixSummary(
   thinkingLevel?: ThinkingLevel,
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
+  thinkingLevelSource?: ThinkingLevelSource,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.5 * reserveTokens),
@@ -893,6 +903,7 @@ async function generateTurnPrefixSummary(
     headers,
     signal,
     thinkingLevel,
+    thinkingLevelSource,
     streamFn,
     runtime,
     errorLabel: "Turn prefix summarization",

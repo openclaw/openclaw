@@ -136,6 +136,8 @@ export interface AgentLoopTurnUpdate {
   model?: Model;
   /** Thinking level for the next provider request. */
   thinkingLevel?: ThinkingLevel;
+  /** Whether the thinking level came from a caller choice or an agent default. */
+  thinkingLevelSource?: ThinkingLevelSource;
 }
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
@@ -144,6 +146,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;
+  /** Whether the logical thinking level is caller-selected or the agent default. */
+  thinkingLevelSource?: ThinkingLevelSource;
 
   /**
    * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -309,6 +313,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  * from openclaw/plugin-sdk/llm to detect support for a concrete model.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevelSource = "default" | "explicit";
 
 export interface BashExecutionMessage {
   /** Harness role for shell command transcripts. */
@@ -405,6 +410,8 @@ export interface AgentState {
   model: Model;
   /** Requested reasoning level for future turns. */
   thinkingLevel: ThinkingLevel;
+  /** Whether the current thinking level came from an agent default or an explicit choice. */
+  readonly thinkingLevelSource: ThinkingLevelSource;
   /** Available tools. Assigning a new array copies the top-level array. */
   set tools(tools: AgentTool[]);
   get tools(): AgentTool[];

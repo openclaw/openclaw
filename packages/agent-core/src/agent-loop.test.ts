@@ -1237,50 +1237,98 @@ describe("agentLoop thinking state", () => {
       nextModel: { ...model, id: "claude-fable-5", thinkingLevelMap: { off: "low" } },
       expected: [undefined, "low"],
     },
-  ])("$name", async ({ initialModel, nextModel, expected }) => {
-    const observedReasoning: Array<string | undefined> = [];
-    let callCount = 0;
-    const streamFn: StreamFn = (activeModel, _context, options) => {
-      observedReasoning.push(options?.reasoning);
-      callCount += 1;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const content: AssistantMessage["content"] =
-          callCount === 1
-            ? [{ type: "toolCall", id: "tool-1", name: "missing_tool", arguments: {} }]
-            : [{ type: "text", text: "done" }];
-        stream.push({
-          type: "done",
-          reason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
-          message: makeAssistantMessage(activeModel, content),
-        });
-        stream.end();
-      });
-      return stream;
-    };
-    let prepared = false;
-    const stream = agentLoop(
-      [{ role: "user", content: "hello", timestamp: 1 }],
-      { systemPrompt: "", messages: [] },
-      {
-        ...config,
-        model: initialModel,
-        thinkingLevel: "off",
-        reasoning: initialModel.thinkingLevelMap?.off === "low" ? "low" : undefined,
-        prepareNextTurn: () => {
-          if (prepared) {
-            return undefined;
-          }
-          prepared = true;
-          return { model: nextModel };
-        },
+    {
+      name: "preserves Sonnet provider-default reasoning across model updates",
+      initialModel: {
+        ...model,
+        id: "claude-sonnet-5",
+        api: "anthropic-messages",
+        provider: "anthropic",
       },
-      undefined,
-      streamFn,
-    );
+      nextModel: {
+        ...model,
+        id: "claude-sonnet-5",
+        api: "anthropic-messages",
+        provider: "anthropic",
+      },
+      thinkingLevelSource: "default" as const,
+      expected: [undefined, undefined],
+    },
+    {
+      name: "recomputes Sonnet reasoning after a source-only update",
+      initialModel: {
+        ...model,
+        id: "claude-sonnet-5",
+        api: "anthropic-messages",
+        provider: "anthropic",
+      },
+      nextModel: {
+        ...model,
+        id: "claude-sonnet-5",
+        api: "anthropic-messages",
+        provider: "anthropic",
+      },
+      thinkingLevelSource: "explicit" as const,
+      initialReasoning: "off" as const,
+      nextTurnUpdate: { thinkingLevelSource: "default" as const },
+      expected: ["off", undefined],
+    },
+  ])(
+    "$name",
+    async ({
+      initialModel,
+      nextModel,
+      thinkingLevelSource,
+      initialReasoning,
+      nextTurnUpdate,
+      expected,
+    }) => {
+      const observedReasoning: Array<string | undefined> = [];
+      let callCount = 0;
+      const streamFn: StreamFn = (activeModel, _context, options) => {
+        observedReasoning.push(options?.reasoning);
+        callCount += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const content: AssistantMessage["content"] =
+            callCount === 1
+              ? [{ type: "toolCall", id: "tool-1", name: "missing_tool", arguments: {} }]
+              : [{ type: "text", text: "done" }];
+          stream.push({
+            type: "done",
+            reason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
+            message: makeAssistantMessage(activeModel, content),
+          });
+          stream.end();
+        });
+        return stream;
+      };
+      let prepared = false;
+      const stream = agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [] },
+        {
+          ...config,
+          model: initialModel,
+          thinkingLevel: "off",
+          thinkingLevelSource,
+          reasoning:
+            initialReasoning ?? (initialModel.thinkingLevelMap?.off === "low" ? "low" : undefined),
+          prepareNextTurn: () => {
+            if (prepared) {
+              return undefined;
+            }
+            prepared = true;
+            return nextTurnUpdate ?? { model: nextModel };
+          },
+        },
+        undefined,
+        streamFn,
+      );
 
-    await collectEvents(stream);
+      await collectEvents(stream);
 
-    expect(observedReasoning).toEqual(expected);
-  });
+      expect(observedReasoning).toEqual(expected);
+    },
+  );
 });
