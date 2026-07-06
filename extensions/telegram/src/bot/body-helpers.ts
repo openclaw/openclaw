@@ -199,7 +199,10 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {
-  const text = resolveTelegramTextContent(msg.text, msg.caption);
+  const text =
+    resolveTelegramTextContent(msg.text, msg.caption) ||
+    resolveTelegramRichMessageText(msg) ||
+    "";
   const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
   return { text, entities };
 }

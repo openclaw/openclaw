@@ -547,7 +547,7 @@ describe("describeReplyTarget", () => {
     } as never);
 
     expect(result?.body).toBe("Forwarded reply text");
-    expect(result?.quoteSourceText).toBeUndefined();
+    expect(result?.quoteSourceText).toBe("Forwarded reply text");
   });
 
   it("drops binary reply captions with no safe fallback", () => {
@@ -803,6 +803,54 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
+    expect(result.entities).toStrictEqual([]);
+  });
+
+  it("extracts markdown Telegram rich_message text when text and caption are absent", () => {
+    const result = getTelegramTextParts({
+      rich_message: { markdown: "**Heart** plain text works" },
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("**Heart** plain text works");
+    expect(result.entities).toStrictEqual([]);
+  });
+
+  it("extracts readable text from Telegram rich_message HTML", () => {
+    const result = getTelegramTextParts({
+      rich_message: { html: "<b>Heart</b><br><p>plain &amp; readable</p>" },
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("Heart\nplain & readable");
+    expect(result.entities).toStrictEqual([]);
+  });
+
+  it("extracts text from Telegram rich_message blocks", () => {
+    const result = getTelegramTextParts({
+      rich_message: {
+        blocks: [
+          {
+            type: "paragraph",
+            text: [
+              { type: "bold", text: "Pinching" },
+              "\n",
+              { type: "code", text: "command openclaw status --deep" },
+            ],
+          },
+          {
+            type: "paragraph",
+            text: "Gateway restart ok",
+          },
+        ],
+      },
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("Pinching\ncommand openclaw status --deep\nGateway restart ok");
     expect(result.entities).toStrictEqual([]);
   });
 });
