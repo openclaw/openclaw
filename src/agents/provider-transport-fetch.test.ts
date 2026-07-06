@@ -1194,25 +1194,14 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("does not re-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
-    const encoder = new TextEncoder();
+    const source = openResponseStreamText(
+      'data: {"id":"a","choices":[{"index":0,"delta":{"content":"Hi","role":"assistant"}}]}\n\n' +
+        'data: {"id":"a","choices":[{"index":0,"delta":{"content":" there"}}]}\n\n' +
+        "data: [DONE]\n\n",
+    );
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(
-              encoder.encode(
-                'data: {"id":"a","choices":[{"index":0,"delta":{"content":"Hi","role":"assistant"}}]}\n\n',
-              ),
-            );
-            controller.enqueue(
-              encoder.encode(
-                'data: {"id":"a","choices":[{"index":0,"delta":{"content":" there"}}]}\n\n',
-              ),
-            );
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-          },
-        }),
+        source.stream,
         // Mislabeled: SSE body served with a JSON content-type.
         { headers: { "content-type": "application/json; charset=utf-8" } },
       ),
@@ -1226,7 +1215,7 @@ describe("buildGuardedModelFetch", () => {
       baseUrl: "https://gateway.example/v1",
     } as unknown as Model<"openai-completions">;
 
-    const response = await buildGuardedModelFetch(model)(
+    const responsePromise = buildGuardedModelFetch(model)(
       "https://gateway.example/v1/chat/completions",
       {
         method: "POST",
@@ -1234,7 +1223,17 @@ describe("buildGuardedModelFetch", () => {
         body: JSON.stringify({ model: "MiniMax-M3", stream: true }),
       },
     );
+    const timeout = Symbol("timeout");
+    const result = await Promise.race<Response | typeof timeout>([
+      responsePromise,
+      new Promise<typeof timeout>((resolve) => {
+        setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    source.close();
 
+    expect(result).not.toBe(timeout);
+    const response = result as Response;
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const items = [];
     for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
