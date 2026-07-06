@@ -190,10 +190,12 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
     this.proc.stdout.setEncoding("utf8");
     this.proc.stderr.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.handleStdout(chunk));
+    this.proc.stdout.on("error", () => {});
     this.proc.stderr.on("data", (chunk: string) => {
       this.stderrTail.push(...chunk.split(/\r?\n/).filter(Boolean));
       this.stderrTail.splice(0, Math.max(0, this.stderrTail.length - 40));
     });
+    this.proc.stderr.on("error", () => {});
     this.proc.stdin.once("error", (error) => this.fail(error));
     this.proc.once("error", (error) => this.fail(error));
     this.proc.once("close", () =>
