@@ -2,13 +2,11 @@
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
-  getChannelRecord,
+  getChannelSurface,
   hasConfiguredSecretInputValue,
   isBaseFieldActiveForChannelSurface,
   isEnabledFlag,
   isRecord,
-  resolveChannelAccountSurface,
-  type ChannelAccountSurface,
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
@@ -86,47 +84,31 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   },
 ];
 
-function withImplicitDefaultDiscordAccount(params: {
-  discord: Record<string, unknown>;
-  surface: ChannelAccountSurface;
-  defaults?: SecretDefaults;
-}): ChannelAccountSurface {
-  if (
-    !params.surface.hasExplicitAccounts ||
-    !hasConfiguredSecretInputValue(params.discord.token, params.defaults) ||
-    params.surface.accounts.some((entry) => entry.accountId.toLowerCase() === "default")
-  ) {
-    return params.surface;
-  }
-  // Discord account listing keeps a top-level token as an implicit default account.
-  // Match that runtime contract so named accounts do not orphan the default SecretRef.
-  return {
-    ...params.surface,
-    accounts: [
-      ...params.surface.accounts,
-      {
-        accountId: "default",
-        account: {},
-        enabled: params.surface.channelEnabled,
-      },
-    ],
-  };
-}
-
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
   defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
-  const discord = getChannelRecord(params.config, "discord");
-  if (!discord) {
+  const resolved = getChannelSurface(params.config, "discord");
+  if (!resolved) {
     return;
   }
-  const surface = withImplicitDefaultDiscordAccount({
-    discord,
-    surface: resolveChannelAccountSurface(discord),
-    defaults: params.defaults,
-  });
+  const { channel: discord, surface } = resolved;
+  const hasImplicitDefault =
+    surface.hasExplicitAccounts &&
+    !surface.accounts.some(({ accountId }) => accountId === "default") &&
+    [discord.token, params.context.env.DISCORD_BOT_TOKEN].some((value) =>
+      hasConfiguredSecretInputValue(value, params.defaults),
+    );
+  if (hasImplicitDefault) {
+    // Account discovery treats either token source as an implicit default. Keep it in
+    // secret collection so named accounts cannot orphan the default's inherited refs.
+    surface.accounts.push({
+      accountId: "default",
+      account: {},
+      enabled: surface.channelEnabled,
+    });
+  }
   collectSimpleChannelFieldAssignments({
     channelKey: "discord",
     field: "token",
