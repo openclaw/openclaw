@@ -1296,18 +1296,19 @@ export function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   compactRecommended: boolean;
+  approximate: boolean;
 } | null {
-  if (session?.totalTokensFresh === false) {
-    return null;
-  }
   const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }
+  const approximate = session?.totalTokensFresh === false;
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
-  const warning = ratio >= CONTEXT_NOTICE_RATIO;
+  // A stale total is still useful orientation, but must not drive warning or
+  // compaction decisions because the session may already have compacted.
+  const warning = !approximate && ratio >= CONTEXT_NOTICE_RATIO;
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
@@ -1330,11 +1331,12 @@ export function getContextNoticeViewModel(
     return {
       pct,
       ...usage,
-      detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+      detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
       compactRecommended: false,
+      approximate,
     };
   }
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
@@ -1355,6 +1357,7 @@ export function getContextNoticeViewModel(
     bg,
     warning,
     compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
+    approximate,
   };
 }
 
@@ -1375,11 +1378,12 @@ export function renderContextNotice(
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   const summary = model
     ? t("chat.composer.contextUsage.summary", {
-        used: formatCompactTokenCount(model.used),
+        used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
         limit: formatCompactTokenCount(model.limit),
-        pct: String(model.pct),
+        pct: `${model.approximate ? "~" : ""}${model.pct}`,
       })
     : t("chat.usageRemaining");
+  const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
   const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
   const provider = providerCosts?.provider ?? model?.provider;
@@ -1423,7 +1427,7 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          ${model ? html`<span class="context-ring__pct">${model.pct}%</span>` : nothing}
+          ${percentage ? html`<span class="context-ring__pct">${percentage}</span>` : nothing}
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
           ${model
@@ -1433,7 +1437,7 @@ export function renderContextNotice(
                     >${t("chat.composer.contextUsage.contextWindow")}</span
                   >
                   <strong class="context-usage__context-value"
-                    >${model.detail} · ${model.pct}%</strong
+                    >${model.detail} · ${percentage}</strong
                   >
                 </div>
                 <div

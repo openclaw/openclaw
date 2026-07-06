@@ -1057,6 +1057,7 @@ function renderChatModelReasoningSelect(params: {
                 return;
               }
               draft.saving = true;
+              details?.removeAttribute("open");
               onRequestUpdate?.();
               try {
                 if (draft.modelValue !== draft.initialModelValue) {
@@ -1072,7 +1073,6 @@ function renderChatModelReasoningSelect(params: {
                   await onFastModeSelect(draft.fastModeValue);
                 }
                 chatModelPickerDrafts.delete(sessionKey);
-                details?.removeAttribute("open");
               } finally {
                 const current = chatModelPickerDrafts.get(sessionKey);
                 if (current === draft) {
