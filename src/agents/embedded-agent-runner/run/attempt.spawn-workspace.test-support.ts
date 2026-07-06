@@ -128,6 +128,10 @@ function createSubscriptionMock(): SubscriptionMock {
       replayInvalid: false,
       hadPotentialSideEffects: false,
     }),
+    getCurrentAttemptReplayState: () => ({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    }),
     didSendViaMessagingTool: () => false,
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
