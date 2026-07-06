@@ -108,7 +108,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { GatewaySidecarStartupMode } from "./server-startup-post-attach.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
