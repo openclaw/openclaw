@@ -25,6 +25,7 @@ import {
   createSqliteAcpEventLedger,
   migrateFileAcpEventLedgerToSqlite,
   resolveDefaultAcpEventLedgerPath,
+  type AcpEventLedger,
 } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
@@ -53,6 +54,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   });
 
   let agent: AcpGatewayAgent | null = null;
+  let eventLedger: AcpEventLedger | undefined;
   let onClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     onClosed = resolve;
@@ -121,6 +123,8 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     stopped = true;
     resolveGatewayReady();
     gateway.stop();
+    eventLedger?.close();
+    eventLedger = undefined;
     // If no WebSocket is active (e.g. between reconnect attempts),
     // gateway.stop() won't trigger onClose, so resolve directly.
     onClosed();
@@ -158,7 +162,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     filePath: resolveDefaultAcpEventLedgerPath(process.env),
     archiveSource: true,
   });
-  const eventLedger = createSqliteAcpEventLedger();
+  eventLedger = createSqliteAcpEventLedger();
 
   void new AgentSideConnection(
     (conn: AgentSideConnection) => {

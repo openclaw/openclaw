@@ -34,9 +34,15 @@ const mockState = vi.hoisted(() => ({
   gatewayOptions: [] as GatewayClientOptions[],
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
+  eventLedgerClose: vi.fn(),
   routeLogsToStderr: vi.fn(),
   startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
+  migrateFileAcpEventLedgerToSqlite: vi.fn(async (_params: unknown) => ({
+    importedSessions: 0,
+    importedEvents: 0,
+    archived: false,
+  })),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -154,6 +160,22 @@ vi.mock("../infra/is-main.js", () => ({
 
 vi.mock("../logging/console.js", () => ({
   routeLogsToStderr: () => mockState.routeLogsToStderr(),
+}));
+
+vi.mock("./event-ledger.js", () => ({
+  createSqliteAcpEventLedger: () => ({
+    close: () => mockState.eventLedgerClose(),
+    markIncomplete: vi.fn(async () => {}),
+    readReplay: vi.fn(async () => ({ complete: false, events: [] })),
+    readReplayBySessionId: vi.fn(async () => ({ complete: false, events: [] })),
+    readReplayBySessionKey: vi.fn(async () => ({ complete: false, events: [] })),
+    recordUpdate: vi.fn(async () => {}),
+    recordUserPrompt: vi.fn(async () => {}),
+    startSession: vi.fn(async () => {}),
+  }),
+  migrateFileAcpEventLedgerToSqlite: (params: unknown) =>
+    mockState.migrateFileAcpEventLedgerToSqlite(params),
+  resolveDefaultAcpEventLedgerPath: () => "legacy-acp-event-ledger.json",
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -284,9 +306,16 @@ describe("serveAcpGateway startup", () => {
     mockState.gatewayOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
+    mockState.eventLedgerClose.mockReset();
     mockState.routeLogsToStderr.mockReset();
     mockState.startProxy.mockReset();
     mockState.stopProxy.mockReset();
+    mockState.migrateFileAcpEventLedgerToSqlite.mockReset();
+    mockState.migrateFileAcpEventLedgerToSqlite.mockResolvedValue({
+      importedSessions: 0,
+      importedEvents: 0,
+      archived: false,
+    });
     mockState.startProxy.mockResolvedValue(null);
     mockState.stopProxy.mockResolvedValue(undefined);
     mockState.resolveGatewayClientBootstrap.mockReset();
@@ -458,6 +487,24 @@ describe("serveAcpGateway startup", () => {
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
       expect(mockState.stopProxy).not.toHaveBeenCalled();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("closes the ACP event ledger when a shutdown signal stops the server", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.eventLedgerClose).not.toHaveBeenCalled();
+      await stopServeWithSigint(signalHandlers, servePromise);
+      expect(mockState.eventLedgerClose).toHaveBeenCalledTimes(1);
+
+      signalHandlers.get("SIGINT")?.();
+      expect(mockState.eventLedgerClose).toHaveBeenCalledTimes(1);
     } finally {
       onceSpy.mockRestore();
     }

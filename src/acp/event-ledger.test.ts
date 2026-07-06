@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  isOpenClawStateDatabaseOpen,
+} from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createInMemoryAcpEventLedger,
@@ -136,19 +139,50 @@ describe("ACP event ledger", () => {
         },
       });
 
-      closeOpenClawStateDatabaseForTest();
+      first.close();
       const second = createSqliteAcpEventLedger({ path: databasePath });
-      const replay = await second.readReplay({
+      try {
+        const replay = await second.readReplay({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+        });
+
+        expect(replay.complete).toBe(true);
+        expect(replay.events).toHaveLength(1);
+        expect(replay.events[0]?.update).toEqual({
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: "Thinking" },
+        });
+      } finally {
+        second.close();
+      }
+    });
+  });
+
+  it("closes the SQLite-backed state database handle through the ledger lifecycle", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      const ledger = createSqliteAcpEventLedger({ path: databasePath, now: () => 1000 });
+      await ledger.startSession({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
       });
 
-      expect(replay.complete).toBe(true);
-      expect(replay.events).toHaveLength(1);
-      expect(replay.events[0]?.update).toEqual({
-        sessionUpdate: "agent_thought_chunk",
-        content: { type: "text", text: "Thinking" },
+      expect(isOpenClawStateDatabaseOpen()).toBe(true);
+      ledger.close();
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
+
+      const reopened = createSqliteAcpEventLedger({ path: databasePath });
+      await expect(
+        reopened.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toMatchObject({
+        complete: true,
+        events: [],
       });
+      reopened.close();
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
     });
   });
 
@@ -195,22 +229,26 @@ describe("ACP event ledger", () => {
         archiveSource: true,
       });
       const sqlite = createSqliteAcpEventLedger({ path: databasePath });
-      const replay = await sqlite.readReplay({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-      });
+      try {
+        const replay = await sqlite.readReplay({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+        });
 
-      expect(migrated).toEqual({
-        importedSessions: 1,
-        importedEvents: 1,
-        archived: true,
-      });
-      expect(replay.complete).toBe(true);
-      expect(replay.events[0]?.update).toEqual({
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
-      });
-      await expect(fs.stat(`${filePath}.migrated`)).resolves.toBeTruthy();
+        expect(migrated).toEqual({
+          importedSessions: 1,
+          importedEvents: 1,
+          archived: true,
+        });
+        expect(replay.complete).toBe(true);
+        expect(replay.events[0]?.update).toEqual({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Answer" },
+        });
+        await expect(fs.stat(`${filePath}.migrated`)).resolves.toBeTruthy();
+      } finally {
+        sqlite.close();
+      }
     });
   });
 
@@ -243,9 +281,13 @@ describe("ACP event ledger", () => {
         },
       });
 
-      await expect(
-        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-      ).resolves.toEqual({ complete: false, events: [] });
+      try {
+        await expect(
+          ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+        ).resolves.toEqual({ complete: false, events: [] });
+      } finally {
+        ledger.close();
+      }
     });
   });
 
@@ -427,5 +469,4 @@ describe("ACP event ledger", () => {
       ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
     ).resolves.toEqual({ complete: false, events: [] });
   });
-
 });

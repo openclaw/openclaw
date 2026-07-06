@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { readJsonFile } from "../infra/json-files.js";
 import {
+  closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
@@ -70,6 +71,7 @@ export type AcpEventLedger = {
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
+  close: () => void;
 };
 
 type LedgerSession = {
@@ -352,6 +354,8 @@ function createLedgerApi(params: {
   });
 
   return {
+    close() {},
+
     async startSession(sessionParams) {
       await params.mutate(() => {
         getOrCreateSession(params.state, sessionParams);
@@ -849,6 +853,10 @@ export function createSqliteAcpEventLedger(
   const read = <T>(fn: (db: DatabaseSync) => T): T => fn(openOpenClawStateDatabase(dbOptions).db);
 
   return {
+    close() {
+      closeOpenClawStateDatabase();
+    },
+
     async startSession(sessionParams) {
       mutate((db) => {
         upsertSqliteSession(db, state, sessionParams);
