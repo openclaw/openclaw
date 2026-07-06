@@ -165,6 +165,7 @@ import type {
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import {
   forceClearReplyRunBySessionId,
+  queueReplyRunMessage,
   replyRunRegistry,
   type ReplyOperation,
   waitForReplyBarrierSettlement,
@@ -2355,12 +2356,59 @@ export async function dispatchReplyFromConfig(
       releaseInboundDedupe(inboundDedupeClaim.key);
     }
   };
+  const resolveActiveReplySteerText = (): string | undefined => {
+    const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+    const normalizedCommandBody = normalizeCommandBody(commandSource, {
+      botUsername: ctx.BotUsername,
+    }).trim();
+    if (normalizedCommandBody.startsWith("/") || isExplicitSourceReplyCommand(ctx, cfg)) {
+      return;
+    }
+    return (
+      normalizeOptionalString(ctx.BodyForAgent) ??
+      normalizeOptionalString(ctx.BodyStripped) ??
+      normalizeOptionalString(ctx.Body) ??
+      normalizeOptionalString(ctx.CommandBody) ??
+      normalizeOptionalString(ctx.RawBody)
+    );
+  };
+  const tryQueueActiveReplySteer = (): boolean => {
+    const operation =
+      dispatchAbortOperation ??
+      preDispatchAbortOperation ??
+      (dispatchOperationSessionKey ? replyRunRegistry.get(dispatchOperationSessionKey) : undefined);
+    const steerText = resolveActiveReplySteerText();
+    if (!operation || !steerText) {
+      return false;
+    }
+    const queued = queueReplyRunMessage(operation.sessionId, steerText);
+    if (queued) {
+      logVerbose(
+        `dispatch-from-config: queued follow-up text into active reply operation for ${
+          dispatchOperationSessionKey ?? "unknown"
+        }`,
+      );
+    }
+    return queued;
+  };
   const finishReplyOperationBusyDispatch = (opts?: {
     dedupeDisposition?: "commit" | "release";
     recordAgentDispatchCompleted?: boolean;
     sessionMetadataChanges?: DispatchFromConfigResult["sessionMetadataChanges"];
   }): DispatchFromConfigResult => {
     void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(dispatcher));
+    if (tryQueueActiveReplySteer()) {
+      if (opts?.recordAgentDispatchCompleted) {
+        recordAgentDispatchCompleted("completed", { reason: "active-run-steer" });
+      }
+      recordProcessed("completed", { reason: "active-run-steer" });
+      markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      });
+    }
     if (opts?.recordAgentDispatchCompleted) {
       recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
     }
