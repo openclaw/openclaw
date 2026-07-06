@@ -9035,7 +9035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 867,
+      "line": 858,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -9043,7 +9043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 867,
+      "line": 858,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -9051,7 +9051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 932,
+      "line": 923,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -9059,7 +9059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 932,
+      "line": 923,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -9067,7 +9067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 979,
+      "line": 970,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -9075,7 +9075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 979,
+      "line": 970,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -9083,7 +9083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 984,
+      "line": 975,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -9091,7 +9091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 984,
+      "line": 975,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -9099,7 +9099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 986,
+      "line": 977,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -9107,7 +9107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 986,
+      "line": 977,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -9115,7 +9115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1007,
+      "line": 998,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "\\(diagnosticsIssueCount)",
       "surface": "apple",
@@ -9123,7 +9123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1018,
+      "line": 1009,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location off",
       "surface": "apple",
@@ -9131,7 +9131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1020,
+      "line": 1011,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using",
       "surface": "apple",
@@ -9139,7 +9139,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1022,
+      "line": 1013,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Off",
       "surface": "apple",
@@ -9147,7 +9147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1024,
+      "line": 1015,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Always",
       "surface": "apple",
@@ -9155,7 +9155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1026,
+      "line": 1017,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always",
       "surface": "apple",
@@ -9163,7 +9163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1028,
+      "line": 1019,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective While Using",
       "surface": "apple",
@@ -9171,7 +9171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1030,
+      "line": 1021,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective Off",
       "surface": "apple",
@@ -9179,7 +9179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1058,
+      "line": 1049,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Checking iOS notification permission.",
       "surface": "apple",
@@ -9187,7 +9187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1060,
+      "line": 1051,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw can show approval prompts and event alerts when the app is not active.",
       "surface": "apple",
@@ -9195,7 +9195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1062,
+      "line": 1053,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Notifications have been denied. Enable them in iOS Settings.",
       "surface": "apple",
@@ -9203,7 +9203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1064,
+      "line": 1055,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Enable notifications to receive approval prompts and event alerts outside the app.",
       "surface": "apple",
@@ -9211,7 +9211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1066,
+      "line": 1057,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw cannot determine the current notification permission state.",
       "surface": "apple",
@@ -9874,12 +9874,12 @@
       "id": "native.apple.518cef9408771a92"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 946,
+      "kind": "ui-call",
+      "line": 945,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Wake Words",
       "surface": "apple",
-      "id": "native.apple.e1383011b9ccc3a3"
+      "id": "native.apple.1604352fea16d495"
     },
     {
       "kind": "ui-call",
@@ -9994,12 +9994,12 @@
       "id": "native.apple.c695f785d4f3331a"
     },
     {
-      "kind": "ui-named-argument",
+      "kind": "ui-call",
       "line": 1030,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Logs",
       "surface": "apple",
-      "id": "native.apple.2bb13c2d7465f99e"
+      "id": "native.apple.8584babe715b1133"
     },
     {
       "kind": "ui-call",
@@ -10027,7 +10027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 93,
+      "line": 118,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Enabled",
       "surface": "apple",
@@ -10035,7 +10035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 94,
+      "line": 119,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Denied",
       "surface": "apple",
@@ -10043,7 +10043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 95,
+      "line": 120,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Not Enabled",
       "surface": "apple",
@@ -10051,7 +10051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 96,
+      "line": 121,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Unknown",
       "surface": "apple",
@@ -10059,7 +10059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 102,
+      "line": 127,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Enable Notifications",
       "surface": "apple",
@@ -10067,7 +10067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 104,
+      "line": 129,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Checking",
       "surface": "apple",
@@ -10075,7 +10075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 106,
+      "line": 131,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Manage in iOS Settings",
       "surface": "apple",
@@ -10083,7 +10083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 108,
+      "line": 133,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Open iOS Settings",
       "surface": "apple",
@@ -10091,7 +10091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 250,
+      "line": 275,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Connected",
       "surface": "apple",
@@ -10099,7 +10099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 252,
+      "line": 277,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Gateway online",
       "surface": "apple",
@@ -10107,7 +10107,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 253,
+      "line": 278,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Connected to openclaw-gateway.tailnet.ts.net.",
       "surface": "apple",
@@ -10115,7 +10115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 263,
+      "line": 288,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Loading",
       "surface": "apple",
@@ -10123,7 +10123,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 265,
+      "line": 290,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Checking gateway",
       "surface": "apple",
@@ -10131,7 +10131,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 266,
+      "line": 291,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Refreshing connection, discovery, and device trust state.",
       "surface": "apple",
@@ -10139,7 +10139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 272,
+      "line": 297,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Empty",
       "surface": "apple",
@@ -10147,7 +10147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 274,
+      "line": 299,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "No gateway configured",
       "surface": "apple",
@@ -10155,7 +10155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 275,
+      "line": 300,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Scan a setup QR code, paste a setup code, or choose a discovered gateway.",
       "surface": "apple",
@@ -10163,7 +10163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 281,
+      "line": 306,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Error",
       "surface": "apple",
@@ -10171,7 +10171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 283,
+      "line": 308,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Tailscale warning",
       "surface": "apple",
@@ -10179,7 +10179,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 284,
+      "line": 309,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Tailscale is off on this device. Turn it on, then try again.",
       "surface": "apple",
@@ -10187,7 +10187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 333,
+      "line": 358,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Address",
       "surface": "apple",
@@ -10195,7 +10195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 335,
+      "line": 360,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Server",
       "surface": "apple",
@@ -10203,7 +10203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 337,
+      "line": 362,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Discovered",
       "surface": "apple",
@@ -10211,7 +10211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 339,
+      "line": 364,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Default Agent",
       "surface": "apple",
@@ -10219,7 +10219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 361,
+      "line": 386,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Reconnect",
       "surface": "apple",
@@ -10227,7 +10227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 362,
+      "line": 387,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Diagnose",
       "surface": "apple",
@@ -10235,7 +10235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 371,
+      "line": 396,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -10243,7 +10243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 372,
+      "line": 397,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Connect",
       "surface": "apple",
@@ -10251,7 +10251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 374,
+      "line": 399,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Discovered gateways and manual setup live here when the gateway has not connected yet.",
       "surface": "apple",
