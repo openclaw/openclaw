@@ -159,7 +159,14 @@ async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
   });
 }
 function chatSessionListResponse(
-  sessions: Array<Record<string, unknown>> = [
+  sessions: Array<
+    Record<string, unknown> & {
+      key: string;
+      kind: string;
+      label: string;
+      updatedAt: number;
+    }
+  > = [
     {
       key: "agent:main:session-a",
       kind: "direct",
