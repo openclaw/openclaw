@@ -137,18 +137,23 @@ class TalkModeManagerTest {
   }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun staleCancellationDoesNotStopNewerPushToTalkCapture() =
     runTest {
       val manager = createManager()
       val completion = CompletableDeferred<TalkPttStopPayload>()
       setPrivateField(manager, "activePttCaptureId", "capture-new")
       setPrivateField(manager, "pttCompletion", completion)
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val payload = manager.cancelPushToTalk("capture-old")
 
-      val payload = manager.cancelPushToTalk("capture-old")
-
-      assertEquals("idle", payload.status)
-      assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
-      assertFalse(completion.isCompleted)
+        assertEquals("idle", payload.status)
+        assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
+        assertFalse(completion.isCompleted)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
@@ -196,6 +201,7 @@ class TalkModeManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun staleStopDoesNotSubmitNewerPushToTalkCapture() =
     runTest {
       val manager = createManager()
@@ -203,13 +209,17 @@ class TalkModeManagerTest {
       setPrivateField(manager, "activePttCaptureId", "capture-new")
       setPrivateField(manager, "pttCompletion", completion)
       setPrivateField(manager, "lastTranscript", "new partial transcript")
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        val payload = manager.endPushToTalk("capture-old")
 
-      val payload = manager.endPushToTalk("capture-old")
-
-      assertEquals("idle", payload.status)
-      assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
-      assertEquals("new partial transcript", readPrivateField(manager, "lastTranscript"))
-      assertFalse(completion.isCompleted)
+        assertEquals("idle", payload.status)
+        assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
+        assertEquals("new partial transcript", readPrivateField(manager, "lastTranscript"))
+        assertFalse(completion.isCompleted)
+      } finally {
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
