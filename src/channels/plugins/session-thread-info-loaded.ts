@@ -33,10 +33,20 @@ function resolveLoadedSessionConversationThreadInfo(
     rawId,
   }) as SessionConversationHookResult | null | undefined;
   if (!resolved?.id?.trim()) {
+    const topicMarker = ":topic:";
+    const lowerRawId = rawId.toLowerCase();
+    const topicIndex = lowerRawId.lastIndexOf(topicMarker);
+    if (topicIndex > 0) {
+      const baseId = rawId.slice(0, topicIndex);
+      if (baseId.trim()) {
+        return {
+          baseSessionKey: `${raw.prefix}:${baseId}`,
+          threadId: rawId.slice(topicIndex + topicMarker.length),
+        };
+      }
+    }
     return null;
   }
-  // Loaded-plugin read paths avoid bundled fallback/materialization; if the
-  // channel hook has no thread id, preserve the original session key.
   const id = resolved.id.trim();
   const threadId = normalizeOptionalString(resolved.threadId);
   return {

@@ -979,6 +979,32 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("rejects Telegram topic session targets even before the Telegram plugin is loaded", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const threadSessionKey = "agent:main:telegram:group:-1001234567890:topic:42";
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-telegram-topic-target", {
+      sessionKey: threadSessionKey,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(threadSessionKey);
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("rejects label targets that resolve to canonical thread sessions", async () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
