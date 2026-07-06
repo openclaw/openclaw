@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { runCrestodianAgentTurnWithDeps } from "./agent-turn.js";
+import { classifyCrestodianApprovalText } from "./approval-intent.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
 
 const mocks = vi.hoisted(() => ({
@@ -92,7 +93,7 @@ describe("CrestodianChatEngine", () => {
     );
     const engine = new CrestodianChatEngine({
       runAgentTurn: runAgentTurn as never,
-      classifyApproval: async () => "other",
+      classifyApproval: async ({ message }) => classifyCrestodianApprovalText(message),
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
