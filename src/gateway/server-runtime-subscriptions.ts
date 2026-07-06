@@ -1,4 +1,6 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -16,6 +18,7 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -168,6 +171,12 @@ export function startGatewayEventSubscriptions(params: {
             },
             resolveActiveLifecycleGenerationForRun: (runId) =>
               params.chatAbortControllers.get(runId)?.lifecycleGeneration,
+            resolveSessionActiveRunState: (session) =>
+              resolveVisibleActiveSessionRunState({
+                context: params,
+                ...session,
+                defaultAgentId: resolveDefaultAgentId(getRuntimeConfig()),
+              }),
           }),
       );
     },
@@ -203,6 +212,7 @@ export function startGatewayEventSubscriptions(params: {
         createLifecycleEventBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,
           sessionEventSubscribers: params.sessionEventSubscribers,
+          chatAbortControllers: params.chatAbortControllers,
         }),
     );
     return lifecycleEventHandlerPromise;
