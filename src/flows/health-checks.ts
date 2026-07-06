@@ -106,14 +106,6 @@ export interface HealthCheck {
   readonly kind: "core" | "plugin";
   readonly description: string;
   readonly source?: string;
-  /**
-   * Controls the default `doctor --lint` profile. Checks default to enabled;
-   * set this to false for advisory, environment-sensitive, live-service,
-   * inventory, or historical-cleanup checks that should run only through
-   * `doctor --lint --all` or targeted `--only` selection. This does not make
-   * the check repairable and does not change `doctor --fix` repair policy.
-   */
-  readonly defaultEnabled?: boolean;
   detect(ctx: HealthCheckContext, scope?: HealthCheckScope): Promise<readonly HealthFinding[]>;
   repair?(
     ctx: HealthRepairContext,

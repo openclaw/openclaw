@@ -106,9 +106,9 @@ The contract separates `detect()` (reports findings) from `repair()` (reports
 changes/diffs/side effects), which keeps a path open for a future
 `doctor --fix --dry-run` without turning lint checks into mutation planners.
 
-Core and plugin health checks can set `defaultEnabled: false` in their public
-registration to opt out of default `doctor --lint` while remaining available to
-`--all`, `--only`, and Doctor repair flows. Finding severity is still emitted per
+Some built-in checks are default-disabled internally so they stay available to
+`--all`, `--only`, and Doctor repair flows without becoming part of the default
+`doctor --lint` automation profile. Finding severity is still emitted per
 finding (`info`, `warning`, or `error`); default selection is not a severity
 level.
 
