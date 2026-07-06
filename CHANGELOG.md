@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **SSH config stream failures:** terminate `ssh -G` and continue with the configured target when stdout fails or exceeds its bound, preventing local Gateway discovery crashes and hangs. (#101021) Thanks @cxbAsDev.
 - **Codex yielded native subagents:** keep the parent app-server subscription and shared client alive until yielded native subagent completion delivery settles, preventing lost wakeups and leaked one-shot cleanup.
 - **Discord streamed finals:** send completion replies as fresh messages so inactive channels become unread, while preserving targeted mentions without escalating `@everyone` or `@here`. (#99711, #99662) Thanks @davelutztx.
 - **OpenAI-compatible SSE parsing:** recognize event streams mislabeled as JSON without prepending a second `data:` prefix, preserving valid streamed responses from non-conforming providers. (#96503) Thanks @ZengWen-DT.
