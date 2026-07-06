@@ -7,6 +7,18 @@ export { readSystemdServiceRuntime } from "../daemon/systemd.js";
 
 type ExecFileTailResult = { stdout: string; stderr: string; code: number; truncated: boolean };
 
+function decodeUtf8Tail(chunks: Buffer[], truncated: boolean): string {
+  const buffer = Buffer.concat(chunks);
+  if (!truncated || buffer.length === 0) {
+    return buffer.toString("utf8");
+  }
+  let offset = 0;
+  while (offset < buffer.length && (buffer[offset] & 0xc0) === 0x80) {
+    offset += 1;
+  }
+  return buffer.subarray(offset).toString("utf8");
+}
+
 export async function execFileUtf8Tail(
   command: string,
   args: string[],
@@ -68,7 +80,7 @@ export async function execFileUtf8Tail(
         child.kill();
       }
       resolve({
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stdout: decodeUtf8Tail(stdoutChunks, truncated),
         stderr: error instanceof Error ? error.message : String(error),
         code: 1,
         truncated,
@@ -84,7 +96,7 @@ export async function execFileUtf8Tail(
       }
       settled = true;
       resolve({
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stdout: decodeUtf8Tail(stdoutChunks, truncated),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
         code: typeof code === "number" ? code : 1,
         truncated,

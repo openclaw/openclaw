@@ -54,4 +54,26 @@ describe("execFileUtf8Tail", () => {
     await expect(resultPromise).resolves.toMatchObject({ code: 1, stderr: "spawn failed" });
     expect(kill).not.toHaveBeenCalled();
   });
+
+  it("does not return a replacement character when stdout tail starts mid UTF-8 sequence", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => true),
+      stderr,
+      stdout,
+    });
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const resultPromise = execFileUtf8Tail("journalctl", ["--no-pager"], { maxBytes: 1 });
+    stdout.emit("data", Buffer.from("é", "utf8"));
+    child.emit("close", 0);
+
+    await expect(resultPromise).resolves.toEqual({
+      code: 0,
+      stderr: "",
+      stdout: "",
+      truncated: true,
+    });
+  });
 });
