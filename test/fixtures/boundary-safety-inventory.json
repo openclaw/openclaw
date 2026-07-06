@@ -21,15 +21,8 @@
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
-    "file": "extensions/amazon-bedrock-mantle/discovery.ts",
-    "line": 305,
-    "ruleId": "boundary/response-body-limit",
-    "match": "response.json()",
-    "guidance": "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code."
-  },
-  {
     "file": "extensions/browser/src/browser/chrome.ts",
-    "line": 1092,
+    "line": 1111,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -57,7 +50,7 @@
   },
   {
     "file": "extensions/browser/src/browser/pw-tools-core.snapshot.ts",
-    "line": 77,
+    "line": 81,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "(anchor.textContent || anchor.getAttribute(\"aria-label\") || \"\")\n            .replace(/\\s+/g, \" \")\n            .trim()\n            .slice(0, 121)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -99,21 +92,21 @@
   },
   {
     "file": "extensions/codex/src/app-server/dynamic-tools.ts",
-    "line": 1323,
+    "line": 1324,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "noticeText.slice(0, maxChars)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
     "file": "extensions/codex/src/app-server/dynamic-tools.ts",
-    "line": 1330,
+    "line": 1331,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "item.text.slice(0, sliceLength)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
     "file": "extensions/codex/src/app-server/dynamic-tools.ts",
-    "line": 1340,
+    "line": 1341,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "noticeText.slice(0, maxChars)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -137,13 +130,6 @@
     "line": 231,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "redactSensitiveText(message)\n    .replaceAll(\"\\u0000\", \" \")\n    .replace(/[\\r\\n\\t\\u2028\\u2029]/gu, \" \")\n    .slice(0, 500)",
-    "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
-  },
-  {
-    "file": "extensions/discord/src/approval-handler.runtime.ts",
-    "line": 164,
-    "ruleId": "boundary/text-utf16-truncation",
-    "match": "commandText.slice(0, maxChars)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
@@ -273,13 +259,6 @@
     "guidance": "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code."
   },
   {
-    "file": "extensions/google/vertex-adc.ts",
-    "line": 280,
-    "ruleId": "boundary/response-body-limit",
-    "match": "response.arrayBuffer()",
-    "guidance": "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code."
-  },
-  {
     "file": "extensions/googlechat/src/api.ts",
     "line": 125,
     "ruleId": "boundary/response-body-limit",
@@ -357,6 +336,13 @@
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
+    "file": "extensions/mattermost/src/mattermost/slash-commands.ts",
+    "line": 26,
+    "ruleId": "boundary/text-utf16-truncation",
+    "match": "description.slice(0, end)",
+    "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
+  },
+  {
     "file": "extensions/memory-core/doctor-contract-api.ts",
     "line": 713,
     "ruleId": "boundary/text-utf16-truncation",
@@ -393,7 +379,7 @@
   },
   {
     "file": "extensions/memory-core/src/memory/qmd-manager.ts",
-    "line": 3515,
+    "line": 3529,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "snippet.slice(0, Math.max(0, remaining))",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -582,7 +568,7 @@
   },
   {
     "file": "extensions/openrouter/index.ts",
-    "line": 101,
+    "line": 102,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "Array.from(value)\n    .filter((char) => {\n      const codePoint = char.codePointAt(0) ?? 0;\n      return (\n        codePoint > 0x1f &&\n        (codePoint < 0x7f || codePoint > 0x9f) &&\n        codePoint !== 0x2028 &&\n        codePoint !== 0x2029\n      );\n    })\n    .join(\"\")\n    .trim()\n    .slice(0, MAX_PROMPT_MODEL_ID_DISPLAY_CHARS)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -610,7 +596,7 @@
   },
   {
     "file": "extensions/qa-lab/src/providers/mock-openai/server.ts",
-    "line": 1672,
+    "line": 1640,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "toolOutput.replace(/\\s+/g, \" \").trim().slice(0, 220)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -855,7 +841,7 @@
   },
   {
     "file": "extensions/slack/src/monitor/message-handler/prepare.ts",
-    "line": 1163,
+    "line": 1168,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "rawBody.replace(/\\s+/g, \" \").slice(0, 160)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -914,13 +900,6 @@
     "line": 40,
     "ruleId": "boundary/response-body-limit",
     "match": "response.text()",
-    "guidance": "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code."
-  },
-  {
-    "file": "extensions/tlon/src/urbit/channel-ops.ts",
-    "line": 96,
-    "ruleId": "boundary/response-body-limit",
-    "match": "response.json()",
     "guidance": "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code."
   },
   {
@@ -1128,14 +1107,14 @@
   },
   {
     "file": "src/agents/embedded-agent-subscribe.handlers.messages.ts",
-    "line": 1306,
+    "line": 1309,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "text.slice(0, 50)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
     "file": "src/agents/embedded-agent-subscribe.handlers.tools.ts",
-    "line": 844,
+    "line": 871,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -1146,13 +1125,6 @@
     "ruleId": "boundary/text-utf16-truncation",
     "match": "params.messagesSnapshot.slice(0, params.prePromptMessageCount)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
-  },
-  {
-    "file": "src/agents/mcp-http-fetch.ts",
-    "line": 65,
-    "ruleId": "boundary/response-body-limit",
-    "match": "response.text()",
-    "guidance": "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code."
   },
   {
     "file": "src/agents/openai-transport-stream.ts",
@@ -1205,14 +1177,14 @@
   },
   {
     "file": "src/auto-reply/reply/agent-runner-memory.ts",
-    "line": 359,
+    "line": 367,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "visibleText.slice(0, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
     "file": "src/auto-reply/reply/agent-runner-memory.ts",
-    "line": 368,
+    "line": 376,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "message.slice(0, MAX_FLUSH_ERROR_LENGTH - 1)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -1247,14 +1219,14 @@
   },
   {
     "file": "src/auto-reply/reply/queue/drain.ts",
-    "line": 541,
+    "line": 545,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "params.queue.summaryLines.slice(0, sources.length)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
     "file": "src/auto-reply/reply/queue/drain.ts",
-    "line": 933,
+    "line": 937,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "params.queue.summaryLines.slice(0, retainedSources.length)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -1268,9 +1240,16 @@
   },
   {
     "file": "src/cli/gateway-cli/run-loop.ts",
-    "line": 522,
+    "line": 542,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "task.title.slice(0, 80)",
+    "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
+  },
+  {
+    "file": "src/cli/gateway-cli/run-loop.ts",
+    "line": 874,
+    "ruleId": "boundary/text-utf16-truncation",
+    "match": "formatErrorMessage(err).slice(0, 500)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
@@ -1366,7 +1345,7 @@
   },
   {
     "file": "src/gateway/server-reload-handlers.ts",
-    "line": 268,
+    "line": 269,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "task.title.slice(0, 80)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -1471,7 +1450,7 @@
   },
   {
     "file": "src/infra/session-cost-usage.ts",
-    "line": 2159,
+    "line": 2156,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "text.slice(0, 100)",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
@@ -1582,20 +1561,6 @@
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {
-    "file": "src/skills/discovery/command-specs.ts",
-    "line": 134,
-    "ruleId": "boundary/text-utf16-truncation",
-    "match": "rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1)",
-    "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
-  },
-  {
-    "file": "src/skills/discovery/command-specs.ts",
-    "line": 206,
-    "ruleId": "boundary/text-utf16-truncation",
-    "match": "entry.description.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1)",
-    "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
-  },
-  {
     "file": "src/skills/loading/workspace.ts",
     "line": 1392,
     "ruleId": "boundary/text-utf16-truncation",
@@ -1607,6 +1572,13 @@
     "line": 1398,
     "ruleId": "boundary/text-utf16-truncation",
     "match": "skillsForPrompt.slice(0, lo)",
+    "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
+  },
+  {
+    "file": "src/skills/workshop/policy.ts",
+    "line": 95,
+    "ruleId": "boundary/text-utf16-truncation",
+    "match": "requestedSkillName.slice(0, Math.max(0, availableSkillNameLength - 1))",
     "guidance": "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing."
   },
   {

@@ -482,9 +482,18 @@ export async function main(
   io = { stdout: process.stdout, stderr: process.stderr },
 ) {
   const args = parseArgs(argv);
-  const actual = await collectBoundarySafetyInventory({ all: args.all });
-
   const statusStream = args.json ? io.stderr : io.stdout;
+  if (args.updateBaseline && !args.all) {
+    io.stderr.write(
+      "`--update-baseline` requires `--all` so the baseline is rebuilt from the full boundary inventory.\n",
+    );
+    io.stderr.write(
+      "Run `node scripts/check-boundary-safety.mjs --all --update-baseline` only after intentional migrations.\n",
+    );
+    return 1;
+  }
+
+  const actual = await collectBoundarySafetyInventory({ all: args.all });
   if (args.json) {
     io.stdout.write(`${JSON.stringify(actual, null, 2)}\n`);
   }

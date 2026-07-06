@@ -207,6 +207,7 @@ export const forcedUnitFastTestFiles = [
   "src/test-utils/openclaw-test-state.test.ts",
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
+  "test/scripts/check-boundary-safety.test.ts",
   "src/version.test.ts",
   "src/video-generation/provider-registry.test.ts",
 ];

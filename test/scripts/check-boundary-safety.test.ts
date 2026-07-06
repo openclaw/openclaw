@@ -1,5 +1,6 @@
 // Check Boundary Safety tests cover high-confidence boundary guard behavior.
-import { describe, expect, it } from "vitest";
+import { promises as fs } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import {
   diffBoundaryInventory,
   findBoundarySafetyViolations,
@@ -203,5 +204,30 @@ describe("check-boundary-safety", () => {
     expect(JSON.parse(output.stdout)).toEqual(expect.any(Array));
     expect(output.stdout).not.toContain("Boundary safety changed-file check passed");
     expect(output.stderr).toContain("Boundary safety changed-file check passed");
+  });
+
+  it("requires --all before updating the baseline", async () => {
+    const writeFile = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    const output = { stdout: "", stderr: "" };
+    const io = {
+      stdout: {
+        write(chunk: string) {
+          output.stdout += chunk;
+        },
+      },
+      stderr: {
+        write(chunk: string) {
+          output.stderr += chunk;
+        },
+      },
+    };
+
+    try {
+      await expect(main(["--update-baseline"], io)).resolves.toBe(1);
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(output.stderr).toContain("`--update-baseline` requires `--all`");
+    } finally {
+      writeFile.mockRestore();
+    }
   });
 });
