@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,7 +19,6 @@ import {
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
-import type { RealtimeTalkOptions } from "./components/chat-realtime-controls.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
@@ -39,12 +39,14 @@ import {
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
+import type { RealtimeTalkInputDevice } from "./realtime-talk-input.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
 export type ChatProps = {
+  paneId: string;
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
@@ -70,9 +72,11 @@ export type ChatProps = {
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkOptions?: RealtimeTalkOptions;
-  canOpenRealtimeTalkSettings?: boolean;
+  realtimeTalkInputOpen?: boolean;
+  realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
+  realtimeTalkInputDeviceId?: string;
+  realtimeTalkInputLoading?: boolean;
+  realtimeTalkInputError?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -90,6 +94,7 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string | null;
   assistantName: string;
+  sendShortcut?: ChatSendShortcut;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -112,17 +117,15 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeTalkOptions?: () => void;
-  onRealtimeTalkOptionsChange?: (
-    next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
-  ) => void;
-  onOpenRealtimeTalkSettings?: () => void;
+  onToggleRealtimeTalkInput?: () => void;
+  onRealtimeTalkInputSelect?: (deviceId: string) => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onGoalCommand?: (command: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -136,6 +139,8 @@ export type ChatProps = {
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onRevealWorkspaceFile?: (path: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
@@ -147,9 +152,9 @@ export type ChatProps = {
   sessionWorkspace?: SessionWorkspaceProps;
 };
 
-export function resetChatViewState() {
-  resetChatComposerState();
-  resetChatThreadPresentationState();
+export function resetChatViewState(paneId?: string) {
+  resetChatComposerState(paneId);
+  resetChatThreadPresentationState(paneId);
 }
 
 export function renderChat(props: ChatProps) {
@@ -160,6 +165,7 @@ export function renderChat(props: ChatProps) {
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
+    paneId: props.paneId,
     sessionKey: props.sessionKey,
     loading: props.loading,
     messages: props.messages,
@@ -186,6 +192,7 @@ export function renderChat(props: ChatProps) {
     autoExpandToolCalls: props.autoExpandToolCalls,
     realtimeTalkConversation: props.realtimeTalkConversation,
     onOpenSidebar: props.onOpenSidebar,
+    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestUpdate: requestUpdate,
@@ -201,6 +208,7 @@ export function renderChat(props: ChatProps) {
   });
 
   const chatColumnFooter = renderChatComposer({
+    paneId: props.paneId,
     sessionKey: props.sessionKey,
     currentAgentId: props.currentAgentId,
     connected: props.connected,
@@ -218,6 +226,7 @@ export function renderChat(props: ChatProps) {
     draft: props.draft,
     sessions: props.sessions,
     assistantName: props.assistantName,
+    sendShortcut: props.sendShortcut,
     attachments: props.attachments,
     showNewMessages: props.showNewMessages,
     replyTarget: props.replyTarget,
@@ -226,9 +235,11 @@ export function renderChat(props: ChatProps) {
     realtimeTalkDetail: props.realtimeTalkDetail,
     realtimeTalkTranscript: props.realtimeTalkTranscript,
     realtimeTalkConversation: props.realtimeTalkConversation,
-    realtimeTalkOptionsOpen: props.realtimeTalkOptionsOpen,
-    realtimeTalkOptions: props.realtimeTalkOptions,
-    canOpenRealtimeTalkSettings: props.canOpenRealtimeTalkSettings,
+    realtimeTalkInputOpen: props.realtimeTalkInputOpen,
+    realtimeTalkInputDevices: props.realtimeTalkInputDevices,
+    realtimeTalkInputDeviceId: props.realtimeTalkInputDeviceId,
+    realtimeTalkInputLoading: props.realtimeTalkInputLoading,
+    realtimeTalkInputError: props.realtimeTalkInputError,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -238,14 +249,14 @@ export function renderChat(props: ChatProps) {
     onSend: props.onSend,
     onCompact: props.onCompact,
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
-    onToggleRealtimeTalkOptions: props.onToggleRealtimeTalkOptions,
-    onRealtimeTalkOptionsChange: props.onRealtimeTalkOptionsChange,
-    onOpenRealtimeTalkSettings: props.onOpenRealtimeTalkSettings,
+    onToggleRealtimeTalkInput: props.onToggleRealtimeTalkInput,
+    onRealtimeTalkInputSelect: props.onRealtimeTalkInputSelect,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
+    onGoalCommand: props.onGoalCommand,
     onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
@@ -275,14 +286,14 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (event.key === "Escape" && props.sideResult && !isChatThreadSearchOpen()) {
+        if (event.key === "Escape" && props.sideResult && !isChatThreadSearchOpen(props.paneId)) {
           event.preventDefault();
           props.onDismissSideResult?.();
           return;
         }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
           event.preventDefault();
-          toggleChatThreadSearch(requestUpdate);
+          toggleChatThreadSearch(props.paneId, requestUpdate);
         }
       }}
     >
@@ -322,9 +333,10 @@ export function renderChat(props: ChatProps) {
             </openclaw-tooltip>
           `
         : nothing}
-      ${renderChatSearchBar(requestUpdate)}
+      ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
+          paneId: props.paneId,
           sessionKey: props.sessionKey,
           messages: props.messages,
           userName: props.userName,
@@ -363,6 +375,8 @@ export function renderChat(props: ChatProps) {
                     .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
                     .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
                     .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
+                    .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
+                    .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
                   ></openclaw-chat-detail-panel>
                 `

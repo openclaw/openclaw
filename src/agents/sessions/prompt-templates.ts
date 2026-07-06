@@ -108,7 +108,7 @@ function loadTemplatesFromDir(
   return templates;
 }
 
-export interface LoadPromptTemplatesOptions {
+interface LoadPromptTemplatesOptions {
   /** Working directory for project-local templates. */
   cwd: string;
   /** Agent config directory for global templates. */

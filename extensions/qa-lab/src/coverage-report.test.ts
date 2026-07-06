@@ -304,6 +304,21 @@ describe("qa coverage report", () => {
     expect(report).not.toContain("Native test refs");
   });
 
+  it("includes required channel driver flags in scenario match commands", () => {
+    const matches = findQaScenarioMatches(
+      readQaScenarioPack().scenarios,
+      "whatsapp-access-control-group-disabled",
+    );
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "whatsapp-access-control-group-disabled",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled`",
+    );
+  });
+
   it("splits qa suite targets when matches mix execution kinds", () => {
     const playwrightExecutionPath = "ui/src/e2e/chat-flow.e2e.test.ts";
     const flowScenario = scenarioWithCoverage({

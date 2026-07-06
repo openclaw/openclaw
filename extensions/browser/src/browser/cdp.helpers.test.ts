@@ -84,9 +84,18 @@ describe("cdp helpers", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("still enforces hostname allowlist for loopback CDP endpoints", async () => {
+  it("adds exact loopback hosts to the CDP hostname allowlist", async () => {
     await expect(
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
+        dangerouslyAllowPrivateNetwork: false,
+        hostnameAllowlist: ["*.corp.example"],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still enforces hostname allowlist for non-loopback CDP endpoints", async () => {
+    await expect(
+      assertCdpEndpointAllowed("http://172.29.128.1:9222/json/version", {
         dangerouslyAllowPrivateNetwork: false,
         hostnameAllowlist: ["*.corp.example"],
       }),
@@ -203,7 +212,7 @@ describe("cdp helpers", () => {
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.policy).toEqual({
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.corp.example"],
+      hostnameAllowlist: ["*.corp.example", "127.0.0.1"],
       allowedHostnames: ["127.0.0.1"],
     });
     expect(release).toHaveBeenCalledTimes(1);
@@ -328,6 +337,23 @@ describe("CDP reachability policy", () => {
     ).toEqual({
       allowedHostnames: ["metadata.internal", "172.29.128.1"],
     });
+  });
+
+  it("merges the selected remote profile CDP host without widening navigation", async () => {
+    const profile = createProfile({});
+    const browserPolicy = { hostnameAllowlist: ["browserless.example.com"] };
+
+    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
+      hostnameAllowlist: ["browserless.example.com", "172.29.128.1"],
+      allowedHostnames: ["172.29.128.1"],
+    });
+    expect(browserPolicy).toStrictEqual({ hostnameAllowlist: ["browserless.example.com"] });
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "http://172.29.128.1/",
+        ssrfPolicy: browserPolicy,
+      }),
+    ).rejects.toThrow(/not in allowlist/i);
   });
 
   it("keeps local managed loopback CDP control outside browser SSRF policy", () => {

@@ -178,6 +178,120 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
           daily,
           totals,
         },
+        "usage.status": {
+          updatedAt: Date.now(),
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              plan: "Admin API",
+              windows: [],
+              billing: [{ type: "spend", label: "30-day API spend", amount: 98.75, unit: "USD" }],
+              costHistory: {
+                unit: "USD",
+                periodDays: 30,
+                daily: [
+                  {
+                    date: dayOffset(-6),
+                    amount: 38.5,
+                    requests: 12_300,
+                    inputTokens: 4_200_000,
+                    cacheReadTokens: 2_100_000,
+                    cacheWriteTokens: 0,
+                    outputTokens: 850_000,
+                    totalTokens: 5_050_000,
+                  },
+                  {
+                    date: dayOffset(0),
+                    amount: 60.25,
+                    requests: 18_450,
+                    inputTokens: 6_100_000,
+                    cacheReadTokens: 3_400_000,
+                    cacheWriteTokens: 0,
+                    outputTokens: 1_200_000,
+                    totalTokens: 7_300_000,
+                  },
+                ],
+                models: [
+                  {
+                    name: "gpt-5.5",
+                    requests: 30_750,
+                    inputTokens: 10_300_000,
+                    cacheReadTokens: 5_500_000,
+                    cacheWriteTokens: 0,
+                    outputTokens: 2_050_000,
+                    totalTokens: 12_350_000,
+                  },
+                ],
+                categories: [{ name: "Responses", amount: 98.75 }],
+              },
+            },
+            {
+              provider: "anthropic",
+              displayName: "Anthropic",
+              plan: "Admin API",
+              windows: [],
+              billing: [{ type: "spend", label: "30-day API spend", amount: 42.4, unit: "USD" }],
+              costHistory: {
+                unit: "USD",
+                periodDays: 30,
+                daily: [
+                  {
+                    date: dayOffset(-6),
+                    amount: 17.15,
+                    inputTokens: 1_800_000,
+                    cacheReadTokens: 900_000,
+                    cacheWriteTokens: 200_000,
+                    outputTokens: 350_000,
+                    totalTokens: 3_250_000,
+                  },
+                  {
+                    date: dayOffset(0),
+                    amount: 25.25,
+                    inputTokens: 2_600_000,
+                    cacheReadTokens: 1_400_000,
+                    cacheWriteTokens: 300_000,
+                    outputTokens: 500_000,
+                    totalTokens: 4_800_000,
+                  },
+                ],
+                models: [
+                  {
+                    name: "claude-opus-4-8",
+                    inputTokens: 4_400_000,
+                    cacheReadTokens: 2_300_000,
+                    cacheWriteTokens: 500_000,
+                    outputTokens: 850_000,
+                    totalTokens: 8_050_000,
+                  },
+                ],
+                categories: [{ name: "Claude API", amount: 42.4 }],
+              },
+            },
+            {
+              provider: "openrouter",
+              displayName: "OpenRouter",
+              plan: "Production",
+              windows: [{ label: "API key budget", usedPercent: 25 }],
+              billing: [
+                {
+                  type: "balance",
+                  label: "Account balance",
+                  amount: 64.5,
+                  unit: "USD",
+                },
+                {
+                  type: "budget",
+                  label: "API key budget",
+                  used: 5,
+                  limit: 20,
+                  unit: "USD",
+                },
+              ],
+              summary: "$1.25 today · $5.00 this month",
+            },
+          ],
+        },
       },
     });
 
@@ -209,16 +323,30 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
       await expect
         .poll(() => page.locator(".usage-insight-card", { hasText: "Top Providers" }).textContent())
         .toContain("openai");
+      const providerCards = page.locator(".provider-usage-card");
+      await expect.poll(() => providerCards.count()).toBe(3);
+      await expect
+        .poll(async () => (await gateway.getRequests("usage.status")).length)
+        .toBeGreaterThan(0);
+      await expect
+        .poll(() => providerCards.filter({ hasText: "OpenRouter" }).textContent())
+        .toContain("$64.50");
+      await expect
+        .poll(() => providerCards.filter({ hasText: "OpenAI" }).textContent())
+        .toContain("$98.75");
+      await expect
+        .poll(() => providerCards.filter({ hasText: "Anthropic" }).textContent())
+        .toContain("claude-opus-4-8");
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const artifactDir = path.join(
           process.cwd(),
           ".artifacts",
           "control-ui-e2e",
-          "cost-analysis",
+          "provider-plans",
         );
         await mkdir(artifactDir, { recursive: true });
-        await page.locator(".usage-left-card").screenshot({
+        await page.locator(".usage-page").screenshot({
           path: path.join(artifactDir, "after.png"),
         });
       }

@@ -12,13 +12,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -129,7 +129,20 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
-private class GatewayRequestNotEnqueued(
+internal sealed class GatewayRequestDefinitiveFailure(
+  message: String,
+) : IllegalStateException(message)
+
+internal class GatewayRequestNotEnqueued(
+  message: String,
+) : GatewayRequestDefinitiveFailure(message)
+
+internal class GatewayRequestRejected(
+  val gatewayError: GatewaySession.ErrorShape,
+) : GatewayRequestDefinitiveFailure("${gatewayError.code}: ${gatewayError.message}")
+
+/** Request frame was sent, but no response proved whether the gateway applied it. */
+internal class GatewayRequestOutcomeUnknown(
   message: String,
 ) : IllegalStateException(message)
 
@@ -152,6 +165,7 @@ class GatewaySession(
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
+  private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
 ) {
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
@@ -235,6 +249,9 @@ class GatewaySession(
 
   @Volatile private var reconnectPausedForAuthFailure = false
 
+  // Network recovery must interrupt the current backoff without creating a parallel loop.
+  private val reconnectSignal = Channel<Unit>(Channel.CONFLATED)
+
   /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
   fun connect(
     endpoint: GatewayEndpoint,
@@ -253,6 +270,8 @@ class GatewaySession(
       connectionToClose = currentConnection
       if (job?.isActive != true) {
         job = scope.launch(Dispatchers.IO) { runLoop() }
+      } else {
+        reconnectSignal.trySend(Unit)
       }
     }
     connectionToClose?.closeQuietly()
@@ -277,6 +296,7 @@ class GatewaySession(
       pendingDeviceTokenRetry = false
       deviceTokenRetryBudgetUsed = false
       reconnectPausedForAuthFailure = false
+      drainReconnectSignals()
       connectionToClose = currentConnection
       jobToCancel = job
       job = null
@@ -301,8 +321,31 @@ class GatewaySession(
 
   /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
-    reconnectPausedForAuthFailure = false
-    currentConnection?.closeQuietly()
+    signalReconnect(resumeAuthPaused = true)
+  }
+
+  /** Wakes transport backoff without overriding a deliberate auth-failure pause. */
+  internal fun retryAfterNetworkRestore() {
+    signalReconnect(resumeAuthPaused = false)
+  }
+
+  private fun signalReconnect(resumeAuthPaused: Boolean) {
+    synchronized(lifecycleLock) {
+      if (resumeAuthPaused) {
+        reconnectPausedForAuthFailure = false
+      } else if (reconnectPausedForAuthFailure) {
+        return
+      }
+      if (desired == null) return
+      currentConnection?.closeQuietly()
+      reconnectSignal.trySend(Unit)
+    }
+  }
+
+  private fun drainReconnectSignals() {
+    while (reconnectSignal.tryReceive().isSuccess) {
+      // A newly ready connection already incorporates every earlier retry request.
+    }
   }
 
   private fun readyConnection(): Connection? = currentConnection?.takeIf { it.isReady() }
@@ -380,8 +423,7 @@ class GatewaySession(
   ): String {
     val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
     if (res.ok) return res.payloadJson ?: ""
-    val err = res.error
-    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
   /** Sends an RPC request and returns the structured success/error payload. */
@@ -390,7 +432,7 @@ class GatewaySession(
     paramsJson: String?,
     timeoutMs: Long = 15_000,
   ): RpcResult {
-    val conn = readyConnection() ?: throw IllegalStateException("not connected")
+    val conn = readyConnection() ?: throw GatewayRequestNotEnqueued("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -488,8 +530,12 @@ class GatewaySession(
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect(): ConnectedGateway {
-      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
-      val request = Request.Builder().url(url).build()
+      val request =
+        buildGatewayWebSocketUpgradeRequest(
+          endpoint = endpoint,
+          tls = tls,
+          customHeadersProvider = customHeadersProvider,
+        )
       socket = client.newWebSocket(request, listener)
       return connectDeferred.await()
     }
@@ -506,7 +552,7 @@ class GatewaySession(
         sendJson(buildRequestFrame(id = id, method = method, params = params))
         return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
-        throw IllegalStateException("request timeout")
+        throw GatewayRequestOutcomeUnknown("request timeout")
       } finally {
         pending.remove(id)
         if (connectRequestId == id) connectRequestId = null
@@ -536,6 +582,9 @@ class GatewaySession(
               onError(ErrorShape("UNAVAILABLE", "request timeout"))
               return@launch
             } catch (_: CancellationException) {
+              return@launch
+            } catch (err: GatewayRequestOutcomeUnknown) {
+              onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
               return@launch
             }
           if (!response.ok) {
@@ -1161,7 +1210,7 @@ class GatewaySession(
           pending.values.toList().also { pending.clear() }
         }
       for (waiter in waiters) {
-        waiter.cancel()
+        waiter.completeExceptionally(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))
       }
     }
   }
@@ -1173,16 +1222,17 @@ class GatewaySession(
       if (target == null) {
         currentConnection?.closeQuietly()
         currentConnection = null
-        delay(250)
+        withTimeoutOrNull(250) { reconnectSignal.receive() }
         continue
       }
       if (reconnectPausedForAuthFailure) {
-        delay(250)
+        withTimeoutOrNull(250) { reconnectSignal.receive() }
         continue
       }
 
       try {
         onDisconnected(if (attempt == 0) "Connecting…" else "Reconnecting…")
+        drainReconnectSignals()
         connectOnce(target)
         attempt = 0
       } catch (err: Throwable) {
@@ -1196,11 +1246,13 @@ class GatewaySession(
           onConnectFailure(gatewayConnectFailure.gatewayError, pauseForAuthFailure)
         }
         if (pauseForAuthFailure) {
-          reconnectPausedForAuthFailure = true
+          synchronized(lifecycleLock) {
+            reconnectPausedForAuthFailure = true
+          }
           continue
         }
         val sleepMs = minOf(8_000L, (350.0 * Math.pow(1.7, attempt.toDouble())).toLong())
-        delay(sleepMs)
+        withTimeoutOrNull(sleepMs) { reconnectSignal.receive() }
       }
     }
   }
@@ -1248,6 +1300,7 @@ class GatewaySession(
           conn.closeQuietly()
           return@withContext
         }
+        drainReconnectSignals()
         conn.awaitClose()
       } finally {
         // Callback failures and cancellation must drain this socket's owned work before the loop
@@ -1485,6 +1538,23 @@ internal fun buildGatewayWebSocketUrl(
 ): String {
   val scheme = if (useTls) "wss" else "ws"
   return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+/** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
+internal fun buildGatewayWebSocketUpgradeRequest(
+  endpoint: GatewayEndpoint,
+  tls: GatewayTlsParams?,
+  customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
+): Request {
+  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  if (tls == null) return request.build()
+
+  // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens
+  // or Authorization values, so the cleartext branch above must never invoke the provider.
+  for ((name, value) in GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(tls.stableId).orEmpty())) {
+    request.addHeader(name, value)
+  }
+  return request.build()
 }
 
 /** Formats host/port for gateway URLs, including IPv6 bracket wrapping. */

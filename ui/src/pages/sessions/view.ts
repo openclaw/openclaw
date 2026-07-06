@@ -48,7 +48,6 @@ export type SessionsProps = {
   includeUnknown: boolean;
   showArchived: boolean;
   mainKey: string;
-  filtersCollapsed: boolean;
   basePath: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -59,7 +58,7 @@ export type SessionsProps = {
   page: number;
   pageSize: number;
   selectedKeys: Set<string>;
-  expandedCheckpointKey: string | null;
+  expandedSessionKey: string | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
@@ -71,7 +70,6 @@ export type SessionsProps = {
     includeUnknown: boolean;
     showArchived: boolean;
   }) => void;
-  onToggleFiltersCollapsed: () => void;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
@@ -88,6 +86,7 @@ export type SessionsProps = {
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
+      unread?: boolean;
       thinkingLevel?: string | null;
       fastMode?: FastMode | null;
       verboseLevel?: string | null;
@@ -100,10 +99,11 @@ export type SessionsProps = {
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
+  onFork: (sessionKey: string) => void | Promise<void>;
   workboardSessionKeys?: Set<string>;
   workboardBusySessionKey?: string | null;
   onAddToWorkboard?: (session: GatewaySessionRow) => void | Promise<void>;
-  onToggleCheckpointDetails: (sessionKey: string) => void;
+  onToggleDetails: (sessionKey: string) => void;
   onBranchFromCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
@@ -488,7 +488,7 @@ const NEW_GROUP_OPTION = "__new-group__";
 const SESSION_DRAG_MIME = "application/x-openclaw-session-key";
 
 function sessionsTableColumnCount(props: SessionsProps): number {
-  return props.groupBy === "category" ? 15 : 14;
+  return props.groupBy === "category" ? 9 : 8;
 }
 
 function groupModeLabel(mode: SessionsGroupBy): string {
@@ -614,7 +614,7 @@ function renderCategoryCell(row: GatewaySessionRow, props: SessionsProps) {
       <select
         ?disabled=${props.loading}
         aria-label=${t("sessionsView.moveToGroup")}
-        style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 110px;"
+        class="session-group-select"
         @change=${(e: Event) => {
           const select = e.target as HTMLSelectElement;
           if (select.value === NEW_GROUP_OPTION) {
@@ -676,6 +676,32 @@ function renderFilterToggle(params: {
   `;
 }
 
+function renderOverrideSelect(params: {
+  label: string;
+  disabled: boolean;
+  options: readonly { value: string; label: string }[];
+  current: string;
+  onChange: (value: string) => void;
+}) {
+  return html`
+    <label class="session-override-field">
+      <span class="session-override-field__label">${params.label}</span>
+      <select
+        class="session-override-field__control"
+        ?disabled=${params.disabled}
+        @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
+      >
+        ${params.options.map(
+          (option) =>
+            html`<option value=${option.value} ?selected=${params.current === option.value}>
+              ${option.label}
+            </option>`,
+        )}
+      </select>
+    </label>
+  `;
+}
+
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
   const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
@@ -695,16 +721,16 @@ export function renderSessions(props: SessionsProps) {
   const paginated = groupingActive ? sorted : paginateRows(sorted, page, props.pageSize);
   const emptyBecauseFiltered =
     rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
+  const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const loadedLabel =
+    rawRows.length === 1
+      ? t("sessionsView.groupRowCountOne", { count: "1" })
+      : t("sessionsView.groupRowCount", { count: String(rawRows.length) });
   const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");
   const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
-  const filtersExpanded = !props.filtersCollapsed;
-  const filterPanelTitle = t("sessionsView.filters");
-  const filterToggleLabel = filtersExpanded
-    ? t("sessionsView.hideFilters")
-    : t("sessionsView.showFilters");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -728,132 +754,35 @@ export function renderSessions(props: SessionsProps) {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
+      <div class="sessions-header">
         <div>
-          <div class="card-title">${t("sessionsView.title")}</div>
-          <div class="card-sub">
+          <div class="card-title sessions-header__title">
+            ${t("sessionsView.title")}
             ${props.result
-              ? t("sessionsView.store", { path: props.result.path })
-              : t("sessionsView.subtitle")}
+              ? html`<span class="sessions-header__count">${rawRows.length}</span>`
+              : nothing}
           </div>
+          ${props.result
+            ? html`
+                <openclaw-tooltip .content=${t("sessionsView.store", { path: props.result.path })}>
+                  <div class="card-sub sessions-header__meta">
+                    <span>${loadedLabel}</span>
+                    ${liveCount > 0
+                      ? html`
+                          <span class="sessions-header__live">
+                            <span class="sessions-header__live-dot" aria-hidden="true"></span>
+                            ${t("sessionsView.liveCount", { count: String(liveCount) })}
+                          </span>
+                        `
+                      : nothing}
+                  </div>
+                </openclaw-tooltip>
+              `
+            : html`<div class="card-sub">${t("sessionsView.subtitle")}</div>`}
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
-      </div>
-
-      <div class="sessions-filter-panel">
-        <div class="sessions-filter-panel__header">
-          <div class="sessions-filter-panel__title">${filterPanelTitle}</div>
-          <button
-            class="sessions-filter-panel__toggle"
-            type="button"
-            aria-expanded=${String(filtersExpanded)}
-            aria-controls="sessions-filter-bar"
-            @click=${props.onToggleFiltersCollapsed}
-          >
-            ${filtersExpanded ? icons.chevronDown : icons.chevronRight}
-            <span>${filterToggleLabel}</span>
-          </button>
-        </div>
-
-        ${filtersExpanded
-          ? html`
-              <div
-                id="sessions-filter-bar"
-                class="sessions-filter-bar"
-                aria-label="Session filters"
-              >
-                <div class="session-filter-primary-row">
-                  <openclaw-tooltip .content=${activeTooltip}>
-                    <label class="session-filter-field">
-                      <span class="session-filter-label">${t("sessionsView.active")}</span>
-                      <input
-                        class="session-filter-input session-filter-input--minutes"
-                        placeholder=${t("sessionsView.minutesPlaceholder")}
-                        .value=${props.activeMinutes}
-                        ?disabled=${props.showArchived}
-                        @input=${(e: Event) =>
-                          props.onFiltersChange({
-                            activeMinutes: (e.target as HTMLInputElement).value,
-                            limit: props.limit,
-                            includeGlobal: props.includeGlobal,
-                            includeUnknown: props.includeUnknown,
-                            showArchived: props.showArchived,
-                          })}
-                      />
-                    </label>
-                  </openclaw-tooltip>
-                  <openclaw-tooltip .content=${limitTooltip}>
-                    <label class="session-filter-field">
-                      <span class="session-filter-label">${t("sessionsView.limit")}</span>
-                      <input
-                        class="session-filter-input session-filter-input--limit"
-                        .value=${props.limit}
-                        @input=${(e: Event) =>
-                          props.onFiltersChange({
-                            activeMinutes: props.activeMinutes,
-                            limit: (e.target as HTMLInputElement).value,
-                            includeGlobal: props.includeGlobal,
-                            includeUnknown: props.includeUnknown,
-                            showArchived: props.showArchived,
-                          })}
-                      />
-                    </label>
-                  </openclaw-tooltip>
-                </div>
-                <div
-                  class="session-filter-toggle-group"
-                  role="group"
-                  aria-label=${t("sessionsView.sourceFilters")}
-                >
-                  ${renderFilterToggle({
-                    name: "includeGlobal",
-                    checked: props.includeGlobal,
-                    label: t("sessionsView.global"),
-                    title: globalTooltip,
-                    onChange: (checked) =>
-                      props.onFiltersChange({
-                        activeMinutes: props.activeMinutes,
-                        limit: props.limit,
-                        includeGlobal: checked,
-                        includeUnknown: props.includeUnknown,
-                        showArchived: props.showArchived,
-                      }),
-                  })}
-                  ${renderFilterToggle({
-                    name: "includeUnknown",
-                    checked: props.includeUnknown,
-                    label: t("sessionsView.unknown"),
-                    title: unknownTooltip,
-                    onChange: (checked) =>
-                      props.onFiltersChange({
-                        activeMinutes: props.activeMinutes,
-                        limit: props.limit,
-                        includeGlobal: props.includeGlobal,
-                        includeUnknown: checked,
-                        showArchived: props.showArchived,
-                      }),
-                  })}
-                  ${renderFilterToggle({
-                    name: "showArchived",
-                    checked: props.showArchived,
-                    label: t("sessionsView.archivedOnly"),
-                    title: showArchivedTooltip,
-                    extraClass: "session-archive-toggle",
-                    onChange: (checked) =>
-                      props.onFiltersChange({
-                        activeMinutes: props.activeMinutes,
-                        limit: props.limit,
-                        includeGlobal: props.includeGlobal,
-                        includeUnknown: props.includeUnknown,
-                        showArchived: checked,
-                      }),
-                  })}
-                </div>
-              </div>
-            `
-          : nothing}
       </div>
 
       ${props.error
@@ -861,8 +790,9 @@ export function renderSessions(props: SessionsProps) {
         : nothing}
 
       <div class="data-table-wrapper">
-        <div class="data-table-toolbar">
-          <div class="data-table-search">
+        <div class="sessions-toolbar sessions-filter-bar" aria-label="Session filters">
+          <div class="data-table-search sessions-toolbar__search">
+            ${icons.search}
             <input
               type="text"
               placeholder=${t("sessionsView.searchPlaceholder")}
@@ -870,6 +800,94 @@ export function renderSessions(props: SessionsProps) {
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
           </div>
+          <div class="session-filter-primary-row">
+            <openclaw-tooltip .content=${activeTooltip}>
+              <label class="session-filter-field">
+                <span class="session-filter-label">${t("sessionsView.active")}</span>
+                <input
+                  class="session-filter-input session-filter-input--minutes"
+                  placeholder=${t("sessionsView.minutesPlaceholder")}
+                  .value=${props.activeMinutes}
+                  ?disabled=${props.showArchived}
+                  @input=${(e: Event) =>
+                    props.onFiltersChange({
+                      activeMinutes: (e.target as HTMLInputElement).value,
+                      limit: props.limit,
+                      includeGlobal: props.includeGlobal,
+                      includeUnknown: props.includeUnknown,
+                      showArchived: props.showArchived,
+                    })}
+                />
+              </label>
+            </openclaw-tooltip>
+            <openclaw-tooltip .content=${limitTooltip}>
+              <label class="session-filter-field">
+                <span class="session-filter-label">${t("sessionsView.limit")}</span>
+                <input
+                  class="session-filter-input session-filter-input--limit"
+                  .value=${props.limit}
+                  @input=${(e: Event) =>
+                    props.onFiltersChange({
+                      activeMinutes: props.activeMinutes,
+                      limit: (e.target as HTMLInputElement).value,
+                      includeGlobal: props.includeGlobal,
+                      includeUnknown: props.includeUnknown,
+                      showArchived: props.showArchived,
+                    })}
+                />
+              </label>
+            </openclaw-tooltip>
+          </div>
+          <div
+            class="session-filter-toggle-group"
+            role="group"
+            aria-label=${t("sessionsView.sourceFilters")}
+          >
+            ${renderFilterToggle({
+              name: "includeGlobal",
+              checked: props.includeGlobal,
+              label: t("sessionsView.global"),
+              title: globalTooltip,
+              onChange: (checked) =>
+                props.onFiltersChange({
+                  activeMinutes: props.activeMinutes,
+                  limit: props.limit,
+                  includeGlobal: checked,
+                  includeUnknown: props.includeUnknown,
+                  showArchived: props.showArchived,
+                }),
+            })}
+            ${renderFilterToggle({
+              name: "includeUnknown",
+              checked: props.includeUnknown,
+              label: t("sessionsView.unknown"),
+              title: unknownTooltip,
+              onChange: (checked) =>
+                props.onFiltersChange({
+                  activeMinutes: props.activeMinutes,
+                  limit: props.limit,
+                  includeGlobal: props.includeGlobal,
+                  includeUnknown: checked,
+                  showArchived: props.showArchived,
+                }),
+            })}
+            ${renderFilterToggle({
+              name: "showArchived",
+              checked: props.showArchived,
+              label: t("sessionsView.archivedOnly"),
+              title: showArchivedTooltip,
+              extraClass: "session-archive-toggle",
+              onChange: (checked) =>
+                props.onFiltersChange({
+                  activeMinutes: props.activeMinutes,
+                  limit: props.limit,
+                  includeGlobal: props.includeGlobal,
+                  includeUnknown: props.includeUnknown,
+                  showArchived: checked,
+                }),
+            })}
+          </div>
+          <span class="sessions-toolbar__divider" aria-hidden="true"></span>
           <label class="session-groupby">
             <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
             <select
@@ -939,21 +957,15 @@ export function renderSessions(props: SessionsProps) {
                     : nothing}
                 </th>
                 ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
-                <th>${t("sessionsView.label")}</th>
                 ${props.groupBy === "category"
                   ? html`<th>${t("sessionsView.group")}</th>`
                   : nothing}
                 ${sortHeader("kind", t("sessionsView.kind"))}
                 <th class="session-status-col">${t("sessionsView.status")}</th>
-                <th>${t("agents.context.runtime")}</th>
+                <th class="session-runtime-col">${t("agents.context.runtime")}</th>
                 ${sortHeader("updated", t("sessionsView.updated"))}
                 ${sortHeader("tokens", t("sessionsView.tokens"))}
-                <th class="session-compaction-col">${t("sessionsView.compaction")}</th>
-                <th>${t("sessionsView.thinking")}</th>
-                <th>${t("sessionsView.fast")}</th>
-                <th>${t("sessionsView.verbose")}</th>
-                <th>${t("sessionsView.reasoning")}</th>
-                <th>${t("sessionsView.actions")}</th>
+                <th class="session-actions-col">${t("sessionsView.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -994,7 +1006,7 @@ export function renderSessions(props: SessionsProps) {
                 </div>
                 <div class="data-table-pagination__controls">
                   <select
-                    style="height: 32px; padding: 0 8px; font-size: 13px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--card);"
+                    class="data-table-pagination__size"
                     .value=${String(props.pageSize)}
                     @change=${(e: Event) =>
                       props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
@@ -1021,6 +1033,311 @@ export function renderSessions(props: SessionsProps) {
 
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
+  const latestCheckpoint = row.latestCompactionCheckpoint;
+  const checkpointCount = row.compactionCheckpointCount ?? 0;
+  const visibleCheckpointCount = Math.max(checkpointCount, latestCheckpoint ? 1 : 0);
+  const hasCheckpoints = checkpointCount > 0 || Boolean(latestCheckpoint);
+  const isExpanded = props.expandedSessionKey === row.key;
+  const detailsId = `session-details-${encodeURIComponent(row.key)}`;
+  const displayName = normalizeOptionalString(row.displayName) ?? null;
+  const trimmedLabel = normalizeOptionalString(row.label) ?? "";
+  const showDisplayName = Boolean(
+    displayName && displayName !== row.key && displayName !== trimmedLabel,
+  );
+  const keyParts = parseSessionKeyParts(row.key);
+  const agentIdentity = keyParts
+    ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
+    : null;
+  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji) ?? "";
+  const identityName = normalizeOptionalString(agentIdentity?.name) ?? "";
+  const friendlyKeyLabel =
+    identityName && keyParts
+      ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
+      : null;
+  const keyCellTitle = friendlyKeyLabel ?? row.key;
+  const isMainSession =
+    row.key === "main" ||
+    parseAgentSessionKey(row.key)?.rest === normalizeLowercaseStringOrEmpty(props.mainKey);
+  const canLink = row.kind !== "global";
+  const captured = props.workboardSessionKeys?.has(row.key) === true;
+  const captureBusy = props.workboardBusySessionKey === row.key;
+  const chatUrl = canLink
+    ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
+    : null;
+  const badgeClass =
+    row.kind === "cron"
+      ? "data-table-badge--cron"
+      : row.kind === "direct"
+        ? "data-table-badge--direct"
+        : row.kind === "group"
+          ? "data-table-badge--group"
+          : row.kind === "global"
+            ? "data-table-badge--global"
+            : "data-table-badge--unknown";
+  const rowClass = [
+    "session-data-row",
+    "session-data-row--expandable",
+    isExpanded ? "session-data-row--expanded" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  // The {count} placeholder predates the drawer redesign; it carries the session title.
+  const detailsToggleLabel = isExpanded
+    ? t("sessionsView.hideSessionDetails", { count: keyCellTitle })
+    : t("sessionsView.showSessionDetails", { count: keyCellTitle });
+  const categoryMode = props.groupBy === "category";
+  // Dropping on a row targets that row's group so the whole section area accepts drops.
+  const rowDrop = categoryDropHandlers(props, normalizeOptionalString(row.category) ?? null);
+
+  return [
+    html`<tr
+      class=${rowClass}
+      tabindex="0"
+      aria-expanded=${String(isExpanded)}
+      aria-controls=${detailsId}
+      draggable=${categoryMode ? "true" : nothing}
+      aria-description=${categoryMode ? t("sessionsView.dragSessionHint") : nothing}
+      @dragstart=${categoryMode
+        ? (e: DragEvent) => {
+            e.dataTransfer?.setData(SESSION_DRAG_MIME, row.key);
+            if (e.dataTransfer) {
+              e.dataTransfer.effectAllowed = "move";
+            }
+          }
+        : nothing}
+      @dragover=${rowDrop.dragover}
+      @dragleave=${rowDrop.dragleave}
+      @drop=${rowDrop.drop}
+      @click=${(e: MouseEvent) => {
+        if (isRowControlTarget(e.target)) {
+          return;
+        }
+        props.onToggleDetails(row.key);
+      }}
+      @keydown=${(e: KeyboardEvent) => {
+        if (isRowControlTarget(e.target)) {
+          return;
+        }
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          props.onToggleDetails(row.key);
+        }
+      }}
+    >
+      <td class="data-table-checkbox-col">
+        <input
+          type="checkbox"
+          .checked=${props.selectedKeys.has(row.key)}
+          @change=${() => props.onToggleSelect(row.key)}
+          aria-label=${t("sessionsView.selectSession")}
+        />
+      </td>
+      <td class="data-table-key-col">
+        <openclaw-tooltip .content=${keyCellTitle}>
+          <div class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}>
+            <span class="session-key-cell__primary">
+              ${row.unread === true
+                ? html`<span
+                    class="session-unread-dot"
+                    role="img"
+                    aria-label=${t("sessionsView.unread")}
+                  ></span>`
+                : nothing}
+              ${canLink
+                ? html`<a
+                    href=${chatUrl}
+                    class="session-link"
+                    @click=${(e: MouseEvent) => {
+                      if (
+                        e.defaultPrevented ||
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      ) {
+                        return;
+                      }
+                      if (props.onNavigateToChat) {
+                        e.preventDefault();
+                        props.onNavigateToChat(row.key);
+                      }
+                    }}
+                    >${friendlyKeyLabel ?? row.key}</a
+                  >`
+                : html`<span>${friendlyKeyLabel ?? row.key}</span>`}
+              ${trimmedLabel
+                ? html`<span class="session-label-chip" title=${trimmedLabel}
+                    >${trimmedLabel}</span
+                  >`
+                : nothing}
+            </span>
+            ${showDisplayName
+              ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              : nothing}
+          </div>
+        </openclaw-tooltip>
+      </td>
+      ${categoryMode ? renderCategoryCell(row, props) : nothing}
+      <td>
+        <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+      </td>
+      <td class="session-status-col">
+        <div class="session-status-stack">
+          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+        </div>
+      </td>
+      <td class="session-runtime-cell">
+        <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
+      </td>
+      <td>${updated}</td>
+      <td class="session-token-cell">${formatSessionTokens(row)}</td>
+      <td class="session-actions-cell">
+        <div class="session-actions">
+          <button
+            class="session-details-toggle"
+            type="button"
+            aria-expanded=${String(isExpanded)}
+            aria-controls=${detailsId}
+            aria-label=${detailsToggleLabel}
+            @click=${(e: MouseEvent) => {
+              e.stopPropagation();
+              props.onToggleDetails(row.key);
+            }}
+          >
+            ${visibleCheckpointCount > 0
+              ? html`<span class="session-compaction-count">${visibleCheckpointCount}</span>`
+              : nothing}
+            ${icons.chevronDown}
+          </button>
+          <button
+            class="icon-btn"
+            title=${row.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}
+            aria-label=${row.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}
+            ?disabled=${props.loading}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              props.onPatch(row.key, { unread: row.unread !== true });
+            }}
+          >
+            ${row.unread ? icons.eye : icons.circle}
+          </button>
+          <button
+            class="icon-btn"
+            title=${t("sessionsView.forkSession")}
+            aria-label=${t("sessionsView.forkSession")}
+            ?disabled=${props.loading}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              void props.onFork(row.key);
+            }}
+          >
+            ${icons.copy}
+          </button>
+          <button
+            class="icon-btn"
+            title=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+            aria-label=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+            ?disabled=${props.loading || row.archived === true}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              props.onPatch(row.key, { pinned: row.pinned !== true });
+            }}
+          >
+            ${row.pinned ? icons.pinOff : icons.pin}
+          </button>
+          <button
+            class="icon-btn"
+            title=${row.archived
+              ? t("sessionsView.restoreSession")
+              : t("sessionsView.archiveSession")}
+            aria-label=${row.archived
+              ? t("sessionsView.restoreSession")
+              : t("sessionsView.archiveSession")}
+            ?disabled=${props.loading ||
+            (!row.archived &&
+              (isMainSession ||
+                row.hasActiveRun === true ||
+                row.kind === "global" ||
+                row.kind === "unknown"))}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              props.onPatch(row.key, { archived: row.archived !== true });
+            }}
+          >
+            ${row.archived ? icons.archiveRestore : icons.archive}
+          </button>
+          ${props.onAddToWorkboard && canLink
+            ? html`
+                <openclaw-tooltip
+                  .content=${captured
+                    ? t("sessionsView.openWorkboardCard")
+                    : t("sessionsView.addToWorkboard")}
+                >
+                  <button
+                    class="icon-btn"
+                    aria-label=${captured
+                      ? t("sessionsView.openWorkboardCard")
+                      : t("sessionsView.addToWorkboard")}
+                    ?disabled=${props.loading || captureBusy}
+                    @click=${(event: MouseEvent) => {
+                      event.stopPropagation();
+                      void props.onAddToWorkboard?.(row);
+                    }}
+                  >
+                    ${captured ? icons.check : icons.plus}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+        </div>
+      </td>
+    </tr>`,
+    ...(isExpanded
+      ? [
+          renderSessionDetailsRow({
+            row,
+            props,
+            detailsId,
+            friendlyKeyLabel,
+            keyCellTitle,
+            displayName,
+            showDisplayName,
+            badgeClass,
+            updated,
+            visibleCheckpointCount,
+            hasCheckpoints,
+          }),
+        ]
+      : []),
+  ];
+}
+
+function renderSessionDetailsRow(params: {
+  row: GatewaySessionRow;
+  props: SessionsProps;
+  detailsId: string;
+  friendlyKeyLabel: string | null;
+  keyCellTitle: string;
+  displayName: string | null;
+  showDisplayName: boolean;
+  badgeClass: string;
+  updated: string;
+  visibleCheckpointCount: number;
+  hasCheckpoints: boolean;
+}) {
+  const {
+    row,
+    props,
+    detailsId,
+    friendlyKeyLabel,
+    displayName,
+    showDisplayName,
+    badgeClass,
+    updated,
+    visibleCheckpointCount,
+    hasCheckpoints,
+  } = params;
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
   const thinkLevels = withCurrentLabeledOption(
@@ -1040,438 +1357,163 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
-  const latestCheckpoint = row.latestCompactionCheckpoint;
-  const checkpointCount = row.compactionCheckpointCount ?? 0;
-  const visibleCheckpointCount = Math.max(checkpointCount, latestCheckpoint ? 1 : 0);
-  const hasCheckpoints = checkpointCount > 0 || Boolean(latestCheckpoint);
-  const isExpanded = props.expandedCheckpointKey === row.key;
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
-  const detailsId = `session-checkpoints-${encodeURIComponent(row.key)}`;
   const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
   const sessionDetails = sessionDetailItems({
     row,
     updated,
     checkpointCount: visibleCheckpointCount,
   });
-  const displayName = normalizeOptionalString(row.displayName) ?? null;
-  const trimmedLabel = normalizeOptionalString(row.label) ?? "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== row.key && displayName !== trimmedLabel,
-  );
-  const keyParts = parseSessionKeyParts(row.key);
-  const isMainSession =
-    row.key === "main" ||
-    parseAgentSessionKey(row.key)?.rest === normalizeLowercaseStringOrEmpty(props.mainKey);
-  const agentIdentity = keyParts
-    ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
-    : null;
-  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji) ?? "";
-  const identityName = normalizeOptionalString(agentIdentity?.name) ?? "";
-  const friendlyKeyLabel =
-    identityName && keyParts
-      ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
-      : null;
-  const keyCellTitle = friendlyKeyLabel ?? row.key;
-  const canLink = row.kind !== "global";
-  const captured = props.workboardSessionKeys?.has(row.key) === true;
-  const captureBusy = props.workboardBusySessionKey === row.key;
-  const chatUrl = canLink
-    ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
-    : null;
-  const badgeClass =
-    row.kind === "cron"
-      ? "data-table-badge--cron"
-      : row.kind === "direct"
-        ? "data-table-badge--direct"
-        : row.kind === "group"
-          ? "data-table-badge--group"
-          : row.kind === "global"
-            ? "data-table-badge--global"
-            : "data-table-badge--unknown";
-  const rowClass = [
-    "session-data-row",
-    hasCheckpoints ? "session-data-row--expandable" : "",
-    isExpanded ? "session-data-row--expanded" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const activateCheckpointDetails = () => {
-    if (hasCheckpoints) {
-      props.onToggleCheckpointDetails(row.key);
-    }
-  };
-  const categoryMode = props.groupBy === "category";
-  // Dropping on a row targets that row's group so the whole section area accepts drops.
-  const rowDrop = categoryDropHandlers(props, normalizeOptionalString(row.category) ?? null);
 
-  return [
-    html`<tr
-      class=${rowClass}
-      tabindex=${hasCheckpoints ? "0" : nothing}
-      aria-expanded=${hasCheckpoints ? String(isExpanded) : nothing}
-      aria-controls=${hasCheckpoints ? detailsId : nothing}
-      draggable=${categoryMode ? "true" : nothing}
-      aria-description=${categoryMode ? t("sessionsView.dragSessionHint") : nothing}
-      @dragstart=${categoryMode
-        ? (e: DragEvent) => {
-            e.dataTransfer?.setData(SESSION_DRAG_MIME, row.key);
-            if (e.dataTransfer) {
-              e.dataTransfer.effectAllowed = "move";
-            }
-          }
-        : nothing}
-      @dragover=${rowDrop.dragover}
-      @dragleave=${rowDrop.dragleave}
-      @drop=${rowDrop.drop}
-      @click=${(e: MouseEvent) => {
-        if (!hasCheckpoints || isRowControlTarget(e.target)) {
-          return;
-        }
-        activateCheckpointDetails();
-      }}
-      @keydown=${(e: KeyboardEvent) => {
-        if (!hasCheckpoints || isRowControlTarget(e.target)) {
-          return;
-        }
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          activateCheckpointDetails();
-        }
-      }}
-    >
-      <td class="data-table-checkbox-col">
-        <input
-          type="checkbox"
-          .checked=${props.selectedKeys.has(row.key)}
-          @change=${() => props.onToggleSelect(row.key)}
-          aria-label=${t("sessionsView.selectSession")}
-        />
-      </td>
-      <td class="data-table-key-col">
-        <openclaw-tooltip .content=${keyCellTitle}>
-          <div class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}>
-            ${canLink
-              ? html`<a
-                  href=${chatUrl}
-                  class="session-link"
-                  @click=${(e: MouseEvent) => {
-                    if (
-                      e.defaultPrevented ||
-                      e.button !== 0 ||
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey
-                    ) {
-                      return;
-                    }
-                    if (props.onNavigateToChat) {
-                      e.preventDefault();
-                      props.onNavigateToChat(row.key);
-                    }
-                  }}
-                  >${friendlyKeyLabel ?? row.key}</a
-                >`
-              : (friendlyKeyLabel ?? row.key)}
+  return html`<tr id=${detailsId} class="session-details-row">
+    <td colspan=${sessionsTableColumnCount(props)}>
+      <div class="session-details-panel">
+        <div class="session-details-panel__hero">
+          <div>
+            <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
+            <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
             ${showDisplayName
-              ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
               : nothing}
           </div>
-        </openclaw-tooltip>
-      </td>
-      <td>
-        <input
-          .value=${row.label ?? ""}
-          ?disabled=${props.loading}
-          placeholder=${t("sessionsView.optionalPlaceholder")}
-          style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
-          @change=${(e: Event) => {
-            const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
-            props.onPatch(row.key, { label: value });
-          }}
-        />
-      </td>
-      ${categoryMode ? renderCategoryCell(row, props) : nothing}
-      <td>
-        <span class="data-table-badge ${badgeClass}">${row.kind}</span>
-      </td>
-      <td class="session-status-col">
-        <div class="session-status-stack">
-          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+          <div class="session-details-panel__badges">
+            ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+            <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+          </div>
         </div>
-      </td>
-      <td class="session-runtime-cell">
-        <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
-      </td>
-      <td>${updated}</td>
-      <td class="session-token-cell">${formatSessionTokens(row)}</td>
-      <td class="session-compaction-col">
-        <div class="session-compaction-cell">
-          ${hasCheckpoints
-            ? html`
-                <button
-                  class="session-compaction-trigger"
-                  type="button"
-                  aria-expanded=${String(isExpanded)}
-                  aria-controls=${detailsId}
-                  aria-label=${isExpanded
-                    ? t("sessionsView.hideSessionDetails", { count: checkpointLabel })
-                    : t("sessionsView.showSessionDetails", { count: checkpointLabel })}
-                  @click=${(e: MouseEvent) => {
-                    e.stopPropagation();
-                    activateCheckpointDetails();
-                  }}
-                >
-                  <span class="session-compaction-count">${checkpointLabel}</span>
-                </button>
-              `
-            : html`<span class="muted session-compaction-count">${t("common.none")}</span>`}
+
+        <div class="session-details-section">
+          <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
+          <div class="session-overrides-grid">
+            <label class="session-override-field">
+              <span class="session-override-field__label">${t("sessionsView.label")}</span>
+              <input
+                class="session-override-field__control"
+                .value=${row.label ?? ""}
+                ?disabled=${props.loading}
+                placeholder=${t("sessionsView.optionalPlaceholder")}
+                @change=${(e: Event) => {
+                  const value =
+                    normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
+                  props.onPatch(row.key, { label: value });
+                }}
+              />
+            </label>
+            ${renderOverrideSelect({
+              label: t("sessionsView.thinking"),
+              disabled: props.loading,
+              options: thinkLevels,
+              current: thinking,
+              onChange: (value) =>
+                props.onPatch(row.key, { thinkingLevel: resolveThinkLevelPatchValue(value) }),
+            })}
+            ${renderOverrideSelect({
+              label: t("sessionsView.fast"),
+              disabled: props.loading,
+              options: fastLevels,
+              current: fastMode,
+              onChange: (value) =>
+                props.onPatch(row.key, {
+                  fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+                }),
+            })}
+            ${renderOverrideSelect({
+              label: t("sessionsView.verbose"),
+              disabled: props.loading,
+              options: verboseLevels,
+              current: verbose,
+              onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
+            })}
+            ${renderOverrideSelect({
+              label: t("sessionsView.reasoning"),
+              disabled: props.loading,
+              options: reasoningLevels.map((level) => ({
+                value: level,
+                label: level || t("sessionsView.inherit"),
+              })),
+              current: reasoning,
+              onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
+            })}
+          </div>
         </div>
-      </td>
-      <td>
-        <select
-          ?disabled=${props.loading}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, {
-              thinkingLevel: resolveThinkLevelPatchValue(value),
-            });
-          }}
-        >
-          ${thinkLevels.map(
-            (level) =>
-              html`<option value=${level.value} ?selected=${thinking === level.value}>
-                ${level.label}
-              </option>`,
-          )}
-        </select>
-      </td>
-      <td>
-        <select
-          ?disabled=${props.loading}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, {
-              fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
-            });
-          }}
-        >
-          ${fastLevels.map(
-            (level) =>
-              html`<option value=${level.value} ?selected=${fastMode === level.value}>
-                ${level.label}
-              </option>`,
-          )}
-        </select>
-      </td>
-      <td>
-        <select
-          ?disabled=${props.loading}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, { verboseLevel: value || null });
-          }}
-        >
-          ${verboseLevels.map(
-            (level) =>
-              html`<option value=${level.value} ?selected=${verbose === level.value}>
-                ${level.label}
-              </option>`,
-          )}
-        </select>
-      </td>
-      <td>
-        <select
-          ?disabled=${props.loading}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, { reasoningLevel: value || null });
-          }}
-        >
-          ${reasoningLevels.map(
-            (level) =>
-              html`<option value=${level} ?selected=${reasoning === level}>
-                ${level || t("sessionsView.inherit")}
-              </option>`,
-          )}
-        </select>
-      </td>
-      <td>
-        <button
-          class="icon-btn"
-          title=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
-          aria-label=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
-          ?disabled=${props.loading || row.archived === true}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            props.onPatch(row.key, { pinned: row.pinned !== true });
-          }}
-        >
-          ${row.pinned ? icons.pinOff : icons.pin}
-        </button>
-        <button
-          class="icon-btn"
-          title=${row.archived
-            ? t("sessionsView.restoreSession")
-            : t("sessionsView.archiveSession")}
-          aria-label=${row.archived
-            ? t("sessionsView.restoreSession")
-            : t("sessionsView.archiveSession")}
-          ?disabled=${props.loading ||
-          (!row.archived &&
-            (isMainSession ||
-              row.hasActiveRun === true ||
-              row.kind === "global" ||
-              row.kind === "unknown"))}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            props.onPatch(row.key, { archived: row.archived !== true });
-          }}
-        >
-          ${row.archived ? icons.archiveRestore : icons.archive}
-        </button>
-        ${props.onAddToWorkboard && canLink
-          ? html`
-              <openclaw-tooltip
-                .content=${captured
-                  ? t("sessionsView.openWorkboardCard")
-                  : t("sessionsView.addToWorkboard")}
-              >
-                <button
-                  class="icon-btn"
-                  aria-label=${captured
-                    ? t("sessionsView.openWorkboardCard")
-                    : t("sessionsView.addToWorkboard")}
-                  ?disabled=${props.loading || captureBusy}
-                  @click=${(event: MouseEvent) => {
-                    event.stopPropagation();
-                    void props.onAddToWorkboard?.(row);
-                  }}
-                >
-                  ${captured ? icons.check : icons.plus}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
-      </td>
-    </tr>`,
-    ...(isExpanded && hasCheckpoints
-      ? [
-          html`<tr id=${detailsId} class="session-checkpoint-details-row">
-            <td colspan=${sessionsTableColumnCount(props)}>
-              <div class="session-details-panel">
-                <div class="session-details-panel__hero">
-                  <div>
-                    <div class="session-details-panel__eyebrow">
-                      ${t("sessionsView.sessionDetails")}
-                    </div>
-                    <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
-                    ${showDisplayName
-                      ? html`
-                          <div class="muted session-details-panel__subtitle">${displayName}</div>
-                        `
-                      : nothing}
-                  </div>
-                  <div class="session-details-panel__badges">
-                    ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
-                    <span class="data-table-badge ${badgeClass}">${row.kind}</span>
-                  </div>
-                </div>
 
-                <div class="session-details-grid">
-                  ${sessionDetails.map(
-                    (item) => html`
-                      <div class="session-detail-stat">
-                        <div class="session-detail-stat__label">${item.label}</div>
-                        <openclaw-tooltip .content=${item.value}>
-                          <div class="session-detail-stat__value">${item.value}</div>
-                        </openclaw-tooltip>
-                      </div>
-                    `,
-                  )}
-                </div>
-
-                <div class="session-details-section">
-                  <div class="session-details-section__header">
-                    <div>
-                      <div class="session-details-panel__eyebrow">
-                        ${t("sessionsView.compactionHistory")}
-                      </div>
-                      <div class="session-details-section__title">${checkpointLabel}</div>
-                    </div>
-                  </div>
-                  ${props.checkpointLoadingKey === row.key
-                    ? html`<div class="muted session-details-empty">
-                        ${t("sessionsView.loadingCheckpoints")}
-                      </div>`
-                    : checkpointError
-                      ? html`<div class="callout danger">${checkpointError}</div>`
-                      : checkpointItems.length === 0
-                        ? html`<div class="muted session-details-empty">
-                            ${t("sessionsView.noCheckpoints")}
-                          </div>`
-                        : html`
-                            <div class="session-checkpoint-list">
-                              ${checkpointItems.map(
-                                (checkpoint) => html`
-                                  <div class="session-checkpoint-card">
-                                    <div class="session-checkpoint-card__header">
-                                      <strong>
-                                        ${formatCheckpointReason(checkpoint.reason)} ·
-                                        ${formatRelativeTimestamp(checkpoint.createdAt)}
-                                      </strong>
-                                      <span class="muted session-checkpoint-card__delta">
-                                        ${formatCheckpointDelta(checkpoint)}
-                                      </span>
-                                    </div>
-                                    ${checkpoint.summary
-                                      ? html`<div class="session-checkpoint-card__summary">
-                                          ${checkpoint.summary}
-                                        </div>`
-                                      : html`
-                                          <div class="muted">${t("sessionsView.noSummary")}</div>
-                                        `}
-                                    <div class="session-checkpoint-card__actions">
-                                      <button
-                                        class="btn btn--sm"
-                                        ?disabled=${props.checkpointBusyKey ===
-                                        checkpoint.checkpointId}
-                                        @click=${() =>
-                                          props.onBranchFromCheckpoint(
-                                            row.key,
-                                            checkpoint.checkpointId,
-                                          )}
-                                      >
-                                        ${t("sessionsView.branchFromCheckpoint")}
-                                      </button>
-                                      <button
-                                        class="btn btn--sm"
-                                        ?disabled=${props.checkpointBusyKey ===
-                                        checkpoint.checkpointId}
-                                        @click=${() =>
-                                          props.onRestoreCheckpoint(
-                                            row.key,
-                                            checkpoint.checkpointId,
-                                          )}
-                                      >
-                                        ${t("sessionsView.restoreCheckpoint")}
-                                      </button>
-                                    </div>
-                                  </div>
-                                `,
-                              )}
-                            </div>
-                          `}
-                </div>
+        <div class="session-details-grid">
+          ${sessionDetails.map(
+            (item) => html`
+              <div class="session-detail-stat">
+                <div class="session-detail-stat__label">${item.label}</div>
+                <openclaw-tooltip .content=${item.value}>
+                  <div class="session-detail-stat__value">${item.value}</div>
+                </openclaw-tooltip>
               </div>
-            </td>
-          </tr>`,
-        ]
-      : []),
-  ];
+            `,
+          )}
+        </div>
+
+        <div class="session-details-section">
+          <div class="session-details-section__header">
+            <div>
+              <div class="session-details-panel__eyebrow">
+                ${t("sessionsView.compactionHistory")}
+              </div>
+              <div class="session-details-section__title">${checkpointLabel}</div>
+            </div>
+          </div>
+          ${props.checkpointLoadingKey === row.key
+            ? html`<div class="muted session-details-empty">
+                ${t("sessionsView.loadingCheckpoints")}
+              </div>`
+            : checkpointError
+              ? html`<div class="callout danger">${checkpointError}</div>`
+              : !hasCheckpoints || checkpointItems.length === 0
+                ? html`<div class="muted session-details-empty">
+                    ${t("sessionsView.noCheckpoints")}
+                  </div>`
+                : html`
+                    <div class="session-checkpoint-list">
+                      ${checkpointItems.map(
+                        (checkpoint) => html`
+                          <div class="session-checkpoint-card">
+                            <div class="session-checkpoint-card__header">
+                              <strong>
+                                ${formatCheckpointReason(checkpoint.reason)} ·
+                                ${formatRelativeTimestamp(checkpoint.createdAt)}
+                              </strong>
+                              <span class="muted session-checkpoint-card__delta">
+                                ${formatCheckpointDelta(checkpoint)}
+                              </span>
+                            </div>
+                            ${checkpoint.summary
+                              ? html`<div class="session-checkpoint-card__summary">
+                                  ${checkpoint.summary}
+                                </div>`
+                              : html`<div class="muted">${t("sessionsView.noSummary")}</div>`}
+                            <div class="session-checkpoint-card__actions">
+                              <button
+                                class="btn btn--sm"
+                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId}
+                                @click=${() =>
+                                  props.onBranchFromCheckpoint(row.key, checkpoint.checkpointId)}
+                              >
+                                ${t("sessionsView.branchFromCheckpoint")}
+                              </button>
+                              <button
+                                class="btn btn--sm"
+                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId}
+                                @click=${() =>
+                                  props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
+                              >
+                                ${t("sessionsView.restoreCheckpoint")}
+                              </button>
+                            </div>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  `}
+        </div>
+      </div>
+    </td>
+  </tr>`;
 }

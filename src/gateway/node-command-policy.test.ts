@@ -14,6 +14,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import {
+  filterLegacyNodeProtocolFeatures,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -28,7 +29,7 @@ describe("gateway/node-command-policy", () => {
 
   function installCanvasPluginDefaults() {
     const registry = createEmptyPluginRegistry();
-    (registry.nodeInvokePolicies ??= []).push({
+    registry.nodeInvokePolicies.push({
       pluginId: "canvas",
       pluginName: "Canvas",
       source: "/extensions/canvas/index.ts",
@@ -115,15 +116,30 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.present")).toBe(true);
   });
 
+  it("suppresses plugin-owned features for legacy protocol nodes", () => {
+    installCanvasPluginDefaults();
+
+    expect(
+      filterLegacyNodeProtocolFeatures({
+        caps: ["canvas", "device"],
+        commands: ["canvas.snapshot", "device.info"],
+        pluginSurfaces: ["canvas"],
+      }),
+    ).toEqual({
+      caps: ["device"],
+      commands: ["device.info"],
+    });
+  });
+
   it("keeps plugin node defaults from the pinned Gateway registry", () => {
     const startupRegistry = installCanvasPluginDefaults();
     pinActivePluginChannelRegistry(startupRegistry);
     const transientRegistry = createEmptyPluginRegistry();
-    const startupPolicy = startupRegistry.nodeInvokePolicies?.[0];
+    const startupPolicy = startupRegistry.nodeInvokePolicies[0];
     if (!startupPolicy) {
       throw new Error("expected canvas node policy");
     }
-    (transientRegistry.nodeInvokePolicies ??= []).push({
+    transientRegistry.nodeInvokePolicies.push({
       ...startupPolicy,
       pluginId: "transient",
       policy: {

@@ -80,6 +80,7 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
@@ -684,7 +685,9 @@ async function initSessionStateAttemptLocked(
     previousSessionId: previousSessionEntry?.sessionId,
   });
   if (previousSessionEntry) {
-    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
+    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
+      activeReplySessionId: previousSessionEntry.sessionId,
+    });
   }
 
   const recoveredTerminalEntry =
@@ -958,6 +961,9 @@ async function initSessionStateAttemptLocked(
     sessionEntry.fallbackNoticeActiveModel = undefined;
     sessionEntry.fallbackNoticeReason = undefined;
     sessionEntry.systemPromptReport = undefined;
+    sessionEntry.memoryFlushFailureCount = undefined;
+    sessionEntry.memoryFlushLastFailedAt = undefined;
+    sessionEntry.memoryFlushLastFailureError = undefined;
     // Clear stale context hash so the first flush in the new session is not
     // incorrectly skipped due to a hash match with the old transcript (#30115).
     sessionEntry.memoryFlushContextHash = undefined;
@@ -1051,9 +1057,13 @@ async function initSessionStateAttemptLocked(
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });
+    // Direct-message browser tabs use a peer-scoped runtime identity even when
+    // their transcript aliases main; cleanup must carry both exact keys.
+    const runtimePolicySessionKey =
+      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,
-      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+      sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
       onWarn: (message) => log.warn(message),
       onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
     });

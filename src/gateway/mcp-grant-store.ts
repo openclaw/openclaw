@@ -28,7 +28,7 @@ export function mintAttachGrant(params: {
   ttlMs?: number;
   nowMs?: number;
 }): McpAttachGrant {
-  const sessionKey = params.sessionKey.trim();
+  const sessionKey = params.sessionKey?.trim() ?? "";
   if (!sessionKey) {
     throw new Error("mintAttachGrant: sessionKey is required");
   }

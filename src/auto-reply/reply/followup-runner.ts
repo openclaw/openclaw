@@ -31,7 +31,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import {
   isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -96,6 +96,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   completeFollowupRunLifecycle,
@@ -717,6 +718,15 @@ export function createFollowupRunner(params: {
         }
         return sendFollowupPayloads(...args);
       };
+      // Admission already loads the latest entry under the lifecycle fence.
+      const goalContextSessionEntry = admission.sessionEntry ?? activeSessionEntry;
+      const currentInboundContext =
+        opts?.isHeartbeat === true
+          ? effectiveQueued.currentInboundContext
+          : refreshActiveGoalContext(
+              effectiveQueued.currentInboundContext,
+              goalContextSessionEntry,
+            );
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -783,6 +793,7 @@ export function createFollowupRunner(params: {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
           ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+          agentId: run.agentId,
           lifecycleGeneration,
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
@@ -842,6 +853,7 @@ export function createFollowupRunner(params: {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
           ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          agentId: run.agentId,
           lifecycleGeneration,
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
@@ -1072,8 +1084,8 @@ export function createFollowupRunner(params: {
                   sessionKey: replySessionKey,
                   startedAt: cliLifecycleStartedAt,
                   getLifecycleGeneration: () => lifecycleGeneration,
-                  resolveAbortLifecycleFields: () =>
-                    resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                  resolveTerminationFields: (error) =>
+                    resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                 });
                 let droppedCliSessionReplacement = false;
                 pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
@@ -1174,7 +1186,7 @@ export function createFollowupRunner(params: {
                     storePath,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundAudio: queued.currentInboundAudio,
-                    currentInboundContext: queued.currentInboundContext,
+                    currentInboundContext,
                     inputProvenance: run.inputProvenance,
                     provider: cliExecutionProvider,
                     model,
@@ -1245,8 +1257,8 @@ export function createFollowupRunner(params: {
                 runId,
                 sessionKey: replySessionKey,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () =>
-                  resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) =>
+                  resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
               });
               pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
@@ -1290,7 +1302,7 @@ export function createFollowupRunner(params: {
                 userTurnTranscriptRecorder,
                 currentInboundEventKind: queued.currentInboundEventKind,
                 currentInboundAudio: queued.currentInboundAudio,
-                currentInboundContext: queued.currentInboundContext,
+                currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,

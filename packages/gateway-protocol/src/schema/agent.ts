@@ -206,6 +206,7 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    cwd: Type.Optional(NonEmptyString),
     // One-shot CLI gateway requests can ask the gateway to close process-wide
     // bundle MCP resources after the run instead of keeping them warm.
     cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),

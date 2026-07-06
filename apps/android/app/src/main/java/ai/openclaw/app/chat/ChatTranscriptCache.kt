@@ -234,10 +234,11 @@ class RoomChatTranscriptCache internal constructor(
   ): List<ChatMessage> {
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
-    return database.dao().messages(gateway, key).map { row ->
+    return database.dao().messages(gateway, key).mapNotNull { row ->
+      val role = normalizeVisibleChatMessageRole(row.role) ?: return@mapNotNull null
       ChatMessage(
         id = UUID.randomUUID().toString(),
-        role = row.role,
+        role = role,
         content = decodeTextParts(row.textPartsJson).map { ChatMessageContent(type = "text", text = it) },
         timestampMs = row.timestampMs,
         idempotencyKey = row.idempotencyKey,
@@ -300,16 +301,17 @@ class RoomChatTranscriptCache internal constructor(
     val rows =
       messages
         .mapNotNull { message ->
+          val role = normalizeVisibleChatMessageRole(message.role) ?: return@mapNotNull null
           val textParts = message.content.filter { it.type == "text" }.mapNotNull { it.text }
           if (textParts.isEmpty()) return@mapNotNull null
-          message to textParts
+          Triple(message, role, textParts)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
-        .mapIndexed { index, (message, textParts) ->
+        .mapIndexed { index, (message, role, textParts) ->
           CachedMessageEntity(
             gatewayId = gateway,
             sessionKey = key,
             rowOrder = index,
-            role = message.role,
+            role = role,
             textPartsJson = json.encodeToString(textPartsSerializer, textParts),
             timestampMs = message.timestampMs,
             idempotencyKey = message.idempotencyKey,

@@ -54,7 +54,6 @@ import {
 import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
-  createDefaultRealtimeTalkOptions,
   createInitialChatRealtimeState,
   resetChatRealtimeConversation,
   type ChatRealtimeState,
@@ -348,7 +347,6 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarReason = null;
   state.realtimeTalkTranscript = null;
   resetChatRealtimeConversation(state);
-  state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -361,7 +359,9 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
     clearRunStatus: true,
   });
   state.resetChatScroll();
-  saveRouteSessionSettings(state, sessionKey);
+  // Deliberately no saveRouteSessionSettings here: this runs for every split
+  // pane, and only the active pane may write the global sessionKey /
+  // lastActiveSessionKey settings (chat-pane applyActiveSessionBindings).
 }
 
 export async function refreshRouteSessionOptions(state: ChatPageHost) {
@@ -977,7 +977,7 @@ export function createPageState(
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
-    ...createInitialChatRealtimeState(),
+    ...createInitialChatRealtimeState(settings.realtimeTalkInputDeviceId),
     requestUpdate,
     sessionWorkspaceState: undefined,
     sessionWorkspaceOpenRequest: undefined,
@@ -1006,6 +1006,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatAutoScroll: next.chatAutoScroll,
+      chatSendShortcut: next.chatSendShortcut,
       splitRatio: next.splitRatio,
     });
     state.splitRatio = state.settings.splitRatio;

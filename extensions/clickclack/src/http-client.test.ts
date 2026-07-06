@@ -191,6 +191,69 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
+  it("includes quoted_message_id on a channel message when quoting", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ message: { id: "msg_q" } }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.createChannelMessage("chn_1", "ack", { quotedMessageId: "msg_root" });
+
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      body: "ack",
+      quoted_message_id: "msg_root",
+    });
+  });
+
+  it("omits quoted_message_id on a channel message when not quoting", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ message: { id: "msg_p" } }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.createChannelMessage("chn_1", "hello");
+
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({ body: "hello" });
+  });
+
+  it("includes quoted_message_id on a direct message when quoting", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ message: { id: "msg_dm_q" } }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.createDirectMessage("dcn_1", "ack", { quotedMessageId: "msg_root" });
+
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      body: "ack",
+      quoted_message_id: "msg_root",
+    });
+  });
+
   it("rejects activity rows without a channel or conversation target", async () => {
     const fetchMock = vi.fn();
     const client = createClickClackClient({

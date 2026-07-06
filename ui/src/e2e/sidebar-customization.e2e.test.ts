@@ -92,21 +92,36 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toContain("Logbook");
       await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
+      // Workboard ships disabled, so it stays hidden from navigation entirely.
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
+        )
+        .not.toContain("Workboard");
 
       const customizeButton = sidebar.getByRole("button", { name: "Customize sidebar" });
       await customizeButton.click();
       const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
+      await expect
+        .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
+        .not.toContain("Workboard");
       const overviewItem = menu.getByRole("menuitemcheckbox", { name: "Overview" });
       await expect.poll(() => overviewItem.getAttribute("aria-checked")).toBe("true");
+      const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
       await expect
         .poll(() => overviewItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
+      await usageItem.click();
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview", "Usage"]);
       await overviewItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
@@ -153,6 +168,37 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toBe(0);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows the Workboard route when the plugin is enabled in config", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: { plugins: { entries: { workboard: { enabled: true } } } },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}overview`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "More" }).click();
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
+        )
+        .toContain("Workboard");
     } finally {
       await context.close();
     }

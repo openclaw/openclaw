@@ -3,6 +3,7 @@ import { html } from "lit";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import {
   normalizeChatAutoScrollMode,
+  normalizeChatSendShortcut,
   type ChatAutoScrollMode,
   type UiSettings,
 } from "../../../app/settings.ts";
@@ -21,7 +22,8 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 
-export type ChatControlsProps = {
+type ChatControlsProps = {
+  paneId: string;
   agentsList: AgentsListResult | null;
   connected: boolean;
   hideCronSessions: boolean;
@@ -44,6 +46,7 @@ export type ChatControlsProps = {
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
   ) => void;
   onToggleCronSessions?: () => void;
+  onOpenSplitView?: () => void;
 };
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -96,6 +99,33 @@ function renderChatAutoScrollToggle(props: {
         <span class="chat-settings-action__text">${t("chat.autoScrollMode")}</span>
       </button>
     </openclaw-tooltip>
+  `;
+}
+
+function renderChatSendShortcutPreference(props: {
+  settings: UiSettings;
+  onSettingsChange: (next: UiSettings) => void;
+}) {
+  const shortcut = normalizeChatSendShortcut(props.settings.chatSendShortcut);
+  return html`
+    <label class="chat-settings-popover__preference">
+      <span>${t("chat.sendShortcut")}</span>
+      <select
+        data-chat-send-shortcut="true"
+        .value=${shortcut}
+        @change=${(event: Event) => {
+          props.onSettingsChange({
+            ...props.settings,
+            chatSendShortcut: normalizeChatSendShortcut(
+              (event.currentTarget as HTMLSelectElement).value,
+            ),
+          });
+        }}
+      >
+        <option value="enter">${t("chat.sendShortcutEnter")}</option>
+        <option value="modifier-enter">${t("chat.sendShortcutModifierEnter")}</option>
+      </select>
+    </label>
   `;
 }
 
@@ -175,6 +205,7 @@ export function renderChatControls(props: ChatControlsProps) {
   const settingsOpen = props.settingsOpen;
   const settingsLabel = t("chat.settings");
   const settingsTitle = t("chat.settings");
+  const settingsPopoverId = `chat-composer-settings-popover-${encodeURIComponent(props.paneId)}`;
 
   return html`
     <div
@@ -188,6 +219,20 @@ export function renderChatControls(props: ChatControlsProps) {
       ${renderChatModelControls(props.model)}
     </div>
     ${renderProviderQuotaPill(props.quota)}
+    ${props.onOpenSplitView
+      ? html`
+          <openclaw-tooltip .content=${t("chat.splitView.open")}>
+            <button
+              class="btn btn--sm btn--icon chat-open-split-view"
+              type="button"
+              aria-label=${t("chat.splitView.open")}
+              @click=${props.onOpenSplitView}
+            >
+              ${icons.panelRightOpen}
+            </button>
+          </openclaw-tooltip>
+        `
+      : ""}
     <div class="chat-settings-popover-wrapper">
       <openclaw-tooltip .content=${settingsTitle}>
         <button
@@ -195,7 +240,7 @@ export function renderChatControls(props: ChatControlsProps) {
           type="button"
           aria-label=${settingsTitle}
           aria-expanded=${settingsOpen}
-          aria-controls="chat-composer-settings-popover"
+          aria-controls=${settingsPopoverId}
           @click=${(event: Event) => {
             event.stopPropagation();
             (event.currentTarget as HTMLElement)
@@ -213,7 +258,7 @@ export function renderChatControls(props: ChatControlsProps) {
         </button>
       </openclaw-tooltip>
       <div
-        id="chat-composer-settings-popover"
+        id=${settingsPopoverId}
         class="chat-settings-popover ${settingsOpen ? "chat-settings-popover--open" : ""}"
         role="dialog"
         aria-label=${settingsTitle}
@@ -313,6 +358,7 @@ export function renderChatControls(props: ChatControlsProps) {
               </button>
             </openclaw-tooltip>
           </div>
+          ${renderChatSendShortcutPreference(props)}
         </div>
       </div>
     </div>

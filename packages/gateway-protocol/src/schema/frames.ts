@@ -9,6 +9,10 @@ import {
 } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
+export const GATEWAY_SERVER_CAPS = {
+  CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+} as const;
+
 /**
  * Top-level gateway frame schemas.
  *
@@ -103,6 +107,7 @@ export const HelloOkSchema = Type.Object(
       {
         methods: Type.Array(NonEmptyString),
         events: Type.Array(NonEmptyString),
+        capabilities: Type.Optional(Type.Array(NonEmptyString)),
       },
       { additionalProperties: false },
     ),

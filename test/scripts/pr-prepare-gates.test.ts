@@ -45,7 +45,10 @@ function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { ...env, ...overrides };
 }
 
-function runGatesBash(script: string, options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
+function runGatesBash(
+  script: string,
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; sourcePrepareCore?: boolean } = {},
+) {
   return spawnSync(
     "bash",
     [
@@ -55,6 +58,9 @@ function runGatesBash(script: string, options: { cwd?: string; env?: NodeJS.Proc
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        ...(options.sourcePrepareCore
+          ? [`source '${repoRoot}/scripts/pr-lib/prepare-core.sh'`]
+          : []),
         script,
       ].join("\n"),
     ],
@@ -328,6 +334,104 @@ describe("lease-retry gate stamp refresh", () => {
 });
 
 describe("prepare gate stamp transitions", () => {
+  it("preserves whitespace in the rebase patch fingerprint", () => {
+    const { repoDir, headSha: baseSha } = makeRetryRepo();
+    writeFileSync(join(repoDir, "config.yml"), "root:\n  child: value\n");
+    spawnSync("git", ["add", "config.yml"], { cwd: repoDir });
+    spawnSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "two spaces"],
+      { cwd: repoDir },
+    );
+    const twoSpaceSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(join(repoDir, "config.yml"), "root:\n    child: value\n");
+    spawnSync("git", ["add", "config.yml"], { cwd: repoDir });
+    spawnSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "four spaces"],
+      { cwd: repoDir },
+    );
+    const fourSpaceSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+
+    const result = runGatesBash(
+      [
+        `compute_pr_patch_id ${baseSha} ${twoSpaceSha}`,
+        `compute_pr_patch_id ${baseSha} ${fourSpaceSha}`,
+      ].join("\n"),
+      { cwd: repoDir },
+    );
+    expect(result.status).toBe(0);
+    const patchIds = result.stdout.trim().split("\n");
+    expect(patchIds).toHaveLength(2);
+    expect(patchIds[0]).not.toBe(patchIds[1]);
+  });
+
+  it("uses the hosted pre-sync SHA only when its tree matches the local prep head", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const remoteSha = spawnSync(
+      "git",
+      [
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit-tree",
+        tree,
+        "-p",
+        headSha,
+        "-m",
+        "hosted head",
+      ],
+      { cwd: repoDir, encoding: "utf8" },
+    ).stdout.trim();
+
+    const matching = runGatesBash(`resolve_prep_sync_evidence_sha ${headSha} ${remoteSha}`, {
+      cwd: repoDir,
+      sourcePrepareCore: true,
+    });
+    expect(matching.status).toBe(0);
+    expect(matching.stdout.trim()).toBe(remoteSha);
+
+    writeFileSync(join(repoDir, "changed.ts"), "export {};\n");
+    spawnSync("git", ["add", "changed.ts"], { cwd: repoDir });
+    spawnSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "different"],
+      { cwd: repoDir },
+    );
+    const mismatched = runGatesBash(
+      `resolve_prep_sync_evidence_sha ${headSha} $(git rev-parse HEAD)`,
+      { cwd: repoDir, sourcePrepareCore: true },
+    );
+    expect(mismatched.status).not.toBe(0);
+  });
+
+  it("forwards only the recorded pre-rebase SHA as recent evidence", () => {
+    const result = runGatesBash(
+      [
+        "gh() { if [ \"$1\" = pr ]; then printf 'deadbeef\\n'; else printf 'openclaw/openclaw\\n'; fi; }",
+        "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        "run_hosted_prepare_gates 100606 deadbeef false cafebabe",
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ARG:hosted CI/Testbox gates");
+    expect(result.stdout).toContain(`ARG:${repoRoot}/scripts/verify-pr-hosted-gates.mjs`);
+    expect(result.stdout).toContain("ARG:--pr\nARG:100606");
+    expect(result.stdout).toContain("ARG:--recent-sha\nARG:cafebabe");
+  });
+
   it("clears remote stamps when fresh docs-only gates do not reuse prior proof", () => {
     const { repoDir } = makeRetryRepo();
     spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
@@ -374,7 +478,7 @@ describe("prepare gate stamp transitions", () => {
     expect(result.stdout).not.toContain("tbx_stale");
   });
 
-  it("clears remote stamps when hosted exact-head gates replace remote proof", () => {
+  it("clears remote stamps when hosted gates replace remote proof", () => {
     const { repoDir } = makeRetryRepo();
     spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
     writeFileSync(join(repoDir, "changed.ts"), "export {};\n");
@@ -384,7 +488,33 @@ describe("prepare gate stamp transitions", () => {
       ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change"],
       { cwd: repoDir },
     );
+    const prepTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const mainlineBase = spawnSync("git", ["rev-parse", "refs/remotes/origin/main"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const patchId = spawnSync(
+      "bash",
+      [
+        "-c",
+        "git diff --binary refs/remotes/origin/main HEAD | git patch-id --verbatim | awk 'NR == 1 { print $1 }'",
+      ],
+      { cwd: repoDir, encoding: "utf8" },
+    ).stdout.trim();
     writeFileSync(join(repoDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
+    writeFileSync(
+      join(repoDir, ".local", "prep-sync.env"),
+      [
+        `PREP_SYNC_MAINLINE_BASE_SHA=${mainlineBase}`,
+        `PREP_SYNC_TREE=${prepTree}`,
+        `PREP_SYNC_PATCH_ID=${patchId}`,
+        "PREP_SYNC_EVIDENCE_SHA=cafebabe",
+        "",
+      ].join("\n"),
+    );
     writeFileSync(
       join(repoDir, ".local", "gates.env"),
       [
@@ -403,7 +533,7 @@ describe("prepare gate stamp transitions", () => {
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 1; }",
         "changelog_required_for_changed_files() { return 1; }",
-        "run_hosted_prepare_gates() { :; }",
+        "run_hosted_prepare_gates() { printf 'RECENT:%s\\n' \"${4:-}\"; }",
         "prepare_gates 4242",
         "cat .local/gates.env",
       ].join("\n"),
@@ -411,7 +541,8 @@ describe("prepare gate stamp transitions", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("GATES_MODE=hosted_exact_head");
+    expect(result.stdout).toContain("GATES_MODE=hosted_exact_or_recent_rebase");
+    expect(result.stdout).toContain("RECENT:cafebabe");
     expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
     expect(result.stdout).not.toContain("tbx_stale");
   });

@@ -17,7 +17,9 @@ type RepairPatch = {
 };
 
 const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
+  CHECK_IDS.policyAgentsToolNotDenied,
   CHECK_IDS.policyToolsElevatedEnabled,
+  CHECK_IDS.policyToolsRequiredDenyMissing,
   CHECK_IDS.policyGatewayControlUiInsecure,
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyDataHandlingRedactionDisabled,
@@ -77,6 +79,8 @@ function applyAutomaticPatch(
   checkId: PolicyCheckId,
 ): RepairPatch {
   switch (checkId) {
+    case CHECK_IDS.policyAgentsToolNotDenied:
+      return mergeRequiredDenyTools(cfg, findings);
     case CHECK_IDS.policyToolsElevatedEnabled:
       if (hasScopedPolicyRequirement(findings)) {
         return skippedUnsafeScopedRepair(
@@ -85,6 +89,8 @@ function applyAutomaticPatch(
         );
       }
       return disableElevatedTools(cfg, findings);
+    case CHECK_IDS.policyToolsRequiredDenyMissing:
+      return mergeRequiredDenyTools(cfg, findings);
     case CHECK_IDS.policyGatewayControlUiInsecure:
       return disableInsecureControlUi(cfg, findings);
     case CHECK_IDS.policyGatewayRemoteEnabled:
@@ -108,6 +114,36 @@ function applyAutomaticPatch(
     default:
       return { config: cfg, changes: [] };
   }
+}
+
+function mergeRequiredDenyTools(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+): RepairPatch {
+  const next = cloneConfig(cfg);
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const finding of findings) {
+    const tool = missingRequiredTool(finding);
+    if (tool === undefined || finding.ocPath === undefined) {
+      continue;
+    }
+    if (
+      hasScopedPolicyRequirement([finding]) &&
+      finding.ocPath === "oc://openclaw.config/tools/deny"
+    ) {
+      warnings.push(
+        `Skipped scoped deny repair for ${tool}. The finding reports inherited root tools.deny, so changing it would affect more than the scoped policy target.`,
+      );
+      continue;
+    }
+    if (mergeStringArrayAtOcPath(next, finding.ocPath, tool)) {
+      changes.push(`Added ${tool} to ${configPathLabel(finding.ocPath)} for policy conformance.`);
+    }
+  }
+  return changes.length > 0
+    ? { config: next as OpenClawConfig, changes: uniqueStrings(changes), warnings }
+    : { config: cfg, changes, warnings: uniqueStrings(warnings) };
 }
 
 function disableElevatedTools(
@@ -213,6 +249,74 @@ function cloneConfig(cfg: OpenClawConfig): ConfigRecord {
   return structuredClone(cfg) as ConfigRecord;
 }
 
+function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: string): boolean {
+  const segments = configPathSegments(ocPath);
+  if (segments.length === 0 || segments.at(-1) !== "deny") {
+    return false;
+  }
+  let current: unknown = cfg;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined) {
+      return false;
+    }
+    if (segment.startsWith("#")) {
+      const arrayIndex = Number.parseInt(segment.slice(1), 10);
+      if (!Array.isArray(current) || !Number.isInteger(arrayIndex) || arrayIndex < 0) {
+        return false;
+      }
+      current = current[arrayIndex];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return false;
+    }
+    const nextSegment = segments[index + 1];
+    const existing = current[segment];
+    if (existing === undefined) {
+      current[segment] = nextSegment?.startsWith("#") ? [] : {};
+    }
+    current = current[segment];
+  }
+  if (!isRecord(current)) {
+    return false;
+  }
+  const existing = current.deny;
+  if (existing !== undefined && !Array.isArray(existing)) {
+    return false;
+  }
+  const deny = existing ?? [];
+  if (deny.some((value) => typeof value === "string" && value === entry)) {
+    return false;
+  }
+  current.deny = [...deny, entry];
+  return true;
+}
+
+function configPathSegments(ocPath: string): readonly string[] {
+  const prefix = "oc://openclaw.config/";
+  if (!ocPath.startsWith(prefix)) {
+    return [];
+  }
+  return ocPath.slice(prefix.length).split("/").filter(Boolean);
+}
+
+function configPathLabel(ocPath: string): string {
+  let label = "";
+  for (const segment of configPathSegments(ocPath)) {
+    if (segment.startsWith("#")) {
+      label += `[${segment.slice(1)}]`;
+    } else {
+      label += label === "" ? segment : `.${segment}`;
+    }
+  }
+  return label;
+}
+
+function missingRequiredTool(finding: HealthFinding): string | undefined {
+  return finding.message.match(/required tool '([^']+)'/)?.[1]?.trim();
+}
+
 function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
   const plugins = isRecord(ctx.cfg.plugins) ? ctx.cfg.plugins : {};
   const entries = isRecord(plugins.entries) ? plugins.entries : {};
@@ -254,4 +358,8 @@ function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
 
 function isRecord(value: unknown): value is ConfigRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function uniqueStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
 }

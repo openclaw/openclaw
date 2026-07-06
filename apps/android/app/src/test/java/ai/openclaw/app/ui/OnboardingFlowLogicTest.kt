@@ -31,83 +31,57 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun permissionsBackCanReturnToRecoveryWhenNodeApprovalWasSkipped() {
+  fun directPermissionsBackReturnsToRecovery() {
     assertEquals(
       OnboardingBackDestination(OnboardingStep.Recovery),
       onboardingBackDestination(
         step = OnboardingStep.Permissions,
-        permissionsBackStep = OnboardingStep.Recovery,
+        accessStage = OnboardingAccessStage.DirectPermissions,
       ),
     )
     assertEquals(
       OnboardingBackState(step = OnboardingStep.Recovery),
       onboardingBackStateAfterBack(
         step = OnboardingStep.Permissions,
-        permissionsBackStep = OnboardingStep.Recovery,
+        accessStage = OnboardingAccessStage.DirectPermissions,
       ),
     )
   }
 
   @Test
-  fun nodeApprovalBackCanReturnToPermissionsDuringPermissionReapproval() {
+  fun permissionReapprovalBackReturnsThroughPermissionsToRecovery() {
     assertEquals(
       OnboardingBackDestination(OnboardingStep.Permissions),
       onboardingBackDestination(
         step = OnboardingStep.NodeApproval,
-        nodeApprovalBackStep = OnboardingStep.Permissions,
+        accessStage = OnboardingAccessStage.PermissionReapproval,
       ),
     )
     assertEquals(
       OnboardingBackState(step = OnboardingStep.Permissions),
       onboardingBackStateAfterBack(
         step = OnboardingStep.NodeApproval,
-        nodeApprovalBackStep = OnboardingStep.Permissions,
+        accessStage = OnboardingAccessStage.PermissionReapproval,
+      ),
+    )
+    assertEquals(
+      OnboardingBackState(step = OnboardingStep.Recovery),
+      onboardingBackStateAfterBack(
+        step = OnboardingStep.Permissions,
+        accessStage = OnboardingAccessStage.PermissionReapproval,
       ),
     )
   }
 
   @Test
-  fun permissionReapprovalBackStepsReturnThroughPermissionsWithoutLooping() {
-    val reapprovalBackSteps =
-      permissionReapprovalBackSteps(
-        currentNodeApprovalBackStep = OnboardingStep.Recovery,
-        currentPermissionsBackStep = OnboardingStep.NodeApproval,
-      )
-
-    assertEquals(OnboardingStep.Permissions, reapprovalBackSteps.nodeApprovalBackStep)
-    assertEquals(OnboardingStep.Recovery, reapprovalBackSteps.permissionsBackStep)
+  fun nodeApprovalSuccessUsesTheAccessStage() {
     assertEquals(
-      OnboardingBackState(step = OnboardingStep.Permissions),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.NodeApproval,
-        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
-        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
-      ),
+      OnboardingNodeApprovalSuccess.ShowPermissions,
+      OnboardingAccessStage.InitialApproval.nodeApprovalSuccess,
     )
     assertEquals(
-      OnboardingBackState(step = OnboardingStep.Recovery),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.Permissions,
-        nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
-        permissionsBackStep = reapprovalBackSteps.permissionsBackStep,
-      ),
-    )
-
-    val repeatedReapprovalBackSteps =
-      permissionReapprovalBackSteps(
-        currentNodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep,
-        currentPermissionsBackStep = reapprovalBackSteps.permissionsBackStep,
-      )
-
-    assertEquals(OnboardingStep.Permissions, repeatedReapprovalBackSteps.nodeApprovalBackStep)
-    assertEquals(OnboardingStep.Recovery, repeatedReapprovalBackSteps.permissionsBackStep)
-    assertEquals(
-      OnboardingBackState(step = OnboardingStep.Recovery),
-      onboardingBackStateAfterBack(
-        step = OnboardingStep.Permissions,
-        nodeApprovalBackStep = repeatedReapprovalBackSteps.nodeApprovalBackStep,
-        permissionsBackStep = repeatedReapprovalBackSteps.permissionsBackStep,
-      ),
+      OnboardingNodeApprovalSuccess.CompleteOnboarding,
+      OnboardingAccessStage.PermissionReapproval.nodeApprovalSuccess,
     )
   }
 

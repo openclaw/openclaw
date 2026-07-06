@@ -348,15 +348,37 @@ function readPluginAppPolicyContext(
       entry.destructiveApprovalMode,
       bindingSchemaVersion,
     );
+    const mcpServerNamesValid =
+      Array.isArray(entry.mcpServerNames) &&
+      entry.mcpServerNames.every((serverName) => typeof serverName === "string");
+    if (entry.source === "account") {
+      if (
+        "appId" in entry ||
+        typeof entry.appName !== "string" ||
+        typeof entry.allowDestructiveActions !== "boolean" ||
+        destructiveApprovalMode === "invalid" ||
+        !mcpServerNamesValid
+      ) {
+        return undefined;
+      }
+      parsedApps[appId] = {
+        source: "account",
+        appName: entry.appName,
+        allowDestructiveActions: entry.allowDestructiveActions,
+        ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
+        mcpServerNames: entry.mcpServerNames as string[],
+      };
+      continue;
+    }
     if (
       "appId" in entry ||
+      (entry.source !== undefined && entry.source !== "plugin") ||
       typeof entry.configKey !== "string" ||
       entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       destructiveApprovalMode === "invalid" ||
-      !Array.isArray(entry.mcpServerNames) ||
-      entry.mcpServerNames.some((serverName) => typeof serverName !== "string")
+      !mcpServerNamesValid
     ) {
       return undefined;
     }
@@ -366,7 +388,7 @@ function readPluginAppPolicyContext(
       pluginName: entry.pluginName,
       allowDestructiveActions: entry.allowDestructiveActions,
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
-      mcpServerNames: entry.mcpServerNames,
+      mcpServerNames: entry.mcpServerNames as string[],
     };
   }
   const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
