@@ -2792,8 +2792,9 @@ describe("Codex app-server approval bridge", () => {
 
       const event = findApprovalEvent(params, { status: "pending" });
       const description = String(gatewayRequestPayload().description);
+      const command = typeof event.command === "string" ? event.command : "";
       expect(event.commandPreviewOmitted).toBe(true);
-      expect(hasLoneSurrogate(String(event.command ?? ""))).toBe(false);
+      expect(hasLoneSurrogate(command)).toBe(false);
       expect(hasLoneSurrogate(description)).toBe(false);
       expect(() => encodeURIComponent(description)).not.toThrow();
     },
