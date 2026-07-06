@@ -210,6 +210,26 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
+  it("does not enable xAI session resumption by default", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    bridge.close();
+
+    expect(requireSession(socket).resumption).toBeUndefined();
+  });
+
   it("sends nested xAI session.update audio formats for g711 bridges", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();
@@ -873,7 +893,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onToolCall: vi.fn(),
@@ -935,6 +955,86 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("queues tool results submitted while a resumed session is reconnecting", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const firstSocket = FakeWebSocket.instances[0];
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_tool_queue" } }),
+      ),
+    );
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    for (const callId of ["call_1", "call_2"]) {
+      firstSocket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.done",
+            item_id: `item_${callId}`,
+            name: "openclaw_agent_consult",
+            call_id: callId,
+            arguments: JSON.stringify({ question: callId }),
+          }),
+        ),
+      );
+    }
+
+    firstSocket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const secondSocket = FakeWebSocket.instances[1];
+    expect(String(secondSocket.args[0])).toContain("conversation_id=conv_tool_queue");
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+
+    bridge.submitToolResult("call_1", { text: "first" });
+    expect(parseSent(secondSocket).filter((event) => event.type === "conversation.item.create"))
+      .toEqual([]);
+
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    expect(parseSent(secondSocket).filter((event) => event.type === "response.create")).toEqual([]);
+    expect(parseSent(secondSocket).slice(-1)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ text: "first" }),
+        },
+      },
+    ]);
+
+    bridge.submitToolResult("call_2", { text: "second" });
+    expect(parseSent(secondSocket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_2",
+          output: JSON.stringify({ text: "second" }),
+        },
+      },
+      { type: "response.create" },
+    ]);
+    bridge.close();
+  });
+
   it("exhausts reconnect attempts when websocket opens without session setup", async () => {
     vi.useFakeTimers();
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
@@ -942,7 +1042,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const onEvent = vi.fn();
     const onClose = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onEvent,
@@ -992,7 +1092,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const provider = buildXaiRealtimeVoiceProvider();
     const onReady = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onReady,
@@ -1030,7 +1130,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
@@ -1068,7 +1168,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const onEvent = vi.fn();
     const onClose = vi.fn();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onEvent,
@@ -1091,6 +1191,47 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       direction: "client",
       type: "session.reconnect.blocked",
       detail: "reason=websocket-close missingConversationId=true",
+    });
+    expect(onClose).toHaveBeenCalledWith("error");
+    bridge.close();
+  });
+
+  it("fails closed instead of reconnecting when xAI session resumption is disabled", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onEvent,
+      onClose,
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_default" } }),
+      ),
+    );
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.reconnect.blocked",
+      detail: "reason=websocket-close sessionResumption=false",
     });
     expect(onClose).toHaveBeenCalledWith("error");
     bridge.close();

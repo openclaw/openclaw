@@ -464,6 +464,8 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
             xai: {
               model: "grok-voice-latest",
               voice: "eve",
+              // Opt in only if provider-side session replay is acceptable.
+              sessionResumption: false,
             },
           },
         },
@@ -476,12 +478,21 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     `plugins.entries.voice-call.config.realtime.providers.xai` when Voice Call
     or shared realtime selectors reuse the same provider map. Supported keys are
     `apiKey`, `baseUrl`, `model`, `voice`, `vadThreshold`, `silenceDurationMs`,
-    `prefixPaddingMs`, `interruptResponseOnInputAudio`, and `reasoningEffort`.
+    `prefixPaddingMs`, `interruptResponseOnInputAudio`, `reasoningEffort`, and
+    `sessionResumption`.
 
     <Note>
     xAI OAuth or `XAI_API_KEY` can authenticate realtime voice. Browser-owned
     WebRTC is not part of this provider surface yet; use gateway-relay Talk on
     native nodes or the Control UI relay path.
+    </Note>
+
+    <Note>
+    `sessionResumption` defaults to `false`. When set to `true`, OpenClaw asks
+    xAI to retain enough session state to resume the same conversation after a
+    reconnect and then reconnects with the returned conversation id. Leave it
+    disabled when provider-side replay/retention is not acceptable; interrupted
+    sockets then fail closed instead of silently starting a fresh conversation.
     </Note>
 
   </Accordion>

@@ -45,6 +45,7 @@ type XaiRealtimeVoiceProviderConfig = {
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
   reasoningEffort?: string;
+  sessionResumption?: boolean;
 };
 
 type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
@@ -57,6 +58,7 @@ type XaiRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   prefixPaddingMs?: number;
   interruptResponseOnInputAudio?: boolean;
   reasoningEffort?: string;
+  sessionResumption?: boolean;
   resolveApiKey?: () => Promise<string>;
 };
 
@@ -134,6 +136,7 @@ const XAI_REALTIME_DEFAULT_MODEL = "grok-voice-latest";
 const XAI_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
 const XAI_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const XAI_REALTIME_BASE_RECONNECT_DELAY_MS = 1000;
+const XAI_REALTIME_MAX_PENDING_TOOL_RESULTS = 128;
 const XAI_REALTIME_DEFAULT_VAD_THRESHOLD = 0.85;
 const XAI_REALTIME_DEFAULT_PREFIX_PADDING_MS = 333;
 const XAI_REALTIME_DEFAULT_SILENCE_DURATION_MS = 500;
@@ -202,6 +205,7 @@ function normalizeProviderConfig(
     prefixPaddingMs: asNonNegativeInteger(raw.prefixPaddingMs),
     interruptResponseOnInputAudio: readBoolean(raw.interruptResponseOnInputAudio),
     reasoningEffort: normalizeOptionalString(raw.reasoningEffort),
+    sessionResumption: readBoolean(raw.sessionResumption),
   };
 }
 
@@ -269,6 +273,11 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private intentionallyClosed = false;
   private reconnectAttempts = 0;
   private pendingAudio: Buffer[] = [];
+  private pendingToolResults: Array<{
+    callId: string;
+    result: unknown;
+    options?: RealtimeVoiceToolResultOptions;
+  }> = [];
   private markQueue: string[] = [];
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
@@ -337,6 +346,24 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
+    if (!this.canSubmitToolResult()) {
+      if (this.pendingToolResults.length < XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
+        this.pendingToolResults.push({ callId, result, ...(options ? { options } : {}) });
+      } else {
+        this.config.onError?.(
+          new Error("xAI realtime voice pending tool result queue overflow during reconnect"),
+        );
+      }
+      return;
+    }
+    this.submitToolResultNow(callId, result, options);
+  }
+
+  private submitToolResultNow(
     callId: string,
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
@@ -452,7 +479,11 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
       ? await this.config.resolveApiKey()
       : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg);
     const model = this.config.model ?? XaiRealtimeVoiceBridge.DEFAULT_MODEL;
-    const url = toXaiRealtimeWsUrl(this.config.baseUrl, model, this.conversationId ?? undefined);
+    const url = toXaiRealtimeWsUrl(
+      this.config.baseUrl,
+      model,
+      this.config.sessionResumption === true ? this.conversationId ?? undefined : undefined,
+    );
     const headers = {
       Authorization: `Bearer ${apiKey}`,
       ...xaiUserAgentHeaderFor(this.config.baseUrl),
@@ -508,7 +539,10 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
       };
 
       ws.on("open", () => {
-        this.resetRealtimeSessionState({ preserveToolCallState: this.conversationId !== null });
+        this.resetRealtimeSessionState({
+          preserveToolCallState:
+            this.config.sessionResumption === true && this.conversationId !== null,
+        });
         this.connected = true;
         this.sessionConfigured = false;
         captureWsEvent({
@@ -617,6 +651,15 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (this.intentionallyClosed) {
       return;
     }
+    if (this.config.sessionResumption !== true) {
+      this.config.onEvent?.({
+        direction: "client",
+        type: "session.reconnect.blocked",
+        detail: `reason=${reason} sessionResumption=false`,
+      });
+      this.config.onClose?.("error");
+      return;
+    }
     if (!this.conversationId) {
       this.config.onEvent?.({
         direction: "client",
@@ -694,7 +737,7 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
             format: this.resolveRealtimeAudioFormat(),
           },
         },
-        resumption: { enabled: true },
+        ...(cfg.sessionResumption === true ? { resumption: { enabled: true } } : {}),
         ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
         ...(cfg.tools && cfg.tools.length > 0
           ? {
@@ -741,6 +784,13 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.reconnectAttempts = 0;
         for (const chunk of this.pendingAudio.splice(0)) {
           this.sendAudio(chunk);
+        }
+        for (const pendingToolResult of this.pendingToolResults.splice(0)) {
+          this.submitToolResultNow(
+            pendingToolResult.callId,
+            pendingToolResult.result,
+            pendingToolResult.options,
+          );
         }
         if (!this.sessionReadyFired) {
           this.sessionReadyFired = true;
@@ -990,7 +1040,8 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private sendEvent(event: unknown, detail?: string): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    const ws = this.ws;
+    if (ws?.readyState === WebSocket.OPEN) {
       const type =
         event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
           ? (event as { type: string }).type
@@ -1008,8 +1059,16 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
           capability: "realtime-voice",
         },
       });
-      this.ws.send(payload);
+      ws.send(payload);
     }
+  }
+
+  private canSendEvent(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  private canSubmitToolResult(): boolean {
+    return this.connected && this.sessionConfigured && this.canSendEvent();
   }
 
   private describeServerEvent(event: RealtimeEvent): string | undefined {
@@ -1075,6 +1134,7 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
         interruptResponseOnInputAudio:
           req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
         reasoningEffort: config.reasoningEffort,
+        sessionResumption: config.sessionResumption,
         resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg),
       });
     },
