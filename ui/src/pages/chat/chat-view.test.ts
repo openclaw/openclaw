@@ -3287,14 +3287,15 @@ describe("chat model controls", () => {
     await vi.waitFor(() => {
       expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main");
     });
-    render(renderChatModelControls(props), container);
-
-    expect(getChatModelSelect(container).textContent).toContain("GPT-5.5");
-    expect(
-      container
-        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
-        ?.getAttribute("aria-selected"),
-    ).toBe("true");
+    await vi.waitFor(() => {
+      render(renderChatModelControls(props), container);
+      expect(getChatModelSelect(container).textContent).toContain("GPT-5.5");
+      expect(
+        container
+          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+          ?.getAttribute("aria-selected"),
+      ).toBe("true");
+    });
   });
 
   it("keeps speed choices visible and disabled for unsupported providers", () => {
