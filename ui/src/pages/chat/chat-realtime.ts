@@ -15,8 +15,6 @@ import {
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
 
-// Device IDs are browser-local. Keep the current choice in memory so blocked
-// localStorage cannot undo it and split panes converge on the same input.
 const realtimeTalkInputDeviceIds = new Map<string, string>();
 
 function realtimeTalkInputScope(state: Pick<ChatRealtimeState, "settings">): string {
@@ -180,6 +178,12 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       state.requestUpdate();
       return;
     }
+    const options = state.realtimeTalkOptions;
+    const launchOptions: RealtimeTalkLaunchOptions = {
+      model: options.model.trim() || undefined,
+      voice: options.voice.trim() || undefined,
+      vadThreshold: Number(options.vadThreshold) || undefined,
+    };
     const inputDeviceId = currentRealtimeTalkInput(state) || undefined;
     const options = state.realtimeTalkOptions;
     const launchOptions: RealtimeTalkLaunchOptions = {
