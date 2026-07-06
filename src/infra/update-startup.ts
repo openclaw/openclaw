@@ -18,6 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { isContainerEnvironment as defaultIsContainerEnvironment } from "./container-environment.js";
 import { isTruthyEnvValue } from "./env.js";
 import {
   executeSqliteQuerySync,
@@ -471,6 +472,7 @@ export async function runGatewayUpdateCheck(params: {
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   allowInTests?: boolean;
+  isContainerEnvironment?: () => boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
   runAutoUpdate?: (params: {
     channel: "stable" | "beta";
@@ -496,8 +498,11 @@ export async function runGatewayUpdateCheck(params: {
   }
   const auto = resolveAutoUpdatePolicy(params.cfg);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
-  const shouldRunAutoUpdate = auto.enabled && !autoDisabledByEnv;
+  const isContainerEnvironment =
+    params.isContainerEnvironment?.() ?? defaultIsContainerEnvironment();
+  const shouldRunAutoUpdate = auto.enabled && !autoDisabledByEnv && !isContainerEnvironment;
   const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
+  const shouldExposeUpdateAvailability = shouldRunUpdateHints && !isContainerEnvironment;
   if (!shouldRunUpdateHints && !shouldRunAutoUpdate) {
     return;
   }
@@ -507,7 +512,7 @@ export async function runGatewayUpdateCheck(params: {
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
-  if (shouldRunUpdateHints) {
+  if (shouldExposeUpdateAvailability) {
     const persistedAvailable = resolvePersistedUpdateAvailable(state);
     setUpdateAvailableCache({
       next: persistedAvailable,
@@ -571,7 +576,7 @@ export async function runGatewayUpdateCheck(params: {
       latestVersion: resolved.version,
       channel: tag,
     };
-    if (shouldRunUpdateHints) {
+    if (shouldExposeUpdateAvailability) {
       setUpdateAvailableCache({
         next: nextAvailable,
         onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -582,9 +587,10 @@ export async function runGatewayUpdateCheck(params: {
     const shouldNotify =
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldRunUpdateHints && shouldNotify) {
-      params.log.info(
-        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("openclaw update")}`,
-      );
+      const message = isContainerEnvironment
+        ? `update available (${tag}): v${resolved.version} (current v${VERSION}). OpenClaw is running inside a container; pull a newer image version and redeploy the container.`
+        : `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("openclaw update")}`;
+      params.log.info(message);
       nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;
     }
