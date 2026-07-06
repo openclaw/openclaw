@@ -75,19 +75,19 @@ internal fun ChatMessageActionHost(
       expanded = menuExpanded,
       onDismissRequest = { menuExpanded = false },
     ) {
-      MessageActionItem("Copy") {
+      MessageActionItem(label = "Copy") {
         copyChatMessage(context, text)
         menuExpanded = false
       }
-      MessageActionItem("Select text") {
+      MessageActionItem(label = "Select text") {
         menuExpanded = false
         selectText = true
       }
-      MessageActionItem("Share") {
+      MessageActionItem(label = "Share") {
         shareChatMessage(context, text)
         menuExpanded = false
       }
-      MessageActionItem("Reply") {
+      MessageActionItem(label = "Reply") {
         onReply(quoteChatMessage(text))
         menuExpanded = false
       }
