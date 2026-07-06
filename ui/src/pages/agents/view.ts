@@ -24,28 +24,28 @@ import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
 
-export type ConfigState = {
+type ConfigState = {
   form: Record<string, unknown> | null;
   loading: boolean;
   saving: boolean;
   dirty: boolean;
 };
 
-export type ChannelsState = {
+type ChannelsState = {
   snapshot: ChannelsStatusSnapshot | null;
   loading: boolean;
   error: string | null;
   lastSuccess: number | null;
 };
 
-export type CronState = {
+type CronState = {
   status: CronStatus | null;
   jobs: CronJob[];
   loading: boolean;
   error: string | null;
 };
 
-export type AgentFilesState = {
+type AgentFilesState = {
   list: AgentsFilesListResult | null;
   loading: boolean;
   error: string | null;
@@ -55,7 +55,7 @@ export type AgentFilesState = {
   saving: boolean;
 };
 
-export type AgentSkillsState = {
+type AgentSkillsState = {
   report: SkillStatusReport | null;
   loading: boolean;
   error: string | null;
@@ -69,13 +69,13 @@ type ToolsCatalogState = {
   result: ToolsCatalogResult | null;
 };
 
-export type ToolsEffectiveState = {
+type ToolsEffectiveState = {
   loading: boolean;
   error: string | null;
   result: ToolsEffectiveResult | null;
 };
 
-export type AgentsProps = {
+type AgentsProps = {
   basePath: string;
   loading: boolean;
   error: string | null;
