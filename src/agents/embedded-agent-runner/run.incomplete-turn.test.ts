@@ -1381,6 +1381,62 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Analysis...", "Here is the final answer after update_plan."],
+        toolMetas: [{ toolName: "update_plan" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [
+            { type: "text", text: "Analysis..." },
+            { type: "tool_use", id: "tool_1", name: "update_plan", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Here is the final answer after update_plan." }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("still flags incomplete-turn when currentAttemptAssistant is absent and lastAssistant=toolUse (#76477 regression)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Let me update the file..."],
+        toolMetas: [{ toolName: "write" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Let me update the file..." },
+            { type: "tool_use", id: "tool_1", name: "write", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: undefined,
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
   it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
     const interruptedToolOnlyAttempt = makeAttemptResult({
       assistantTexts: [],
@@ -1673,6 +1729,43 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
     expectWarnMessageWith("incomplete turn detected");
+  });
+
+  it("delivers the current final answer when the session assistant is stale (#80918)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "The requested update is complete.";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [finalText],
+        toolMetas: [{ toolName: "update_plan", replaySafe: true }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-current-assistant-after-tool-use",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+    expect(result.meta.stopReason).toBe("stop");
+    expectNoWarnMessageWith("incomplete turn detected");
   });
 
   it("treats missing replay metadata as replay-invalid", () => {

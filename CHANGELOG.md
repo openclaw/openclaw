@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - **Android network recovery:** reconnect Gateway sessions immediately when Android regains a validated network instead of waiting for the current reconnect backoff. (#100347) Thanks @ly85206559.
 - **Android Voice layout:** keep Voice settings controls within their intended width so nested cards do not overflow or clip on constrained screens. (#100491) Thanks @IWhatsskill.
 - **Android camera logging:** remove release-path camera clip diagnostics that exposed temporary file details and added noisy invoke logs. (#99484) Thanks @NianJiuZst.
+- **Agent final replies:** prefer the current attempt's terminal assistant across incomplete-turn classification and success metadata so a stale pre-tool snapshot cannot replace a completed post-tool answer with an error. (#94637) Thanks @LiuwqGit.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
