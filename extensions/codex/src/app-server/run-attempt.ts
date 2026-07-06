@@ -2996,6 +2996,7 @@ export async function runCodexAppServerAttempt(
           nativeHookRelay.shouldRelayEvent("post_tool_use"),
         trajectoryRecorder,
         onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+        runAbortSignal: runAbortController.signal,
       },
     );
     if (
