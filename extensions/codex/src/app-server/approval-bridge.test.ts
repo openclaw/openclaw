@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApprovalResponse, handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { requestPluginApproval } from "./plugin-approval-roundtrip.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -2756,5 +2757,63 @@ describe("Codex app-server approval bridge", () => {
 
     const description = String(gatewayRequestPayload().description);
     expect(hasLoneSurrogate(description)).toBe(false);
+  });
+
+  it.each([
+    ["string command", { command: `${"\u0000".repeat(4095)}😀tail` }],
+    ["command array", { command: [`${"\u0000".repeat(4095)}😀tail`] }],
+    [
+      "command actions",
+      {
+        command: "ignored fallback",
+        commandActions: [{ command: `${"\u0000".repeat(4095)}😀tail` }],
+      },
+    ],
+  ])(
+    "does not expose split surrogate pairs from the preview scan cap: %s",
+    async (_label, input) => {
+      const params = createParams();
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "plugin:approval-utf16-scan", status: "accepted" })
+        .mockResolvedValueOnce({ id: "plugin:approval-utf16-scan", decision: "allow-once" });
+
+      await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-utf16-scan",
+          ...input,
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+
+      const event = findApprovalEvent(params, { status: "pending" });
+      const description = String(gatewayRequestPayload().description);
+      expect(event.commandPreviewOmitted).toBe(true);
+      expect(hasLoneSurrogate(String(event.command ?? ""))).toBe(false);
+      expect(hasLoneSurrogate(description)).toBe(false);
+      expect(() => encodeURIComponent(description)).not.toThrow();
+    },
+  );
+
+  it("does not split surrogate pairs at gateway title and description caps", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({ id: "plugin:approval-utf16-gateway" });
+
+    await requestPluginApproval({
+      paramsForRun: createParams(),
+      title: `${"t".repeat(76)}😀tail`,
+      description: `${"d".repeat(252)}😀tail`,
+      severity: "warning",
+      toolName: "codex_utf16_test",
+    });
+
+    const payload = gatewayRequestPayload();
+    expect(payload.title).toBe(`${"t".repeat(76)}...`);
+    expect(payload.description).toBe(`${"d".repeat(252)}...`);
+    expect(hasLoneSurrogate(String(payload.title))).toBe(false);
+    expect(hasLoneSurrogate(String(payload.description))).toBe(false);
   });
 });

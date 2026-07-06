@@ -1690,4 +1690,25 @@ describe("Codex app-server elicitation bridge", () => {
     const description = approvalCallParams.description ?? "";
     expect(hasLoneSurrogate(description)).toBe(false);
   });
+
+  it("does not expose a split surrogate pair from the display scan cap", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-scan", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-scan", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        message: `${"\u0000".repeat(4095)}😀tail`,
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
+    expect(approvalCallParams.title).toBe("Codex MCP tool approval");
+    expect(hasLoneSurrogate(approvalCallParams.description ?? "")).toBe(false);
+    expect(() => encodeURIComponent(approvalCallParams.description ?? "")).not.toThrow();
+  });
 });
