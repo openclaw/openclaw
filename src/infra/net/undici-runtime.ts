@@ -107,8 +107,9 @@ function stripIpServernameFromConnect(connect: unknown): unknown {
   if (typeof connect !== "function") {
     return connect;
   }
+  const safeConnect = wrapSafeUndiciConnector(connect) as UnknownFunction;
   return (options: unknown, callback: unknown): unknown =>
-    (connect as UnknownFunction)(stripIpServernameFromConnectOptions(options), callback);
+    safeConnect(stripIpServernameFromConnectOptions(options), callback);
 }
 
 function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
@@ -215,7 +216,35 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
       };
     }
   }
+  if (targets.connect) {
+    if (typeof baseRecord.connect !== "function") {
+      baseRecord.connect = createSafeUndiciConnector(
+        isObjectRecord(baseRecord.connect) ? (baseRecord.connect as any) : {}
+      );
+    } else {
+      baseRecord.connect = wrapSafeUndiciConnector(baseRecord.connect);
+    }
+  }
   return base;
+}
+
+export function wrapSafeUndiciConnector(
+  connector: unknown
+): unknown {
+  if (typeof connector !== "function") {
+    return connector;
+  }
+  return (
+    opts: unknown,
+    cb: unknown
+  ): unknown => {
+    const socket = (connector as Function)(opts, cb) as import("node:net").Socket | undefined;
+    if (socket && typeof socket.on === "function") {
+      // Swallow unhandled socket errors to prevent process exits; undici handles them via callback.
+      socket.on("error", () => {});
+    }
+    return socket;
+  };
 }
 
 /**
@@ -227,18 +256,7 @@ export function createSafeUndiciConnector(
   options: import("undici").buildConnector.BuildOptions
 ): import("undici").buildConnector.connector {
   const { buildConnector } = loadUndiciRuntimeDeps();
-  const connector = buildConnector(options);
-  return (
-    opts: import("undici").buildConnector.Options,
-    cb: import("undici").buildConnector.Callback
-  ) => {
-    const socket = connector(opts, cb);
-    if (socket && typeof socket.on === "function") {
-      // Swallow unhandled socket errors to prevent process exits; undici handles them via callback.
-      socket.on("error", () => {});
-    }
-    return socket;
-  };
+  return wrapSafeUndiciConnector(buildConnector(options)) as import("undici").buildConnector.connector;
 }
 
 /** Creates a direct undici Agent with OpenClaw's HTTP/1-only dispatcher policy. */
