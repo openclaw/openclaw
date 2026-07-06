@@ -46,9 +46,7 @@ import {
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
-  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
-  type CodexLegacyDynamicToolFunctionSpec,
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
@@ -1190,31 +1188,11 @@ export function buildThreadStartParams(
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-    dynamicTools: toCodexThreadStartDynamicTools(options.dynamicTools),
+    // Canonical typed specs (`type: "function" | "namespace"`); the 0.142 floor
+    // accepts them natively (codex-rs normalize_dynamic_tool_specs).
+    dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
-    persistExtendedHistory: true,
   };
-}
-
-function toCodexThreadStartDynamicTools(
-  dynamicTools: readonly CodexDynamicToolSpec[],
-): CodexLegacyDynamicToolFunctionSpec[] {
-  // Managed stable Codex still accepts the legacy flat start payload. Keep
-  // OpenClaw namespaces internally, but omit `type` on the wire so Codex does
-  // not reject a mixed canonical/legacy shape before thread creation.
-  return dynamicTools.flatMap((tool) =>
-    tool.type === "namespace"
-      ? tool.tools.map((child) => toCodexLegacyDynamicTool(child, tool.name))
-      : [toCodexLegacyDynamicTool(tool)],
-  );
-}
-
-function toCodexLegacyDynamicTool(
-  tool: CodexDynamicToolFunctionSpec,
-  namespace?: string,
-): CodexLegacyDynamicToolFunctionSpec {
-  const { type: _type, ...legacyTool } = tool;
-  return namespace ? { ...legacyTool, namespace } : legacyTool;
 }
 
 export function buildThreadResumeParams(
@@ -1270,7 +1248,6 @@ export function buildThreadResumeParams(
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-    persistExtendedHistory: true,
   };
 }
 
