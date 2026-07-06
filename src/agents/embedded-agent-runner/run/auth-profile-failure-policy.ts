@@ -17,7 +17,8 @@ export function resolveAuthProfileFailureReason(params: {
   transientRateLimit?: boolean;
   policy?: AuthProfileFailurePolicy;
 }): AuthProfileFailureReason | null {
-  // Helper-local runs, transport/server failures, empty responses, and request-shape ("format") rejections
+  // Helper-local runs, transport/server failures, empty responses, missing
+  // provider error details, and request-shape ("format") rejections
   // should not poison shared provider auth health. A `format` failure means the
   // provider rejected the request payload (e.g. an assistant-prefill 400 from a
   // strict provider when a session transcript ends with a stream-error placeholder
@@ -34,6 +35,7 @@ export function resolveAuthProfileFailureReason(params: {
         (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
     params.failoverReason === "server_error" ||
     params.failoverReason === "empty_response" ||
+    params.failoverReason === "no_error_details" ||
     params.failoverReason === "context_overflow" ||
     params.failoverReason === "format"
   ) {
