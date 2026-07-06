@@ -154,6 +154,34 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       methodResponses: {
         "sessions.list": {
           cases: [
+            ...[50, 100, 150].map((offset) => ({
+              match: { offset, search: "helpers" },
+              response: sessionsListResponse(
+                Array.from({ length: 50 }, (_, index) =>
+                  sessionRow(
+                    `agent:main:hidden-helper-${offset + index}`,
+                    `Hidden helper ${offset + index}`,
+                    baseTime - offset - index,
+                    { spawnedBy: "agent:main:main" },
+                  ),
+                ),
+                { hasMore: true, nextOffset: offset + 50, offset, totalCount: 250 },
+              ),
+            })),
+            {
+              match: { search: "helpers" },
+              response: sessionsListResponse(
+                Array.from({ length: 50 }, (_, index) =>
+                  sessionRow(
+                    `agent:main:hidden-helper-${index}`,
+                    `Hidden helper ${index}`,
+                    baseTime - index,
+                    { spawnedBy: "agent:main:main" },
+                  ),
+                ),
+                { hasMore: true, nextOffset: 50, totalCount: 250 },
+              ),
+            },
             {
               match: { offset: 50, search: "release" },
               response: sessionsListResponse(
@@ -288,6 +316,24 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Open command palette" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
+      // Automatic search is intentionally bounded: an all-hidden result set
+      // must not scan the entire session store from one palette query.
+      await paletteInput.fill("helpers");
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("sessions.list");
+          return requests.filter((request) => requireRecord(request.params).search === "helpers")
+            .length;
+        })
+        .toBe(4);
+      await page.waitForTimeout(400);
+      const boundedSearchRequests = await gateway.getRequests("sessions.list");
+      expect(
+        boundedSearchRequests.filter(
+          (request) => requireRecord(request.params).search === "helpers",
+        ),
+      ).toHaveLength(4);
+
       await paletteInput.fill("release");
       const paletteOption = page
         .locator(".cmd-palette__item")

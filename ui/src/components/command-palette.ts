@@ -24,6 +24,7 @@ type PaletteItem = {
 const SESSION_ACTION_PREFIX = "session:";
 const SESSION_SEARCH_DEBOUNCE_MS = 250;
 const SESSION_SEARCH_LIMIT = 10;
+const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
 export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
@@ -507,9 +508,10 @@ export class CommandPalette extends LitElement {
     const visibleRows: ReturnType<typeof getVisibleSessionRows> = [];
     const visibleKeys = new Set<string>();
     const seenOffsets = new Set<number>([0]);
+    let pagesLoaded = 0;
     let offset: number | undefined;
     try {
-      while (visibleRows.length < SESSION_SEARCH_LIMIT) {
+      while (visibleRows.length < SESSION_SEARCH_LIMIT && pagesLoaded < SESSION_SEARCH_MAX_PAGES) {
         const result = await sessions.list({
           search,
           limit: SESSION_SEARCH_PAGE_SIZE,
@@ -517,6 +519,7 @@ export class CommandPalette extends LitElement {
           includeGlobal: false,
           includeUnknown: false,
         });
+        pagesLoaded += 1;
         if (requestId !== this.sessionSearchId || !this.open || !result) {
           return;
         }
