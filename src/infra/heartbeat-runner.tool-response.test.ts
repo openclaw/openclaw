@@ -88,7 +88,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   function expectTelegramSend(
     sendTelegram: ReturnType<typeof vi.fn>,
-    params: { text: string; cfg: OpenClawConfig },
+    params: { text: string; cfg: OpenClawConfig; silent?: boolean },
   ) {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
     expect(sendTelegram.mock.calls).toEqual([
@@ -99,6 +99,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           verbose: false,
           cfg: params.cfg,
           accountId: undefined,
+          ...(params.silent !== undefined ? { silent: params.silent } : {}),
         },
       ],
     ]);
@@ -145,6 +146,26 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         lastTo: TELEGRAM_GROUP,
       });
       replySpy.mockResolvedValue(createHeartbeatToolResponsePayload(response));
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      return { result, sendTelegram, replySpy, cfg };
+    });
+  }
+
+  async function runPlainFallbackReply(text: string) {
+    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue({ text });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
       const result = await runHeartbeatOnce({
@@ -233,6 +254,52 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
     expectTelegramSend(sendTelegram, {
       text: "Build is blocked on missing credentials.",
+      cfg,
+    });
+  });
+
+  it.each(["", "\n", "\r\n"])(
+    "converts trailing notify=false fallback text into silent Telegram delivery with suffix %j",
+    async (suffix) => {
+      const { result, sendTelegram, cfg } = await runPlainFallbackReply(
+        `No interruption needed.\n\nnotify=false${suffix}`,
+      );
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        text: "No interruption needed.",
+        cfg,
+        silent: true,
+      });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+        preview: "No interruption needed.",
+        channel: "telegram",
+        silent: true,
+      });
+    },
+  );
+
+  it("suppresses marker-only notify=false fallback replies", async () => {
+    const { result, sendTelegram } = await runPlainFallbackReply("notify=false\r\n");
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      status: "ok-token",
+      channel: "telegram",
+      silent: true,
+    });
+  });
+
+  it("preserves inline notify=false fallback text", async () => {
+    const { result, sendTelegram, cfg } = await runPlainFallbackReply(
+      "The literal notify=false flag is documented.",
+    );
+
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "The literal notify=false flag is documented.",
       cfg,
     });
   });
