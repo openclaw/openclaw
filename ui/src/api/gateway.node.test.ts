@@ -104,6 +104,7 @@ const {
   CONTROL_UI_OPERATOR_SCOPES,
   GatewayBrowserClient,
   GatewayRequestError,
+  isNonRecoverableConnectError,
   resolveGatewayErrorDetailCode,
   shouldRetryWithDeviceToken,
 } = await import("./gateway.ts");
@@ -391,6 +392,7 @@ describe("GatewayBrowserClient", () => {
 
     expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
     expect(resolveGatewayErrorDetailCode(error)).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+    expect(isNonRecoverableConnectError(error)).toBe(true);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {

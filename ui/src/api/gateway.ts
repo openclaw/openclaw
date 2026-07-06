@@ -112,14 +112,10 @@ function shouldContinueReconnectForPairingRequired(details: unknown): boolean {
 }
 
 /**
- * Auth errors that won't resolve without user action — don't auto-reconnect.
- *
- * NOTE: AUTH_TOKEN_MISMATCH is intentionally NOT included here because the
- * browser client supports a bounded one-time retry with a cached device token
- * when the endpoint is trusted. Reconnect suppression for mismatch is handled
- * with client state (after retry budget is exhausted).
+ * Connect failures that cannot recover while client and server state stay unchanged.
+ * AUTH_TOKEN_MISMATCH stays out: the close handler owns its bounded cached-token retry.
  */
-export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
+export function isNonRecoverableConnectError(error: { details?: unknown } | undefined): boolean {
   if (!error) {
     return false;
   }
@@ -599,7 +595,7 @@ export class GatewayBrowserClient {
         !this.closed &&
         (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
           ? this.pendingDeviceTokenRetry
-          : !isNonRecoverableAuthError(connectError));
+          : !isNonRecoverableConnectError(connectError));
       this.notifyClose({ code: ev.code, reason, error: connectError, willRetry });
       if (willRetry) {
         this.scheduleReconnect();
