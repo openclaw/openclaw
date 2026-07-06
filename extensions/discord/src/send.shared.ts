@@ -464,6 +464,7 @@ async function sendDiscordMedia(
       silent,
       suppressEmbeds,
       maxChars,
+      replyToFirstChunkOnly,
       onResult,
     );
   }

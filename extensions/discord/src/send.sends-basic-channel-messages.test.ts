@@ -638,6 +638,38 @@ describe("sendMessageDiscord", () => {
     expectReplyReference(fallbackBody, "orig-123");
   });
 
+  it("preserves implicit reply scope and delivery progress in upload fallback chunks", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Bad Request"), {
+          status: 400,
+          rawError: { code: 40005 },
+        }),
+      )
+      .mockResolvedValueOnce({ id: "fallback-1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "fallback-2", channel_id: "789" });
+    const onDeliveryResult = vi.fn();
+
+    await sendMessageDiscord("channel:789", "a".repeat(2500), {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/report.pdf",
+      replyTo: "orig-123",
+      replyToFirstChunkOnly: true,
+      onDeliveryResult,
+    });
+
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expectReplyReference(requireRestBody(postMock, 1), "orig-123");
+    expectNoReplyReference(requireRestBody(postMock, 2));
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "fallback-1",
+      "fallback-2",
+    ]);
+  });
+
   it("reports a media-only upload rejected with HTTP 413", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock
