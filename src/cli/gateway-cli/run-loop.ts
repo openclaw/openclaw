@@ -107,6 +107,11 @@ export async function runGatewayLoop(params: {
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
 }) {
+  // macOS/BSD process inspection reports process.title instead of the original
+  // argv. Give the long-running Gateway a verifiable identity for lock readers.
+  if (process.title === "openclaw") {
+    process.title = "openclaw-gateway";
+  }
   let startupStartedAt = Date.now();
   // Eagerly resolve the lifecycle runtime module before installing signal
   // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
@@ -723,6 +728,7 @@ export async function runGatewayLoop(params: {
     gatewayLog.info("signal SIGUSR1 received");
     void (async () => {
       const {
+        abortPendingChannelReloads,
         consumeGatewayRestartIntentPayloadSync,
         consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
@@ -733,6 +739,7 @@ export async function runGatewayLoop(params: {
       } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
+        abortPendingChannelReloads();
         if (consumeGatewaySigusr1RestartAuthorization()) {
           markGatewaySigusr1RestartHandled();
         }
@@ -759,9 +766,11 @@ export async function runGatewayLoop(params: {
         }
         // External SIGUSR1 requests should still reuse the in-process restart
         // scheduler so idle drain and restart coalescing stay consistent.
+        abortPendingChannelReloads();
         scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
         return;
       }
+      abortPendingChannelReloads();
       const sigusr1RestartIntent = consumeGatewaySigusr1RestartIntent();
       const restartReason = peekGatewaySigusr1RestartReason();
       markGatewaySigusr1RestartHandled();

@@ -1,6 +1,7 @@
 /**
  * Waits for completion-required async tasks before finalizing an attempt.
  */
+import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
@@ -42,11 +43,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 function createAbortError(signal: AbortSignal): Error {
-  const err = new Error("aborted", {
+  return createNamedAbortError("aborted", {
     cause: "reason" in signal ? (signal as { reason?: unknown }).reason : undefined,
   });
-  err.name = "AbortError";
-  return err;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

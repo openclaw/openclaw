@@ -475,8 +475,10 @@ describe("Inworld response read bounding", () => {
     ]);
   });
 
-  it("regression: malformed voices JSON under the cap still throws", async () => {
+  it("regression: malformed voices JSON under the cap throws descriptive error", async () => {
     queueGuardedResponse(new Response("{not-json", { status: 200 }));
-    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow();
+    await expect(listInworldVoices({ apiKey: "test-key" })).rejects.toThrow(
+      "Inworld voices API returned malformed JSON",
+    );
   });
 });

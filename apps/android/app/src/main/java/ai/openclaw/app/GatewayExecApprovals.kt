@@ -97,7 +97,10 @@ internal fun parseGatewayExecApprovalDetail(
   )
 }
 
-private fun gatewayExecApprovalListCommandText(obj: JsonObject, request: JsonObject?): String =
+private fun gatewayExecApprovalListCommandText(
+  obj: JsonObject,
+  request: JsonObject?,
+): String =
   obj["commandText"]
     .asStringOrNull()
     ?.trim()

@@ -177,6 +177,23 @@ describe("createAnthropicVertexStreamFn", () => {
     });
   });
 
+  it("restores the canonical API before calling the shared Anthropic transport", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = {
+      ...makeModel({ id: "claude-fable-5", maxTokens: 128000 }),
+      api: "openclaw-anthropic-vertex-simple:default",
+    };
+
+    void streamFn(model as never, { messages: [] }, {});
+
+    expect(streamAnthropicCall(streamAnthropicMock)[0]).toMatchObject({
+      api: "anthropic-messages",
+      provider: "anthropic-vertex",
+      id: "claude-fable-5",
+    });
+  });
+
   it("defaults maxTokens to the model limit instead of the old 32000 cap", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);

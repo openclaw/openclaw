@@ -113,6 +113,30 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
   });
 
+  it("replaces a failed media placeholder with an unavailable notice", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      mediaUnavailable: true,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("<media:image>");
+    expect(context?.ctxPayload.CommandBody).toBe("<media:image>");
+    expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
+    expect(context?.ctxPayload.MediaPath).toBeUndefined();
+  });
+
   it("routes group postback replies to the group id", async () => {
     const event = createPostbackEvent({ type: "group", groupId: "group-2", userId: "user-2" });
 

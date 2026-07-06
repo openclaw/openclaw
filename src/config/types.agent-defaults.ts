@@ -224,6 +224,8 @@ export type AgentDefaultsConfig = {
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
+  /** Optional lower-cost model for short internal tasks such as generated session titles. */
+  utilityModel?: string;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
    * Normal schema parsing rejects this key; use per-model agentRuntime instead.
@@ -566,7 +568,9 @@ export type AgentCompactionConfig = {
    */
   maxActiveTranscriptBytes?: number | string;
   /**
-   * Send brief compaction notices to the user when compaction starts and completes.
+   * Send brief context-maintenance notices to the user: when compaction starts
+   * and completes, and when a pre-compaction memory flush is exhausted so the
+   * reply continues in a degraded state.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

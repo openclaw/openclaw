@@ -41,6 +41,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createCrestodianTool } from "./tools/crestodian-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -134,6 +135,11 @@ export function createOpenClawTools(
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
+    /**
+     * Ring-zero Crestodian setup tool. Only the Crestodian agent runner sets
+     * this; normal agents must never receive it (wildcard allowlists included).
+     */
+    crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -417,6 +423,7 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
+    ...(options?.crestodianTool ? [createCrestodianTool(options.crestodianTool)] : []),
     ...(embedded
       ? []
       : [

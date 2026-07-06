@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,6 +58,43 @@ class TalkModeManagerTest {
 
     assertTrue(playbackJob.isCancelled)
     assertEquals(12L, playbackGeneration(manager).get())
+  }
+
+  @Test
+  fun beginPushToTalkRejectsNewCaptureWhenNewCaptureIsDisallowed() =
+    runTest {
+      val manager = createManager()
+
+      val error =
+        runCatching { manager.beginPushToTalk(allowNewCapture = false) }
+          .exceptionOrNull()
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", error?.message)
+    }
+
+  @Test
+  fun beginPushToTalkReturnsActiveCaptureWhenNewCaptureIsDisallowed() =
+    runTest {
+      val manager = createManager()
+      setPrivateField(manager, "activePttCaptureId", "capture-1")
+
+      val payload = manager.beginPushToTalk(allowNewCapture = false)
+
+      assertEquals("capture-1", payload.captureId)
+    }
+
+  @Test
+  fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
+    val manager = createManager()
+    setPrivateField(manager, "activePttCaptureId", "capture-1")
+    setMutableStateFlow(manager, "_isListening", true)
+
+    manager.stopAllCapture()
+
+    assertNull(readPrivateField(manager, "activePttCaptureId"))
+    assertFalse(manager.isEnabled.value)
+    assertFalse(manager.isListening.value)
+    assertEquals("Off", manager.statusText.value)
   }
 
   @Test
@@ -110,6 +148,57 @@ class TalkModeManagerTest {
 
     assertEquals(0L, playbackGeneration(manager).get())
     assertTrue(realtimeToolRuns(manager).isEmpty())
+  }
+
+  @Test
+  fun realtimeToolFinalBeforeRunMetadataIsHeldForToolCompletion() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    pendingRealtimeToolCalls(manager).add("call-1")
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "tool result"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+    assertTrue(pendingRealtimeToolCompletions(manager).containsKey("run-tool"))
+  }
+
+  @Test
+  fun realtimeCloseErrorDisablesTalkButKeepsFailureStatus() {
+    var stoppedByRelay = false
+    val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertFalse(manager.isEnabled.value)
+    assertTrue(stoppedByRelay)
+    assertEquals(
+      "Talk failed: Realtime provider closed unexpectedly.",
+      manager.statusText.value,
+    )
+  }
+
+  @Test
+  fun realtimeClosePreservesDetailedProviderFailure() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+    setMutableStateFlow(manager, "_statusText", "Talk failed: Provider rejected the session.")
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertEquals("Talk failed: Provider rejected the session.", manager.statusText.value)
   }
 
   @Test
@@ -485,6 +574,12 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun realtimeToolRuns(manager: TalkModeManager) = readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
+
+  @Suppress("UNCHECKED_CAST")
+  private fun pendingRealtimeToolCalls(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCalls") as MutableSet<String>
+
+  @Suppress("UNCHECKED_CAST")
+  private fun pendingRealtimeToolCompletions(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCompletions") as MutableMap<String, Any>
 
   private fun setPrivateField(
     target: Any,

@@ -18,6 +18,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
+import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
   mergeSsrFPolicies,
@@ -51,10 +52,11 @@ const log = createSubsystemLogger("provider-transport-fetch");
  *  without Content-Length. */
 const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
-/** Max bytes for the internal SSE sanitization buffer between event boundaries.
- *  A response that cannot find a \n\n boundary within this many characters is
- *  almost certainly hostile or broken — cap the buffer rather than let it grow. */
-const SSE_SANITIZE_BUFFER_MAX_BYTES = 64 * 1024;
+/** Max bytes read from a non-OK response body before truncation. */
+const SSE_NONOK_BODY_MAX_BYTES = 64 * 1024;
+
+/** Max decoded characters buffered while waiting for the next SSE event boundary. */
+const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
@@ -132,7 +134,7 @@ function sanitizeOpenAISdkSseResponse(
     return response;
   }
   if (!response.ok) {
-    return capNonOkResponseBodyLazily(response, SSE_SANITIZE_BUFFER_MAX_BYTES);
+    return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
   }
   if (
     options?.synthesizeJsonAsSse === true &&
@@ -207,9 +209,9 @@ function sanitizeOpenAISdkSseResponse(
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_BYTES) {
+        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_CHARS) {
           throw new Error(
-            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_BYTES} bytes) without event boundary`,
+            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_CHARS} chars) without event boundary`,
           );
         }
         return enqueued;
@@ -549,12 +551,6 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
-const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
-  (held) => {
-    void held.finalize();
-  },
-);
-
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -568,53 +564,18 @@ function buildManagedResponse(
     void release().finally(finalizeLocalServiceLease);
     return response;
   }
-  const source = response.body;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let released = false;
-  const cleanupRegistrationToken = {};
-  const finalize = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
-    try {
-      await reader?.cancel().catch(() => undefined);
-      await release().catch(() => undefined);
-    } finally {
-      finalizeLocalServiceLease();
-    }
-  };
-  const wrappedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
+  const wrappedBody = wrapGuardedBodyStream({
+    body: response.body,
+    // Lease release must survive a failed guard release so local services do not leak.
+    cleanup: async () => {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          await finalize();
-          return;
-        }
-        refreshTimeout?.();
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        await finalize();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader?.cancel(reason);
+        await release().catch(() => undefined);
       } finally {
-        await finalize();
+        finalizeLocalServiceLease();
       }
     },
+    refreshTimeout,
   });
-  // Stream consumers should cancel deterministically; this catches abandoned
-  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
-  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
@@ -743,13 +704,13 @@ function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
   );
 }
 
-function resolveModelTransportSsrFPolicy(params: {
-  model: Model;
+export function resolveProviderTransportSsrFPolicy(params: {
+  baseUrl?: string;
   url: string;
   allowPrivateNetwork?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
-  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
+  const baseUrl = params.baseUrl;
   const baseOrigin = resolveHttpOrigin(baseUrl);
   const requestOrigin = resolveHttpOrigin(params.url);
   const requestMatchesBaseOrigin =
@@ -811,8 +772,8 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
-    const policy = resolveModelTransportSsrFPolicy({
-      model,
+    const policy = resolveProviderTransportSsrFPolicy({
+      baseUrl: model.baseUrl,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
       // Only operator-configured custom/local endpoints get exact-origin trust;
