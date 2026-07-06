@@ -811,8 +811,10 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProviderMode).toBe("mock-openai");
   });
 
-  it("marks channel-owned access gates with their required channel driver", () => {
+  it("marks channel-owned scenarios that require the live driver", () => {
     const liveScenarioIds = [
+      "slack-restart-resume",
+      "whatsapp-restart-resume",
       "whatsapp-access-control-dm-disabled",
       "whatsapp-access-control-dm-open",
       "whatsapp-access-control-group-disabled",
@@ -827,6 +829,12 @@ describe("qa scenario catalog", () => {
         | undefined;
       expect(config?.requiredChannelDriver, scenarioId).toBe("live");
     }
+  });
+
+  it("isolates channel baseline silence assertions from shared transport state", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

@@ -578,6 +578,7 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "smoke-ci",
+      scenarioIds: ["dm-chat-baseline", "instruction-followthrough-repo-contract"],
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
