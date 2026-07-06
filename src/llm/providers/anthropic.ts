@@ -842,13 +842,15 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   }
 
   const base = buildBaseOptions(model, options, apiKey);
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
-      ...(mandatoryAdaptiveThinking ? { effort: "high" as const } : {}),
-    } satisfies AnthropicOptions);
+      ...(mandatoryAdaptiveThinking
+        ? { effort: options?.reasoning === "off" ? "low" : "high" }
+        : {}),
+    } as AnthropicOptions);
   }
 
   // For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
