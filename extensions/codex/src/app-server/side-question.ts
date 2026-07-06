@@ -1037,7 +1037,10 @@ function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number 
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
+  return (
+    readSidePositiveFiniteTimeoutMs(value.timeoutMs) ??
+    readSideTimeoutSecondsAsMs(value.timeoutSeconds)
+  );
 }
 
 function readSideImageGenerationModelTimeoutMs(
@@ -1051,8 +1054,17 @@ function readSideImageGenerationModelTimeoutMs(
 }
 
 function readSideTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readSidePositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
+  // timeoutSeconds is documented as an integer; reject fractional values
+  // instead of silently flooring them.
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
+    return undefined;
+  }
+  return value * 1000;
 }
 
 function readSidePositiveFiniteTimeoutMs(value: unknown): number | undefined {

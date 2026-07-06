@@ -2616,6 +2616,51 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(90_000);
   });
 
+  it("honors timeoutSeconds when timeoutMs is absent for side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "session_status",
+        arguments: { timeoutSeconds: 45 },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(45_000);
+  });
+
+  it("prefers timeoutMs over timeoutSeconds for side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "session_status",
+        arguments: { timeoutMs: 5_000, timeoutSeconds: 45 },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(5_000);
+  });
+
+  it("rejects fractional timeoutSeconds for side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "session_status",
+        arguments: { timeoutSeconds: 1.5 },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(90_000);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {

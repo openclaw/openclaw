@@ -513,8 +513,17 @@ function readConfiguredDynamicToolTimeoutMs(
 }
 
 function readTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readPositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
+  // timeoutSeconds is documented as an integer in sessions_send; reject
+  // fractional values instead of silently flooring them.
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
+    return undefined;
+  }
+  return value * 1000;
 }
 
 function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
