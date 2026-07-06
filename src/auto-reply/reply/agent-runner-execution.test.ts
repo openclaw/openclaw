@@ -1989,6 +1989,62 @@ describe("runAgentTurnWithFallback", () => {
     expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
   });
 
+  it("re-promotes a session stuck on a lower tier to the highest available middle tier", async () => {
+    // Reproduces the live stuck-on-spark case: gpt-5.5 (primary) is rate-limited,
+    // the session auto-pinned down to spark, and sonnet (the middle tier) has since
+    // recovered. Per-model cooldown scoping means the primary-only probe never
+    // re-walks to sonnet, so without re-promotion the session sticks on spark.
+    const { resolveAutoFallbackRepromotionTarget } = await import("../../agents/agent-scope.js");
+    const chain = [
+      { provider: "openai", model: "gpt-5.5" },
+      { provider: "claude-cli", model: "claude-sonnet-5" },
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "xai", model: "grok-4.3" },
+    ];
+    // gpt-5.5 still rate-limited; sonnet + spark + grok available.
+    const unavailable = new Set(["openai/gpt-5.5"]);
+    const isAvailable = (ref: { provider: string; model: string }) =>
+      !unavailable.has(`${ref.provider}/${ref.model}`);
+
+    const probe = {
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.3-codex-spark",
+      fallbackAuthProfileId: "openai:oauth",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.3-codex-spark",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
+      authProfileOverride: "openai:oauth",
+      authProfileOverrideSource: "auto",
+    };
+    const run = createFollowupRun().run;
+    run.provider = "openai";
+    run.model = "gpt-5.5";
+    run.autoFallbackPrimaryProbe = probe;
+
+    const rechecked = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+      run,
+      entry: sessionEntry,
+      sessionKey: "main",
+      resolveRepromotionTarget: (current) =>
+        resolveAutoFallbackRepromotionTarget({ chain, current, isAvailable }),
+    });
+
+    expect(rechecked).toMatchObject({
+      provider: "claude-cli",
+      model: "claude-sonnet-5",
+      autoFallbackPrimaryProbe: undefined,
+    });
+  });
+
   it("keeps fallback auth available when a primary probe falls back", async () => {
     const probe = {
       provider: "anthropic",

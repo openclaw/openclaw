@@ -88,6 +88,7 @@ import {
   resolveRunFastModeForFallbackCandidate,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
+import { buildAutoFallbackRepromotionResolver } from "./auto-fallback-repromotion.js";
 import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
@@ -593,6 +594,11 @@ export function createFollowupRunner(params: {
         run,
         entry: activeSessionEntry,
         sessionKey: replySessionKey,
+        resolveRepromotionTarget: buildAutoFallbackRepromotionResolver({
+          cfg: run.config,
+          agentDir: run.agentDir,
+          defaultProvider: run.autoFallbackPrimaryProbe?.provider ?? run.provider,
+        }),
       });
       if (run !== effectiveQueued.run) {
         effectiveQueued = { ...effectiveQueued, run };
