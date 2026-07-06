@@ -13,7 +13,23 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class SecurePrefsTest {
   @Test
-  fun loadLocationMode_migratesLegacyAlwaysValue() {
+  fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
+    assertEquals(
+      LocationMode.Always,
+      locationModeAfterBackgroundSettings(LocationMode.Off, foregroundGranted = true, backgroundGranted = true),
+    )
+    assertEquals(
+      LocationMode.Off,
+      locationModeAfterBackgroundSettings(LocationMode.Off, foregroundGranted = true, backgroundGranted = false),
+    )
+    assertEquals(
+      LocationMode.WhileUsing,
+      locationModeAfterBackgroundSettings(LocationMode.Always, foregroundGranted = true, backgroundGranted = false),
+    )
+  }
+
+  @Test
+  fun loadLocationMode_enforcesFlavorAvailabilityForAlwaysValue() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs
@@ -24,8 +40,10 @@ class SecurePrefsTest {
 
     val prefs = SecurePrefs(context)
 
-    assertEquals(LocationMode.WhileUsing, prefs.locationMode.value)
-    assertEquals("whileUsing", plainPrefs.getString("location.enabledMode", null))
+    val expected =
+      if (SensitiveFeatureConfig.backgroundLocationEnabled) LocationMode.Always else LocationMode.WhileUsing
+    assertEquals(expected, prefs.locationMode.value)
+    assertEquals(expected.rawValue, plainPrefs.getString("location.enabledMode", null))
   }
 
   @Test

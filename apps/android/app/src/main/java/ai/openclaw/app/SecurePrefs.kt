@@ -605,9 +605,14 @@ class SecurePrefs(
 
   private fun loadLocationMode(): LocationMode {
     val raw = plainPrefs.getString(locationModeKey, "off")
-    val resolved = LocationMode.fromRawValue(raw)
-    if (raw?.trim()?.lowercase() == "always") {
-      // Migrate old "always" configs to the current while-using contract.
+    val stored = LocationMode.fromRawValue(raw)
+    val resolved =
+      if (stored == LocationMode.Always && !SensitiveFeatureConfig.backgroundLocationEnabled) {
+        LocationMode.WhileUsing
+      } else {
+        stored
+      }
+    if (resolved != stored) {
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved

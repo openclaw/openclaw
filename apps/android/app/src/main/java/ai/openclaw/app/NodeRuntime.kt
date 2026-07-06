@@ -420,6 +420,8 @@ class NodeRuntime private constructor(
       location = location,
       json = json,
       isForeground = { _isForeground.value },
+      locationMode = { locationMode.value },
+      backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
       locationPreciseEnabled = { locationPreciseEnabled.value },
     )
 
