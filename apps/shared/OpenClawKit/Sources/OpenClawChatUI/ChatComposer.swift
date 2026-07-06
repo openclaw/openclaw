@@ -88,7 +88,6 @@ struct OpenClawChatComposer: View {
     let messagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
-    @State private var stagingVoiceNoteURL: URL?
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -1087,30 +1086,22 @@ struct OpenClawChatComposer: View {
 
     private var canSendMessage: Bool {
         self.isComposerEnabled
-            && self.voiceNoteControl?.recorder.completedRecording == nil
+            && self.voiceNoteControl?.recorder.ownsPendingChatAttachment != true
             && self.viewModel.canSend
             && (self.isAttachmentInputEnabled || self.viewModel.attachments.isEmpty)
     }
 
     private func stageCompletedVoiceNoteIfNeeded() {
         guard let recorder = self.voiceNoteControl?.recorder,
-              let recording = recorder.completedRecording,
-              self.stagingVoiceNoteURL != recording.fileURL
+              let recording = recorder.claimCompletedRecording()
         else { return }
 
-        self.stagingVoiceNoteURL = recording.fileURL
-        self.viewModel.beginAttachmentStaging()
+        let viewModel = self.viewModel
         Task {
-            defer { self.viewModel.endAttachmentStaging() }
-            await self.viewModel.addVoiceNoteAttachment(
+            await viewModel.addVoiceNoteAttachment(
                 fileURL: recording.fileURL,
                 durationSeconds: recording.durationSeconds)
-            if recorder.completedRecording == recording {
-                recorder.clearCompletedRecording()
-            }
-            if self.stagingVoiceNoteURL == recording.fileURL {
-                self.stagingVoiceNoteURL = nil
-            }
+            recorder.completeStaging(recording)
         }
     }
 

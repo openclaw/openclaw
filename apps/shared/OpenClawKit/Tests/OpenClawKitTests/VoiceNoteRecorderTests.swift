@@ -58,6 +58,26 @@ final class VoiceNoteRecorderTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedRecordingHasOneStagingOwner() async throws {
+        let capture = FakeVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+
+        let started = await recorder.start()
+        XCTAssertTrue(started)
+        let recording = try XCTUnwrap(recorder.finish())
+
+        XCTAssertEqual(recorder.claimCompletedRecording(), recording)
+        XCTAssertNil(recorder.claimCompletedRecording())
+        XCTAssertTrue(recorder.ownsPendingChatAttachment)
+
+        recorder.completeStaging(recording)
+
+        XCTAssertEqual(recorder.state, .idle)
+        XCTAssertFalse(recorder.ownsPendingChatAttachment)
+        try FileManager.default.removeItem(at: recording.fileURL)
+    }
+
+    @MainActor
     func testCancelReturnsToIdleAndDeletesTemporaryFile() async throws {
         let capture = FakeVoiceNoteAudioCapture()
         let recorder = OpenClawVoiceNoteRecorder(capture: capture)

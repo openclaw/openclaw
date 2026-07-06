@@ -153,7 +153,7 @@ struct ChatProTab: View {
                 showsAssistantAvatars: false,
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
-                isAttachmentInputEnabled: self.gatewayConnected,
+                isAttachmentInputEnabled: self.gatewayConnected || self.canQueueOffline,
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,

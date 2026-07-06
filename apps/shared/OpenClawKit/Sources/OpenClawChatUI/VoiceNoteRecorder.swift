@@ -40,6 +40,7 @@ public final class OpenClawVoiceNoteRecorder {
         case requestingPermission
         case recording(startedAt: Date, fileURL: URL)
         case finished(recording: OpenClawVoiceNoteRecording)
+        case staging(recording: OpenClawVoiceNoteRecording)
         case failed(message: String)
     }
 
@@ -91,7 +92,7 @@ public final class OpenClawVoiceNoteRecorder {
     /// True from permission request until the completed recording is staged.
     public var ownsPendingChatAttachment: Bool {
         switch self.state {
-        case .requestingPermission, .recording, .finished:
+        case .requestingPermission, .recording, .finished, .staging:
             true
         case .idle, .failed:
             false
@@ -112,6 +113,20 @@ public final class OpenClawVoiceNoteRecorder {
     public var completedRecording: OpenClawVoiceNoteRecording? {
         guard case let .finished(recording) = self.state else { return nil }
         return recording
+    }
+
+    /// Claims a finished recording exactly once while its captured chat stages it.
+    func claimCompletedRecording() -> OpenClawVoiceNoteRecording? {
+        guard case let .finished(recording) = self.state else { return nil }
+        self.state = .staging(recording: recording)
+        return recording
+    }
+
+    /// Releases chat ownership after the claimed recording was consumed.
+    func completeStaging(_ recording: OpenClawVoiceNoteRecording) {
+        guard self.state == .staging(recording: recording) else { return }
+        self.state = .idle
+        self.elapsedSeconds = 0
     }
 
     /// Requests permission if needed and starts a new recording.
@@ -165,6 +180,8 @@ public final class OpenClawVoiceNoteRecorder {
 
     /// Cancels permission or capture and removes any temporary audio file.
     public func cancel() {
+        // The chat view model owns the file after claiming the handoff.
+        if case .staging = self.state { return }
         let fileURL: URL? = switch self.state {
         case let .recording(_, fileURL):
             fileURL
@@ -186,13 +203,6 @@ public final class OpenClawVoiceNoteRecorder {
         if wasRecording {
             self.onRecordingActiveChanged?(false)
         }
-    }
-
-    /// Clears a completed handoff after the composer has staged it.
-    public func clearCompletedRecording() {
-        guard case .finished = self.state else { return }
-        self.state = .idle
-        self.elapsedSeconds = 0
     }
 
     private func startTimer() {
