@@ -157,7 +157,11 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
     models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
-    isConfigured: ({ agentDir }) =>
+    isConfigured: ({ cfg, agentDir }) =>
+      // generateImage already authenticates from a config apiKey; count a
+      // non-empty one as configured here too, so image gen works from config
+      // alone, like chat.
+      Boolean(cfg?.models?.providers?.google?.apiKey) ||
       isProviderApiKeyConfigured({
         provider: "google",
         agentDir,
