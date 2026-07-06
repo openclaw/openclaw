@@ -540,7 +540,12 @@ export function recordScheduleComputeError(params: {
   return true;
 }
 
-function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; nowMs: number }): {
+function normalizeJobTickState(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  preserveRunningJobIds?: ReadonlySet<string>;
+}): {
   changed: boolean;
   skip: boolean;
 } {
@@ -584,7 +589,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   const runningAt = job.state.runningAtMs;
-  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
+  if (
+    typeof runningAt === "number" &&
+    nowMs - runningAt > STUCK_RUN_MS &&
+    !params.preserveRunningJobIds?.has(job.id)
+  ) {
     state.deps.log.warn(
       { jobId: job.id, runningAtMs: runningAt },
       "cron: clearing stuck running marker",
@@ -605,13 +614,19 @@ function walkSchedulableJobs(
   state: CronServiceState,
   fn: (params: { job: CronJob; nowMs: number }) => boolean,
   nowMs = state.deps.nowMs(),
+  opts?: { preserveRunningJobIds?: ReadonlySet<string> },
 ): boolean {
   if (!state.store) {
     return false;
   }
   let changed = false;
   for (const job of state.store.jobs) {
-    const tick = normalizeJobTickState({ state, job, nowMs });
+    const tick = normalizeJobTickState({
+      state,
+      job,
+      nowMs,
+      preserveRunningJobIds: opts?.preserveRunningJobIds,
+    });
     if (tick.changed) {
       changed = true;
     }
@@ -703,6 +718,7 @@ export function recomputeNextRunsForMaintenance(
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
     deferredAutoDisableNotifications?: Array<() => void>;
+    preserveRunningJobIds?: ReadonlySet<string>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -781,6 +797,7 @@ export function recomputeNextRunsForMaintenance(
       return changed;
     },
     opts?.nowMs,
+    { preserveRunningJobIds: opts?.preserveRunningJobIds },
   );
 }
 

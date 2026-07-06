@@ -1257,17 +1257,18 @@ export async function onTimer(state: CronServiceState) {
       reservedAtMs: number;
     }): Promise<TimedCronRunOutcome> => {
       const { id, job } = params;
-      const startedAt = state.deps.nowMs();
-      job.state.runningAtMs = startedAt;
-      job.state.lastError = undefined;
-      const activeJobMarker = markCronJobActive(job.id, {
-        preserveAcrossGenerationAdvance: job.sessionTarget === "main",
-      });
-      emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
-      const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
 
       try {
+        const startedAt = state.deps.nowMs();
+        job.state.runningAtMs = startedAt;
+        job.state.lastError = undefined;
+        const activeJobMarker = markCronJobActive(job.id, {
+          preserveAcrossGenerationAdvance: job.sessionTarget === "main",
+        });
+        emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
+        const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+        const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+
         const result = await executeJobCoreWithTimeout(state, job, {
           runId: taskRunId,
           activeJobMarker,
@@ -1282,72 +1283,64 @@ export async function onTimer(state: CronServiceState) {
           endedAt: state.deps.nowMs(),
         };
       } catch (err) {
+        // Catch errors from pre-flight setup (markCronJobActive,
+        // tryCreateCronTaskRun, etc.) in addition to execution errors.
+        // Return an error result so applyCompletedResult can still
+        // clear the runningAtMs marker via applyJobResult.  Without this
+        // catch, a synchronous throw would reject the worker Promise and
+        // leave runningAtMs permanently set (see #100471).
         const errorText = normalizeCronRunErrorText(err);
-        state.deps.log.warn(
-          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
-          `cron: job failed: ${errorText}`,
-        );
+        state.deps.log.warn({ jobId: id, jobName: job.name }, `cron: job failed: ${errorText}`);
         return {
           jobId: id,
           job,
-          taskRunId,
-          activeJobMarker,
+          taskRunId: undefined,
+          activeJobMarker: undefined,
           status: "error",
           error: errorText,
           diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
             nowMs: state.deps.nowMs,
           }),
-          startedAt,
+          startedAt: state.deps.nowMs(),
           endedAt: state.deps.nowMs(),
         };
       }
     };
 
-    const finalizeCompletedResults = async (
-      completedResults: readonly TimedCronRunOutcome[],
-      opts?: { clearOnFailure?: boolean },
-    ): Promise<TimedCronRunOutcome[]> => {
-      if (completedResults.length === 0) {
-        return [];
+    // Track unapplied due-job ids so recomputeNextRunsForMaintenance preserves
+    // their running markers.  Without this, a long batch can cross the stuck-run
+    // threshold and make queued/running jobs look idle on disk.
+    const unappliedDueJobIds = new Set(dueJobs.map((due) => due.id));
+    const completedOutcomes: TimedCronRunOutcome[] = [];
+    const applyCompletedResult = async (result: TimedCronRunOutcome) => {
+      // Skip store update for retired (non-current) active markers to avoid
+      // re-applying stale outcomes after a restart generation advance.
+      if (!isCronActiveJobMarkerCurrent(result.activeJobMarker)) {
+        tryFinishCronTaskRun(state, result);
+        return;
       }
-      let finalizedResults: TimedCronRunOutcome[] = [];
-      let finalizationSucceeded = false;
-      try {
-        const currentResults = filterCurrentCronRunOutcomes(completedResults);
-        if (currentResults.length === 0) {
-          finishRetiredCronTaskRuns(state, completedResults, currentResults);
-          return [];
+      await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        // Re-check inside the lock after forceReload — the generation may
+        // have advanced between the first check and lock acquisition.
+        if (!isCronActiveJobMarkerCurrent(result.activeJobMarker)) {
+          tryFinishCronTaskRun(state, result);
+          return;
         }
-        await locked(state, async () => {
-          await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-          finalizedResults = filterCurrentCronRunOutcomes(currentResults);
-          finishRetiredCronTaskRuns(state, completedResults, finalizedResults);
-          for (const result of finalizedResults) {
-            applyOutcomeToStoredJob(state, result);
-          }
-          if (finalizedResults.length === 0) {
-            return;
-          }
+        applyOutcomeToStoredJob(state, result);
 
-          // Use maintenance-only recompute to avoid advancing past-due
-          // nextRunAtMs values that became due between findDueJobs and this
-          // locked block.  The full recomputeNextRuns would silently skip
-          // those jobs (advancing nextRunAtMs without execution), causing
-          // daily cron schedules to jump 48 h instead of 24 h (#17852).
-          recomputeNextRunsForMaintenance(state);
-          await persist(state);
-        });
-        finalizationSucceeded = finalizedResults.length > 0;
-        return finalizedResults;
-      } finally {
-        if (opts?.clearOnFailure !== false || finalizationSucceeded) {
-          clearActiveMarkersForOutcomes(completedResults);
-        }
-      }
+        // Use maintenance-only recompute to avoid advancing past-due
+        // nextRunAtMs values that became due between findDueJobs and this
+        // locked block.  The full recomputeNextRuns would silently skip
+        // those jobs (advancing nextRunAtMs without execution), causing
+        // daily cron schedules to jump 48 h instead of 24 h (#17852).
+        recomputeNextRunsForMaintenance(state, { preserveRunningJobIds: unappliedDueJobIds });
+        await persist(state);
+      });
+      unappliedDueJobIds.delete(result.jobId);
     };
 
     const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
-    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
@@ -1367,8 +1360,9 @@ export async function onTimer(state: CronServiceState) {
           if (job?.state && job.state.runningAtMs === due.reservedAtMs) {
             delete job.state.runningAtMs;
           }
+          unappliedDueJobIds.delete(due.id);
         }
-        recomputeNextRunsForMaintenance(state);
+        recomputeNextRunsForMaintenance(state, { preserveRunningJobIds: unappliedDueJobIds });
         await persist(state);
       });
     };
@@ -1394,14 +1388,13 @@ export async function onTimer(state: CronServiceState) {
         claimedIndexes.add(index);
         const result = await runDueJob(due);
         if (result.isolatedAgentSetupTimeout) {
-          let finalizedResults: TimedCronRunOutcome[];
           try {
-            finalizedResults = await finalizeCompletedResults([result], { clearOnFailure: false });
+            await applyCompletedResult(result);
           } catch {
-            results[index] = result;
-            continue;
+            // Persist failed; setup timeout handling still proceeds.
           }
-          if (!hasSetupTimeoutRecoveryHandler || finalizedResults.length === 0) {
+          completedOutcomes.push(result);
+          if (!hasSetupTimeoutRecoveryHandler) {
             continue;
           }
           if (!setupTimeoutNotified) {
@@ -1416,10 +1409,12 @@ export async function onTimer(state: CronServiceState) {
           }
           continue;
         }
-        results[index] = result;
+        await applyCompletedResult(result);
+        completedOutcomes.push(result);
       }
     });
     await Promise.all(workers);
+    clearActiveMarkersForOutcomes(completedOutcomes);
     if (reservationReleaseError) {
       throw reservationReleaseError instanceof Error
         ? reservationReleaseError
@@ -1427,24 +1422,6 @@ export async function onTimer(state: CronServiceState) {
     }
     if (stopAdmittingDueJobs) {
       await releaseUnclaimedDueJobReservations();
-    }
-
-    const completedResults: TimedCronRunOutcome[] = results.filter(
-      (entry): entry is TimedCronRunOutcome => entry !== undefined,
-    );
-
-    if (completedResults.length > 0) {
-      const finalizedResults = await finalizeCompletedResults(completedResults);
-      for (const result of finalizedResults) {
-        if (
-          !setupTimeoutNotified &&
-          result.isolatedAgentSetupTimeout &&
-          maybeNotifyIsolatedAgentSetupTimeout(state, result)
-        ) {
-          setupTimeoutNotified = true;
-          break;
-        }
-      }
     }
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).

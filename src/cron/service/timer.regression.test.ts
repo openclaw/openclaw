@@ -3725,4 +3725,111 @@ describe("cron service timer regressions", () => {
       "cron: job run returned error status",
     );
   });
+
+  it("persists a completed due-job outcome before later batch jobs finish", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const finishedJob = createDueIsolatedJob({
+      id: "finished",
+      nowMs: now,
+      nextRunAtMs: now - 2,
+      deleteAfterRun: true,
+    });
+    const blockingJob = createDueIsolatedJob({
+      id: "blocking",
+      nowMs: now,
+      nextRunAtMs: now - 1,
+      deleteAfterRun: true,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [finishedJob, blockingJob] });
+
+    const blockingStarted = createDeferred<void>();
+    const releaseBlocking = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
+      if (job.id === "finished") {
+        return { status: "ok" as const, summary: "finished" };
+      }
+      blockingStarted.resolve();
+      await releaseBlocking.promise;
+      return { status: "ok" as const, summary: "blocking finished" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 1 },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await blockingStarted.promise;
+
+    try {
+      const persisted = await loadCronStore(store.storePath);
+      expect(persisted.jobs.find((job) => job.id === "finished")).toBeUndefined();
+      expect(persisted.jobs.find((job) => job.id === "blocking")).toBeDefined();
+    } finally {
+      releaseBlocking.resolve();
+      await timerRun;
+    }
+  });
+
+  it("preserves queued due-job running markers during incremental batch persistence", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const batchStart = Date.parse("2026-02-06T10:05:00.000Z");
+    // STUCK_RUN_MS is 2 hours; pick a threshold just past it.
+    const stuckThresholdMs = 2 * 60 * 60 * 1000;
+    const first = createDueIsolatedJob({
+      id: "long-first",
+      nowMs: batchStart,
+      nextRunAtMs: batchStart - 2,
+    });
+    const second = createDueIsolatedJob({
+      id: "reserved-second",
+      nowMs: batchStart,
+      nextRunAtMs: batchStart - 1,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [first, second] });
+
+    let now = batchStart;
+    const secondStarted = createDeferred<void>();
+    const releaseSecond = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
+      if (job.id === "long-first") {
+        now = batchStart + stuckThresholdMs + 1;
+        return { status: "ok" as const, summary: "first finished after stuck threshold" };
+      }
+      secondStarted.resolve();
+      await releaseSecond.promise;
+      return { status: "ok" as const, summary: "second finished" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 1 },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await secondStarted.promise;
+
+    try {
+      // After the first job completes (past the stuck-run threshold), the
+      // second job's runningAtMs must still be preserved by the incremental
+      // persistence — otherwise recomputeNextRunsForMaintenance would clear it.
+      const persisted = await loadCronStore(store.storePath);
+      const secondJob = persisted.jobs.find((job) => job.id === "reserved-second");
+      expect(secondJob?.state?.runningAtMs).toBe(batchStart);
+    } finally {
+      releaseSecond.resolve();
+      await timerRun;
+    }
+  });
 });
