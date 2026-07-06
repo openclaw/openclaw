@@ -2627,7 +2627,7 @@ async function handle(message) {
     };
     if (await isFirstConnect()) {
       log("slow first initialize");
-      setTimeout(() => send(response), 600);
+      setTimeout(() => send(response), 2500);
     } else {
       log("fast retry initialize");
       send(response);
@@ -2682,7 +2682,7 @@ process.on("SIGINT", shutdown);`,
               slow: {
                 command: process.execPath,
                 args: [slowServerPath],
-                connectionTimeoutMs: 150,
+                connectionTimeoutMs: 1_000,
               },
             },
           },
