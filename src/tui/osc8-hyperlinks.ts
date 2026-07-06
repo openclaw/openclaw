@@ -5,6 +5,27 @@ const OSC8_PATTERN = "\\x1b\\]8;;.*?(?:\\x07|\\x1b\\\\)";
 const ANSI_RE = new RegExp(`${SGR_PATTERN}|${OSC8_PATTERN}`, "g");
 const SGR_START_RE = new RegExp(`^${SGR_PATTERN}`);
 const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
+const MARKDOWN_LINK_RE =
+  /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/(?:[^\s<>()[\]]+|\([^()\s<>]*\))+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+
+function trimUnbalancedTrailingParens(url: string): string {
+  let openParens = 0;
+  let closeParens = 0;
+  for (const ch of url) {
+    if (ch === "(") {
+      openParens++;
+    } else if (ch === ")") {
+      closeParens++;
+    }
+  }
+
+  let trimmed = url;
+  while (trimmed.endsWith(")") && closeParens > openParens) {
+    trimmed = trimmed.slice(0, -1);
+    closeParens--;
+  }
+  return trimmed;
+}
 
 /**
  * Extract all unique URLs from raw markdown text.
@@ -14,20 +35,18 @@ export function extractUrls(markdown: string): string[] {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
-  const mdLinkRe = /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
   let m: RegExpExecArray | null;
-  while ((m = mdLinkRe.exec(markdown)) !== null) {
+  MARKDOWN_LINK_RE.lastIndex = 0;
+  while ((m = MARKDOWN_LINK_RE.exec(markdown)) !== null) {
     urls.add(m[1]);
   }
 
   // Bare URLs (remove markdown links first to avoid double-matching)
-  const stripped = markdown.replace(
-    /\[(?:[^\]]*)\]\(\s*<?https?:\/\/[^)\s>]+>?(?:\s+["'][^"']*["'])?\s*\)/g,
-    "",
-  );
-  const bareRe = /https?:\/\/[^\s)\]>]+/g;
+  MARKDOWN_LINK_RE.lastIndex = 0;
+  const stripped = markdown.replace(MARKDOWN_LINK_RE, "");
+  const bareRe = /https?:\/\/[^\s\]>]+/g;
   while ((m = bareRe.exec(stripped)) !== null) {
-    urls.add(m[0]);
+    urls.add(trimUnbalancedTrailingParens(m[0]));
   }
 
   return [...urls];
@@ -86,12 +105,12 @@ function findUrlRanges(
   }
 
   // Find new URL starts in visible text
-  const urlRe = /https?:\/\/[^\s)\]>]+/g;
+  const urlRe = /https?:\/\/[^\s\]>]+/g;
   urlRe.lastIndex = searchFrom;
   let match: RegExpExecArray | null;
 
   while ((match = urlRe.exec(visibleText)) !== null) {
-    const fragment = match[0];
+    const fragment = trimUnbalancedTrailingParens(match[0]);
     const start = match.index;
 
     // Resolve fragment to a known URL (exact > prefix > superstring)
