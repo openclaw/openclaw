@@ -102,7 +102,7 @@ describe("readBrowserVersion", () => {
 
     it("reads PE product metadata without interpolating the executable path", () => {
       stubPlatform("win32");
-      const exePath = "C:\\Users\\Peter's Browser\\chrome.exe";
+      const exePath = "C:\\Users\\Example\\Browser's Path\\chrome.exe";
       execFileSyncMock.mockReturnValue("148.0.7778.179\r\n");
 
       expect(readBrowserVersion(exePath)).toBe("148.0.7778.179");

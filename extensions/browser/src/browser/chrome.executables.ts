@@ -744,7 +744,7 @@ export function resolveGoogleChromeExecutableForPlatform(
   return null;
 }
 
-/** Read a browser executable version string using its command-line flag. */
+/** Read a browser executable version from platform metadata or a command-line probe. */
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
     const bundleVersion = readMacBundleBrowserVersion(executablePath);
@@ -754,9 +754,8 @@ export function readBrowserVersion(executablePath: string): string | null {
   }
 
   if (process.platform === "win32") {
-    // `chrome.exe --version` does not print to stdout on Windows (the GUI binary
-    // does not attach to the parent console), so the `--version` probe below is
-    // useless there. Resolve the build version from the install layout instead.
+    // Windows GUI browsers do not report `--version` to inherited stdout.
+    // Read PE metadata first, then use the install layout only as a safe fallback.
     return readWindowsBrowserVersion(executablePath);
   }
 
@@ -806,7 +805,7 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
     const versionDirs = fs
       .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
-    return versionDirs.length === 1 ? versionDirs[0]?.name ?? null : null;
+    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
   } catch {
     return null;
   }
