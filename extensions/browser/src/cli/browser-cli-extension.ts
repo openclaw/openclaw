@@ -35,7 +35,14 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
   return null;
 }
 
-function buildPairingString(): { pairing: string; relayPort: number } {
+/** Gateway route path for the remote extension relay (see gateway-relay-route.ts). */
+const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
+
+function buildPairingString(gatewayUrl?: string): {
+  pairing: string;
+  relayPort: number;
+  remote: boolean;
+} {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   // Create the host-local relay secret if this host has not used the extension
@@ -44,9 +51,19 @@ function buildPairingString(): { pairing: string; relayPort: number } {
   const token = ensureExtensionRelayToken();
   const profile = firstExtensionProfile();
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
+
+  const gateway = gatewayUrl?.trim();
+  if (gateway) {
+    // Remote: the extension connects straight to this gateway over wss:// — no
+    // node host on the browser machine. The gateway route self-validates the
+    // same host-local secret.
+    const base = gateway.replace(/\/+$/, "");
+    return { pairing: `${base}${GATEWAY_EXTENSION_RELAY_PATH}#${token}`, relayPort, remote: true };
+  }
   return {
     pairing: `ws://127.0.0.1:${relayPort}/extension#${token}`,
     relayPort,
+    remote: false,
   };
 }
 
@@ -70,22 +87,35 @@ export function registerBrowserExtensionCommands(
     .command("pair")
     .description("Print the pairing string to paste into the OpenClaw extension popup")
     .option("--json", "Print the pairing string as JSON")
+    .option(
+      "--gateway-url <url>",
+      "Print a remote pairing string for a Chrome on another machine (e.g. wss://gateway.example.com)",
+    )
     .action(async (opts) => {
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
-          const result = buildPairingString();
+          const result = buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
             defaultRuntime.log(
-              JSON.stringify({ pairingString: result.pairing, relayPort: result.relayPort }),
+              JSON.stringify({
+                pairingString: result.pairing,
+                relayPort: result.relayPort,
+                remote: result.remote,
+              }),
             );
             return;
           }
+          const setupLine = result.remote
+            ? info(
+                "Remote pairing: load and pair the extension on the machine running Chrome; it connects to this gateway over wss://.",
+              )
+            : info(
+                "Run this on the machine that hosts the browser (gateway host or browser node).",
+              );
           defaultRuntime.log(
             [
-              info(
-                "Run this on the machine that hosts the browser (gateway host or browser node).",
-              ),
+              setupLine,
               info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
               `   ${resolveChromeExtensionDir()}`,
               info("2. Open the OpenClaw popup and paste this pairing string:"),

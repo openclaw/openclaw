@@ -24,7 +24,12 @@ const log = createSubsystemLogger("browser").child("extension-relay");
  * Cap relay frame size to bound memory from a hostile/buggy peer while leaving
  * headroom for CDP payloads (base64 screenshots, DOM snapshots, network bodies).
  */
-const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+
+/** Wire an accepted extension WebSocket to a bridge (shared by loopback + gateway paths). */
+export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSocket): void {
+  bindSocket(ws, bridge.attachExtensionSocket(toBridgeSocket(ws)));
+}
 
 /** Running relay server handle owned by the profile runtime state. */
 export type ExtensionRelayHandle = {
@@ -39,7 +44,8 @@ function firstHeader(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
-function requestToken(req: IncomingMessage): string {
+/** Extract the relay token from a request (Bearer/Basic header or ?token= query). */
+export function requestToken(req: IncomingMessage): string {
   const auth = firstHeader(req.headers.authorization);
   if (auth.startsWith("Bearer ")) {
     return auth.slice("Bearer ".length).trim();
@@ -63,7 +69,7 @@ function isAuthorized(req: IncomingMessage, token: string): boolean {
 }
 
 /** Reject cross-origin websocket upgrades; the extension side must come from Chrome. */
-function isAllowedExtensionOrigin(req: IncomingMessage): boolean {
+export function isAllowedExtensionOrigin(req: IncomingMessage): boolean {
   const origin = firstHeader(req.headers.origin);
   // Chrome MV3 service workers send their chrome-extension:// origin. Absent
   // origin is allowed for non-browser clients such as tests and diagnostics.
@@ -158,7 +164,7 @@ export async function startExtensionRelayServer(params: {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        bindSocket(ws, bridge.attachExtensionSocket(toBridgeSocket(ws)));
+        attachExtensionWebSocket(bridge, ws);
         log.info("extension connected to relay");
       });
       return;

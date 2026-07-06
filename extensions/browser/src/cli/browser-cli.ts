@@ -34,7 +34,13 @@ type BrowserCommandGroupDefinition = {
 const ROOT_BOOLEAN_OPTIONS = new Set(["--dev", "--no-color"]);
 const ROOT_VALUE_OPTIONS = new Set(["--profile", "--log-level", "--container"]);
 const BROWSER_BOOLEAN_OPTIONS = new Set(["--json", "--expect-final"]);
-const BROWSER_VALUE_OPTIONS = new Set(["--browser-profile", "--url", "--token", "--timeout"]);
+const BROWSER_VALUE_OPTIONS = new Set([
+  "--browser-profile",
+  "--url",
+  "--token",
+  "--timeout",
+  "--gateway-url",
+]);
 
 const command = (
   name: string,
