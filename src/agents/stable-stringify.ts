@@ -4,7 +4,7 @@
  * handling for errors, binary data, bigint, non-finite numbers, and cycles.
  */
 import { Buffer } from "node:buffer";
-import { sanitizeSurrogates } from "./sanitize-surrogates.js";
+import { sanitizeSurrogates } from "@openclaw/ai/internal/runtime";
 
 /** Deterministically stringifies unknown values for cache keys and diagnostics. */
 export function stableStringify(value: unknown): string {
