@@ -308,6 +308,10 @@ private struct ChatMessageBody: View {
                     includesThinking: self.showsAssistantTrace)
             }
 
+            if self.showsLinkPreview, let previewURL = chatFirstPreviewURL(in: text) {
+                ChatLinkPreview(url: previewURL)
+            }
+
             if !self.inlineAttachments.isEmpty {
                 ForEach(self.inlineAttachments.indices, id: \.self) { idx in
                     AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
@@ -342,6 +346,11 @@ private struct ChatMessageBody: View {
         // Keep the guarded base condition; iOS additionally opts assistant
         // messages into bubbles via the clean-chrome environment flag.
         self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
+    }
+
+    private var showsLinkPreview: Bool {
+        let role = self.message.role.lowercased()
+        return role == "user" || role == "assistant"
     }
 
     private var primaryText: String {
