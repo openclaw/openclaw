@@ -1204,7 +1204,9 @@ export async function stopOpenClawChrome(
 ) {
   const proc = running.proc;
   try {
-    if (proc.killed) {
+    // The fixed CDP port may already belong to a replacement. Once the
+    // tracked child exits, never send Browser.close to the current listener.
+    if (proc.killed || proc.exitCode != null || proc.signalCode != null) {
       return;
     }
 
