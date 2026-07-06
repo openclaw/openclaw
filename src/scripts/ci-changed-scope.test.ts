@@ -13,39 +13,7 @@ const {
   listChangedPaths,
   parseArgs,
   shouldRunNativeI18n,
-} = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
-  detectChangedScope: (paths: string[]) => {
-    runNode: boolean;
-    runMacos: boolean;
-    runIosBuild: boolean;
-    runAndroid: boolean;
-    runWindows: boolean;
-    runSkillsPython: boolean;
-    runChangedSmoke: boolean;
-    runControlUiI18n: boolean;
-  };
-  detectInstallSmokeScope: (paths: string[]) => {
-    runFastInstallSmoke: boolean;
-    runFullInstallSmoke: boolean;
-  };
-  detectNodeFastScope: (paths: string[]) => {
-    runFastOnly: boolean;
-    runPluginContracts: boolean;
-    runCiRouting: boolean;
-  };
-  shouldRunNativeI18n: (paths: string[]) => boolean;
-  listChangedPaths: (
-    base: string,
-    head?: string,
-    cwd?: string,
-    preferMergeHeadFirstParent?: boolean,
-  ) => string[];
-  parseArgs: (argv: string[]) => {
-    base: string;
-    head: string;
-    mergeHeadFirstParent: boolean;
-  };
-};
+} = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
