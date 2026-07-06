@@ -24,6 +24,7 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
+import { extractOriginalFilename, getMediaDir } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -643,10 +644,14 @@ export async function handleControlUiAssistantMediaRequest(
       filePath: localPath,
     });
     const contentType = mime ?? "application/octet-stream";
+    const isInboundStorePath = isWithinDir(path.join(getMediaDir(), "inbound"), localPath);
+    const filename = isInboundStorePath
+      ? extractOriginalFilename(localPath)
+      : path.basename(localPath);
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",
-      buildAssistantMediaContentDisposition(path.basename(localPath), contentType),
+      buildAssistantMediaContentDisposition(filename, contentType),
     );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
