@@ -134,6 +134,10 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   });
 
   ffmpeg.stdout.on("error", (err) => opusStream.destroy(err));
+  // A raw stream `error` without a listener is process-fatal (uncaughtException).
+  // stderr content is diagnostic-only, but its stream can still emit `error`, so
+  // surface it through the playback stream like stdout instead of crashing.
+  ffmpeg.stderr.on("error", (err) => opusStream.destroy(err));
   ffmpeg.stdin.on("error", (err) => {
     if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
       opusStream.destroy(err);

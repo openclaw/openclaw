@@ -1,11 +1,43 @@
 // Discord tests cover audio plugin behavior.
-import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough, Readable } from "node:stream";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
+// resolveFfmpegBin requires a real ffmpeg on PATH; stub only that lookup so the
+// playback stream construction reaches the stdio stream-error wiring under test.
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  resolveFfmpegBin: () => "ffmpeg",
+}));
+
 import {
   createDiscordOpusEncodeStream,
+  createDiscordOpusPlaybackStream,
   decodeOpusStream,
   decodeOpusStreamChunks,
 } from "./audio.js";
+
+// Mirrors the ffmpeg child's stdio shape so we can emit stream `error` events.
+// On a raw stream an unhandled `error` throws synchronously (the real gateway
+// uncaughtException crash path).
+function createFakeFfmpeg() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdin: PassThrough;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.kill = vi.fn();
+  return child;
+}
 
 async function collectBuffers(stream: Readable): Promise<Buffer[]> {
   const chunks: Buffer[] = [];
@@ -75,4 +107,26 @@ describe("discord voice opus codec", () => {
 
     expect(onError).toHaveBeenCalledWith(err);
   });
+});
+
+describe("createDiscordOpusPlaybackStream child stream errors", () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "routes a %s stream error to the playback stream instead of crashing",
+    async (streamName) => {
+      const ffmpeg = createFakeFfmpeg();
+      spawnMock.mockReturnValue(ffmpeg);
+
+      const playback = createDiscordOpusPlaybackStream("input.mp3");
+      const errorSeen = new Promise<Error>((resolve) => playback.once("error", resolve));
+
+      const streamError = new Error(`${streamName} broke`);
+      expect(() => ffmpeg[streamName].emit("error", streamError)).not.toThrow();
+
+      await expect(errorSeen).resolves.toBe(streamError);
+    },
+  );
 });
