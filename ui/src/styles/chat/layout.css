@@ -978,8 +978,8 @@ openclaw-chat-page {
   margin: 0;
 }
 
-/* Keep settings and run status adjacent while the model picker uses the
-   remaining footer space; split view stays in the left control cluster. */
+/* Keep settings, split view, and run status together while the model picker
+   uses the remaining footer space. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
@@ -995,7 +995,7 @@ openclaw-chat-page {
 
 .agent-chat__composer-run-status {
   display: inline-flex;
-  order: 1;
+  order: 2;
   flex: 0 0 auto;
   align-items: center;
 }
@@ -1007,7 +1007,7 @@ openclaw-chat-page {
 /* openclaw-tooltip renders as display: contents, so this button participates
    directly in the parent flex layout. */
 .agent-chat__composer-controls .chat-open-split-view {
-  order: 2;
+  order: 1;
 }
 
 .agent-chat__composer-run-status .agent-chat__run-status {
@@ -1286,10 +1286,6 @@ openclaw-chat-page {
   stroke-linejoin: round;
 }
 
-.agent-chat__camera-btn {
-  display: none;
-}
-
 .agent-chat__control-label {
   display: none;
 }
@@ -1307,6 +1303,8 @@ openclaw-chat-page {
 }
 
 .agent-chat__attach-menu {
+  display: flex;
+  align-items: center;
   position: relative;
   flex: 0 0 auto;
 }
@@ -1391,7 +1389,7 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent);
 }
 
-/* Split talk control: mic toggles Talk, the narrow caret opens Talk settings
+/* Split talk control: mic toggles Talk, the narrow caret opens microphone inputs
    (mirrors a mic-with-dropdown control; negative margin keeps the pair reading
    as one unit without a wrapper border). */
 .agent-chat__talk-group {
@@ -1712,6 +1710,107 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+.agent-chat__talk-input-picker {
+  display: inline-flex;
+  position: relative;
+}
+
+.agent-chat__talk-input-menu {
+  position: absolute;
+  inset-inline-start: 8px;
+  bottom: 52px;
+  z-index: 95;
+  width: min(320px, calc(100% - 16px));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+}
+
+.agent-chat__talk-input-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.agent-chat__talk-input-options {
+  display: grid;
+  gap: 2px;
+  max-height: min(260px, calc(100vh - 180px));
+  overflow-y: auto;
+}
+
+.agent-chat__talk-input-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-chat__talk-input-option:hover,
+.agent-chat__talk-input-option:focus-visible {
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.agent-chat__talk-input-option--selected {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.agent-chat__talk-input-check,
+.agent-chat__talk-input-spinner {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.agent-chat__talk-input-check {
+  color: var(--accent);
+}
+
+.agent-chat__talk-input-spinner {
+  color: var(--muted);
+  animation: chat-run-status-spin 0.9s linear infinite;
+}
+
+.agent-chat__talk-input-check svg,
+.agent-chat__talk-input-spinner svg {
+  width: 100%;
+  height: 100%;
+}
+
+.agent-chat__talk-input-message {
+  padding: 7px 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.agent-chat__talk-input-message--error {
+  color: var(--danger);
+}
+
 .agent-chat__input-divider {
   width: 1px;
   height: 16px;
@@ -1822,19 +1921,6 @@ openclaw-chat-page {
 }
 
 @media (max-width: 860px) {
-  .agent-chat__talk-options {
-    flex-direction: column;
-  }
-
-  .agent-chat__talk-options-primary {
-    width: 100%;
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  }
-
-  .agent-chat__talk-settings-link {
-    align-self: flex-end;
-  }
-
   .agent-chat__input-btn,
   .agent-chat__toolbar-right .btn--ghost {
     width: 36px;
@@ -2009,28 +2095,6 @@ openclaw-chat-page {
     min-height: 44px;
     justify-content: center;
     padding: 0;
-  }
-
-  .agent-chat__camera-btn {
-    display: inline-flex;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, color-mix(in srgb, var(--ok) 55%, var(--info)), var(--bg) 20%);
-    color: var(--primary-foreground);
-    box-shadow: var(--shadow-sm);
-  }
-
-  .agent-chat__camera-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, color-mix(in srgb, var(--ok) 65%, var(--info)), var(--bg) 15%);
-    color: var(--primary-foreground);
-  }
-
-  .agent-chat__camera-btn svg {
-    width: 18px;
-    height: 18px;
   }
 
   .agent-chat__toolbar-right {
@@ -2565,6 +2629,10 @@ openclaw-chat-page {
     animation: none;
     border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
     box-shadow: var(--focus-ring);
+  }
+
+  .agent-chat__talk-input-spinner {
+    animation: none;
   }
 }
 

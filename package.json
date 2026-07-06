@@ -169,6 +169,7 @@
     "!docs/**/*.jpg",
     "!docs/**/*.png",
     "src/agents/templates/",
+    "scripts/crabbox-wrapper-providers.mjs",
     "scripts/crabbox-wrapper.mjs",
     "patches/",
     "skills/",

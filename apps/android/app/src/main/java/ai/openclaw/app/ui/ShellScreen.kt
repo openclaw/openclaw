@@ -860,11 +860,9 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstNotNullOfOrNull { it.settingsRoute } ?: SettingsRoute.Gateway
 
-internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int =
-  overviewRecentSessions(sessions).size
+internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int = overviewRecentSessions(sessions).size
 
-internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
-  sessions.take(overviewRecentSessionLimit).distinctBy { session -> session.key }
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> = sessions.take(overviewRecentSessionLimit).distinctBy { session -> session.key }
 
 internal data class OverviewMetricCard(
   val title: String,

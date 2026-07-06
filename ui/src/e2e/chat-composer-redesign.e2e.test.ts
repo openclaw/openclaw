@@ -117,7 +117,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const attach = composer.locator(
         'summary.agent-chat__input-btn--attach[aria-label="Add attachment"]',
       );
-      const camera = composerShell.getByRole("button", { name: "Take photo" });
+      const camera = composerShell.locator(".agent-chat__camera-btn");
+      const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
       const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
       const splitView = composer.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
@@ -436,34 +437,25 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => page.getByRole("button", { name: "Send message" }).count()).toBe(0);
 
       await page.setViewportSize({ width: 393, height: 852 });
-      await expect.poll(() => camera.isVisible()).toBe(true);
-      const [
-        mobileAttachBox,
-        mobileModelBox,
-        mobileSettingsBox,
-        mobileContextBox,
-        mobileCameraBox,
-        mobileVoiceBox,
-      ] = await Promise.all([
-        attach.boundingBox(),
-        model.boundingBox(),
-        settings.boundingBox(),
-        contextUsage.boundingBox(),
-        camera.boundingBox(),
-        voice.boundingBox(),
-      ]);
+      await expect.poll(() => camera.count()).toBe(0);
+      const [mobileAttachBox, mobileModelBox, mobileSettingsBox, mobileContextBox, mobileVoiceBox] =
+        await Promise.all([
+          attach.boundingBox(),
+          model.boundingBox(),
+          settings.boundingBox(),
+          contextUsage.boundingBox(),
+          voice.boundingBox(),
+        ]);
       expect(mobileAttachBox).not.toBeNull();
       expect(mobileModelBox).not.toBeNull();
       expect(mobileSettingsBox).not.toBeNull();
       expect(mobileContextBox).not.toBeNull();
-      expect(mobileCameraBox).not.toBeNull();
       expect(mobileVoiceBox).not.toBeNull();
       if (
         !mobileAttachBox ||
         !mobileModelBox ||
         !mobileSettingsBox ||
         !mobileContextBox ||
-        !mobileCameraBox ||
         !mobileVoiceBox
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
@@ -478,22 +470,35 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(mobileModelBox.x).toBeGreaterThanOrEqual(
         mobileSettingsBox.x + mobileSettingsBox.width - 1,
       );
-      expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileCameraBox.x + 1);
-      expect(
-        Math.abs(
-          mobileCameraBox.x +
-            mobileCameraBox.width / 2 -
-            (mobileVoiceBox.x + mobileVoiceBox.width / 2),
-        ),
-      ).toBeLessThanOrEqual(2);
-      expect(mobileCameraBox.y + mobileCameraBox.height).toBeLessThanOrEqual(mobileVoiceBox.y + 1);
-      await textarea.fill("Keep the camera available");
-      await expect.poll(() => camera.isVisible()).toBe(true);
+      expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
+      await expect
+        .poll(async () => {
+          const [attachBox, voiceBox] = await Promise.all([
+            attach.boundingBox(),
+            voice.boundingBox(),
+          ]);
+          if (!attachBox || !voiceBox) {
+            return Number.POSITIVE_INFINITY;
+          }
+          return Math.abs(attachBox.y + attachBox.height / 2 - (voiceBox.y + voiceBox.height / 2));
+        })
+        .toBeLessThanOrEqual(2);
+      await attach.click();
+      await expect.poll(() => takePhoto.isVisible()).toBe(true);
+      await expect
+        .poll(() => composerShell.getByRole("menuitem", { name: "Photo", exact: true }).isVisible())
+        .toBe(true);
+      await expect
+        .poll(() => composerShell.getByRole("menuitem", { name: "File", exact: true }).isVisible())
+        .toBe(true);
+      await page.keyboard.press("Escape");
+      await textarea.fill("Keep camera access in the attachment menu");
+      await expect.poll(() => camera.count()).toBe(0);
       await expect
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
       await textarea.fill("");
-      await expect.poll(() => camera.isVisible()).toBe(true);
+      await expect.poll(() => camera.count()).toBe(0);
       await model.click();
       const mobilePickerBox = await composer
         .locator(".chat-controls__inline-select-menu--combined")

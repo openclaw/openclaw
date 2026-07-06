@@ -1278,6 +1278,41 @@ describe("chat composer workbench", () => {
     expect(voiceButton?.closest(".agent-chat__composer-input-row")).not.toBeNull();
     expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
   });
+
+  it("exposes the microphone input picker state from its own callback contract", () => {
+    const onToggleRealtimeTalkInput = vi.fn();
+    const collapsed = renderChatView({
+      onToggleRealtimeTalkInput,
+      realtimeTalkInputOpen: false,
+    });
+    const collapsedButton = collapsed.querySelector<HTMLButtonElement>(
+      'button[aria-label="Microphone input"]',
+    );
+    expect(collapsedButton?.getAttribute("aria-expanded")).toBe("false");
+    collapsedButton?.click();
+    expect(onToggleRealtimeTalkInput).toHaveBeenCalledOnce();
+
+    const expanded = renderChatView({
+      onToggleRealtimeTalkInput: () => undefined,
+      onRealtimeTalkInputSelect: () => undefined,
+      realtimeTalkInputOpen: true,
+    });
+    const expandedButton = expanded.querySelector<HTMLButtonElement>(
+      'button[aria-label="Microphone input"]',
+    );
+    const menu = expanded.querySelector<HTMLElement>(
+      '[role="group"][aria-label="Microphone input"]',
+    );
+    expect(expandedButton?.getAttribute("aria-expanded")).toBe("true");
+    expect(expandedButton?.getAttribute("aria-controls")).toBe(menu?.id);
+  });
+
+  it("does not render a dead microphone input button without its callback", () => {
+    const container = renderChatView({ realtimeTalkInputOpen: true });
+
+    expect(container.querySelector('button[aria-label="Start voice input"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Microphone input"]')).toBeNull();
+  });
 });
 
 afterEach(() => {
@@ -1790,6 +1825,65 @@ describe("chat voice controls", () => {
 
     expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(1);
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows every available microphone in the input picker", () => {
+    const onRealtimeTalkInputSelect = vi.fn();
+    const container = renderChatView({
+      realtimeTalkInputOpen: true,
+      realtimeTalkInputDevices: [
+        { deviceId: "built-in", label: "MacBook Microphone" },
+        { deviceId: "usb", label: "USB Audio Interface" },
+      ],
+      realtimeTalkInputDeviceId: "usb",
+      onToggleRealtimeTalkInput: () => undefined,
+      onRealtimeTalkInputSelect,
+    });
+
+    const options = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__talk-input-option"),
+    );
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "System default",
+      "MacBook Microphone",
+      "USB Audio Interface",
+    ]);
+    expect(options.map((option) => option.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "false",
+      "true",
+    ]);
+
+    options[1]?.click();
+
+    expect(onRealtimeTalkInputSelect).toHaveBeenCalledWith("built-in");
+  });
+
+  it("shows microphone loading, empty, and error states without hiding System default", () => {
+    const loading = renderChatView({
+      realtimeTalkInputOpen: true,
+      realtimeTalkInputLoading: true,
+      onToggleRealtimeTalkInput: () => undefined,
+      onRealtimeTalkInputSelect: () => undefined,
+    });
+    expect(loading.textContent).toContain("System default");
+    expect(loading.textContent).toContain("Loading microphones");
+    expect(loading.textContent).not.toContain("No additional microphones found");
+
+    const empty = renderChatView({
+      realtimeTalkInputOpen: true,
+      onToggleRealtimeTalkInput: () => undefined,
+      onRealtimeTalkInputSelect: () => undefined,
+    });
+    expect(empty.textContent).toContain("No additional microphones found");
+
+    const error = renderChatView({
+      realtimeTalkInputOpen: true,
+      realtimeTalkInputError: "Microphone access is blocked.",
+      onToggleRealtimeTalkInput: () => undefined,
+      onRealtimeTalkInputSelect: () => undefined,
+    });
+    expect(error.textContent).toContain("Microphone access is blocked.");
   });
 
   it("renders editable voice launch options", () => {
@@ -2763,7 +2857,7 @@ describe("chat attachment picker", () => {
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
-  it("opens a mobile camera input and attaches the captured photo", async () => {
+  it("opens the camera input from the attachment menu and attaches the captured photo", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = requireElement(
@@ -2771,20 +2865,16 @@ describe("chat attachment picker", () => {
       ".agent-chat__camera-input",
       "camera capture input",
     ) as HTMLInputElement;
-    const cameraButton = requireElement(
-      container,
-      '.agent-chat__camera-btn[aria-label="Take photo"]',
-      "camera button",
-    ) as HTMLButtonElement;
+    const cameraButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
+    ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton.closest(".agent-chat__composer-input-row")).not.toBeNull();
-    expect(
-      container.querySelector(".agent-chat__composer-footer .agent-chat__camera-btn"),
-    ).toBeNull();
-    cameraButton.click();
+    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
+    cameraButton!.click();
     expect(clickInput).toHaveBeenCalledTimes(1);
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -2802,12 +2892,14 @@ describe("chat attachment picker", () => {
     });
   });
 
-  it("keeps the mobile camera action available when the composer has text", () => {
+  it("keeps the camera attachment option available when the composer has text", () => {
     const container = renderChatView({ draft: "Ready to send" });
+    const cameraButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
+    ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
 
-    expect(
-      container.querySelector('.agent-chat__camera-btn[aria-label="Take photo"]'),
-    ).not.toBeNull();
+    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 

@@ -13619,6 +13619,26 @@
       "translated": "正在撰寫"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "正在準備音訊…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "正在朗讀…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "正在準備音訊，點一下即可取消"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "正在朗讀，點一下即可停止"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "已排入佇列"
@@ -13692,6 +13712,16 @@
       "id": "native.apple.cdad35e9657fa693",
       "source": "Delete",
       "translated": "刪除"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "停止聆聽"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "聆聽"
     },
     {
       "id": "native.apple.f84b674ad395b694",

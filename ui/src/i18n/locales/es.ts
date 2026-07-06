@@ -1661,9 +1661,26 @@ export const es: TranslationMap = {
       },
       takePhoto: "Tomar foto",
       dismissVoiceInputError: "Descartar error de entrada de voz",
+      loadingMicrophones: "Cargando micrófonos…",
+      microphoneAccessFailed: "No se puede acceder a las entradas de micrófono.",
+      microphoneBusy:
+        "Las entradas de micrófono están ocupadas o no están disponibles para el navegador.",
+      microphoneFallback: "Micrófono {number}",
+      microphoneInput: "Entrada de micrófono",
+      microphoneListUnsupported: "Este navegador no puede listar las entradas de micrófono.",
+      noMicrophones: "No se encontraron micrófonos adicionales",
+      microphoneNoneFound: "No se encontraron entradas de micrófono.",
+      microphonePageInactive:
+        "Las entradas de micrófono no están disponibles mientras esta página está inactiva.",
+      microphonePermissionBlocked:
+        "El acceso al micrófono está bloqueado. Permítelo en la configuración del sitio del navegador para listar las entradas.",
+      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      selectedMicrophoneUnavailable:
+        "El micrófono seleccionado no está disponible. Elige otra entrada o la opción predeterminada del sistema.",
       startVoiceInput: "Iniciar entrada de voz",
       stillListening: "Sigo escuchando",
       stopVoiceInput: "Detener entrada de voz",
+      systemDefaultMicrophone: "Predeterminado del sistema",
       voiceOptions: "Opciones de voz",
       voiceTranscript: "Transcripción de voz",
     },

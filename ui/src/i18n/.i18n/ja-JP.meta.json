@@ -1,11 +1,13 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-06T17:41:42.157Z",
+  "fallbackKeys": [
+    "chat.composer.realtimeTalkRequiresMicrophone"
+  ],
+  "generatedAt": "2026-07-06T19:18:12.828Z",
   "locale": "ja-JP",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "c0d1e6cf7d92cd25fde015ca112a8080c5cf6e43a7b1a7c7673f66fdbc4de400",
-  "totalKeys": 1636,
-  "translatedKeys": 1636,
+  "sourceHash": "e9214414221a2b1192f026b12d70e133d07e4ace9c61c12295f080c4e808fc65",
+  "totalKeys": 1649,
+  "translatedKeys": 1648,
   "workflow": 1
 }

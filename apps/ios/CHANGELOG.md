@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added long-press Listen and Stop controls for assistant chat messages, using configured Gateway speech with an on-device fallback.
 - Added a read-only Files browser for agent workspaces with directory navigation, text and image previews, and share-sheet export.
 - Fixed Apple Watch connection setup so pairing and companion-install changes refresh immediately and cold launches wait for WatchConnectivity activation before sending.
 - Redesigned the Settings About screen with the animated mascot, app tagline, and Website/Docs/GitHub/Discord links.

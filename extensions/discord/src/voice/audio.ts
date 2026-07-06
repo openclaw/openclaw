@@ -133,7 +133,10 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     }
   });
 
-  ffmpeg.stdout.on("error", (err) => opusStream.destroy(err));
+  // Both readable child pipes need listeners; an unhandled stream error terminates Node.
+  for (const readable of [ffmpeg.stdout, ffmpeg.stderr]) {
+    readable.on("error", (err) => opusStream.destroy(err));
+  }
   ffmpeg.stdin.on("error", (err) => {
     if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
       opusStream.destroy(err);

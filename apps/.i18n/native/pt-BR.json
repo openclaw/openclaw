@@ -13619,6 +13619,26 @@
       "translated": "Escrevendo"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "Preparando áudio…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "Falando…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "Preparando áudio, toque para cancelar"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "Falando, toque para parar"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "Na fila"
@@ -13692,6 +13712,16 @@
       "id": "native.apple.cdad35e9657fa693",
       "source": "Delete",
       "translated": "Excluir"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "Parar de ouvir"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "Ouvir"
     },
     {
       "id": "native.apple.f84b674ad395b694",

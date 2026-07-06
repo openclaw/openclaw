@@ -40,9 +40,11 @@ import {
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import { renderRealtimeTalkInputPicker } from "./chat-realtime-controls.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -92,6 +94,11 @@ export type ChatComposerProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  realtimeTalkInputOpen?: boolean;
+  realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
+  realtimeTalkInputDeviceId?: string;
+  realtimeTalkInputLoading?: boolean;
+  realtimeTalkInputError?: string | null;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -101,6 +108,8 @@ export type ChatComposerProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeTalkInput?: () => void;
+  onRealtimeTalkInputSelect?: (deviceId: string) => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -1926,19 +1935,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       providerQuota: props.providerQuota,
     },
   );
-  const cameraAction = html`
-    <openclaw-tooltip .content=${t("chat.composer.takePhoto")}>
-      <button
-        type="button"
-        class="agent-chat__input-btn agent-chat__camera-btn"
-        @click=${clickComposerCameraInput}
-        aria-label=${t("chat.composer.takePhoto")}
-        ?disabled=${!canCompose}
-      >
-        ${icons.camera}
-      </button>
-    </openclaw-tooltip>
-  `;
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel =
@@ -2187,6 +2183,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
   const slashMenuListboxId = paneDomId(props.paneId, "slash-menu-listbox");
   const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
+  const talkInputMenuId = paneDomId(props.paneId, "talk-input");
 
   return html`
     ${renderChatQueue({
@@ -2441,7 +2438,28 @@ export function renderChatComposer(props: ChatComposerProps) {
             >
           </div>
           <div class="agent-chat__composer-actions">
-            ${cameraAction} ${renderChatPrimaryActions(runControlsProps)}
+            ${props.onToggleRealtimeTalkInput
+              ? html`
+                  <div class="agent-chat__talk-input-picker">
+                    <openclaw-tooltip .content=${t("chat.composer.microphoneInput")}>
+                      <button
+                        class="agent-chat__input-btn agent-chat__talk-caret ${props.realtimeTalkInputOpen
+                          ? "agent-chat__input-btn--open"
+                          : ""}"
+                        @click=${props.onToggleRealtimeTalkInput}
+                        aria-label=${t("chat.composer.microphoneInput")}
+                        aria-controls=${talkInputMenuId}
+                        aria-expanded=${props.realtimeTalkInputOpen ? "true" : "false"}
+                        ?disabled=${!canCompose || props.realtimeTalkActive}
+                      >
+                        ${icons.chevronDown}
+                      </button>
+                    </openclaw-tooltip>
+                    ${renderRealtimeTalkInputPicker(props, talkInputMenuId)}
+                  </div>
+                `
+              : nothing}
+            ${renderChatPrimaryActions(runControlsProps)}
           </div>
         </div>
 

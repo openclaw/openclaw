@@ -105,6 +105,7 @@ export type RealtimeTalkTransportContext = {
   client: GatewayBrowserClient;
   sessionKey: string;
   callbacks: RealtimeTalkCallbacks;
+  inputDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
 };
