@@ -24,13 +24,18 @@ afterEach(() => {
 });
 
 function createChild(): MockChild {
-  return Object.assign(new EventEmitter(), {
+  const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     killed: false,
     kill: vi.fn(() => true),
   }) as unknown as MockChild;
+  child.kill.mockImplementation(() => {
+    child.killed = true;
+    return true;
+  });
+  return child;
 }
 
 it("rejects partial fd output when fd exits with an error", async () => {
@@ -59,6 +64,7 @@ it("rejects when stdout emits an error", async () => {
   child.stdout.emit("error", new Error("stdout EPIPE"));
 
   await expect(result).rejects.toThrow("stdout EPIPE");
+  expect(child.killed).toBe(true);
 });
 
 it("rejects when stderr emits an error", async () => {
@@ -72,6 +78,7 @@ it("rejects when stderr emits an error", async () => {
   child.stderr.emit("error", new Error("stderr EPIPE"));
 
   await expect(result).rejects.toThrow("stderr EPIPE");
+  expect(child.killed).toBe(true);
 });
 
 it.each([

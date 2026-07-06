@@ -299,10 +299,12 @@ export function createFindToolDefinition(
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             child.stdout?.on("error", (error) => {
+              stopChild?.();
               cleanup();
               settle(() => reject(new Error(`fd stdout error: ${error.message}`)));
             });
             child.stderr?.on("error", (error) => {
+              stopChild?.();
               cleanup();
               settle(() => reject(new Error(`fd stderr error: ${error.message}`)));
             });
