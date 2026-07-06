@@ -546,8 +546,8 @@ private fun TalkTranscriptCard(
 private fun TalkControl(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   label: String,
-  primary: Boolean = false,
   modifier: Modifier = Modifier,
+  primary: Boolean = false,
   onClick: () -> Unit,
 ) {
   Column(
