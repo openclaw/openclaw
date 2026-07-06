@@ -62,6 +62,9 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
   if (mentions.length === 0) {
     return false;
   }
+  if (!botOpenId) {
+    return false;
+  }
 
   const isDirectMessage = !isFeishuGroupChatType(event.message.chat_type);
   const userMentions = mentions.filter((m) => !isFeishuBroadcastMention(m));

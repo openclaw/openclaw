@@ -140,6 +140,14 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("does not create mention-forward targets when botOpenId is undefined", () => {
+    const event = makeEvent("p2p", [
+      { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event, undefined);
+    expect(ctx.mentionTargets).toBeUndefined();
+  });
+
   it("returns mentionedBot=false when botOpenId is empty string (probe failed)", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
