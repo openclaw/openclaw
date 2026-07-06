@@ -53,9 +53,13 @@ export async function deliverLineAutoReply(params: {
   cfg: OpenClawConfig;
   textLimit: number;
   deps: LineAutoReplyDeps;
-}): Promise<{ replyTokenUsed: boolean }> {
+}): Promise<{ replyTokenUsed: boolean; visiblePartialDeliveryError?: Error }> {
   const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
   let replyTokenUsed = params.replyTokenUsed;
+  // Set when the text reached the user but a rich/media bubble did not. Returned
+  // (not thrown) so the caller adopts the consumed reply-token state before it
+  // surfaces the failure.
+  let visiblePartialDeliveryError: Error | undefined;
 
   const pushLineMessages = async (messages: messagingApi.Message[]): Promise<void> => {
     if (messages.length === 0) {
@@ -141,11 +145,17 @@ export async function deliverLineAutoReply(params: {
 
   if (chunks.length > 0) {
     const hasRichOrMedia = richMessages.length > 0 || mediaMessages.length > 0;
-    if (hasQuickReplies && hasRichOrMedia) {
+    // Quick replies attach to the trailing message, so when both are present the
+    // rich/media bubbles must go out before the quick-reply text. Capture a
+    // failure instead of swallowing it: the text still sends below, but a lost
+    // rich/media bubble must surface as a partial delivery, not silent success.
+    const sendRichBeforeText = hasQuickReplies && hasRichOrMedia;
+    let richMediaError: unknown;
+    if (sendRichBeforeText) {
       try {
         await sendLineMessages([...richMessages, ...mediaMessages], false);
       } catch (err) {
-        deps.onReplyError?.(err);
+        richMediaError = err;
       }
     }
     const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
@@ -162,11 +172,26 @@ export async function deliverLineAutoReply(params: {
       createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
     });
     replyTokenUsed = nextReplyTokenUsed;
-    if (!hasQuickReplies || !hasRichOrMedia) {
-      await sendLineMessages(richMessages, false);
-      if (mediaMessages.length > 0) {
-        await sendLineMessages(mediaMessages, false);
+    if (!sendRichBeforeText) {
+      try {
+        await sendLineMessages(richMessages, false);
+        if (mediaMessages.length > 0) {
+          await sendLineMessages(mediaMessages, false);
+        }
+      } catch (err) {
+        richMediaError = err;
       }
+    }
+    if (richMediaError !== undefined) {
+      // Tag the failure as a visible partial delivery so the caller reports it
+      // instead of silent success; visibleReplySent marks the text as visibly
+      // delivered so the foreground fallback/freshness path does not re-send it
+      // (see isVisiblePartialDeliveryError in src/auto-reply/dispatch.ts).
+      const partialError =
+        richMediaError instanceof Error
+          ? richMediaError
+          : new Error("LINE rich or media message send failed", { cause: richMediaError });
+      visiblePartialDeliveryError = Object.assign(partialError, { visibleReplySent: true });
     }
   } else {
     const combined = [...richMessages, ...mediaMessages];
@@ -200,5 +225,8 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  return { replyTokenUsed };
+  return {
+    replyTokenUsed,
+    ...(visiblePartialDeliveryError ? { visiblePartialDeliveryError } : {}),
+  };
 }
