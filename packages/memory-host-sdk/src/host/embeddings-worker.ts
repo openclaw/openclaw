@@ -1,5 +1,6 @@
 // Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
@@ -145,6 +146,36 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
 
 const WORKER_CLOSE_GRACE_MS = 250;
 
+/** Resolve Homebrew Cellar Node paths to stable symlinks before forking workers. */
+async function resolveStableWorkerNodePath(nodePath: string): Promise<string> {
+  const cellarMatch = nodePath.match(
+    /^(.+?)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+[\\/]bin[\\/]node$/,
+  );
+  if (!cellarMatch) {
+    return nodePath;
+  }
+  const prefix = cellarMatch[1];
+  const formula = cellarMatch[2];
+  const pathModule = nodePath.includes("\\") ? path.win32 : path.posix;
+  const optPath = pathModule.join(prefix, "opt", formula, "bin", "node");
+  try {
+    await fs.access(optPath);
+    return optPath;
+  } catch {
+    // fall through
+  }
+  if (formula === "node") {
+    const binPath = pathModule.join(prefix, "bin", "node");
+    try {
+      await fs.access(binPath);
+      return binPath;
+    } catch {
+      // fall through
+    }
+  }
+  return nodePath;
+}
+
 /** Drop execArgv flags that would make forked workers debug/eval stateful or unsafe. */
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
@@ -175,7 +206,10 @@ class LocalEmbeddingWorkerClient {
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
 
-  constructor(private readonly scriptPath: string) {}
+  constructor(
+    private readonly scriptPath: string,
+    private readonly execPath: string,
+  ) {}
 
   /** Start or reuse the child worker and initialize its provider. */
   async initialize(options: EmbeddingProviderOptions): Promise<void> {
@@ -234,6 +268,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath: this.execPath,
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -359,8 +394,10 @@ export async function createLocalEmbeddingWorkerProvider(
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
+  const workerExecPath = await resolveStableWorkerNodePath(process.execPath);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
+    workerExecPath,
   );
   try {
     await client.initialize(workerOptions);
