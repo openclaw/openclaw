@@ -3807,6 +3807,7 @@ describe("update-cli", () => {
             expect.objectContaining({ message: "update invariant broke" }),
             expect.objectContaining({ message: "task restore failed" }),
           ],
+          cause: expect.objectContaining({ message: "update invariant broke" }),
         }),
       );
       expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(1);
