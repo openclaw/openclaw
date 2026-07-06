@@ -1004,9 +1004,11 @@ function armWindowsTaskAutoStartRecovery(
   };
   const onSigint = () => onSignal(130);
   const onSigterm = () => onSignal(143);
+  const onSigbreak = () => onSignal(130);
   const removeSignalHandlers = () => {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
+    process.off("SIGBREAK", onSigbreak);
     unregisterSignalExitBarrier();
   };
   const complete = () => {
@@ -1026,6 +1028,7 @@ function armWindowsTaskAutoStartRecovery(
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  process.on("SIGBREAK", onSigbreak);
   unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
   // Arm recovery before starting the persistent state change. A signal arriving
   // while schtasks is still returning waits for that result before restoring.

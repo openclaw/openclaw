@@ -3726,8 +3726,10 @@ describe("update-cli", () => {
     expect(requiredNpmInstallCallOrder).toBeLessThan(resumeOrder);
     expect(processOnSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
     expect(processOnSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
+    expect(processOnSpy).toHaveBeenCalledWith("SIGBREAK", expect.any(Function));
     expect(processOffSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
     expect(processOffSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
+    expect(processOffSpy).toHaveBeenCalledWith("SIGBREAK", expect.any(Function));
     processOnSpy.mockRestore();
     processOffSpy.mockRestore();
   });
@@ -3771,52 +3773,55 @@ describe("update-cli", () => {
     );
   });
 
-  it("restores Windows Scheduled Task autostart when interrupted during suspension", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const processOnSpy = vi.spyOn(process, "on");
-    const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    let finishSuspension: ((suspended: boolean) => void) | undefined;
-    suspendScheduledTaskAutoStartForUpdate.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          finishSuspension = resolve;
-        }),
-    );
-    resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-    mockPackageInstallStatus(createCaseDir("openclaw-update-suspension-signal"));
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-    });
-    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+  it.each(["SIGINT", "SIGBREAK"] as const)(
+    "restores Windows Scheduled Task autostart on %s during suspension",
+    async (signal) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const processOnSpy = vi.spyOn(process, "on");
+      const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      let finishSuspension: ((suspended: boolean) => void) | undefined;
+      suspendScheduledTaskAutoStartForUpdate.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finishSuspension = resolve;
+          }),
+      );
+      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+      mockPackageInstallStatus(createCaseDir("openclaw-update-suspension-signal"));
+      serviceReadCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+      });
+      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
 
-    const updatePromise = updateCommand({ yes: true, restart: false });
-    await vi.waitFor(() => expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce());
-    const sigintListener = processOnSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
-    if (typeof sigintListener !== "function" || !finishSuspension) {
-      throw new Error("expected armed SIGINT recovery and pending task suspension");
-    }
-    sigintListener();
-    sigintListener();
-    expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
-    finishSuspension(true);
+      const updatePromise = updateCommand({ yes: true, restart: false });
+      await vi.waitFor(() => expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce());
+      const signalListener = processOnSpy.mock.calls.find(([event]) => event === signal)?.[1];
+      if (typeof signalListener !== "function" || !finishSuspension) {
+        throw new Error(`expected armed ${signal} recovery and pending task suspension`);
+      }
+      signalListener();
+      signalListener();
+      expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+      finishSuspension(true);
 
-    await updatePromise;
-    expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(1);
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(packageInstallCommandCall()).toBeUndefined();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    await vi.waitFor(() => {
-      expect(processExitSpy).toHaveBeenCalledTimes(2);
-      expect(processExitSpy).toHaveBeenCalledWith(130);
-    });
-    platformSpy.mockRestore();
-    processOnSpy.mockRestore();
-    processExitSpy.mockRestore();
-  });
+      await updatePromise;
+      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledTimes(1);
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      await vi.waitFor(() => {
+        expect(processExitSpy).toHaveBeenCalledTimes(2);
+        expect(processExitSpy).toHaveBeenCalledWith(130);
+      });
+      platformSpy.mockRestore();
+      processOnSpy.mockRestore();
+      processExitSpy.mockRestore();
+    },
+  );
 
   it.each(["running", "stopped"] as const)(
     "guards a %s Windows Scheduled Task during a no-restart package update",
