@@ -1,15 +1,64 @@
 import AVFoundation
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 /// Gateway-rendered audio for one transcript message.
 public struct OpenClawChatSpeechClip: Equatable, Sendable {
     public let data: Data
+    public let outputFormat: String?
     public let mimeType: String?
+    public let fileExtension: String?
 
-    public init(data: Data, mimeType: String?) {
+    public init(
+        data: Data,
+        outputFormat: String? = nil,
+        mimeType: String? = nil,
+        fileExtension: String? = nil)
+    {
         self.data = data
+        self.outputFormat = outputFormat
         self.mimeType = mimeType
+        self.fileExtension = fileExtension
+    }
+
+    /// Raw formats need sample-rate/channel metadata that `tts.speak` does not
+    /// currently expose. Reject them explicitly so Listen uses its local voice
+    /// instead of asking AVAudioPlayer to guess at headerless bytes.
+    var isHeaderlessAudio: Bool {
+        let extensionName = self.normalizedFileExtension
+        if ["pcm", "raw", "mulaw", "ulaw", "alaw"].contains(extensionName) {
+            return true
+        }
+        let mimeType = self.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["audio/pcm", "audio/l16", "audio/pcmu", "audio/pcma", "audio/x-raw"].contains(mimeType) {
+            return true
+        }
+        let outputFormat = self.outputFormat?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let outputFormat else { return false }
+        return outputFormat.hasPrefix("raw-") ||
+            outputFormat.hasPrefix("raw_") ||
+            ["pcm", "mulaw", "ulaw", "alaw"].contains(outputFormat) ||
+            ["pcm_", "mulaw_", "ulaw_", "alaw_"].contains { outputFormat.hasPrefix($0) }
+    }
+
+    var fileTypeHint: String? {
+        if let mimeType,
+           let type = UTType(
+               mimeType: mimeType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        {
+            return type.identifier
+        }
+        guard !self.normalizedFileExtension.isEmpty else { return nil }
+        return UTType(filenameExtension: self.normalizedFileExtension)?.identifier
+    }
+
+    private var normalizedFileExtension: String {
+        self.fileExtension?
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            .lowercased() ?? ""
     }
 }
 
@@ -21,7 +70,7 @@ public typealias OpenClawChatSpeechSynthesis =
 @MainActor
 protocol ChatSpeechClipPlaying: AnyObject {
     /// Resolves when playback ends; false when stopped early or undecodable.
-    func play(data: Data) async -> Bool
+    func play(clip: OpenClawChatSpeechClip) async -> Bool
     func stop()
 }
 
@@ -130,7 +179,7 @@ public final class OpenClawChatSpeechController {
         self.activateAudioSession()
         self.phase = .speaking(messageID)
         if let clip, !clip.data.isEmpty {
-            let finished = await self.clipPlayer.play(data: clip.data)
+            let finished = await self.clipPlayer.play(clip: clip)
             // stop() bumps the generation, so reaching this guard with a
             // false result means the clip failed to decode/start, not that
             // the user cancelled — fall through to the on-device voice.
@@ -173,19 +222,20 @@ public final class OpenClawChatSpeechController {
     }
 }
 
-/// Whole-clip playback for gateway-rendered audio. AVAudioPlayer performs
-/// container detection (MP3/WAV/FLAC/Opus-in-Ogg per platform support).
+/// Whole-clip playback for gateway-rendered container audio. File metadata
+/// helps AVAudioPlayer parse clips whose type is not obvious from the bytes.
 @MainActor
 final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying, @preconcurrency AVAudioPlayerDelegate {
     private var player: AVAudioPlayer?
     private var continuation: CheckedContinuation<Bool, Never>?
 
-    func play(data: Data) async -> Bool {
+    func play(clip: OpenClawChatSpeechClip) async -> Bool {
         self.stop()
+        guard !clip.isHeaderlessAudio else { return false }
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
             do {
-                let player = try AVAudioPlayer(data: data)
+                let player = try AVAudioPlayer(data: clip.data, fileTypeHint: clip.fileTypeHint)
                 self.player = player
                 player.delegate = self
                 player.prepareToPlay()
@@ -231,6 +281,7 @@ final class ChatSpeechLocalSpeaker: NSObject, ChatSpeechLocalSpeaking,
 {
     private let synthesizer = AVSpeechSynthesizer()
     private var continuation: CheckedContinuation<Bool, Never>?
+    private var utterance: AVSpeechUtterance?
 
     override init() {
         super.init()
@@ -240,20 +291,26 @@ final class ChatSpeechLocalSpeaker: NSObject, ChatSpeechLocalSpeaking,
     func speak(text: String) async -> Bool {
         self.stop()
         return await withCheckedContinuation { continuation in
+            let utterance = AVSpeechUtterance(string: text)
             self.continuation = continuation
-            self.synthesizer.speak(AVSpeechUtterance(string: text))
+            self.utterance = utterance
+            self.synthesizer.speak(utterance)
         }
     }
 
     func stop() {
+        let continuation = self.continuation
+        self.continuation = nil
+        self.utterance = nil
         self.synthesizer.stopSpeaking(at: .immediate)
-        self.resume(false)
+        continuation?.resume(returning: false)
     }
 
     func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,
         didFinish utterance: AVSpeechUtterance)
     {
+        guard utterance === self.utterance else { return }
         self.resume(true)
     }
 
@@ -261,12 +318,14 @@ final class ChatSpeechLocalSpeaker: NSObject, ChatSpeechLocalSpeaking,
         _ synthesizer: AVSpeechSynthesizer,
         didCancel utterance: AVSpeechUtterance)
     {
+        guard utterance === self.utterance else { return }
         self.resume(false)
     }
 
     private func resume(_ finished: Bool) {
         let continuation = self.continuation
         self.continuation = nil
+        self.utterance = nil
         continuation?.resume(returning: finished)
     }
 }

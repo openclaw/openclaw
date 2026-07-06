@@ -19,7 +19,7 @@ private func toolCallContent(name: String) -> OpenClawChatMessageContent {
 
 @Suite("ChatMessageVisibleText")
 struct ChatMessageVisibleTextTests {
-    @Test func assistantVisibleTextSkipsNonTextBlocks() {
+    @Test func `assistant visible text skips non text blocks`() {
         let message = OpenClawChatMessage(
             role: "assistant",
             content: [
@@ -33,7 +33,7 @@ struct ChatMessageVisibleTextTests {
             == "Here is the answer.\nAnd a follow-up.")
     }
 
-    @Test func userTextPassesThroughWithoutAssistantParsing() {
+    @Test func `user text passes through without assistant parsing`() {
         let message = OpenClawChatMessage(
             role: "user",
             content: [textContent("What is <final>up</final>?")],
@@ -42,7 +42,7 @@ struct ChatMessageVisibleTextTests {
         #expect(ChatMessageVisibleText.visibleText(in: message) == "What is <final>up</final>?")
     }
 
-    @Test func hasTextContentIgnoresToolAndBlankBlocks() {
+    @Test func `has visible text ignores tool blank and thinking only messages`() {
         let toolOnly = OpenClawChatMessage(
             role: "assistant",
             content: [toolCallContent(name: "exec")],
@@ -55,9 +55,14 @@ struct ChatMessageVisibleTextTests {
             role: "assistant",
             content: [textContent("Say this")],
             timestamp: 1)
+        let thinkingOnly = OpenClawChatMessage(
+            role: "assistant",
+            content: [textContent("<think>Do not speak this</think>")],
+            timestamp: 1)
 
-        #expect(!ChatMessageVisibleText.hasTextContent(in: toolOnly))
-        #expect(!ChatMessageVisibleText.hasTextContent(in: blank))
-        #expect(ChatMessageVisibleText.hasTextContent(in: spoken))
+        #expect(!ChatMessageVisibleText.hasVisibleText(in: toolOnly))
+        #expect(!ChatMessageVisibleText.hasVisibleText(in: blank))
+        #expect(!ChatMessageVisibleText.hasVisibleText(in: thinkingOnly))
+        #expect(ChatMessageVisibleText.hasVisibleText(in: spoken))
     }
 }

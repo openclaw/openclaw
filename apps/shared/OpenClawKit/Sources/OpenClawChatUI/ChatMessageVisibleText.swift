@@ -14,15 +14,10 @@ enum ChatMessageVisibleText {
             .joined(separator: "\n\n")
     }
 
-    /// Cheap per-row gate for text-derived actions; avoids running the segment
-    /// parser on every bubble render.
-    static func hasTextContent(in message: OpenClawChatMessage) -> Bool {
-        message.content.contains { content in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return false }
-            let text = content.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return !text.isEmpty
-        }
+    static func hasVisibleText(in message: OpenClawChatMessage) -> Bool {
+        !self.visibleText(in: message)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
     }
 
     private static func primaryText(in message: OpenClawChatMessage) -> String {

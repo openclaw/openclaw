@@ -471,8 +471,13 @@ public struct OpenClawChatView: View {
                     }
                 } label: {
                     Label {
-                        Text(speech.isActive(msg.id) ? "Stop Listening" : "Listen")
-                            .font(OpenClawChatTypography.body)
+                        if speech.isActive(msg.id) {
+                            Text("Stop Listening")
+                                .font(OpenClawChatTypography.body)
+                        } else {
+                            Text("Listen")
+                                .font(OpenClawChatTypography.body)
+                        }
                     } icon: {
                         Image(systemName: speech.isActive(msg.id) ? "stop.circle" : "speaker.wave.2")
                     }
@@ -485,7 +490,7 @@ public struct OpenClawChatView: View {
 
     private func isListenable(_ msg: OpenClawChatMessage) -> Bool {
         msg.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
-            && ChatMessageVisibleText.hasTextContent(in: msg)
+            && ChatMessageVisibleText.hasVisibleText(in: msg)
     }
 
     private func speechChipIsPreparing(

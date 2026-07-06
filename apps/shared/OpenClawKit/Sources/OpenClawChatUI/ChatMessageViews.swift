@@ -629,14 +629,20 @@ struct ChatSpeechStatusChip: View {
             HStack(spacing: 4) {
                 Image(systemName: self.isPreparing ? "hourglass" : "speaker.wave.2.fill")
                     .font(.system(size: 10, weight: .semibold))
-                Text(self.isPreparing ? "Preparing audio…" : "Speaking…")
-                    .font(OpenClawChatTypography.caption)
+                if self.isPreparing {
+                    Text("Preparing audio…")
+                        .font(OpenClawChatTypography.caption)
+                } else {
+                    Text("Speaking…")
+                        .font(OpenClawChatTypography.caption)
+                }
             }
             .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            self.isPreparing ? "Preparing audio, tap to cancel" : "Speaking, tap to stop")
+        .accessibilityLabel(self.isPreparing
+            ? Text("Preparing audio, tap to cancel")
+            : Text("Speaking, tap to stop"))
     }
 }
 
