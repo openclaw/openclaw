@@ -22,14 +22,15 @@ afterEach(() => {
 type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
 
 function createChild(): MockChild {
+  let killed = false;
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
-    killed: false,
   }) as unknown as MockChild;
+  Object.defineProperty(child, "killed", { get: () => killed });
   child.kill = vi.fn(() => {
-    child.killed = true;
+    killed = true;
     return true;
   });
   return child;
