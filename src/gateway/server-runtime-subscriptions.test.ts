@@ -233,4 +233,50 @@ describe("startGatewayEventSubscriptions", () => {
     });
     expect(broadcast).not.toHaveBeenCalled();
   });
+
+  it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {
+    const staleBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    const staleSubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      broadcast: staleBroadcast,
+    });
+    await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    const staleObservers = getTaskRegistryObservers();
+
+    const replacementBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      broadcast: replacementBroadcast,
+    });
+    await vi.waitFor(() => {
+      const current = getTaskRegistryObservers();
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(staleObservers);
+    });
+
+    // The stale dispose must not clear the replacement's observer slot.
+    await staleSubs.taskUnsub();
+    staleSubs.agentUnsub();
+    staleSubs.heartbeatUnsub();
+    staleSubs.transcriptUnsub();
+    staleSubs.lifecycleUnsub();
+    expect(getTaskRegistryObservers()).not.toBeNull();
+
+    createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "After stale dispose",
+      status: "queued",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    expect(replacementBroadcast).toHaveBeenCalledWith("task", expect.anything(), {
+      dropIfSlow: true,
+    });
+    expect(staleBroadcast).not.toHaveBeenCalledWith("task", expect.anything(), {
+      dropIfSlow: true,
+    });
+  });
 });

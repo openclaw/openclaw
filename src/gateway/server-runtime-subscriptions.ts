@@ -319,43 +319,43 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   let taskObserverDisposed = false;
-  const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then(
-    ({ configureTaskRegistryRuntime }) => {
-      if (!taskObserverDisposed) {
-        configureTaskRegistryRuntime({
-          observers: {
-            onEvent: (event: TaskRegistryObserverEvent) => {
-              let payload: TaskEventPayload;
-              switch (event.kind) {
-                case "upserted":
-                  payload = { action: "upserted", task: mapTaskSummary(event.task) };
-                  break;
-                case "deleted":
-                  payload = { action: "deleted", taskId: event.taskId };
-                  break;
-                case "restored":
-                  payload = { action: "restored" };
-                  break;
-              }
-              params.broadcast("task", payload, { dropIfSlow: true });
-            },
-          },
-        });
+  const taskObservers = {
+    onEvent: (event: TaskRegistryObserverEvent) => {
+      let payload: TaskEventPayload;
+      switch (event.kind) {
+        case "upserted":
+          payload = { action: "upserted", task: mapTaskSummary(event.task) };
+          break;
+        case "deleted":
+          payload = { action: "deleted", taskId: event.taskId };
+          break;
+        case "restored":
+          payload = { action: "restored" };
+          break;
       }
-      return configureTaskRegistryRuntime;
+      params.broadcast("task", payload, { dropIfSlow: true });
     },
-  );
+  };
+  const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then((module) => {
+    if (!taskObserverDisposed) {
+      module.configureTaskRegistryRuntime({ observers: taskObservers });
+    }
+    return module;
+  });
   void taskObserverRuntimePromise.catch((error: unknown) => {
     params.log.warn("Task registry observer registration failed", { error });
   });
-  // Return the cleanup promise so shutdown awaits it: the observer slot is a
-  // process-wide singleton, and a replacement gateway registering before this
-  // deferred clear runs would have its observer wiped by the stale cleanup.
+  // The observer slot is a process-wide singleton. Cleanup returns its promise
+  // so shutdown can await it, and only clears the slot when it still holds
+  // this subscription's observer — a replacement gateway may have registered
+  // its own observer before a stale deferred dispose runs.
   const taskUnsub = () => {
     taskObserverDisposed = true;
     return taskObserverRuntimePromise
-      .then((configureTaskRegistryRuntime) => {
-        configureTaskRegistryRuntime({ observers: null });
+      .then((module) => {
+        if (module.getTaskRegistryObservers() === taskObservers) {
+          module.configureTaskRegistryRuntime({ observers: null });
+        }
       })
       .catch(() => undefined);
   };
