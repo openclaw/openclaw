@@ -992,12 +992,17 @@ class GatewayBootstrapAuthTest {
   @OptIn(ExperimentalCoroutinesApi::class)
   fun pttStartQueuedAfterCancelIsInvalidatedBeforePreparation() =
     runTest {
-      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-      val runtime = NodeRuntime(app)
+      val securePrefs =
+        app.getSharedPreferences(
+          "openclaw.node.secure.test.${UUID.randomUUID()}",
+          android.content.Context.MODE_PRIVATE,
+        )
+      val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
       val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       try {
         preparationMutex.lock()
         val cancel = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null) }
