@@ -2866,6 +2866,7 @@ export const testing = {
   resolveSlackQaRuntimeEnv,
   sendSlackChannelMessage,
   listSlackMessages,
+  listSlackThreadMessages,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
   waitForSlackNoReply,
