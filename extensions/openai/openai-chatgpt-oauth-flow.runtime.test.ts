@@ -210,6 +210,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       res.end(JSON.stringify(validPayload));
     });
     const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
 
     try {
       ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
@@ -217,7 +218,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
           ...init,
           signal,
         });
-        return { response, release: vi.fn(async () => undefined) };
+        return { response, release };
       });
 
       const result = await testing.exchangeAuthorizationCode(
@@ -235,6 +236,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       expect(
         (result as { type: "success"; access: string; refresh: string; expires: number }).expires,
       ).toBeGreaterThan(0);
+      expect(release).toHaveBeenCalledOnce();
     } finally {
       await closeServer(server);
     }
@@ -247,6 +249,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       res.end(oversizedPayload);
     });
     const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
 
     try {
       ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
@@ -254,7 +257,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
           ...init,
           signal,
         });
-        return { response, release: vi.fn(async () => undefined) };
+        return { response, release };
       });
 
       const result = await testing.exchangeAuthorizationCode(
@@ -266,6 +269,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
 
       expect(result).toMatchObject({ type: "failed" });
       expect((result as { type: "failed"; message: string }).message).toContain("too large");
+      expect(release).toHaveBeenCalledOnce();
     } finally {
       await closeServer(server);
     }
