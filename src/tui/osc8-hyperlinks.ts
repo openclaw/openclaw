@@ -31,6 +31,10 @@ function trimUnbalancedTrailingParens(url: string): string {
   return url;
 }
 
+function hasUrlContent(url: string): boolean {
+  return url !== "http://" && url !== "https://";
+}
+
 /**
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).
@@ -53,7 +57,7 @@ export function extractUrls(markdown: string): string[] {
   const bareRe = /https?:\/\/[^\s\]>]+/g;
   while ((m = bareRe.exec(stripped)) !== null) {
     const url = trimUnbalancedTrailingParens(m[0]);
-    if (url !== "http://" && url !== "https://") {
+    if (hasUrlContent(url)) {
       urls.add(url);
     }
   }
@@ -120,6 +124,9 @@ function findUrlRanges(
 
   while ((match = urlRe.exec(visibleText)) !== null) {
     const fragment = trimUnbalancedTrailingParens(match[0]);
+    if (!hasUrlContent(fragment)) {
+      continue;
+    }
     const start = match.index;
 
     // Resolve fragment to a known URL (exact > prefix > superstring)

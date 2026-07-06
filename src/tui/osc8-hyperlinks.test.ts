@@ -157,6 +157,13 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toBe(`Wikipedia (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`);
   });
 
+  it("does not resolve an incomplete URL to another known URL", () => {
+    const url = "https://example.com";
+    const result = addOsc8Hyperlinks(["broken (https://)", url], [url]);
+    expect(result[0]).toBe("broken (https://)");
+    expect(result[1]).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+  });
+
   it("handles URL split across three lines", () => {
     const fullUrl = "https://example.com/a/very/long/path/that/keeps/going/and/going";
     const lines = ["https://example.com/a/very/lon", "g/path/that/keeps/going/and/g", "oing"];
