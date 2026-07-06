@@ -81,6 +81,7 @@ export function execDockerRaw(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let aborted = false;
+    let outputStreamError: Error | undefined;
 
     const signal = opts?.signal;
     const handleAbort = () => {
@@ -98,13 +99,20 @@ export function execDockerRaw(
       }
     }
 
-    // Output pipes may fail independently; child close/error remains authoritative.
-    const ignoreOutputStreamError = () => {};
-    child.stdout?.on("error", ignoreOutputStreamError);
+    const handleOutputStreamError = (error: Error) => {
+      if (outputStreamError) {
+        return;
+      }
+      // A stream error means captured output is incomplete, so the command
+      // cannot report success even if Docker later exits with code 0.
+      outputStreamError = error;
+      child.kill("SIGTERM");
+    };
+    child.stdout?.on("error", handleOutputStreamError);
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
-    child.stderr?.on("error", ignoreOutputStreamError);
+    child.stderr?.on("error", handleOutputStreamError);
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
@@ -139,6 +147,10 @@ export function execDockerRaw(
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
         reject(createAbortError("Aborted"));
+        return;
+      }
+      if (outputStreamError) {
+        reject(outputStreamError);
         return;
       }
       const exitCode = code ?? 0;

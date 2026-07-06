@@ -57,6 +57,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI autonomous tool failures:** preserve an earlier Tool error outcome across later autonomous recovery turns. (#100514, #98888) Thanks @qingminglong.
 - **Agent empty replies:** surface a visible failure when a completed interactive turn has no deliverable reply, including queued follow-ups, while preserving explicit silence, pending continuations, and committed side effects, honoring queued send policies, and treating compaction notices as progress. (#100456) Thanks @mushuiyu886.
 - **Child process output safety:** prevent stdout/stderr pipe failures from crashing agent exec sessions, local TUI shell commands, and bounded process execution. (#100407, #100406, #100410) Thanks @cxbAsDev.
+- **Docker sandbox command output:** fail and terminate Docker sandbox operations when stdout/stderr capture breaks instead of returning success with incomplete output. (#100523) Thanks @cxbAsDev.
 - **Background refresh isolation:** keep remote skill-bin refreshes running when one node fails, and contain periodic subagent-sweeper failures without hiding errors from direct callers. (#100393, #100390) Thanks @cxbAsDev.
 - **Skill scan diagnostics:** report directory enumeration failures through the existing resource diagnostics instead of silently dropping affected skills. (#100380) Thanks @wendy-chsy.
 - **Exec output sanitization:** remove complete ANSI sequences and render residual C0/C1 controls as visible escapes instead of silently discarding output bytes. (#100327) Thanks @LavyaTandel.

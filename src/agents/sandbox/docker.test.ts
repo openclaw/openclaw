@@ -21,7 +21,8 @@ const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   imageExists: true,
   inspectError: "",
-  emitStreamError: false,
+  streamError: undefined as "stdout" | "stderr" | undefined,
+  killSignals: [] as (NodeJS.Signals | undefined)[],
 }));
 
 function createMockDockerChild(): MockDockerChild {
@@ -29,7 +30,9 @@ function createMockDockerChild(): MockDockerChild {
   child.stdout = new Readable({ read() {} });
   child.stderr = new Readable({ read() {} });
   child.stdin = { end: () => undefined };
-  child.kill = () => undefined;
+  child.kill = (signal) => {
+    spawnState.killSignals.push(signal);
+  };
   return child;
 }
 
@@ -55,9 +58,11 @@ function spawnDockerProcess(command: string, args: string[]) {
   }
 
   queueMicrotask(() => {
-    if (spawnState.emitStreamError) {
-      child.stdout.emit("error", new Error("stdout read failed"));
-      child.stderr.emit("error", new Error("stderr read failed"));
+    if (spawnState.streamError) {
+      child[spawnState.streamError].emit(
+        "error",
+        new Error(`${spawnState.streamError} read failed`),
+      );
     }
     if (stderr) {
       child.stderr.emit("data", Buffer.from(stderr));
@@ -91,7 +96,8 @@ describe("ensureDockerImage", () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
     spawnState.inspectError = "";
-    spawnState.emitStreamError = false;
+    spawnState.streamError = undefined;
+    spawnState.killSignals.length = 0;
     await loadFreshDockerModuleForTest();
   });
 
@@ -152,17 +158,20 @@ describe("execDockerRaw", () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
     spawnState.inspectError = "";
-    spawnState.emitStreamError = false;
+    spawnState.streamError = undefined;
+    spawnState.killSignals.length = 0;
     await loadFreshDockerModuleForTest();
   });
 
-  it("swallows stdout and stderr stream errors without rejecting", async () => {
-    spawnState.emitStreamError = true;
+  it.each(["stdout", "stderr"] as const)(
+    "rejects and terminates Docker when %s fails",
+    async (stream) => {
+      spawnState.streamError = stream;
 
-    await expect(execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE])).resolves.toEqual(
-      expect.objectContaining({
-        code: 0,
-      }),
-    );
-  });
+      await expect(
+        execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE], { allowFailure: true }),
+      ).rejects.toThrow(`${stream} read failed`);
+      expect(spawnState.killSignals).toEqual(["SIGTERM"]);
+    },
+  );
 });
