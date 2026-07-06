@@ -213,7 +213,9 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (!hasTerminalLifecycle) {
     return undefined;
   }
-  if (params.entry.status === "failed") {
+  if (params.entry.status === "done" || params.entry.status === "failed") {
+    // Successful rows can receive managed transcript writes after registry bookkeeping.
+    // Only interrupted terminal rows need the mtime recovery guard.
     // Failed rows with a present transcript stay reusable for retry/recovery.
     // Callers already rotate failed rows when the transcript is missing.
     return undefined;

@@ -1286,7 +1286,7 @@ describe("gateway agent handler", () => {
   });
 
   it.each([
-    { name: "status terminal row", status: "done" as const },
+    { name: "timeout terminal row", status: "timeout" as const },
     { name: "endedAt-only terminal row" },
   ])(
     "rotates a terminal main session from a $name when its transcript is newer",
