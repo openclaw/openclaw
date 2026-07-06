@@ -66,7 +66,7 @@ export function parsePageRange(range: string, maxPages: number): number[] {
       }
     } else {
       const num = Number(part);
-      if (!Number.isFinite(num) || num < 1) {
+      if (!Number.isFinite(num) || !Number.isInteger(num) || num < 1) {
         throw new Error(`Invalid page number: "${part}"`);
       }
       if (num <= maxPages) {
