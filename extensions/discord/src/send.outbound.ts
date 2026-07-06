@@ -14,6 +14,10 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
+import {
+  createReusableDiscordReplyReference,
+  type DiscordReplyReference,
+} from "./reply-reference.js";
 import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
@@ -45,8 +49,7 @@ type DiscordSendOpts = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
-  replyTo?: string;
-  replyToFirstChunkOnly?: boolean;
+  reply?: DiscordReplyReference;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -124,8 +127,7 @@ function toDiscordSendResult(
   params: {
     kind?: Parameters<typeof createDiscordSendResult>[0]["kind"];
     threadId?: string | number;
-    replyToId?: string;
-    replyToFirstMessageOnly?: boolean;
+    reply?: DiscordReplyReference;
   } = {},
 ): DiscordSendResult {
   const resultParams: Parameters<typeof createDiscordSendResult>[0] = {
@@ -136,11 +138,8 @@ function toDiscordSendResult(
   if (params.threadId != null) {
     resultParams.threadId = params.threadId;
   }
-  if (params.replyToId) {
-    resultParams.replyToId = params.replyToId;
-  }
-  if (params.replyToFirstMessageOnly) {
-    resultParams.replyToFirstMessageOnly = true;
+  if (params.reply) {
+    resultParams.reply = params.reply;
   }
   return createDiscordSendResult(resultParams);
 }
@@ -343,7 +342,7 @@ export async function sendMessageDiscord(
     await opts.onDeliveryResult?.(
       toDiscordSendResult(progressResult, channelId, {
         kind,
-        replyToId,
+        reply: createReusableDiscordReplyReference(replyToId),
       }),
     );
   };
@@ -359,7 +358,7 @@ export async function sendMessageDiscord(
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         maxBytes: mediaMaxBytes,
-        replyTo: opts.replyTo,
+        reply: opts.reply,
         request,
         maxLinesPerMessage,
         components: opts.components,
@@ -368,7 +367,6 @@ export async function sendMessageDiscord(
         silent: opts.silent,
         suppressEmbeds,
         maxChars: textLimit,
-        replyToFirstChunkOnly: opts.replyToFirstChunkOnly,
         onResult: reportResult,
       });
     } else {
@@ -376,7 +374,7 @@ export async function sendMessageDiscord(
         rest,
         channelId,
         text: textWithMentions,
-        replyTo: opts.replyTo,
+        reply: opts.reply,
         request,
         maxLinesPerMessage,
         components: opts.components,
@@ -385,7 +383,6 @@ export async function sendMessageDiscord(
         silent: opts.silent,
         suppressEmbeds,
         maxChars: textLimit,
-        replyToFirstChunkOnly: opts.replyToFirstChunkOnly,
         onResult: reportResult,
       });
     }
@@ -406,8 +403,7 @@ export async function sendMessageDiscord(
   });
   return toDiscordSendResult(result, channelId, {
     kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
-    replyToId: opts.replyTo,
-    replyToFirstMessageOnly: opts.replyToFirstChunkOnly,
+    reply: opts.reply,
   });
 }
 

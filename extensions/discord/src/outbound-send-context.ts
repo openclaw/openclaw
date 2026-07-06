@@ -1,14 +1,15 @@
 // Discord plugin module implements outbound send context behavior.
-import { createReplyToFanout, type ReplyToResolution } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  createReplyToFanout,
   resolveOutboundSendDep,
   type OutboundSendDeps,
+  type ReplyToResolution,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
+import { resolveDiscordReplyReference } from "./reply-reference.js";
 
 type DiscordSendRuntime = typeof import("./send.js");
 
@@ -49,17 +50,6 @@ export function resolveDiscordFormattingOptions(ctx: {
   };
 }
 
-export function shouldReplyToFirstDiscordChunkOnly(params: {
-  replyToIdSource?: ReplyToResolution["source"];
-  replyToMode?: ReplyToMode;
-}): boolean {
-  return (
-    params.replyToIdSource !== "explicit" &&
-    params.replyToMode !== undefined &&
-    isSingleUseReplyToMode(params.replyToMode)
-  );
-}
-
 export async function createDiscordPayloadSendContext(ctx: {
   cfg: OpenClawConfig;
   to: string;
@@ -73,25 +63,22 @@ export async function createDiscordPayloadSendContext(ctx: {
 }): Promise<{
   target: string;
   formatting: DiscordFormattingOptions;
-  replyToFirstChunkOnly: boolean;
-  resolveReplyTo: () => string | undefined;
+  resolveReply: () => ReturnType<typeof resolveDiscordReplyReference>;
   send: DiscordSendFn;
   sendVoice: DiscordVoiceSendFn;
   withRetry: <T>(fn: () => Promise<T>) => Promise<T>;
 }> {
   const runtime = await loadDiscordSendRuntime();
+  const nextReplyToId = createReplyToFanout(ctx);
   return {
     target: resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId }),
     formatting: resolveDiscordFormattingOptions(ctx),
-    replyToFirstChunkOnly: shouldReplyToFirstDiscordChunkOnly({
-      replyToIdSource: ctx.replyToIdSource,
-      replyToMode: ctx.replyToMode,
-    }),
-    resolveReplyTo: createReplyToFanout({
-      replyToId: ctx.replyToId,
-      replyToIdSource: ctx.replyToIdSource,
-      replyToMode: ctx.replyToMode,
-    }),
+    resolveReply: () =>
+      resolveDiscordReplyReference({
+        replyToId: nextReplyToId(),
+        replyToIdSource: ctx.replyToIdSource,
+        replyToMode: ctx.replyToMode,
+      }),
     send: resolveOutboundSendDep<DiscordSendFn>(ctx.deps, "discord") ?? runtime.sendMessageDiscord,
     sendVoice:
       resolveOutboundSendDep<DiscordVoiceSendFn>(ctx.deps, "discordVoice") ??

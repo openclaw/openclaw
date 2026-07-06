@@ -173,7 +173,7 @@ describe("sendMessageDiscord", () => {
   async function sendChunkedReplyAndCollectBodies(params: {
     text: string;
     mediaUrl?: string;
-    replyToFirstChunkOnly?: boolean;
+    replyScope?: "all" | "first";
   }) {
     const { rest, postMock } = makeDiscordRest();
     postMock
@@ -183,8 +183,7 @@ describe("sendMessageDiscord", () => {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
-      replyTo: "orig-123",
-      ...(params.replyToFirstChunkOnly ? { replyToFirstChunkOnly: true } : {}),
+      reply: { messageId: "orig-123", scope: params.replyScope ?? "all" },
       ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     });
     expect(postMock).toHaveBeenCalledTimes(2);
@@ -623,7 +622,7 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
       mediaUrl: "file:///tmp/report.pdf",
-      replyTo: "orig-123",
+      reply: { messageId: "orig-123", scope: "all" },
       components: [new Container([new TextDisplay("Attachment controls")])],
       embeds: [{ title: "Attachment preview" }],
     });
@@ -659,8 +658,7 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
       mediaUrl: "file:///tmp/report.pdf",
-      replyTo: "orig-123",
-      replyToFirstChunkOnly: true,
+      reply: { messageId: "orig-123", scope: "first" },
       onDeliveryResult,
     });
 
@@ -807,7 +805,7 @@ describe("sendMessageDiscord", () => {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
-      replyTo: "orig-123",
+      reply: { messageId: "orig-123", scope: "all" },
     });
     const body = requireRestBody(postMock);
     expect(body?.message_reference).toEqual({
@@ -827,7 +825,7 @@ describe("sendMessageDiscord", () => {
   it("limits reply reference to the first text chunk when requested", async () => {
     const { firstBody, secondBody, result } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2001),
-      replyToFirstChunkOnly: true,
+      replyScope: "first",
     });
     expectReplyReference(firstBody, "orig-123");
     expectNoReplyReference(secondBody);
@@ -849,7 +847,7 @@ describe("sendMessageDiscord", () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2500),
       mediaUrl: "file:///tmp/photo.jpg",
-      replyToFirstChunkOnly: true,
+      replyScope: "first",
     });
     expectReplyReference(firstBody, "orig-123");
     expectNoReplyReference(secondBody);

@@ -5,6 +5,7 @@ import {
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordSendResult } from "./send.types.js";
 
 export type DiscordReceiptResultSource = {
@@ -18,8 +19,7 @@ export function createDiscordSendReceipt(params: {
   channelId?: string;
   kind: MessageReceiptPartKind;
   threadId?: string;
-  replyToId?: string;
-  replyToFirstMessageOnly?: boolean;
+  reply?: DiscordReplyReference;
 }): MessageReceipt {
   const platformMessageIds = params.platformMessageIds
     .map((messageId) => messageId.trim())
@@ -33,7 +33,7 @@ export function createDiscordSendReceipt(params: {
       if (params.channelId) {
         result.channelId = params.channelId;
       }
-      if (params.replyToFirstMessageOnly && index === 0 && params.replyToId) {
+      if (params.reply?.scope === "first" && index === 0) {
         // A top-level replyToId would be copied onto every receipt part. Nest the
         // first receipt so persisted metadata matches Discord's one message_reference.
         const rawResult: MessageReceiptSourceResult = {
@@ -47,7 +47,7 @@ export function createDiscordSendReceipt(params: {
           results: [rawResult],
           kind: params.kind,
           threadId: params.threadId,
-          replyToId: params.replyToId,
+          replyToId: params.reply.messageId,
         });
       }
       return result;
@@ -56,7 +56,7 @@ export function createDiscordSendReceipt(params: {
     results,
     kind: params.kind,
     threadId: params.threadId,
-    replyToId: params.replyToFirstMessageOnly ? undefined : params.replyToId,
+    replyToId: params.reply?.scope === "all" ? params.reply.messageId : undefined,
   });
 }
 
@@ -65,8 +65,7 @@ export function createDiscordSendResult(params: {
   fallbackChannelId: string;
   kind: MessageReceiptPartKind;
   threadId?: string | number;
-  replyToId?: string;
-  replyToFirstMessageOnly?: boolean;
+  reply?: DiscordReplyReference;
 }): DiscordSendResult {
   const messageId = params.result.id || "unknown";
   const channelId = params.result.channel_id ?? params.fallbackChannelId;
@@ -80,11 +79,8 @@ export function createDiscordSendResult(params: {
   if (params.threadId != null) {
     receiptParams.threadId = String(params.threadId);
   }
-  if (params.replyToId) {
-    receiptParams.replyToId = params.replyToId;
-  }
-  if (params.replyToFirstMessageOnly) {
-    receiptParams.replyToFirstMessageOnly = true;
+  if (params.reply) {
+    receiptParams.reply = params.reply;
   }
   return {
     messageId,

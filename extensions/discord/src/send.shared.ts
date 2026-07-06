@@ -26,6 +26,7 @@ import {
   RequestClient,
 } from "./internal/discord.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
@@ -322,7 +323,7 @@ type DiscordTextSendParams = {
   channelId: string;
   text: string;
   request: DiscordRequest;
-  replyTo?: string;
+  reply?: DiscordReplyReference;
   maxLinesPerMessage?: number;
   components?: DiscordSendComponents;
   embeds?: DiscordSendEmbeds;
@@ -330,7 +331,6 @@ type DiscordTextSendParams = {
   silent?: boolean;
   suppressEmbeds?: boolean;
   maxChars?: number;
-  replyToFirstChunkOnly?: boolean;
   onResult?: DiscordSendProgress;
 };
 
@@ -340,7 +340,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     channelId,
     text,
     request,
-    replyTo,
+    reply,
     maxLinesPerMessage,
     components,
     embeds,
@@ -348,7 +348,6 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     silent,
     suppressEmbeds,
     maxChars,
-    replyToFirstChunkOnly,
     onResult,
   } = params;
   if (!text.trim()) {
@@ -356,7 +355,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
   }
   const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
-    const chunkReplyTo = replyToFirstChunkOnly && !isFirst ? undefined : replyTo;
+    const chunkReplyTo = resolveDiscordReplyMessageId(reply, isFirst);
     const chunkComponents = resolveDiscordSendComponents({
       components,
       text: chunk,
@@ -421,7 +420,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     mediaLocalRoots,
     mediaReadFile,
     maxBytes,
-    replyTo,
+    reply,
     request,
     maxLinesPerMessage,
     components,
@@ -430,7 +429,6 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     silent,
     suppressEmbeds,
     maxChars,
-    replyToFirstChunkOnly,
     onResult,
   } = params;
   const media = await loadWebMedia(
@@ -463,7 +461,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     components: captionComponents,
     embeds: captionEmbeds,
     flags,
-    replyTo,
+    replyTo: resolveDiscordReplyMessageId(reply, true),
     files: [
       {
         data: fileData,
@@ -487,19 +485,19 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       rest,
       channelId,
       text: buildDiscordUploadTooLargeFallbackText(text),
-      replyTo,
+      reply,
       request,
       maxLinesPerMessage,
       chunkMode,
       silent,
       suppressEmbeds,
       maxChars,
-      replyToFirstChunkOnly,
       onResult,
     });
   }
-  await onResult?.(res, "media", replyTo);
+  await onResult?.(res, "media", reply?.messageId);
   const platformMessageIds = res.id ? [res.id] : [];
+  const followupReply = reply?.scope === "all" ? reply : undefined;
   for (const chunk of chunks.slice(1)) {
     if (!chunk.trim()) {
       continue;
@@ -508,14 +506,13 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       rest,
       channelId,
       text: chunk,
-      replyTo: replyToFirstChunkOnly ? undefined : replyTo,
+      reply: followupReply,
       request,
       maxLinesPerMessage,
       chunkMode,
       silent,
       suppressEmbeds,
       maxChars,
-      replyToFirstChunkOnly,
       onResult,
     });
     for (const id of followup.platformMessageIds) {

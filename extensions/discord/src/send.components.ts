@@ -24,6 +24,7 @@ import {
   type RequestClient,
 } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
+import type { DiscordReplyReference } from "./reply-reference.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
@@ -154,8 +155,7 @@ type DiscordComponentSendOpts = {
   token?: string;
   rest?: RequestClient;
   silent?: boolean;
-  replyTo?: string;
-  replyToFirstChunkOnly?: boolean;
+  reply?: DiscordReplyReference;
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
@@ -202,8 +202,8 @@ async function buildDiscordComponentPayload(params: {
   body: ReturnType<typeof stripUndefinedFields>;
   buildResult: ReturnType<typeof buildDiscordComponentMessage>;
 }> {
-  const messageReference = params.opts.replyTo
-    ? { message_id: params.opts.replyTo, fail_if_not_exists: false }
+  const messageReference = params.opts.reply
+    ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
     : undefined;
 
   let spec = params.spec;
@@ -282,8 +282,7 @@ export async function sendDiscordComponentMessage(
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,
-      replyTo: opts.replyTo,
-      replyToFirstChunkOnly: opts.replyToFirstChunkOnly,
+      reply: opts.reply,
       silent: opts.silent,
       textLimit: opts.textLimit,
       maxLinesPerMessage: opts.maxLinesPerMessage,
@@ -335,7 +334,7 @@ export async function sendDiscordComponentMessage(
     result,
     fallbackChannelId: channelId,
     kind: "card",
-    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+    ...(opts.reply ? { reply: opts.reply } : {}),
   });
   await opts.onDeliveryResult?.(deliveryResult);
 
@@ -409,6 +408,6 @@ export async function editDiscordComponentMessage(
     },
     fallbackChannelId: channelId,
     kind: "card",
-    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+    ...(opts.reply ? { reply: opts.reply } : {}),
   });
 }
