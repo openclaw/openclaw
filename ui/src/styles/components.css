@@ -2219,8 +2219,8 @@
   font-size: 14px;
   line-height: 1.55;
   max-height: min(55vh, 480px);
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .chat-side-result__body > :first-child {
@@ -2258,8 +2258,8 @@
 
   .chat-side-result__body {
     max-height: none;
-    overflow: visible;
-    overscroll-behavior: auto;
+    overflow-y: visible;
+    overscroll-behavior-y: auto;
   }
 }
 

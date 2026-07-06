@@ -1682,14 +1682,21 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const body = await page.locator(".chat-side-result__body").evaluate((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
-            overflow: style.overflow,
+            overflowY: style.overflowY,
             clientHeight: (node as HTMLElement).clientHeight,
             scrollHeight: (node as HTMLElement).scrollHeight,
           };
         });
-        expect(body.overflow).toBe("auto");
+        expect(body.overflowY).toBe("auto");
         expect(body.clientHeight).toBeLessThan(body.scrollHeight);
         expect(body.clientHeight).toBeLessThanOrEqual(480);
+
+        const scrollTop = await page.locator(".chat-side-result__body").evaluate((node) => {
+          const element = node as HTMLElement;
+          element.scrollTop = element.scrollHeight;
+          return element.scrollTop;
+        });
+        expect(scrollTop).toBeGreaterThan(0);
       } finally {
         await closeBrowserPage(page);
       }
@@ -1707,18 +1714,25 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const style = getComputedStyle(element);
         return {
           clientHeight: element.clientHeight,
-          overflow: style.overflow,
+          overflowY: style.overflowY,
           position: style.position,
           scrollHeight: element.scrollHeight,
         };
       });
-      const bodyOverflow = await page
+      const bodyOverflowY = await page
         .locator(".chat-side-result__body")
-        .evaluate((node) => getComputedStyle(node).overflow);
+        .evaluate((node) => getComputedStyle(node).overflowY);
       expect(card.position).toBe("fixed");
-      expect(card.overflow).toBe("auto");
+      expect(card.overflowY).toBe("auto");
       expect(card.clientHeight).toBeLessThan(card.scrollHeight);
-      expect(bodyOverflow).toBe("visible");
+      expect(bodyOverflowY).toBe("visible");
+
+      const scrollTop = await page.locator(".chat-side-result").evaluate((node) => {
+        const element = node as HTMLElement;
+        element.scrollTop = element.scrollHeight;
+        return element.scrollTop;
+      });
+      expect(scrollTop).toBeGreaterThan(0);
     } finally {
       await closeBrowserPage(page);
     }
