@@ -585,6 +585,10 @@ export function createCodexAppServerBindingStore(
             },
           };
         },
+        // Plain clears may expire immediately: a stale generation that re-sets
+        // the key afterwards is fenced by ownsStoredSessionGeneration on read
+        // and displaced via reclaim-generation; durable stable-key fences come
+        // from retireSessionGeneration, not runtime clears.
         mutation.kind === "clear" && !retainLegacyClear && !leaseContext.getStore()?.has(key)
           ? 1
           : undefined,

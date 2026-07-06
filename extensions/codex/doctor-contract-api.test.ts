@@ -226,6 +226,37 @@ describe("codex doctor contract", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("does not scan above stateDir when a session store sits at its parent", async () => {
+    const outerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-outer-"));
+    const stateDir = path.join(outerDir, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    const strayDir = path.join(outerDir, "unrelated");
+    await fs.mkdir(strayDir, { recursive: true });
+    await fs.writeFile(
+      path.join(strayDir, "foreign.jsonl.codex-app-server.json"),
+      JSON.stringify({ schemaVersion: 2, threadId: "thread-foreign" }),
+      "utf8",
+    );
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const params = {
+      // The store dir is exactly the parent of stateDir; doctor must treat it
+      // as an external store (indexed reads only), not a scannable state root.
+      config: { session: { store: path.join(outerDir, "sessions.json") } },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+    const migration = stateMigrations[0];
+    if (!migration) {
+      throw new Error("missing Codex binding migration");
+    }
+
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+
+    await fs.rm(outerDir, { recursive: true, force: true });
+  });
+
   it("renames old approval-routed destructive plugin policy values", () => {
     const original = {
       plugins: {

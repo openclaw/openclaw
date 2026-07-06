@@ -492,7 +492,12 @@ async function isRegularFile(filePath: string): Promise<boolean> {
 
 function isPathWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  // Bare ".." (candidate is root's parent) must stay outside; treating it as
+  // inside would let doctor recursively scan the whole tree above stateDir.
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 async function canonicalizePath(filePath: string): Promise<string> {
