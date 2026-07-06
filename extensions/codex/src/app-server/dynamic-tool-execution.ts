@@ -490,6 +490,9 @@ function readConfiguredDynamicToolTimeoutMs(
 }
 
 function readTimeoutSecondsAsMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return undefined;
+  }
   const seconds = readPositiveFiniteTimeoutMs(value);
   return seconds === undefined ? undefined : seconds * 1000;
 }

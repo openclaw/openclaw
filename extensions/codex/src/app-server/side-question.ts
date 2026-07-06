@@ -926,6 +926,9 @@ function readSideImageGenerationModelTimeoutMs(
 }
 
 function readSideTimeoutSecondsAsMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return undefined;
+  }
   const seconds = readSidePositiveFiniteTimeoutMs(value);
   return seconds === undefined ? undefined : seconds * 1000;
 }

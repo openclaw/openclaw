@@ -104,6 +104,22 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
   });
 
+  it("ignores fractional timeoutSeconds values and falls through to default", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-frac",
+          namespace: null,
+          tool: "session_status",
+          arguments: { timeoutSeconds: 120.5 },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({

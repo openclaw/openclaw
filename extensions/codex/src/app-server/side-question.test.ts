@@ -1916,6 +1916,21 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(30_000);
   });
 
+  it("ignores fractional timeoutSeconds on side-thread calls and falls through to default", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-frac",
+        tool: "session_status",
+        arguments: { timeoutSeconds: 120.5 },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(90_000);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {
