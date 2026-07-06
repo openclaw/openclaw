@@ -79,9 +79,11 @@ export async function probeLocalCommand(
     child.stdout.on("data", (chunk) => {
       stdout = appendBounded(stdout, String(chunk), outputLimit);
     });
+    child.stdout.on("error", () => {});
     child.stderr.on("data", (chunk) => {
       stderr = appendBounded(stderr, String(chunk), outputLimit);
     });
+    child.stderr.on("error", () => {});
     child.on("error", (err: NodeJS.ErrnoException) => {
       finish({
         command,
