@@ -154,12 +154,12 @@ describe("edit tool", () => {
     expect(message).not.toContain(targetTail);
   });
 
-  it("bounds many-line mismatch candidate diagnostics before collecting lines", async () => {
+  it("bounds CRLF mismatch candidate diagnostics before collecting lines", async () => {
     const scannedCandidate = "inside-scan-candidate";
     const unscannedCandidate = "outside-scan-candidate";
     const filler = Array.from({ length: 999 }, (_, index) => `filler ${index + 1}`);
     const filePath = await createTempFile(
-      `${filler.join("\n")}\nalpha ${scannedCandidate}\nalpha ${unscannedCandidate}\n`,
+      `${filler.join("\r\n")}\r\nalpha ${scannedCandidate}\r\nalpha ${unscannedCandidate}\r\n`,
     );
     const tool = createEditTool(tmpDir);
 

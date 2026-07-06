@@ -214,17 +214,39 @@ function splitBoundedDiagnosticLines(text: string): string[] {
 }
 
 function collectBoundedDiagnosticLines(text: string): string[] {
-  const normalized = normalizeToLF(text);
   const lines: string[] = [];
-  let start = 0;
-  while (lines.length < EDIT_MISMATCH_SCAN_LINE_LIMIT) {
-    const end = normalized.indexOf("\n", start);
-    const rawLine = end === -1 ? normalized.slice(start) : normalized.slice(start, end);
-    lines.push(truncateDiagnosticLine(rawLine));
-    if (end === -1) {
-      break;
+  let line = "";
+  let lineTruncated = false;
+
+  const pushLine = () => {
+    lines.push(lineTruncated ? `${line}... (line truncated)` : line);
+    line = "";
+    lineTruncated = false;
+  };
+
+  for (
+    let index = 0;
+    index < text.length && lines.length < EDIT_MISMATCH_SCAN_LINE_LIMIT;
+    index++
+  ) {
+    const char = text[index];
+    if (char === "\r" || char === "\n") {
+      pushLine();
+      if (char === "\r" && text[index + 1] === "\n") {
+        index++;
+      }
+      continue;
     }
-    start = end + 1;
+
+    if (line.length < EDIT_MISMATCH_LINE_TEXT_LIMIT) {
+      line += char;
+    } else {
+      lineTruncated = true;
+    }
+  }
+
+  if (lines.length < EDIT_MISMATCH_SCAN_LINE_LIMIT) {
+    pushLine();
   }
   if (lines.length > 1 && lines[lines.length - 1] === "") {
     lines.pop();
