@@ -803,6 +803,12 @@ export async function uploadDirectoryToSshTarget(params: {
     let tarCode = 0;
     let sshCode = 0;
 
+    const fail = (error: unknown) => {
+      tar.kill("SIGKILL");
+      ssh.kill("SIGKILL");
+      reject(toErrorObject(error, "Non-Error rejection"));
+    };
+
     tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
     tar.stderr.on("error", fail);
     tar.stdout.on("error", fail);
@@ -811,12 +817,6 @@ export async function uploadDirectoryToSshTarget(params: {
     ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
     ssh.stderr.on("error", fail);
     ssh.stdin?.on("error", fail);
-
-    const fail = (error: unknown) => {
-      tar.kill("SIGKILL");
-      ssh.kill("SIGKILL");
-      reject(toErrorObject(error, "Non-Error rejection"));
-    };
 
     tar.on("error", fail);
     ssh.on("error", fail);
