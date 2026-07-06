@@ -181,7 +181,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Code
 
-- TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
+- TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters. For catch blocks, catch `unknown` (or omit annotation) and narrow system errors via `(err as NodeJS.ErrnoException | undefined)?.code` checks.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
