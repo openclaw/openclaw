@@ -26,7 +26,7 @@ internal class NetworkMonitor(
   // Tracks the last emitted transport state so capability churn (e.g. signal strength
   // changes) does not re-fire the reconnect path. Only a lost->validated transition
   // should signal.
-  private val validatedNetworks = ValidatedNetworkState<Network>(initialValidatedNetworks())
+  private val validatedNetworks = ValidatedNetworkState<Network>()
 
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
@@ -45,7 +45,10 @@ internal class NetworkMonitor(
     }
 
   init {
+    // Register first so a network lost during initial seeding still has an owning callback.
+    // The seed suppresses the initial snapshot when it wins; session guards handle the other race.
     start()
+    seedActiveValidatedNetwork()
   }
 
   private fun start() {
@@ -66,14 +69,16 @@ internal class NetworkMonitor(
     }
   }
 
-  private fun initialValidatedNetworks(): Set<Network> {
-    return try {
-      val cm = connectivity ?: return emptySet()
-      val active = cm.activeNetwork ?: return emptySet()
-      val caps = cm.getNetworkCapabilities(active) ?: return emptySet()
-      if (isTransportValidated(caps)) setOf(active) else emptySet()
+  private fun seedActiveValidatedNetwork() {
+    try {
+      val cm = connectivity ?: return
+      val active = cm.activeNetwork ?: return
+      val caps = cm.getNetworkCapabilities(active) ?: return
+      if (isTransportValidated(caps)) {
+        validatedNetworks.update(active, isValidated = true)
+      }
     } catch (_: Throwable) {
-      emptySet()
+      // Callback delivery remains the source of truth when the initial snapshot races.
     }
   }
 }
