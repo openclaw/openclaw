@@ -4,6 +4,7 @@ import {
   GatewayClientIdSchema,
   GatewayClientModeSchema,
   HandshakeBootstrapTokenString,
+  HandshakeRuntimeTokenString,
   HandshakeSharedSecretString,
   NonEmptyString,
 } from "./primitives.js";
@@ -75,8 +76,8 @@ export const ConnectParamsSchema = Type.Object(
           bootstrapToken: Type.Optional(HandshakeBootstrapTokenString),
           deviceToken: Type.Optional(HandshakeBootstrapTokenString),
           password: Type.Optional(HandshakeSharedSecretString),
-          approvalRuntimeToken: Type.Optional(HandshakeSharedSecretString),
-          agentRuntimeIdentityToken: Type.Optional(HandshakeSharedSecretString),
+          approvalRuntimeToken: Type.Optional(HandshakeRuntimeTokenString),
+          agentRuntimeIdentityToken: Type.Optional(HandshakeRuntimeTokenString),
         },
         { additionalProperties: false },
       ),
