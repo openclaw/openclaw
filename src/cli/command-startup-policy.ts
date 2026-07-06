@@ -32,9 +32,9 @@ export function resolveCliStartupPolicy(params: {
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const mcpServeMode = params.commandPath[0] === "mcp" && params.commandPath[1] === "serve";
-  const suppressDoctorStdout = params.jsonOutputMode || mcpServeMode;
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  // Protocol commands own stdout from process startup, before their action installs later routing.
+  const suppressDoctorStdout = params.jsonOutputMode || commandPolicy.ownsProtocolStdout;
   const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,

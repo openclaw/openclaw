@@ -236,19 +236,17 @@ describe("command-startup-policy", () => {
     });
   });
 
-  it("treats mcp serve as stdout-clean protocol startup", () => {
-    expect(
-      resolveCliStartupPolicy({
-        commandPath: ["mcp", "serve"],
-        jsonOutputMode: false,
-        env: {},
-      }),
-    ).toEqual({
-      suppressDoctorStdout: true,
-      hideBanner: false,
-      skipConfigGuard: false,
-      loadPlugins: false,
-      pluginRegistry: { scope: "all" },
-    });
+  it("suppresses startup stdout for the mcp serve protocol", () => {
+    expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("suppresses startup stdout for the bare acp protocol", () => {
+    expect(resolvePolicy({ commandPath: ["acp"] }).suppressDoctorStdout).toBe(true);
+  });
+
+  it("keeps startup stdout for non-protocol commands", () => {
+    expect(resolvePolicy({ commandPath: ["mcp", "list"] }).suppressDoctorStdout).toBe(false);
+    expect(resolvePolicy({ commandPath: ["acp", "client"] }).suppressDoctorStdout).toBe(false);
+    expect(resolvePolicy({ commandPath: ["status"] }).suppressDoctorStdout).toBe(false);
   });
 });

@@ -43,7 +43,7 @@ export async function applyCliExecutionStartupPresentation(params: {
   showBanner?: boolean;
   version?: string;
 }) {
-  // JSON-mode commands must keep stdout machine-readable; route diagnostics away first.
+  // Machine-readable commands must route diagnostics away before startup can print.
   if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
     routeLogsToStderr();
   }
