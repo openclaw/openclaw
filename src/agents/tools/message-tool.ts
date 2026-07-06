@@ -67,6 +67,10 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
+import {
+  hasPendingEmbeddedRunSteering,
+  resolveActiveEmbeddedRunSessionId,
+} from "../embedded-agent-runner/runs.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import {
   channelTargetSchema,
@@ -871,6 +875,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeDeliveryPin: true,
   includeBestEffort: false,
 });
+const MESSAGE_TOOL_ACTIONS_ALLOWED_DURING_PENDING_STEER = new Set<string>(["read"]);
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -1171,6 +1176,24 @@ function buildMessageToolDescription(options?: {
   );
 }
 
+function resolvePendingSteerSideEffectBlock(options: MessageToolOptions | undefined) {
+  const sessionId =
+    normalizeOptionalString(options?.sessionId) ??
+    (options?.agentSessionKey
+      ? resolveActiveEmbeddedRunSessionId(options.agentSessionKey)
+      : undefined);
+  if (!sessionId || !hasPendingEmbeddedRunSteering(sessionId)) {
+    return undefined;
+  }
+  return jsonResult({
+    status: "blocked",
+    reason: "pending_steer_before_side_effect",
+    error:
+      "Pending /steer message detected for the active run. Resolve the steering instruction before sending messages or transferring context.",
+    tool: "message",
+  });
+}
+
 function appendMessageToolVisibleReplyHint(
   description: string,
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
@@ -1331,6 +1354,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      if (!MESSAGE_TOOL_ACTIONS_ALLOWED_DURING_PENDING_STEER.has(action)) {
+        const pendingSteerBlock = resolvePendingSteerSideEffectBlock(options);
+        if (pendingSteerBlock) {
+          return pendingSteerBlock;
+        }
+      }
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&

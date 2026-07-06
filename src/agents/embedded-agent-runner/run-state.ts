@@ -21,6 +21,7 @@ export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
+  getSteeringMessages?: () => readonly string[];
   isStreaming: () => boolean;
   isStopped?: () => boolean;
   isAbortable?: () => boolean;

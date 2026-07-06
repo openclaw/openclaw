@@ -3750,6 +3750,7 @@ export async function runEmbeddedAttempt(
           }
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
         },
+        getSteeringMessages: () => activeSession.getSteeringMessages?.() ?? [],
         isStreaming: () => activeSession.isStreaming,
         isStopped: () => !acceptingSteerMessages || aborted || runAbortController.signal.aborted,
         isCompacting: () => subscription.isCompacting(),

@@ -26,6 +26,7 @@ import {
   clearEmbeddedAgentRunAbortabilityForRunId,
   clearEmbeddedRunAbandonment,
   getActiveEmbeddedRunSnapshot,
+  hasPendingEmbeddedRunSteering,
   isEmbeddedAgentRunAbortableForRunId,
   isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
@@ -59,6 +60,7 @@ function createRunHandle(
       text: string,
       options?: Parameters<RunHandle["queueMessage"]>[1],
     ) => Promise<void>;
+    getSteeringMessages?: () => readonly string[];
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
@@ -68,6 +70,9 @@ function createRunHandle(
   return {
     runId: overrides.runId,
     queueMessage: overrides.queueMessage ?? (async () => {}),
+    ...(overrides.getSteeringMessages
+      ? { getSteeringMessages: overrides.getSteeringMessages }
+      : {}),
     isStreaming: () => overrides.isStreaming ?? true,
     ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
     ...(overrides.isAbortable !== undefined
@@ -766,6 +771,22 @@ describe("embedded-agent runner run registry", () => {
 
     expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("reports pending steering messages on active embedded handles", () => {
+    const handle = createRunHandle({
+      getSteeringMessages: () => ["should we still send?"],
+    });
+
+    expect(hasPendingEmbeddedRunSteering("session-a")).toBe(false);
+
+    setActiveEmbeddedRun("session-a", handle, "agent:main:main");
+
+    expect(hasPendingEmbeddedRunSteering("session-a")).toBe(true);
+
+    clearActiveEmbeddedRun("session-a", handle, "agent:main:main");
+
+    expect(hasPendingEmbeddedRunSteering("session-a")).toBe(false);
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {

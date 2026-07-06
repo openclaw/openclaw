@@ -135,6 +135,7 @@ function installMessagingTestRegistry() {
 
 function createOpenClawTools(options?: {
   agentSessionKey?: string;
+  sessionId?: string;
   agentChannel?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -157,6 +158,7 @@ function createOpenClawTools(options?: {
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
+      sessionId: options?.sessionId,
       agentChannel: options?.agentChannel as never,
       sandboxed: options?.sandboxed,
       config,
@@ -361,6 +363,46 @@ describe("sessions tools", () => {
       .find((call) => call.method === "agent");
     expect(agentCall).toBeDefined();
     expect(agentParams(agentCall ?? {}).message).toContain(value);
+  });
+
+  it("sessions_send blocks transfer while the current active run has pending steering", async () => {
+    const requesterKey = "agent:main:main";
+    setActiveEmbeddedRun(
+      "current-active-session",
+      {
+        queueMessage: vi.fn(async () => {}),
+        getSteeringMessages: () => ["is this even needed?"],
+        isStreaming: () => true,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        abort: () => {},
+      },
+      requesterKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => opts);
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      sessionId: "current-active-session",
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-pending-steer", {
+      sessionKey: "agent:founder:qip",
+      message: "transfer this context",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      reason: "pending_steer_before_side_effect",
+      tool: "sessions_send",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("sessions_send sanitizes formatted reasoning from aliases", async () => {
