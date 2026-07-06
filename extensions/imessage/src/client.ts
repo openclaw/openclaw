@@ -123,11 +123,15 @@ export class IMessageRpcClient {
       this.closedResolve?.();
     });
 
-    // Without this listener, async EPIPE from a dead child crashes the
-    // gateway via uncaughtException. (#75438)
-    child.stdin.on("error", (err) => {
+    // Without these listeners, an async stream error (e.g. EPIPE from a dead
+    // child) crashes the gateway via uncaughtException. #75438 covered stdin;
+    // stdout/stderr carry the same hazard on the same child.
+    const failFromStreamError = (err: unknown) => {
       this.failAll(err instanceof Error ? err : new Error(String(err)));
-    });
+    };
+    child.stdin.on("error", failFromStreamError);
+    child.stdout.on("error", failFromStreamError);
+    child.stderr.on("error", failFromStreamError);
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
