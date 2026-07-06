@@ -982,7 +982,6 @@ function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
 function armWindowsTaskAutoStartRecovery(
   serviceEnv: NodeJS.ProcessEnv,
 ): WindowsTaskAutoStartRecovery {
-  let suspensionPromise: Promise<boolean>;
   let restorePromise: Promise<void> | undefined;
   let unregisterSignalExitBarrier = () => {};
   let finishUpdate: (() => void) | undefined;
@@ -996,7 +995,7 @@ function armWindowsTaskAutoStartRecovery(
   const onSignal = (exitCode: number) => {
     interrupted = true;
     void waitForSignalExitBarriers()
-      .catch((err) => {
+      .catch((err: unknown) => {
         defaultRuntime.error(`Failed to complete update shutdown cleanup: ${String(err)}`);
       })
       .finally(() => {
@@ -1030,7 +1029,7 @@ function armWindowsTaskAutoStartRecovery(
   unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
   // Arm recovery before starting the persistent state change. A signal arriving
   // while schtasks is still returning waits for that result before restoring.
-  suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
+  const suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
   return { suspended: suspensionPromise, restore, complete, interrupted: () => interrupted };
 }
 
@@ -1253,6 +1252,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         throw new AggregateError(
           [err, resumeErr],
           `Failed to stop the managed gateway (${String(err)}) and restore Windows Scheduled Task autostart (${String(resumeErr)})`,
+          { cause: err },
         );
       } finally {
         windowsTaskAutoStartRecovery.complete();
@@ -4211,6 +4211,7 @@ async function updateCommandInternal(
       throw new AggregateError(
         [err, resumeErr],
         `Update failed (${String(err)}) and Windows Scheduled Task autostart could not be restored (${String(resumeErr)})`,
+        { cause: err },
       );
     }
     await maybeRestartServiceAfterFailedMutableUpdate({
