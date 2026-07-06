@@ -817,8 +817,8 @@ async function readClawHubResponseBytes(params: {
   }
   return await readResponseWithLimit(params.response, maxBytes, {
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ size, maxBytes }) =>
-      createClawHubBodyLimitError(params.resourceLabel, size, maxBytes),
+    onOverflow: ({ size, maxBytes: limitBytes }) =>
+      createClawHubBodyLimitError(params.resourceLabel, size, limitBytes),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`ClawHub ${params.resourceLabel} body stalled after ${chunkTimeoutMs}ms`),
   });
