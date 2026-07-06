@@ -243,7 +243,12 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: false, error: "node-llama-cpp not installed" },
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        skipped: false,
+        error: "node-llama-cpp not installed",
+      },
     });
 
     expect(note).toHaveBeenCalledTimes(1);
@@ -260,7 +265,7 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
+      gatewayMemoryProbe: { checked: true, ready: true, skipped: false },
     });
 
     expect(note).not.toHaveBeenCalled();
@@ -318,6 +323,7 @@ describe("noteMemorySearchHealth", () => {
       gatewayMemoryProbe: {
         checked: false,
         ready: false,
+        skipped: false,
         error: "gateway memory probe timed out: gateway timeout after 8000ms",
       },
     });
@@ -444,7 +450,7 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
+      gatewayMemoryProbe: { checked: true, ready: true, skipped: false },
     });
 
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
@@ -479,7 +485,12 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: false, error: "memory search unavailable" },
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        skipped: false,
+        error: "memory search unavailable",
+      },
     });
 
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
@@ -778,7 +789,7 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
+      gatewayMemoryProbe: { checked: true, ready: true, skipped: false },
     });
 
     expect(note).not.toHaveBeenCalled();
@@ -792,7 +803,7 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
+      gatewayMemoryProbe: { checked: true, ready: true, skipped: false },
     });
 
     expect(note).not.toHaveBeenCalled();
@@ -808,7 +819,7 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
+      gatewayMemoryProbe: { checked: true, ready: true, skipped: false },
     });
 
     expect(note).not.toHaveBeenCalled();
@@ -823,7 +834,12 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: false, error: "connection refused" },
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        skipped: false,
+        error: "connection refused",
+      },
     });
 
     const message = firstNoteMessage();
@@ -839,7 +855,12 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: false, error: "LM API token missing" },
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        skipped: false,
+        error: "LM API token missing",
+      },
     });
 
     const message = firstNoteMessage();
@@ -1205,7 +1226,7 @@ describe("noteMemorySearchHealth", () => {
     });
 
     await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
+      gatewayMemoryProbe: { checked: true, ready: true, skipped: false },
     });
 
     const message = firstNoteMessage();
@@ -1224,6 +1245,7 @@ describe("noteMemorySearchHealth", () => {
       gatewayMemoryProbe: {
         checked: true,
         ready: true,
+        skipped: false,
         fts: { enabled: true, available: false, error: "no such module: fts5" },
       },
       noteFn,
@@ -1248,6 +1270,7 @@ describe("noteMemorySearchHealth", () => {
       gatewayMemoryProbe: {
         checked: true,
         ready: true,
+        skipped: false,
         fts: { enabled: true, available: true },
       },
       noteFn,
@@ -1265,6 +1288,7 @@ describe("noteMemorySearchHealth", () => {
       gatewayMemoryProbe: {
         checked: true,
         ready: true,
+        skipped: false,
         fts: { enabled: true, available: false, error: "no such module: fts5" },
       },
       noteFn,
@@ -1287,6 +1311,7 @@ describe("noteMemorySearchHealth", () => {
       gatewayMemoryProbe: {
         checked: true,
         ready: false,
+        skipped: false,
         error: "gateway memory probe unavailable: timeout",
       },
     });
