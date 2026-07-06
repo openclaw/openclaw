@@ -32,6 +32,14 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderOverview } from "./view.ts";
 
+function readGatewaySnapshotConfigPath(snapshot: unknown): string | null {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return null;
+  }
+  const configPath = (snapshot as { configPath?: unknown }).configPath;
+  return typeof configPath === "string" ? configPath : null;
+}
+
 function localDateString(): string {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
@@ -470,10 +478,7 @@ class OverviewPage extends OpenClawLightDomElement {
         password: this.password,
         lastError: gateway.lastError,
         lastChannelsRefresh: channels.channelsLastSuccess,
-        configPath:
-          typeof gateway.hello?.snapshot?.configPath === "string"
-            ? gateway.hello.snapshot.configPath
-            : null,
+        configPath: readGatewaySnapshotConfigPath(gateway.hello?.snapshot),
         modelAuthStatus: this.modelAuthStatus,
         usageResult: this.usageResult,
         sessionsResult: sessions.result,
