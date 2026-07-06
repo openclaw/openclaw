@@ -288,7 +288,9 @@ const WSL_EMPTY_REPLY_PORTPROXY_HINT =
   " listens only on [::1], use v4tov6 with connectaddress=::1 for the WSL2-reachable listener.";
 
 function isLikelyEmptyHttpReply(message: string): boolean {
-  return /empty reply|other side closed|socket closed|terminated before response/i.test(message);
+  return /empty reply|other side closed|socket closed|connection reset|econnreset|terminated before response/i.test(
+    message,
+  );
 }
 
 async function diagnoseCdpWebSocketEndpoint(params: {
