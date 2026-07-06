@@ -796,6 +796,18 @@ describe("qa scenario catalog", () => {
     }
   });
 
+  it("routes canonical thread relation flows through Crabline Matrix", () => {
+    for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+
+      expect(scenario.execution.channel, scenarioId).toBe("matrix");
+      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+    }
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as

@@ -23,6 +23,7 @@ scenario:
     - extensions/qa-matrix/src/adapter.runtime.ts
   execution:
     kind: flow
+    channel: matrix
     summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
     config:
       rootMarker: QA-THREAD-ROOT-OK
