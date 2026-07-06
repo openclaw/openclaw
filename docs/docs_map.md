@@ -2914,6 +2914,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What it is
   - H2: Where it shows up
+  - H2: Anthropic and OpenAI cost history
   - H2: Default usage footer mode
   - H3: Three distinct session states
   - H3: Precedence
@@ -7200,6 +7201,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/anthropic
 - Headings:
+  - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
@@ -7656,6 +7658,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/openai
 - Headings:
+  - H2: Usage and cost tracking
   - H2: Quick choice
   - H2: Naming map
   - H2: GPT-5.6 limited preview
