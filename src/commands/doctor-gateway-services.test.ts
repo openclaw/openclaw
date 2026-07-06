@@ -1195,6 +1195,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
           lastTouchedVersionOverride: "2026.5.14",
         });
 
+        expect(mocks.readRuntime.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.replaceConfigFile.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+        );
         const replaceOptions = requireRecord(
           callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
           "replaceConfigFile options",

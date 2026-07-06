@@ -695,6 +695,28 @@ export async function maybeRepairGatewayServiceConfig(
   // Windows update repairs rewrite the Scheduled Task immediately, so migrate an
   // embedded legacy token first; otherwise the restarted gateway loses auth.
   const updateRepairWillRewriteWindowsTask = updateRepairMode && process.platform === "win32";
+  const serviceRuntimeEnv = {
+    ...serviceInstallEnv,
+    ...command.environment,
+  };
+  const installedWindowsTaskName = command.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim();
+  const serviceRepairEnv =
+    updateRepairWillRewriteWindowsTask && installedWindowsTaskName
+      ? {
+          ...serviceInstallEnv,
+          OPENCLAW_WINDOWS_TASK_NAME: installedWindowsTaskName,
+        }
+      : serviceInstallEnv;
+  const updateRepairCanActivateGateway =
+    updateRepairWillRewriteWindowsTask && updateParentAllowsGatewayActivation(process.env);
+  // Config writes can make the live gateway reload between audit and repair.
+  // Preserve its initial state so a transient reload does not strand a fallback.
+  const updateRepairShouldInstall =
+    updateRepairCanActivateGateway &&
+    (await isWindowsGatewayRunningForUpdateRepair({
+      service,
+      env: serviceRuntimeEnv,
+    }));
   if (
     (!updateRepairMode || updateRepairWillRewriteWindowsTask) &&
     !tokenRefConfigured &&
@@ -757,27 +779,6 @@ export async function maybeRepairGatewayServiceConfig(
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
   });
-  // Installed metadata owns profile/task locators for the pre-repair runtime probe.
-  // Keep it read-only; the rebuilt service still uses the canonical install plan.
-  const serviceRuntimeEnv = {
-    ...serviceInstallEnv,
-    ...command.environment,
-  };
-  const installedWindowsTaskName = command.environment?.OPENCLAW_WINDOWS_TASK_NAME?.trim();
-  const serviceRepairEnv =
-    updateRepairWillRewriteWindowsTask && installedWindowsTaskName
-      ? {
-          ...serviceInstallEnv,
-          OPENCLAW_WINDOWS_TASK_NAME: installedWindowsTaskName,
-        }
-      : serviceInstallEnv;
-  const updateRepairShouldInstall =
-    updateRepairMode &&
-    updateParentAllowsGatewayActivation(process.env) &&
-    (await isWindowsGatewayRunningForUpdateRepair({
-      service,
-      env: serviceRuntimeEnv,
-    }));
   // Windows `install` activates the task/login item. Require both a running
   // gateway and parent authorization so `update --no-restart` stays non-disruptive.
   const repairService =
