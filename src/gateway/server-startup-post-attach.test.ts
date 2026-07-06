@@ -1915,6 +1915,7 @@ describe("startGatewayPostAttachRuntime", () => {
       mediaCleanup: null,
       worktreeCleanup: null,
       agentUnsub: null,
+      taskUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,

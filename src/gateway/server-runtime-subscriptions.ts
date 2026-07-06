@@ -10,6 +10,7 @@ import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
@@ -22,6 +23,7 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -316,10 +318,50 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
 
+  let taskObserverDisposed = false;
+  const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then(
+    ({ configureTaskRegistryRuntime }) => {
+      if (!taskObserverDisposed) {
+        configureTaskRegistryRuntime({
+          observers: {
+            onEvent: (event: TaskRegistryObserverEvent) => {
+              let payload: TaskEventPayload;
+              switch (event.kind) {
+                case "upserted":
+                  payload = { action: "upserted", task: mapTaskSummary(event.task) };
+                  break;
+                case "deleted":
+                  payload = { action: "deleted", taskId: event.taskId };
+                  break;
+                case "restored":
+                  payload = { action: "restored" };
+                  break;
+              }
+              params.broadcast("task", payload, { dropIfSlow: true });
+            },
+          },
+        });
+      }
+      return configureTaskRegistryRuntime;
+    },
+  );
+  void taskObserverRuntimePromise.catch((error: unknown) => {
+    params.log.warn("Task registry observer registration failed", { error });
+  });
+  const taskUnsub = () => {
+    taskObserverDisposed = true;
+    void taskObserverRuntimePromise
+      .then((configureTaskRegistryRuntime) => {
+        configureTaskRegistryRuntime({ observers: null });
+      })
+      .catch(() => undefined);
+  };
+
   return {
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    taskUnsub,
   };
 }

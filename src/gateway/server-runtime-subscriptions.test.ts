@@ -7,12 +7,16 @@ import {
   emitInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
+import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import type { TaskEventPayload } from "./server-methods/task-summary.js";
 
 const warn = vi.fn();
 const mockLog: SubsystemLogger = {
@@ -95,6 +99,7 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.enabled = true;
     auditTestState.created = 0;
     auditTestState.stopped = 0;
+    installInMemoryTaskRegistryRuntime();
   });
 
   afterEach(async () => {
@@ -102,7 +107,9 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
+    unsubs?.taskUnsub();
     resetAgentEventsForTest();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
@@ -160,5 +167,70 @@ describe("startGatewayEventSubscriptions", () => {
       "Lifecycle event dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
+  });
+
+  it("broadcasts bounded public task summaries with ledger statuses", async () => {
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
+    await vi.waitFor(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+    const completed = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Completed task",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      terminalSummary: "x".repeat(10_000),
+    });
+    const lost = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Lost task",
+      status: "lost",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    if (!completed || !lost) {
+      throw new Error("expected task records to be created");
+    }
+    const taskUpsertsById = new Map(
+      broadcast.mock.calls
+        .filter(([event]) => event === "task")
+        .map(([, payload]) => payload as TaskEventPayload)
+        .filter(
+          (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+            payload.action === "upserted",
+        )
+        .map((payload) => [payload.task.id, payload.task]),
+    );
+    expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), { dropIfSlow: true });
+    // Runtime registry statuses translate to the public ledger vocabulary.
+    expect(taskUpsertsById.get(completed.taskId)?.status).toBe("completed");
+    expect(taskUpsertsById.get(lost.taskId)?.status).toBe("failed");
+    // Unbounded status text from providers/shells must be truncated on the wire.
+    const wireTerminalSummary = taskUpsertsById.get(completed.taskId)?.terminalSummary;
+    expect(wireTerminalSummary).toBeTruthy();
+    expect(wireTerminalSummary?.length ?? 0).toBeLessThan(10_000);
+
+    unsubs?.taskUnsub();
+    await vi.waitFor(() => expect(getTaskRegistryObservers()).toBeNull());
+    broadcast.mockClear();
+    createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "After dispose",
+      status: "queued",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    expect(broadcast).not.toHaveBeenCalled();
   });
 });

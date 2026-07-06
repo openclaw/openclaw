@@ -1070,6 +1070,7 @@ export async function startGatewayServer(
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
+      taskUnsub: runtimeState.taskUnsub,
       chatRunState,
       chatAbortControllers,
       chatQueuedTurns,
