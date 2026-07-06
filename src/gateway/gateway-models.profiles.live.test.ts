@@ -1873,6 +1873,34 @@ describe("buildLiveGatewayConfig", () => {
     }
   });
 
+  it("keeps explicit Bedrock fallback models on the Bedrock runtime", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              api: "openai-responses",
+              auth: "api-key",
+              baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+              models: [],
+            },
+          },
+        },
+      },
+      candidates: [
+        createExplicitLiveFallbackModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-6"),
+      ],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+
+    expect(cfg.models?.providers?.["amazon-bedrock"]).toMatchObject({
+      api: "bedrock-converse-stream",
+      auth: "aws-sdk",
+      baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+    });
+  });
+
   it("uses configured Bedrock discovery regions for explicit fallback models", () => {
     const previousAwsRegion = process.env.AWS_REGION;
     setTestEnvValue("AWS_REGION", "eu-west-1");
@@ -3068,6 +3096,7 @@ function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["model
 }
 
 function mergeLiveProviderConfig(params: {
+  provider: string;
   base: ModelProviderConfig | undefined;
   discovered: ModelProviderConfig;
 }): ModelProviderConfig {
@@ -3084,10 +3113,14 @@ function mergeLiveProviderConfig(params: {
       mergedModels.set(model.id, model);
     }
   }
+  const useDiscoveredRuntime = normalizeProviderId(params.provider) === "amazon-bedrock";
   return {
     ...params.discovered,
     ...params.base,
-    api: params.base?.api ?? params.discovered.api,
+    api: useDiscoveredRuntime ? params.discovered.api : (params.base?.api ?? params.discovered.api),
+    auth: useDiscoveredRuntime
+      ? params.discovered.auth
+      : (params.base?.auth ?? params.discovered.auth),
     baseUrl: params.base?.baseUrl ?? params.discovered.baseUrl,
     timeoutSeconds: Math.max(
       params.base?.timeoutSeconds ?? 0,
@@ -3288,7 +3321,7 @@ function buildLiveGatewayConfig(params: {
   const discoveredProviders = Object.fromEntries(
     Object.entries(candidateProviders).map(([provider, discovered]) => [
       provider,
-      mergeLiveProviderConfig({ base: baseProviders[provider], discovered }),
+      mergeLiveProviderConfig({ provider, base: baseProviders[provider], discovered }),
     ]),
   );
   const nextProviders = {
