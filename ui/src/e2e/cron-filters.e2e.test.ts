@@ -256,7 +256,7 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}cron`);
       await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
       const existingCard = page.locator(".cron-job", { hasText: existingJob.name });
-      expect(await existingCard.locator(".cron-job-chips").textContent()).toContain(
+      expect(await existingCard.locator(".cron-job-meta-line").textContent()).toContain(
         `Model: ${configuredModel}`,
       );
       const details = await existingCard
