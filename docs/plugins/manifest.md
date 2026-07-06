@@ -549,6 +549,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
     "webContentExtractors": ["firecrawl"],
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["gemini"],
+    "usageProviders": ["acme-ai"],
     "migrationProviders": ["hermes"],
     "gatewayMethodDispatch": ["authenticated-request"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
@@ -578,6 +579,7 @@ Each list is optional:
 | `webContentExtractors`           | `string[]` | Web-page content-extraction provider ids this plugin owns.                                                                           |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
+| `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                                                         |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
@@ -589,6 +591,8 @@ Installed plugins that need the host-trusted pre-tool policy tier must declare e
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare `contracts.externalAuthProviders`; undeclared external-auth hooks are ignored.
+
+Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot` should declare each auto-discovered provider id in `contracts.usageProviders`. Usage discovery reads this contract before loading runtime code, then verifies both hooks after loading only the declared owners.
 
 General embedding providers should declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. Use the general contract for reusable vector generation, including providers consumed by memory search. `contracts.memoryEmbeddingProviders` is deprecated memory-specific compatibility and remains only while existing providers migrate to the generic embedding provider seam.
 

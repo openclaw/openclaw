@@ -98,18 +98,36 @@ export async function fetchClawRouterUsage(params: {
   const budget = payload.budget;
   const limitMicros = nonNegativeNumber(budget?.limitMicros);
   const spentMicros = nonNegativeNumber(budget?.spentMicros);
+  const costMicros = nonNegativeNumber(payload.usage?.summary?.actualCostMicros);
+  const resetAt = resolveMonthlyResetAt(budget?.windowKey);
   const windows = [];
   if (budget?.configured === true && limitMicros !== undefined && spentMicros !== undefined) {
     windows.push({
       label: "Monthly budget",
       usedPercent: limitMicros === 0 ? 100 : Math.min(100, (spentMicros / limitMicros) * 100),
-      resetAt: resolveMonthlyResetAt(budget?.windowKey),
+      resetAt,
     });
   }
+  const billing: ProviderUsageSnapshot["billing"] =
+    budget?.configured === true && limitMicros !== undefined && spentMicros !== undefined
+      ? [
+          {
+            type: "budget",
+            used: spentMicros / 1_000_000,
+            limit: limitMicros / 1_000_000,
+            unit: "USD",
+            period: "month",
+            resetAt,
+          },
+        ]
+      : costMicros !== undefined
+        ? [{ type: "spend", amount: costMicros / 1_000_000, unit: "USD" }]
+        : undefined;
   return {
     provider: "clawrouter" as ProviderUsageSnapshot["provider"],
     displayName: "ClawRouter",
     windows,
+    ...(billing ? { billing } : {}),
     summary: buildSummary(payload),
     plan: budget?.configured === true ? "Managed monthly budget" : "Unmetered proxy key",
   };
