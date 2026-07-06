@@ -44,13 +44,7 @@ describe("canonical live-transport scenarios", () => {
     expect(whatsapp.filter(({ defaultEnabled }) => defaultEnabled).map(({ id }) => id)).toEqual(
       expect.arrayContaining([...WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS]),
     );
-    expect(whatsappDefaultCanonicalScenarioIds("live-frontier")).toEqual([
-      "channel-canary",
-      "channel-dm-group-routing",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "whatsapp-help-command",
-    ]);
+    expect(whatsappDefaultCanonicalScenarioIds("live-frontier")).toEqual(["whatsapp-help-command"]);
     expect(telegram.find(({ id }) => id === "telegram-status-command")?.regressionRefs).toEqual([
       "openclaw/openclaw#74698",
     ]);
