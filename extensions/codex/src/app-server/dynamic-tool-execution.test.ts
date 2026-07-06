@@ -56,6 +56,54 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
   });
 
+  it("honors timeoutSeconds when timeoutMs is absent", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-seconds",
+          namespace: null,
+          tool: "session_status",
+          arguments: { timeoutSeconds: 30 },
+        },
+        config: undefined,
+      }),
+    ).toBe(30_000);
+  });
+
+  it("prefers timeoutMs over timeoutSeconds", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-both",
+          namespace: null,
+          tool: "session_status",
+          arguments: { timeoutMs: 5_000, timeoutSeconds: 30 },
+        },
+        config: undefined,
+      }),
+    ).toBe(5_000);
+  });
+
+  it("ignores non-positive timeoutSeconds", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-bad-seconds",
+          namespace: null,
+          tool: "session_status",
+          arguments: { timeoutSeconds: -1 },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({
