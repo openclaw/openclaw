@@ -2674,8 +2674,15 @@ async function runEmbeddedAgentInternal(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            const preflightEstimatedPromptTokens =
+              typeof preflightRecovery?.estimatedPromptTokens === "number" &&
+              Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
+              preflightRecovery.estimatedPromptTokens > 0
+                ? Math.ceil(preflightRecovery.estimatedPromptTokens)
+                : undefined;
             const overflowTokenCountForCompaction =
               observedOverflowTokens ??
+              preflightEstimatedPromptTokens ??
               (ctxInfo.tokens > 0
                 ? // Confirmed overflow with an unparseable provider message still carries a
                   // minimally over-budget count for compaction engines and diagnostics.
@@ -2687,6 +2694,7 @@ async function runEmbeddedAgentInternal(
                 `messages=${msgCount} sessionFile=${activeSessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
+                `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
                 `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
