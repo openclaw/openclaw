@@ -130,18 +130,19 @@ class SecurePrefsNotificationForwardingTest {
   }
 
   @Test
-  fun getNotificationForwardingPolicy_blocksSelfPackageInAllowlistMode() {
+  fun getNotificationForwardingPolicy_blocksOwnedPackagesInAllowlistMode() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().commit()
 
     val prefs = SecurePrefs(context)
     prefs.setNotificationForwardingMode(NotificationPackageFilterMode.Allowlist)
-    prefs.setNotificationForwardingPackages(listOf("ai.openclaw.app", "com.other.app"))
+    prefs.setNotificationForwardingPackages(listOf("ai.openclaw.app", "com.whatsapp", "com.other.app"))
 
     val policy = prefs.getNotificationForwardingPolicy(appPackageName = "ai.openclaw.app")
 
     assertFalse(policy.allowsPackage("ai.openclaw.app"))
+    assertFalse(policy.allowsPackage("com.whatsapp"))
     assertTrue(policy.allowsPackage("com.other.app"))
   }
 }
