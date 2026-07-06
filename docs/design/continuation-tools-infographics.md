@@ -1,8 +1,10 @@
 # Continuation tools infographics
 
-These GitHub-rendered Mermaid diagrams give reviewers a quick visual pass over the three continuation tools without rereading the full RFC.
+Three SVG reviewer aids for the continuation feature. Each one keeps the tool story visual and low-text, with a Mermaid fallback underneath for quick diff review.
 
 ## `continue_work()` — same-session successor turn
+
+![continue_work infographic](../assets/continuation-tools/continue-work.svg)
 
 ```mermaid
 flowchart LR
@@ -25,6 +27,8 @@ flowchart LR
 **Read as:** “I am not done yet; wake this same session later.” It is one elected successor turn, not an in-turn loop.
 
 ## `continue_delegate()` — child worker shard and return routing
+
+![continue_delegate infographic](../assets/continuation-tools/continue-delegate.svg)
 
 ```mermaid
 flowchart LR
@@ -58,6 +62,8 @@ flowchart LR
 **Read as:** “Spin out this shard to a fresh child worker; route the result as normal chatter, silent enrichment, silent-wake, or post-compaction recovery.” The task goes to the child; the completion envelope is what is routed.
 
 ## `request_compaction()` — elective compaction seam
+
+![request_compaction infographic](../assets/continuation-tools/request-compaction.svg)
 
 ```mermaid
 flowchart LR
