@@ -186,6 +186,13 @@ export const icons = {
       <rect width="16" height="3" x="4" y="19" rx="1" />
     </svg>
   `,
+  listFilter: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M7 12h10" />
+      <path d="M10 18h4" />
+    </svg>
+  `,
   arrowDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 5v14" />
@@ -530,6 +537,13 @@ export const icons = {
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M15 3v18" stroke-linecap="round" />
       <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  panelBottomOpen: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 15h18" stroke-linecap="round" />
+      <path d="m10 8 2 3 2-3" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   maximize: html`

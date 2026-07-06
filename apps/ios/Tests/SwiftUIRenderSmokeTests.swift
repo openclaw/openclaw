@@ -140,6 +140,30 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
+        let text = """
+        Earlier prose stays visible.
+
+        ```swift
+        let answer = 42
+        ```
+
+        Trailing streamed words fade in.
+        """
+
+        let root = ChatStreamingAssistantBubble(
+            text: text,
+            markdownVariant: .standard,
+            showsAssistantTrace: false,
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false)
+
+        _ = Self.host(root, size: CGSize(width: 393, height: 400))
+    }
+
     @Test @MainActor func `root tabs builds device orientation shell matrix`() {
         for scenario in Self.rootTabsShellScenarios() {
             let appModel = NodeAppModel()

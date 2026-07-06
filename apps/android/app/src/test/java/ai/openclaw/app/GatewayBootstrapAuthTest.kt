@@ -123,7 +123,6 @@ class GatewayBootstrapAuthTest {
     val runtime = app.ensureRuntime()
     writeField(runtime, "connectedEndpoint", GatewayEndpoint.manual("old-gateway.example", 18789))
     val viewModel = MainViewModel(app)
-
     viewModel.pairNewGateway()
     runBlocking {
       withTimeout(5_000) {
@@ -358,7 +357,13 @@ class GatewayBootstrapAuthTest {
   @Test
   fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
     assertEquals(
-      ConnectionManager.nativeClientOperatorScopes,
+      listOf(
+        "operator.admin",
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ),
       operatorConnectScopesForAuth(
         usesStoredDeviceToken = false,
         storedOperatorScopes = null,

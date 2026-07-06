@@ -43,6 +43,26 @@ export type DevicePairingPendingRequest = {
   ts: number;
 };
 
+// Internal pending record. refreshedAtMs is a TTL keepalive stamped on refresh so an
+// actively retrying device keeps one pending request (and requestId) alive instead of
+// minting a new request every TTL window and flooding operator approval UIs. It never
+// crosses the protocol boundary, and ordering/--latest still use ts.
+type DevicePairingPendingRecord = DevicePairingPendingRequest & { refreshedAtMs?: number };
+
+/** Pending request summary returned when a replacement supersedes older requests. */
+export type DevicePairingSupersededRequest = Pick<
+  DevicePairingPendingRequest,
+  "requestId" | "deviceId"
+>;
+
+/** Result for creating or refreshing a pending device pairing request. */
+export type RequestDevicePairingResult = {
+  status: "pending";
+  request: DevicePairingPendingRequest;
+  created: boolean;
+  superseded?: DevicePairingSupersededRequest[];
+};
+
 /** Bearer token issued to one paired device role. */
 export type DeviceAuthToken = {
   token: string;
@@ -155,7 +175,7 @@ export type ApproveDevicePairingResult =
   | null;
 
 type DevicePairingStateFile = {
-  pendingById: Record<string, DevicePairingPendingRequest>;
+  pendingById: Record<string, DevicePairingPendingRecord>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
@@ -192,7 +212,7 @@ async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
     readJsonIfExists<unknown>(pairedPath),
   ]);
   const state: DevicePairingStateFile = {
-    pendingById: coercePairingStateRecord<DevicePairingPendingRequest>(pending),
+    pendingById: coercePairingStateRecord<DevicePairingPendingRecord>(pending),
     pairedByDeviceId: coercePairingStateRecord<PairedDevice>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
@@ -395,10 +415,10 @@ function incomingApprovalCoveredByExisting(
 }
 
 function refreshPendingDevicePairingRequest(
-  existing: DevicePairingPendingRequest,
+  existing: DevicePairingPendingRecord,
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   isRepair: boolean,
-): DevicePairingPendingRequest {
+): DevicePairingPendingRecord {
   return {
     ...existing,
     publicKey: incoming.publicKey,
@@ -415,6 +435,8 @@ function refreshPendingDevicePairingRequest(
     // request's queue position. Using Date.now() here would let an attacker silently
     // refresh recency and win the implicit --latest approval race.
     ts: existing.ts,
+    // Keepalive for the pending TTL only (see pruneExpiredPending); never affects ordering.
+    refreshedAtMs: Date.now(),
   };
 }
 
@@ -425,6 +447,13 @@ function resolveSupersededPendingSilent(params: {
   return Boolean(
     params.incomingSilent && params.existing.every((pending) => pending.silent === true),
   );
+}
+
+function toPublicPendingDevicePairingRequest(
+  pending: DevicePairingPendingRecord,
+): DevicePairingPendingRequest {
+  const { refreshedAtMs: _refreshedAtMs, ...request } = pending;
+  return request;
 }
 
 function buildPendingDevicePairingRequest(params: {
@@ -613,7 +642,9 @@ function scopesWithinApprovedDeviceBaseline(params: {
 
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const pending = Object.values(state.pendingById)
+    .map(toPublicPendingDevicePairingRequest)
+    .toSorted((a, b) => b.ts - a.ts);
   const paired = Object.values(state.pairedByDeviceId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
@@ -635,18 +666,15 @@ export async function getPendingDevicePairing(
   baseDir?: string,
 ): Promise<DevicePairingPendingRequest | null> {
   const state = await loadState(baseDir);
-  return state.pendingById[requestId] ?? null;
+  const pending = state.pendingById[requestId];
+  return pending ? toPublicPendingDevicePairingRequest(pending) : null;
 }
 
 /** Create or refresh a pending device pairing request for owner approval. */
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
-): Promise<{
-  status: "pending";
-  request: DevicePairingPendingRequest;
-  created: boolean;
-}> {
+): Promise<RequestDevicePairingResult> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const deviceId = normalizeDeviceId(req.deviceId);
@@ -657,7 +685,7 @@ export async function requestDevicePairing(
     const pendingForDevice = Object.values(state.pendingById)
       .filter((pending) => pending.deviceId === deviceId)
       .toSorted((left, right) => right.ts - left.ts);
-    return await reconcilePendingPairingRequests({
+    const result = await reconcilePendingPairingRequests({
       pendingById: state.pendingById,
       existing: pendingForDevice,
       incoming: req,
@@ -696,6 +724,18 @@ export async function requestDevicePairing(
       },
       persist: async () => await persistState(state, baseDir, "pending"),
     });
+    // Surface superseded requestIds so callers can broadcast their resolution;
+    // clients otherwise keep prompting for requests that can no longer be approved.
+    const superseded = result.created
+      ? pendingForDevice
+          .filter((pending) => pending.requestId !== result.request.requestId)
+          .map((pending) => ({ requestId: pending.requestId, deviceId: pending.deviceId }))
+      : [];
+    const publicResult = {
+      ...result,
+      request: toPublicPendingDevicePairingRequest(result.request),
+    };
+    return superseded.length > 0 ? { ...publicResult, superseded } : publicResult;
   });
 }
 

@@ -216,7 +216,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
   });
 }
 
-export function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
+function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
     asConfigRecord(config);

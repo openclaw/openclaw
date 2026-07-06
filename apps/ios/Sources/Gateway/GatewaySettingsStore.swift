@@ -22,6 +22,7 @@ enum GatewaySettingsStore {
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
     private static let lastGatewayConnectionAccount = "lastConnection"
+    private static let gatewayCustomHeadersService = "ai.openclawfoundation.app.gateway.custom-headers"
     private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
     struct GatewayCredentialMetadata: Codable, Equatable {
@@ -251,6 +252,71 @@ enum GatewaySettingsStore {
     /// Wildcard certificates and reverse proxies may legitimately reuse a leaf certificate.
     static func authenticationOwnerID(routeStableID: String) -> String {
         routeStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Custom proxy headers are per-gateway credentials (Cloudflare Access-style service
+    /// tokens). They live in the Keychain like the other gateway secrets and are read at
+    /// connect time; never log their values.
+    static func loadGatewayCustomHeaders(gatewayStableID: String) -> [String: String] {
+        self.loadGatewayCustomHeaders(gatewayStableID: gatewayStableID, service: self.gatewayCustomHeadersService)
+    }
+
+    static func loadGatewayCustomHeaders(
+        gatewayStableID: String,
+        service: String) -> [String: String]
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty,
+              let json = KeychainStore.loadString(
+                  service: service,
+                  account: self.customHeadersAccount(stableID: stableID)),
+              let data = json.data(using: .utf8),
+              let headers = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return GatewayCustomHeaders.sanitized(headers)
+    }
+
+    @discardableResult
+    static func saveGatewayCustomHeaders(_ headers: [String: String], gatewayStableID: String) -> Bool {
+        self.saveGatewayCustomHeaders(
+            headers,
+            gatewayStableID: gatewayStableID,
+            service: self.gatewayCustomHeadersService)
+    }
+
+    @discardableResult
+    static func saveGatewayCustomHeaders(
+        _ headers: [String: String],
+        gatewayStableID: String,
+        service: String) -> Bool
+    {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty else { return false }
+        let account = self.customHeadersAccount(stableID: stableID)
+        let sanitized = GatewayCustomHeaders.sanitized(headers)
+        guard !sanitized.isEmpty else {
+            let deleted = KeychainStore.delete(service: service, account: account)
+            return deleted || KeychainStore.loadString(service: service, account: account) == nil
+        }
+        guard let data = try? JSONEncoder().encode(sanitized),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
+        return KeychainStore.saveString(json, service: service, account: account)
+    }
+
+    /// Full onboarding reset is the explicit forget boundary for every gateway's proxy secrets.
+    @discardableResult
+    static func clearGatewayCustomHeaders() -> Bool {
+        self.clearGatewayCustomHeaders(service: self.gatewayCustomHeadersService)
+    }
+
+    @discardableResult
+    static func clearGatewayCustomHeaders(service: String) -> Bool {
+        KeychainStore.deleteAll(service: service)
+    }
+
+    private static func customHeadersAccount(stableID: String) -> String {
+        "customHeaders.\(stableID)"
     }
 
     @discardableResult

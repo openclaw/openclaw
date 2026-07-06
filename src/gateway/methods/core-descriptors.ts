@@ -254,6 +254,11 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "controlUi.githubPreview", scope: "operator.read" },
   // Additive discovery methods append here so older clients keep stable indices.
   { name: "system.info", scope: "operator.read" },
+  // Workspace contents stay in the documented trusted operator domain, like session and log
+  // reads. Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
+  { name: "agents.workspace.list", scope: "operator.read" },
+  { name: "agents.workspace.get", scope: "operator.read" },
+  { name: "tts.speak", scope: "operator.write" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

@@ -21,6 +21,12 @@
     <string name="use_tls">TLS का उपयोग करें</string>
     <string name="token_optional">टोकन (वैकल्पिक)</string>
     <string name="password">पासवर्ड</string>
+    <string name="custom_headers_optional">कस्टम हेडर (वैकल्पिक)</string>
+    <string name="custom_headers_explainer">इस gateway से हर कनेक्शन के साथ भेजा जाता है, उदाहरण के लिए Cloudflare Access service token headers. एन्क्रिप्ट करके संग्रहीत किया जाता है और अगले reconnect पर लागू किया जाता है।</string>
+    <string name="custom_header_value">हेडर मान</string>
+    <string name="custom_header_reserved">यह हेडर कनेक्शन द्वारा प्रबंधित है और इसे ओवरराइड नहीं किया जा सकता।</string>
+    <string name="add_custom_header">हेडर जोड़ें</string>
+    <string name="remove_custom_header">%1$s हटाएँ</string>
     <string name="run_onboarding_again">ऑनबोर्डिंग फिर से चलाएँ</string>
     <string name="resolved_endpoint">रिज़ॉल्व किया गया एंडपॉइंट</string>
     <string name="gateway_trust_first_seen">इस गेटवे पर भरोसा करने से पहले प्रमाणपत्र फ़िंगरप्रिंट सत्यापित करें।\n\n%1$s</string>

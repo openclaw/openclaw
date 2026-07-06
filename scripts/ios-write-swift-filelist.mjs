@@ -26,6 +26,7 @@ const sharedSwiftFiles = [
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatPayloadDecoding.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessions.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatSheets.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatStreamingReveal.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTheme.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptCache.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTransport.swift",

@@ -21,6 +21,12 @@
     <string name="use_tls">TLS 사용</string>
     <string name="token_optional">토큰(선택 사항)</string>
     <string name="password">비밀번호</string>
+    <string name="custom_headers_optional">사용자 지정 헤더(선택 사항)</string>
+    <string name="custom_headers_explainer">이 Gateway에 연결할 때마다 전송됩니다. 예: Cloudflare Access 서비스 토큰 헤더. 암호화되어 저장되며 다음 재연결 시 적용됩니다.</string>
+    <string name="custom_header_value">헤더 값</string>
+    <string name="custom_header_reserved">이 헤더는 연결에서 관리되며 재정의할 수 없습니다.</string>
+    <string name="add_custom_header">헤더 추가</string>
+    <string name="remove_custom_header">%1$s 제거</string>
     <string name="run_onboarding_again">온보딩 다시 실행</string>
     <string name="resolved_endpoint">확인된 엔드포인트</string>
     <string name="gateway_trust_first_seen">이 게이트웨이를 신뢰하기 전에 인증서 지문을 확인하세요.\n\n%1$s</string>

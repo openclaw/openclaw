@@ -21,6 +21,12 @@
     <string name="use_tls">使用 TLS</string>
     <string name="token_optional">權杖（選填）</string>
     <string name="password">密碼</string>
+    <string name="custom_headers_optional">自訂標頭（選填）</string>
+    <string name="custom_headers_explainer">會隨每次連線傳送至此 gateway，例如 Cloudflare Access 服務權杖標頭。已加密儲存，並會在下次重新連線時套用。</string>
+    <string name="custom_header_value">標頭值</string>
+    <string name="custom_header_reserved">此標頭由連線管理，無法覆寫。</string>
+    <string name="add_custom_header">新增標頭</string>
+    <string name="remove_custom_header">移除 %1$s</string>
     <string name="run_onboarding_again">再次執行新手導覽</string>
     <string name="resolved_endpoint">已解析的端點</string>
     <string name="gateway_trust_first_seen">請先驗證憑證指紋，再信任此閘道。\n\n%1$s</string>

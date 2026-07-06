@@ -592,7 +592,7 @@ private fun AnnotatedString.Builder.appendLinkNode(
   }
 }
 
-private fun isSafeMarkdownLinkDestination(destination: String): Boolean {
+internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
   val scheme =
     runCatching { URI(destination).scheme?.lowercase(Locale.US) }
       .getOrNull()

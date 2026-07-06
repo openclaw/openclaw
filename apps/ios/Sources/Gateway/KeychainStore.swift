@@ -13,4 +13,8 @@ enum KeychainStore {
     static func delete(service: String, account: String) -> Bool {
         GenericPasswordKeychainStore.delete(service: service, account: account)
     }
+
+    static func deleteAll(service: String) -> Bool {
+        GenericPasswordKeychainStore.deleteAll(service: service)
+    }
 }

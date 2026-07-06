@@ -76,6 +76,7 @@ struct RootTabsPresentationTests {
             .skillWorkshop,
             .instances,
             .sessions,
+            .files,
             .dreaming,
             .usage,
             .cron,
@@ -93,6 +94,7 @@ struct RootTabsPresentationTests {
             "skillWorkshop",
             "instances",
             "sessions",
+            "files",
             "dreaming",
             "usage",
             "cron",
@@ -334,6 +336,24 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.transportAgentID(nil).isEmpty)
         #expect(ChatProTab.transportAgentID("   ").isEmpty)
         #expect(ChatProTab.transportAgentID(" Main ") == "main")
+    }
+
+    @Test func `chat view model rebuilds only when its transport owner changes`() {
+        #expect(!ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "main"))
+        #expect(ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-b",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "main"))
+        #expect(ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "work"))
     }
 
     @Test func `agent routes can open gateway settings from header pill`() {

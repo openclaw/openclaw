@@ -794,6 +794,12 @@ describe("validateChatSendParams", () => {
     };
 
     expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });

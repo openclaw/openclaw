@@ -111,6 +111,7 @@ enum GatewayOnboardingReset {
             DeviceAuthStore.clearToken(deviceId: deviceId, role: "operator")
             DeviceAuthStore.clearAll(profile: .shareExtension)
             GatewayTLSStore.clearAllFingerprints()
+            GatewaySettingsStore.clearGatewayCustomHeaders()
         }
 
         GatewaySettingsStore.clearLastGatewayConnection(defaults: defaults)

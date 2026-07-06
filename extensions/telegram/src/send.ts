@@ -2195,7 +2195,7 @@ type TelegramCreateForumTopicOpts = {
   iconCustomEmojiId?: string;
 };
 
-export type TelegramCreateForumTopicResult = {
+type TelegramCreateForumTopicResult = {
   topicId: number;
   name: string;
   chatId: string;

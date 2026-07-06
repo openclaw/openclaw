@@ -180,6 +180,8 @@ export type TalkSessionCloseParams = SchemaType<"TalkSessionCloseParams">;
 export type TalkSessionOkResult = SchemaType<"TalkSessionOkResult">;
 export type TalkSpeakParams = SchemaType<"TalkSpeakParams">;
 export type TalkSpeakResult = SchemaType<"TalkSpeakResult">;
+export type TtsSpeakParams = SchemaType<"TtsSpeakParams">;
+export type TtsSpeakResult = SchemaType<"TtsSpeakResult">;
 
 /** Channel control and web-login payloads. */
 export type ChannelsStatusParams = SchemaType<"ChannelsStatusParams">;
@@ -205,6 +207,12 @@ export type AgentsFilesGetParams = SchemaType<"AgentsFilesGetParams">;
 export type AgentsFilesGetResult = SchemaType<"AgentsFilesGetResult">;
 export type AgentsFilesSetParams = SchemaType<"AgentsFilesSetParams">;
 export type AgentsFilesSetResult = SchemaType<"AgentsFilesSetResult">;
+export type AgentsWorkspaceEntry = SchemaType<"AgentsWorkspaceEntry">;
+export type AgentsWorkspaceFile = SchemaType<"AgentsWorkspaceFile">;
+export type AgentsWorkspaceListParams = SchemaType<"AgentsWorkspaceListParams">;
+export type AgentsWorkspaceListResult = SchemaType<"AgentsWorkspaceListResult">;
+export type AgentsWorkspaceGetParams = SchemaType<"AgentsWorkspaceGetParams">;
+export type AgentsWorkspaceGetResult = SchemaType<"AgentsWorkspaceGetResult">;
 export type SessionFileKind = SchemaType<"SessionFileKind">;
 export type SessionFileRelevance = SchemaType<"SessionFileRelevance">;
 export type SessionFileEntry = SchemaType<"SessionFileEntry">;

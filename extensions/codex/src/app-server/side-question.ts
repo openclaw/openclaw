@@ -42,7 +42,11 @@ import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
+import {
+  handleDynamicToolCallWithTimeout,
+  resolveCodexToolAbortTerminalReason,
+  resolveDynamicToolCallTimeoutMs,
+} from "./dynamic-tool-execution.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
@@ -73,8 +77,6 @@ import {
 } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexDynamicToolCallParams,
-  type CodexDynamicToolCallResponse,
   type CodexServerNotification,
   type CodexThreadForkParams,
   type CodexTurn,
@@ -105,10 +107,6 @@ import {
   type CodexWebSearchPlan,
 } from "./web-search.js";
 
-const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
-const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
-const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 
 class CodexSideQuestionTimeoutError extends Error {
@@ -407,7 +405,7 @@ export async function runCodexAppServerSideQuestion(
       if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
         return undefined;
       }
-      const timeoutMs = resolveSideDynamicToolCallTimeoutMs({
+      const timeoutMs = resolveDynamicToolCallTimeoutMs({
         call,
         config: params.cfg,
       });
@@ -421,7 +419,7 @@ export async function runCodexAppServerSideQuestion(
       };
       emitDynamicToolStartedDiagnostic(diagnosticContext);
       try {
-        const response = await handleSideDynamicToolCallWithTimeout({
+        const response = await handleDynamicToolCallWithTimeout({
           call,
           toolBridge,
           signal: runAbortController.signal,
@@ -919,91 +917,6 @@ async function createCodexSideToolBridge(input: {
   };
 }
 
-async function handleSideDynamicToolCallWithTimeout(params: {
-  call: CodexDynamicToolCallParams;
-  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
-  signal: AbortSignal;
-  timeoutMs: number;
-}): Promise<CodexDynamicToolCallResponse> {
-  if (params.signal.aborted) {
-    return failedSideDynamicToolResponse(
-      "OpenClaw dynamic tool call aborted before execution.",
-      resolveCodexToolAbortTerminalReason(params.signal),
-    );
-  }
-
-  const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
-  const abortFromRun = () => {
-    const message = "OpenClaw dynamic tool call aborted.";
-    controller.abort(params.signal.reason ?? new Error(message));
-    resolveAbort?.(
-      failedSideDynamicToolResponse(message, resolveCodexToolAbortTerminalReason(params.signal)),
-    );
-  };
-  const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
-    resolveAbort = resolve;
-  });
-  const timeoutPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
-    const timeoutMs = clampSideDynamicToolTimeoutMs(params.timeoutMs);
-    timeout = setTimeout(() => {
-      controller.abort(new Error(`OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`));
-      resolve(
-        failedSideDynamicToolResponse(
-          `OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`,
-          "timed_out",
-        ),
-      );
-    }, timeoutMs);
-    timeout.unref?.();
-  });
-
-  try {
-    params.signal.addEventListener("abort", abortFromRun, { once: true });
-    if (params.signal.aborted) {
-      abortFromRun();
-    }
-    return await Promise.race([
-      params.toolBridge.handleToolCall(params.call, { signal: controller.signal }),
-      abortPromise,
-      timeoutPromise,
-    ]);
-  } catch (error) {
-    return failedSideDynamicToolResponse(error instanceof Error ? error.message : String(error));
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    params.signal.removeEventListener("abort", abortFromRun);
-    resolveAbort = undefined;
-    if (!controller.signal.aborted) {
-      controller.abort(new Error("OpenClaw dynamic tool call finished."));
-    }
-  }
-}
-
-function failedSideDynamicToolResponse(
-  message: string,
-  terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
-): CodexDynamicToolCallResponse {
-  const response: CodexDynamicToolCallResponse = {
-    contentItems: [{ type: "inputText", text: message }],
-    success: false,
-  };
-  Object.defineProperty(response, "diagnosticTerminalType", {
-    configurable: true,
-    enumerable: false,
-    value: "error",
-  });
-  Object.defineProperty(response, "diagnosticTerminalReason", {
-    configurable: true,
-    enumerable: false,
-    value: terminalReason,
-  });
-  return response;
-}
-
 function emptySideUserInputResponse(): JsonObject {
   return { answers: {} };
 }
@@ -1015,59 +928,6 @@ function isSideUserInputRequest(
 ): boolean {
   return isJsonObject(value) && value.threadId === threadId && value.turnId === turnId;
 }
-
-function resolveSideDynamicToolCallTimeoutMs(params: {
-  call: CodexDynamicToolCallParams;
-  config: AgentHarnessSideQuestionParams["cfg"];
-}): number {
-  const configured =
-    readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
-    (params.call.tool === "image_generate"
-      ? (readSideImageGenerationModelTimeoutMs(params.config) ??
-        CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS)
-      : undefined) ??
-    (params.call.tool === "image"
-      ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
-        CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS)
-      : undefined);
-  return clampSideDynamicToolTimeoutMs(configured ?? CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS);
-}
-
-function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
-}
-
-function readSideImageGenerationModelTimeoutMs(
-  config: AgentHarnessSideQuestionParams["cfg"],
-): number | undefined {
-  const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
-  if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
-    return undefined;
-  }
-  return readSidePositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
-}
-
-function readSideTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readSidePositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
-}
-
-function readSidePositiveFiniteTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
-function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
-  return Math.max(1, Math.min(CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
-}
-
-export const testing = {
-  resolveSideDynamicToolCallTimeoutMs,
-} as const;
 
 async function forkCodexSideThread(
   client: CodexAppServerClient,
@@ -1357,4 +1217,3 @@ function formatCodexErrorMessage(
     "Codex /btw side thread failed.";
   return new Error(formatErrorMessage(message));
 }
-export { testing as __testing };

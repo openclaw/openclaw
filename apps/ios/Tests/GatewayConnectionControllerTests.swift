@@ -5,6 +5,20 @@ import UIKit
 @testable import OpenClawKit
 
 @Suite(.serialized) struct GatewayConnectionControllerTests {
+    @Test @MainActor func `chat owner survives reconnect while session refresh identity changes`() {
+        let appModel = NodeAppModel()
+        let disconnectedOwner = appModel.chatViewModelOwnerID
+        let disconnectedRefreshIdentity = appModel.chatViewModelIdentityID
+
+        appModel._test_setOperatorConnected(true)
+        #expect(appModel.chatViewModelOwnerID == disconnectedOwner)
+        #expect(appModel.chatViewModelIdentityID != disconnectedRefreshIdentity)
+
+        appModel._test_setOperatorConnected(false)
+        #expect(appModel.chatViewModelOwnerID == disconnectedOwner)
+        #expect(appModel.chatViewModelIdentityID == disconnectedRefreshIdentity)
+    }
+
     @Test @MainActor func `resolved display name sets default when missing`() {
         let defaults = UserDefaults.standard
         let displayKey = "node.displayName"

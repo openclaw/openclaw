@@ -77,6 +77,7 @@ export const SessionFileRelevanceSchema = Type.Union([
 export const SessionFileEntrySchema = Type.Object(
   {
     path: NonEmptyString,
+    workspacePath: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     kind: SessionFileKindSchema,
     missing: Type.Boolean(),
@@ -248,6 +249,9 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    fork: Type.Optional(
+      Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
+    ),
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
@@ -330,6 +334,9 @@ export const SessionsPatchParamsSchema = Type.Object(
     category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     archived: Type.Optional(Type.Boolean()),
     pinned: Type.Optional(Type.Boolean()),
+    unread: Type.Optional(
+      Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
+    ),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

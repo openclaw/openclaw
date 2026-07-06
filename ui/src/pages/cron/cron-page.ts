@@ -55,7 +55,7 @@ function unique(values: string[]): string[] {
   return sortUniqueStrings(values.map((value) => value.trim()).filter(Boolean));
 }
 
-export class CronPage extends LitElement {
+class CronPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

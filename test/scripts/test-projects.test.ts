@@ -3386,6 +3386,19 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(spec?.includeFilePath).not.toMatch(new RegExp(`${process.pid}-\\d+-0\\.json$`, "u"));
   });
 
+  it("preflights targeted UI E2E specs with Playwright browser assets", () => {
+    const [spec] = createVitestRunSpecs(["ui/src/pages/tasks/tasks.e2e.test.ts"], {
+      baseEnv: {},
+    });
+
+    expect(spec?.config).toBe("test/vitest/vitest.ui-e2e.config.ts");
+    expect(spec?.preflightPnpmArgs).toEqual([
+      "exec",
+      "node",
+      "scripts/ensure-playwright-chromium.mjs",
+    ]);
+  });
+
   it("routes explicit commands light tests to the lighter commands lane", () => {
     const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
 

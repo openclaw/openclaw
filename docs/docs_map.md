@@ -199,6 +199,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Notification policies
   - H2: CLI reference
   - H2: Chat task board (/tasks)
+  - H3: Control UI
   - H2: Status integration (task pressure)
   - H2: Storage and maintenance
   - H3: Where tasks live
@@ -1367,7 +1368,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Operations and approval
   - H2: Setup bootstrap
-  - H2: Model-assisted planner
+  - H2: AI conversation
   - H3: CLI harness trust model
   - H2: Switching to an agent
   - H2: Message rescue mode
@@ -4866,6 +4867,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 7. Canvas + camera
   - H4: Gateway Canvas Host (recommended for web content)
   - H3: 8. Voice + expanded Android command surface
+  - H3: 9. Workspace files (read-only)
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
@@ -6259,6 +6261,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
+## plugins/reference/logbook.md
+
+- Route: /plugins/reference/logbook
+- Headings:
+  - H1: Logbook plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/longcat.md
+
+- Route: /plugins/reference/longcat
+- Headings:
+  - H1: LongCat plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/matrix.md
 
 - Route: /plugins/reference/matrix
@@ -7560,6 +7580,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: LM Studio not detected
   - H3: Authentication errors (HTTP 401)
+  - H2: Related
+
+## providers/longcat.md
+
+- Route: /providers/longcat
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H3: Non-interactive setup
+  - H2: Reasoning behavior
+  - H2: Pricing
+  - H2: Self-hosted LongCat-2.0
+  - H2: Troubleshooting
   - H2: Related
 
 ## providers/minimax.md
@@ -9093,6 +9126,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Syntax highlighting
   - H2: Output details contract
   - H3: Collapsed unchanged sections
+  - H3: Multi-file navigation
   - H2: Plugin defaults
   - H3: Persistent viewer URL config
   - H2: Security config
