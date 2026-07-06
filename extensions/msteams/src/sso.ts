@@ -24,6 +24,7 @@
  * that ack; these helpers encapsulate token exchange and persistence.
  */
 
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { readMSTeamsHttpErrorDetail } from "./http-error.js";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
@@ -34,6 +35,9 @@ const BOT_FRAMEWORK_TOKEN_SCOPE = "https://api.botframework.com/.default";
 
 /** Bot Framework User Token service base URL. */
 const BOT_FRAMEWORK_USER_TOKEN_BASE_URL = "https://token.botframework.com";
+
+/** Max bytes to read from the User Token service JSON response. */
+const USER_TOKEN_RESPONSE_MAX_BYTES = 64 * 1024;
 
 /**
  * Response shape returned by the Bot Framework User Token service for
@@ -130,7 +134,9 @@ async function callUserTokenService(
   }
   let parsed: unknown;
   try {
-    parsed = await response.json();
+    parsed = await readProviderJsonResponse<unknown>(response, "Bot Framework User Token service", {
+      maxBytes: USER_TOKEN_RESPONSE_MAX_BYTES,
+    });
   } catch {
     return { error: "invalid JSON from User Token service", status: response.status };
   }

@@ -116,6 +116,44 @@ describe("handleSigninTokenExchangeInvoke", () => {
     expect(stored?.expiresAt).toBe("2030-01-01T00:00:00Z");
   });
 
+  it("returns a service error when the User Token response exceeds the byte cap", async () => {
+    const hugeBody = JSON.stringify({
+      channelId: "msteams",
+      connectionName: "GraphConnection",
+      token: "delegated-graph-token",
+      expiration: "2030-01-01T00:00:00Z",
+      padding: "x".repeat(128 * 1024),
+    });
+    const fetchImpl: MSTeamsSsoFetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(hugeBody));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+
+    const result = await handleSigninTokenExchangeInvoke({
+      value: { id: "flow-1", connectionName: "GraphConnection", token: "exchangeable-token" },
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("unexpected_response");
+      expect(result.message).toMatch(/invalid JSON/i);
+    }
+    const stored = await tokenStore.get({
+      connectionName: "GraphConnection",
+      userId: "aad-user-guid",
+    });
+    expect(stored).toBeNull();
+  });
+
   it("returns a service error when the User Token service rejects the exchange", async () => {
     const { fetchImpl } = createFakeFetch([
       () => ({ ok: false, status: 502, body: "bad gateway" }),
