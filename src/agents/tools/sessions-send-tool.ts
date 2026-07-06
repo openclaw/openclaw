@@ -33,6 +33,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
+  hasPendingEmbeddedRunSteering,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../embedded-agent-runner/runs.js";
@@ -92,6 +93,25 @@ function normalizeSessionsSendArguments(args: unknown): Record<string, unknown> 
     delete params[alias];
   }
   return params;
+}
+
+function resolvePendingSteerSideEffectBlock(opts: {
+  agentSessionKey?: string;
+  sessionId?: string;
+}) {
+  const sessionId =
+    normalizeOptionalString(opts.sessionId) ??
+    (opts.agentSessionKey ? resolveActiveEmbeddedRunSessionId(opts.agentSessionKey) : undefined);
+  if (!sessionId || !hasPendingEmbeddedRunSteering(sessionId)) {
+    return undefined;
+  }
+  return jsonResult({
+    status: "blocked",
+    reason: "pending_steer_before_side_effect",
+    error:
+      "Pending /steer message detected for the active run. Resolve the steering instruction before sending messages or transferring context.",
+    tool: "sessions_send",
+  });
 }
 
 function resolveConfiguredAgentMainSessionKey(params: {
@@ -342,6 +362,7 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
+  sessionId?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -356,6 +377,13 @@ export function createSessionsSendTool(opts?: {
     prepareArguments: normalizeSessionsSendArguments,
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
+      const pendingSteerBlock = resolvePendingSteerSideEffectBlock({
+        agentSessionKey: opts?.agentSessionKey,
+        sessionId: opts?.sessionId,
+      });
+      if (pendingSteerBlock) {
+        return pendingSteerBlock;
+      }
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;

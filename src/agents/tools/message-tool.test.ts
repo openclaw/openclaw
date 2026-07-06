@@ -15,6 +15,7 @@ import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.
 import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
+type EmbeddedRunsModule = typeof import("../embedded-agent-runner/runs.js");
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
@@ -22,6 +23,7 @@ type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").c
 
 let createMessageTool: CreateMessageTool;
 let createOpenClawTools: CreateOpenClawTools;
+let embeddedRuns: EmbeddedRunsModule;
 let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
@@ -332,9 +334,11 @@ beforeAll(async () => {
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool.js"));
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
+  embeddedRuns = await import("../embedded-agent-runner/runs.js");
 });
 
 beforeEach(() => {
+  embeddedRuns?.testing.resetActiveEmbeddedRuns();
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
@@ -1717,6 +1721,79 @@ describe("message tool loop detection action runner proof", () => {
       status: "blocked",
       deniedReason: "tool-loop",
     });
+  });
+});
+
+describe("message tool pending steering side-effect guard", () => {
+  beforeEach(() => {
+    mockSendResult();
+  });
+
+  it("blocks side-effect actions while pending steering exists for the active run", async () => {
+    embeddedRuns.setActiveEmbeddedRun(
+      "message-tool-active-session",
+      {
+        queueMessage: vi.fn(async () => {}),
+        getSteeringMessages: () => ["should this send happen?"],
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: () => {},
+      },
+      "agent:main:main",
+    );
+    const messageTool = createMessageTool({
+      agentSessionKey: "agent:main:main",
+      sessionId: "message-tool-active-session",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await messageTool.execute("message-send-pending-steer", {
+      action: "send",
+      target: "channel:loop-room",
+      message: "context transfer",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      reason: "pending_steer_before_side_effect",
+      tool: "message",
+    });
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows read actions while pending steering exists for the active run", async () => {
+    embeddedRuns.setActiveEmbeddedRun(
+      "message-tool-active-session",
+      {
+        queueMessage: vi.fn(async () => {}),
+        getSteeringMessages: () => ["answer this first"],
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: () => {},
+      },
+      "agent:main:main",
+    );
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "read",
+      action: "read",
+      channel: "qa-channel",
+      payload: { messages: [] },
+      dryRun: true,
+    } as MessageActionRunResult);
+    const messageTool = createMessageTool({
+      agentSessionKey: "agent:main:main",
+      sessionId: "message-tool-active-session",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await messageTool.execute("message-read-pending-steer", {
+      action: "read",
+      channel: "qa-channel",
+      target: "channel:loop-room",
+    });
+
+    expect(result.details).toMatchObject({ messages: [] });
+    expect(mocks.runMessageAction).toHaveBeenCalledOnce();
   });
 });
 
