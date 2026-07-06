@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import android.Manifest
 import android.os.SystemClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -11,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -24,6 +26,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -84,6 +87,26 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun beginPushToTalkRejectsInvalidatedCaptureBeforeStarting() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val manager = createManager()
+
+      val error =
+        runCatching {
+          manager.beginPushToTalk(
+            allowNewCapture = true,
+            canStartCapture = { false },
+          )
+        }.exceptionOrNull()
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", error?.message)
+      assertNull(readPrivateField(manager, "activePttCaptureId"))
+      assertFalse(manager.isListening.value)
+    }
+
+  @Test
   fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
     val manager = createManager()
     setPrivateField(manager, "activePttCaptureId", "capture-1")
@@ -96,6 +119,75 @@ class TalkModeManagerTest {
     assertFalse(manager.isListening.value)
     assertEquals("Off", manager.statusText.value)
   }
+
+  @Test
+  fun staleCancellationDoesNotStopNewerPushToTalkCapture() =
+    runTest {
+      val manager = createManager()
+      val completion = CompletableDeferred<TalkPttStopPayload>()
+      setPrivateField(manager, "activePttCaptureId", "capture-new")
+      setPrivateField(manager, "pttCompletion", completion)
+
+      val payload = manager.cancelPushToTalk("capture-old")
+
+      assertEquals("idle", payload.status)
+      assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
+      assertFalse(completion.isCompleted)
+    }
+
+  @Test
+  fun oneShotRetryDoesNotReplaceActivePushToTalkCapture() =
+    runTest {
+      val manager = createManager()
+      val completion = CompletableDeferred<TalkPttStopPayload>()
+      setPrivateField(manager, "activePttCaptureId", "capture-active")
+      setPrivateField(manager, "pttCompletion", completion)
+
+      val start = manager.beginPushToTalkOnce()
+      val payload = manager.awaitPushToTalkOnce(start)
+
+      assertEquals("busy", payload.status)
+      assertEquals("capture-active", payload.captureId)
+      assertEquals("capture-active", readPrivateField(manager, "activePttCaptureId"))
+      assertFalse(completion.isCompleted)
+    }
+
+  @Test
+  fun cancelledOneShotWaitCleansItsCapture() =
+    runTest {
+      val manager = createManager()
+      val completion = CompletableDeferred<TalkPttStopPayload>()
+      setPrivateField(manager, "activePttCaptureId", "capture-1")
+      setPrivateField(manager, "pttCompletion", completion)
+      setMutableStateFlow(manager, "_isListening", true)
+      val start = TalkPttOnceStart.Started(captureId = "capture-1", completion = completion)
+
+      val wait = launch { manager.awaitPushToTalkOnce(start) }
+      advanceUntilIdle()
+      wait.cancelAndJoin()
+
+      assertNull(readPrivateField(manager, "activePttCaptureId"))
+      assertNull(readPrivateField(manager, "pttCompletion"))
+      assertFalse(manager.isListening.value)
+      assertTrue(completion.isCompleted)
+    }
+
+  @Test
+  fun staleStopDoesNotSubmitNewerPushToTalkCapture() =
+    runTest {
+      val manager = createManager()
+      val completion = CompletableDeferred<TalkPttStopPayload>()
+      setPrivateField(manager, "activePttCaptureId", "capture-new")
+      setPrivateField(manager, "pttCompletion", completion)
+      setPrivateField(manager, "lastTranscript", "new partial transcript")
+
+      val payload = manager.endPushToTalk("capture-old")
+
+      assertEquals("idle", payload.status)
+      assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
+      assertEquals("new partial transcript", readPrivateField(manager, "lastTranscript"))
+      assertFalse(completion.isCompleted)
+    }
 
   @Test
   fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {

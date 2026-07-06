@@ -944,6 +944,42 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun staleTalkPttCleanupPreservesNewerManualMicOwnership() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = NodeRuntime(app)
+    val ownershipEpoch = readField<AtomicLong>(runtime, "voiceCaptureOwnershipEpoch")
+    ownershipEpoch.set(41L)
+
+    runtime.setMicEnabled(true)
+    val cleanup = runtime.javaClass.getDeclaredMethod("finishTalkCaptureIfIdle", Long::class.javaPrimitiveType)
+    cleanup.isAccessible = true
+    cleanup.invoke(runtime, 41L)
+
+    assertEquals(VoiceCaptureMode.ManualMic, runtime.voiceCaptureMode.value)
+    assertTrue(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+  }
+
+  @Test
+  fun talkPttOnceRetryPreservesCaptureCleanupOwnership() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      writeField(talkMode, "activePttCaptureId", "capture-1")
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+
+      val retry = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
+      assertNull(retry.error)
+      assertTrue(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+
+      val cancel = dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
+      assertNull(cancel.error)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+    }
+
+  @Test
   fun backgroundingStopsTalkModeCapture() {
     val app = RuntimeEnvironment.getApplication()
     val runtime = NodeRuntime(app)
