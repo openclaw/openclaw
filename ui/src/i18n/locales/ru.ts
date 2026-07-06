@@ -1218,6 +1218,15 @@ export const ru: TranslationMap = {
       byType: "По типу",
       tokensTitle: "Ежедневное использование токенов",
       costTitle: "Ежедневные затраты",
+      compressedScaleHint:
+        "Шкала квадратного корня сохраняет видимость дней с низким использованием.",
+    },
+    costWindows: {
+      title: "Периоды затрат",
+      subtitle: "Календарные периоды, заканчивающиеся {date}",
+      selectedRange: "Выбранный период",
+      lastDays: "Последние {count} дней",
+      perDay: "/ день",
     },
     breakdown: {
       output: "Вывод",
@@ -1265,6 +1274,7 @@ export const ru: TranslationMap = {
       cached: "кешировано",
       prompt: "prompt",
       calls: "вызовы",
+      costShare: "{percent}% затрат",
       topModels: "Лучшие модели",
       topProviders: "Лучшие провайдеры",
       topTools: "Лучшие инструменты",

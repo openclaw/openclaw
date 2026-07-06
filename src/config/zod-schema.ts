@@ -330,7 +330,7 @@ const TalkRealtimeSchema = z
     const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
     const providers = realtime.providers ? Object.keys(realtime.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],
@@ -366,7 +366,7 @@ const TalkSchema = z
     const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in talk.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(talk.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],

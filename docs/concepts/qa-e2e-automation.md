@@ -611,6 +611,9 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 - `slack-restart-resume`
 - `slack-thread-follow-up`
 - `slack-thread-isolation`
+- `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
+  Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
+  `white_check_mark` for the SUT bot on the target message.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack

@@ -1214,6 +1214,14 @@ export const es: TranslationMap = {
       byType: "Por tipo",
       tokensTitle: "Uso diario de tokens",
       costTitle: "Costo diario",
+      compressedScaleHint: "La escala de raíz cuadrada mantiene visibles los días de poco uso.",
+    },
+    costWindows: {
+      title: "Períodos de coste",
+      subtitle: "Períodos de calendario que terminan el {date}",
+      selectedRange: "Período seleccionado",
+      lastDays: "Últimos {count} días",
+      perDay: "/ día",
     },
     breakdown: {
       output: "Salida",
@@ -1261,6 +1269,7 @@ export const es: TranslationMap = {
       cached: "en caché",
       prompt: "prompt",
       calls: "llamadas",
+      costShare: "{percent}% del coste",
       topModels: "Modelos principales",
       topProviders: "Proveedores principales",
       topTools: "Herramientas principales",

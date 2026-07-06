@@ -1193,6 +1193,14 @@ export const zh_CN: TranslationMap = {
       byType: "按类型",
       tokensTitle: "每日 Token 使用量",
       costTitle: "每日成本",
+      compressedScaleHint: "平方根刻度可让低用量日期保持可见。",
+    },
+    costWindows: {
+      title: "费用周期",
+      subtitle: "截至 {date} 的日历周期",
+      selectedRange: "所选范围",
+      lastDays: "过去 {count} 天",
+      perDay: "/ 天",
     },
     breakdown: {
       output: "输出",
@@ -1238,6 +1246,7 @@ export const zh_CN: TranslationMap = {
       cached: "已缓存",
       prompt: "提示",
       calls: "调用",
+      costShare: "占费用的 {percent}%",
       topModels: "热门模型",
       topProviders: "热门提供商",
       topTools: "热门工具",

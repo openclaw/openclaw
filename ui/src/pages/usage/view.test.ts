@@ -265,4 +265,51 @@ describe("renderUsage", () => {
     );
     expect(messagesValue?.textContent?.trim()).toBe("2");
   });
+
+  it("hides range-wide cost windows when a post-load filter is active", () => {
+    const base = createUsageProps();
+    const totals = {
+      input: 100,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 100,
+      totalCost: 1,
+      inputCost: 1,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    };
+    const data = {
+      ...base.data,
+      totals,
+      costDaily: [{ ...totals, date: "2026-05-14" }],
+    };
+    const filterCases: Array<Partial<UsageProps["filters"]>> = [
+      { query: "provider:openai" },
+      { agentId: "main" },
+      { selectedDays: ["2026-05-14"] },
+      { selectedHours: [12] },
+      { selectedSessions: ["agent:main:main"] },
+    ];
+
+    const unfiltered = document.createElement("div");
+    render(renderUsage(createUsageProps({ data })), unfiltered);
+    expect(unfiltered.querySelector(".cost-window-analysis")).not.toBeNull();
+
+    for (const filterCase of filterCases) {
+      const container = document.createElement("div");
+      render(
+        renderUsage(
+          createUsageProps({
+            data,
+            filters: { ...base.filters, ...filterCase },
+          }),
+        ),
+        container,
+      );
+      expect(container.querySelector(".cost-window-analysis")).toBeNull();
+    }
+  });
 });

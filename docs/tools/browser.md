@@ -255,7 +255,8 @@ main model can read the screenshot directly.
   the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
   checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
-  their CDP WebSocket handshakes.
+  their CDP WebSocket handshakes. Persistent remote Playwright tab enumeration
+  uses the larger of the two as its operation deadline.
 - `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
   process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
   follow-up budget for CDP websocket readiness after the process is discovered.

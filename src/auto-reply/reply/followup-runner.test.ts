@@ -12,6 +12,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import type { GetReplyOptions } from "../types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
@@ -46,6 +47,7 @@ let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRe
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
+let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -481,8 +483,10 @@ async function loadFreshFollowupRunnerModuleForTest() {
     replyRunRegistry: replyRunRegistryForTest,
     testing: replyRunTestingForTest,
   } = await import("./reply-run-registry.js"));
-  ({ setReplyPayloadMetadata: setReplyPayloadMetadataForTest } =
-    await import("../reply-payload.js"));
+  ({
+    getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
+    setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
+  } = await import("../reply-payload.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -4332,19 +4336,14 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
-      reasoningPayloadsEnabled: boolean;
-      commentaryPayloadsEnabled: boolean;
+      opts: GetReplyOptions;
     }> = {},
   ) {
     if (overrides.storePath && overrides.sessionStore) {
       registerFollowupTestSessionStore(overrides.storePath, overrides.sessionStore);
     }
     return createFollowupRunner({
-      opts: {
-        onBlockReply,
-        reasoningPayloadsEnabled: overrides.reasoningPayloadsEnabled,
-        commentaryPayloadsEnabled: overrides.commentaryPayloadsEnabled,
-      },
+      opts: { ...overrides.opts, onBlockReply },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-6",
@@ -4363,15 +4362,27 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
       storePath: string;
-      reasoningPayloadsEnabled: boolean;
-      commentaryPayloadsEnabled: boolean;
+      opts: GetReplyOptions;
     }>;
+    agentEvent?: { stream: string; data: Record<string, unknown> };
   }) {
     const onBlockReply = createAsyncReplySpy();
-    runEmbeddedAgentMock.mockResolvedValueOnce({
+    const agentResult = {
       meta: {},
       ...params.agentResult,
-    });
+    };
+    if (params.agentEvent) {
+      runEmbeddedAgentMock.mockImplementationOnce(async (runParams: unknown) => {
+        const onAgentEvent = requireRecord(runParams, "embedded run params").onAgentEvent;
+        if (typeof onAgentEvent !== "function") {
+          throw new Error("expected embedded run onAgentEvent callback");
+        }
+        await onAgentEvent(params.agentEvent);
+        return agentResult;
+      });
+    } else {
+      runEmbeddedAgentMock.mockResolvedValueOnce(agentResult);
+    }
     const runner = createMessagingDedupeRunner(onBlockReply, params.runnerOverrides);
     await runner(params.queued ?? baseQueuedRun());
     return { onBlockReply };
@@ -4384,259 +4395,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ...overrides,
     };
   }
-
-  it.each([
-    { label: "empty", payloads: [], runnerOverrides: undefined },
-    { label: "empty-envelope", payloads: [{}], runnerOverrides: undefined },
-    { label: "blank-text", payloads: [{ text: "" }], runnerOverrides: undefined },
-    {
-      label: "reasoning-only",
-      payloads: [{ text: "internal", isReasoning: true }],
-      runnerOverrides: undefined,
-    },
-    {
-      label: "reasoning-only with reasoning enabled",
-      payloads: [{ text: "internal", isReasoning: true }],
-      runnerOverrides: { reasoningPayloadsEnabled: true },
-    },
-    {
-      label: "commentary-only",
-      payloads: [{ text: "internal", isCommentary: true }],
-      runnerOverrides: undefined,
-    },
-    {
-      label: "commentary-only with commentary enabled",
-      payloads: [{ text: "internal", isCommentary: true }],
-      runnerOverrides: { commentaryPayloadsEnabled: true },
-    },
-    {
-      label: "directive-only",
-      payloads: [{ text: "[[reply_to_current]]" }],
-      runnerOverrides: undefined,
-    },
-  ])(
-    "routes a visible fallback for successful $label followups",
-    async ({ payloads, runnerOverrides }) => {
-      const queued = baseQueuedRun("discord");
-      const { onBlockReply } = await runMessagingCase({
-        agentResult: { payloads },
-        runnerOverrides,
-        queued: {
-          ...queued,
-          currentInboundEventKind: "user_request",
-          originatingChannel: "discord",
-          originatingTo: "channel:C1",
-          originatingReplyToMode: "first",
-          messageId: "message-1",
-        },
-      });
-
-      expect(onBlockReply).not.toHaveBeenCalled();
-      const fallbackCall = routeReplyMock.mock.calls.find((call) => {
-        const payload = requireRecord(
-          requireRecord(call[0], "route reply params").payload,
-          "payload",
-        );
-        return payload.isError === true;
-      });
-      expect(fallbackCall).toBeDefined();
-      expect(requireRecord(fallbackCall?.[0], "fallback route reply params").payload).toMatchObject(
-        {
-          text: expect.stringContaining("did not produce a visible reply"),
-          isError: true,
-        },
-      );
-    },
-  );
-
-  it("routes the shared terminal failure for empty failed followups", async () => {
-    const queued = baseQueuedRun("discord");
-    await runMessagingCase({
-      agentResult: {
-        payloads: [],
-        meta: { error: { kind: "tool_result_mismatch", message: "private detail" } },
-      },
-      queued: {
-        ...queued,
-        currentInboundEventKind: "user_request",
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-      },
-    });
-
-    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
-      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isError: true,
-    });
-  });
-
-  it("routes a terminal failure when a classified empty result exhausts model fallback", async () => {
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: {
-        provider: string;
-        model: string;
-        run: (provider: string, model: string) => Promise<unknown>;
-        classifyResult: (attempt: {
-          result: unknown;
-          provider: string;
-          model: string;
-          attempt: number;
-          total: number;
-        }) => Promise<Record<string, unknown>> | Record<string, unknown>;
-      }) => {
-        const result = await params.run(params.provider, params.model);
-        const classification = await params.classifyResult({
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempt: 1,
-          total: 1,
-        });
-        expect(classification).toMatchObject({
-          code: "empty_result",
-          preserveResultOnExhaustion: true,
-          preserveResultPriority: -1,
-        });
-        return {
-          outcome: "exhausted",
-          result,
-          provider: params.provider,
-          model: params.model,
-          attempts: [{ reason: "format", code: "empty_result" }],
-        };
-      },
-    );
-    const queued = baseQueuedRun("discord");
-    await runMessagingCase({
-      agentResult: {
-        payloads: [],
-        meta: { agentHarnessResultClassification: "empty" },
-      },
-      queued: {
-        ...queued,
-        currentInboundEventKind: "user_request",
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-      },
-    });
-
-    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
-      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isError: true,
-    });
-  });
-
-  it("routes a terminal failure when model fallback exhausts without a preserved result", async () => {
-    const exhaustionError = new Error("All model fallback candidates failed");
-    exhaustionError.name = "FallbackSummaryError";
-    runWithModelFallbackMock.mockRejectedValueOnce(exhaustionError);
-    const queued = baseQueuedRun("discord");
-    await runMessagingCase({
-      agentResult: { payloads: [] },
-      queued: {
-        ...queued,
-        currentInboundEventKind: "user_request",
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-      },
-    });
-
-    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
-      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isError: true,
-    });
-  });
-
-  it.each([
-    {
-      label: "NO_REPLY",
-      agentResult: {
-        payloads: [{ text: "NO_REPLY" }],
-        meta: { finalAssistantVisibleText: "NO_REPLY" },
-      },
-      queuedOverrides: {},
-    },
-    {
-      label: "accepted child spawn",
-      agentResult: {
-        payloads: [],
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
-      },
-      queuedOverrides: {},
-    },
-    {
-      label: "cron side effect",
-      agentResult: { payloads: [], successfulCronAdds: 1 },
-      queuedOverrides: {},
-    },
-    {
-      label: "approval prompt",
-      agentResult: { payloads: [], didSendDeterministicApprovalPrompt: true },
-      queuedOverrides: {},
-    },
-    {
-      label: "source delivery",
-      agentResult: { payloads: [], didDeliverSourceReplyViaMessageTool: true },
-      queuedOverrides: {},
-    },
-    {
-      label: "message-tool-only mode",
-      agentResult: { payloads: [] },
-      queuedOverrides: { run: { sourceReplyDeliveryMode: "message_tool_only" } },
-    },
-    {
-      label: "explicit silent policy",
-      agentResult: { payloads: [] },
-      queuedOverrides: { run: { silentExpected: true } },
-    },
-    {
-      label: "allowed empty reply",
-      agentResult: { payloads: [] },
-      queuedOverrides: { run: { allowEmptyAssistantReplyAsSilent: true } },
-    },
-    {
-      label: "yielded continuation",
-      agentResult: { payloads: [], meta: { yielded: true } },
-      queuedOverrides: {},
-    },
-    {
-      label: "pending tool continuation",
-      agentResult: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
-      queuedOverrides: {},
-    },
-    {
-      label: "room event",
-      agentResult: { payloads: [] },
-      queuedOverrides: { currentInboundEventKind: "room_event" },
-    },
-    {
-      label: "default-silent group",
-      agentResult: { payloads: [] },
-      queuedOverrides: { originatingChatType: "group" },
-    },
-    {
-      label: "internal handoff",
-      agentResult: { payloads: [] },
-      queuedOverrides: {
-        run: { inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" } },
-      },
-    },
-  ])("keeps successful $label followups silent", async ({ agentResult, queuedOverrides }) => {
-    const queued = baseQueuedRun("discord");
-    await runMessagingCase({
-      agentResult,
-      queued: {
-        ...queued,
-        currentInboundEventKind: "user_request",
-        originatingChannel: "discord",
-        originatingTo: "channel:C1",
-        ...queuedOverrides,
-        run: { ...queued.run, ...queuedOverrides.run },
-      } as FollowupRun,
-    });
-
-    expect(routeReplyMock).not.toHaveBeenCalled();
-  });
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = "/tmp/openclaw-followup-usage.json";
@@ -5132,6 +4890,464 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectBlockReplyText(onBlockReply, "hello world!");
   });
 
+  it("routes a visible fallback when an interactive followup completes empty", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingChatType: "direct",
+        originatingReplyToMode: "off",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(routed).toMatchObject({
+      channel: "discord",
+      to: "channel:C1",
+      replyKind: "final",
+      payload: {
+        isError: true,
+      },
+    });
+    expect(String(requireRecord(routed.payload, "fallback payload").text)).toContain(
+      "did not produce a visible reply",
+    );
+    expect(getReplyPayloadMetadataForTest(routed.payload as never)).toMatchObject({
+      replyDelivery: { chatType: "direct", replyToMode: "off" },
+      replyDeliverySource: { channel: "discord" },
+    });
+  });
+
+  it.each([
+    [
+      "reasoning",
+      { text: "internal reasoning", isReasoning: true },
+      { reasoningPayloadsEnabled: true },
+    ],
+    [
+      "commentary",
+      { text: "internal commentary", isCommentary: true },
+      { commentaryPayloadsEnabled: true },
+    ],
+  ] satisfies Array<[string, Record<string, unknown>, GetReplyOptions]>)(
+    "keeps enabled %s progress and appends the terminal fallback",
+    async (_label, progressPayload, opts) => {
+      await runMessagingCase({
+        agentResult: { payloads: [progressPayload] },
+        runnerOverrides: { opts },
+        queued: {
+          ...baseQueuedRun("discord"),
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+        } as FollowupRun,
+      });
+
+      expect(routeReplyMock).toHaveBeenCalledTimes(2);
+      const routedPayloads = routeReplyMock.mock.calls.map((call) =>
+        requireRecord(requireRecord(call[0], "route reply params").payload, "payload"),
+      );
+      expect(routedPayloads).toContainEqual(expect.objectContaining(progressPayload));
+      expect(routedPayloads).toContainEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        }),
+      );
+    },
+  );
+
+  it("routes the shared terminal failure for an empty failed followup", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "private detail" } },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it("routes a terminal failure when an empty result exhausts model fallback", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (provider: string, model: string) => Promise<unknown>;
+        classifyResult: (attempt: {
+          result: unknown;
+          provider: string;
+          model: string;
+          attempt: number;
+          total: number;
+        }) => Promise<Record<string, unknown>> | Record<string, unknown>;
+      }) => {
+        const result = await params.run(params.provider, params.model);
+        const classification = await params.classifyResult({
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempt: 1,
+          total: 1,
+        });
+        expect(classification).toMatchObject({
+          code: "empty_result",
+          preserveResultOnExhaustion: true,
+          preserveResultPriority: -1,
+        });
+        return {
+          outcome: "exhausted",
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [{ reason: "format", code: "empty_result" }],
+        };
+      },
+    );
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { agentHarnessResultClassification: "empty" },
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it("routes a terminal failure when fallback throws without a preserved result", async () => {
+    const exhaustionError = new Error("All model fallback candidates failed");
+    exhaustionError.name = "FallbackSummaryError";
+    runWithModelFallbackMock.mockRejectedValueOnce(exhaustionError);
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "user_request",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      },
+    });
+
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isError: true,
+    });
+  });
+
+  it.each([
+    [
+      "NO_REPLY",
+      { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantVisibleText: "NO_REPLY" } },
+      {},
+    ],
+    ["a yielded continuation", { payloads: [], meta: { yielded: true } }, {}],
+    [
+      "a pending tool continuation",
+      { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
+      {},
+    ],
+    ["a room event", { payloads: [] }, { currentInboundEventKind: "room_event" }],
+    [
+      "an internal handoff",
+      { payloads: [] },
+      { run: { inputProvenance: { kind: "internal_system" } } },
+    ],
+  ] satisfies Array<
+    [
+      string,
+      Record<string, unknown>,
+      {
+        currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
+        run?: Partial<FollowupRun["run"]>;
+      },
+    ]
+  >)(
+    "keeps %s silent",
+    async (
+      _label: string,
+      agentResult: Record<string, unknown>,
+      queuedOverrides: {
+        currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
+        run?: Partial<FollowupRun["run"]>;
+      },
+    ) => {
+      const queued = baseQueuedRun("discord");
+      const runOverride = queuedOverrides.run;
+      const { onBlockReply } = await runMessagingCase({
+        agentResult,
+        queued: {
+          ...queued,
+          ...queuedOverrides,
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: { ...queued.run, ...runOverride },
+        } as FollowupRun,
+      });
+
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains reply-lane ownership until empty fallback delivery settles", async () => {
+    let releaseDelivery = () => {};
+    const deliveryStarted = new Promise<void>((resolveStarted) => {
+      routeReplyMock.mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: true }>((resolveDelivery) => {
+            releaseDelivery = () => resolveDelivery({ ok: true });
+            resolveStarted();
+          }),
+      );
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: { sessionKey: "main", sessionId: "active-session", messageProvider: "discord" },
+      }),
+    );
+    await deliveryStarted;
+
+    expect(replyRunRegistryForTest.get("main")?.result).toMatchObject({
+      kind: "failed",
+      code: "run_failed",
+    });
+    expect(() =>
+      createReplyOperationForTest({
+        sessionKey: "main",
+        sessionId: "next-session",
+        resetTriggered: false,
+      }),
+    ).toThrow();
+
+    releaseDelivery();
+    await pending;
+    expect(replyRunRegistryForTest.get("main")).toBeUndefined();
+  });
+
+  it("routes the fallback for whitespace-only messaging evidence", async () => {
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        messagingToolSentTexts: ["  "],
+        messagingToolSentMediaUrls: ["\t"],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "discord", to: "channel:C1", text: "  " },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
+  it("routes the fallback for a whitespace-only assistant payload", async () => {
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: " \t\n " }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
+  it("routes the fallback for disabled commentary-only output", async () => {
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: "internal commentary", isCommentary: true }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
+  it("routes the fallback after a hidden compaction retry", async () => {
+    await runMessagingCase({
+      agentResult: { payloads: [] },
+      agentEvent: {
+        stream: "compaction",
+        data: { phase: "end", completed: true, willRetry: true },
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["succeeds", { ok: true }],
+    ["fails", { ok: false, error: "forced route failure" }],
+    ["is hook-suppressed", { ok: true, suppressed: true }],
+  ])("routes the fallback after compaction progress that %s", async (_label, noticeResult) => {
+    routeReplyMock.mockResolvedValueOnce(noticeResult).mockResolvedValue({ ok: true });
+    runEmbeddedAgentMock.mockImplementationOnce(async (runParams: unknown) => {
+      const onAgentEvent = requireRecord(runParams, "embedded run params").onAgentEvent;
+      if (typeof onAgentEvent !== "function") {
+        throw new Error("expected embedded run onAgentEvent callback");
+      }
+      await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
+      return { payloads: [], meta: {} };
+    });
+    const queued = baseQueuedRun("discord");
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner({
+      ...queued,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      run: {
+        ...queued.run,
+        config: { agents: { defaults: { compaction: { notifyUser: true } } } },
+      },
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors sendPolicy deny for queued origin delivery", async () => {
+    const onItemEvent = vi.fn();
+    const staleSessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "allow",
+    };
+    const persistedSessionEntry: SessionEntry = {
+      ...staleSessionEntry,
+      sendPolicy: "deny",
+    };
+    const storePath = path.join(tmpdir(), "openclaw-followup-send-policy.json");
+    registerFollowupTestSessionStore(storePath, { main: persistedSessionEntry });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "must stay private" }] },
+      agentEvent: {
+        stream: "item",
+        data: { kind: "preamble", progressText: "also private" },
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: { ...baseQueuedRun("discord").run, verboseLevel: "on" },
+      } as FollowupRun,
+      runnerOverrides: {
+        sessionEntry: staleSessionEntry,
+        sessionKey: "main",
+        storePath,
+        opts: { onItemEvent },
+      },
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps empty message-tool-only followup completions silent", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["source delivery", { didDeliverSourceReplyViaMessageTool: true }],
+    ["source reply payload", { messagingToolSourceReplyPayloads: [{ text: "sent" }] }],
+    [
+      "committed messaging target",
+      { messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }] },
+    ],
+    [
+      "accepted child-session spawn",
+      { acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }] },
+    ],
+    ["cron side effect", { successfulCronAdds: 1 }],
+    ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }],
+  ] satisfies Array<[string, Record<string, unknown>]>)(
+    "keeps empty followup completions silent after %s",
+    async (_label, sideEffectEvidence) => {
+      const { onBlockReply } = await runMessagingCase({
+        agentResult: { payloads: [], ...sideEffectEvidence },
+        queued: {
+          ...baseQueuedRun("discord"),
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+        } as FollowupRun,
+      });
+
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps message-tool-only queued followup finals private", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
@@ -5363,6 +5579,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).toHaveBeenCalledTimes(3);
     const startRoute = requireMockCallArg(routeReplyMock, 0);
     const endRoute = requireMockCallArg(routeReplyMock, 1);
+    const fallbackRoute = requireMockCallArg(routeReplyMock, 2);
     expect(startRoute).toMatchObject({
       channel: "discord",
       to: "channel:C1",
@@ -5385,10 +5602,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToCurrent: true,
       isCompactionNotice: true,
     });
-    expect(
-      requireRecord(requireMockCallArg(routeReplyMock, 2).payload, "final fallback"),
-    ).toMatchObject({
-      text: expect.stringContaining("did not produce a visible reply"),
+    expect(fallbackRoute.replyKind).toBe("final");
+    expect(requireRecord(fallbackRoute.payload, "fallback payload")).toMatchObject({
       isError: true,
     });
   });
@@ -5502,10 +5717,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToCurrent: true,
       isCompactionNotice: true,
     });
-    expect(
-      requireRecord(requireMockCallArg(routeReplyMock, 4).payload, "final fallback"),
-    ).toMatchObject({
-      text: expect.stringContaining("did not produce a visible reply"),
+    const fallbackRoute = requireMockCallArg(routeReplyMock, 4);
+    expect(fallbackRoute.replyKind).toBe("final");
+    expect(requireRecord(fallbackRoute.payload, "fallback payload")).toMatchObject({
       isError: true,
     });
   });
@@ -5552,12 +5766,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       isCompactionNotice: true,
     });
     expect(payload.replyToId).toBeUndefined();
-    expect(
-      requireRecord(requireMockCallArg(routeReplyMock, 1).payload, "final fallback"),
-    ).toMatchObject({
-      text: expect.stringContaining("did not produce a visible reply"),
-      isError: true,
-    });
+    const fallbackRoute = requireMockCallArg(routeReplyMock, 1);
+    expect(fallbackRoute.replyKind).toBe("final");
+    const fallbackPayload = requireRecord(fallbackRoute.payload, "fallback payload");
+    expect(fallbackPayload).toMatchObject({ isError: true });
+    expect(fallbackPayload.replyToId).toBeUndefined();
   });
 
   it("plans queued compaction notices with the active fallback candidate", async () => {
@@ -5646,11 +5859,13 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledOnce();
-    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
-      text: expect.stringContaining("did not produce a visible reply"),
-      isError: true,
-    });
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(routed.replyKind).toBe("final");
+    const payload = requireRecord(routed.payload, "fallback payload");
+    expect(payload).toMatchObject({ isError: true });
+    expect(payload.isCompactionNotice).not.toBe(true);
+    expect(String(payload.text)).toContain("did not produce a visible reply");
   });
 });
 

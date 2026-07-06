@@ -171,8 +171,11 @@ Without the pack, unsupported languages still render as readable plain text. See
 
 ## Output details contract
 
+All successful results include `changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.
+
 <AccordionGroup>
   <Accordion title="Viewer fields (view and both modes)">
+    - `changed`
     - `artifactId`
     - `viewerUrl`
     - `viewerPath`
@@ -185,6 +188,7 @@ Without the pack, unsupported languages still render as readable plain text. See
 
   </Accordion>
   <Accordion title="File fields (file and both modes)">
+    - `changed`
     - `artifactId`
     - `expiresAt`
     - `filePath`

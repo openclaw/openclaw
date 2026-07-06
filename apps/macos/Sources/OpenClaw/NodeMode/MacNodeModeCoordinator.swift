@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OpenClawKit
 import OSLog
@@ -40,7 +41,7 @@ struct MacNodeGatewayTLSSessionCache {
 }
 
 @MainActor
-final class MacNodeModeCoordinator {
+final class MacNodeModeCoordinator: NSObject {
     static let shared = MacNodeModeCoordinator()
     static var nodeIdentityProfile: GatewayDeviceIdentityProfile {
         self.resolveNodeIdentityProfile(
@@ -73,17 +74,46 @@ final class MacNodeModeCoordinator {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "mac-node")
     private var task: Task<Void, Never>?
+    private var endpointRefreshTask: Task<Void, Never>?
+    private var reconnectProbeTask: Task<Void, Never>?
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
+    private let refreshEvents: AsyncStream<Void>
+    private let refreshContinuation: AsyncStream<Void>.Continuation
     private var autoRepairedTLSFingerprintsByStoreKey: [String: String] = [:]
     private var tlsSessionCache = MacNodeGatewayTLSSessionCache()
 
-    private init() {
+    override private init() {
         let session = GatewayNodeSession()
+        let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
         self.runtime = MacNodeRuntime(
             canvasSurfaceUrl: { await session.currentCanvasHostUrl() },
             refreshCanvasSurfaceUrl: { await session.refreshCanvasHostUrl() })
+        self.refreshEvents = refreshEvents.stream
+        self.refreshContinuation = refreshEvents.continuation
+        super.init()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.refreshNodeConfiguration),
+            name: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.refreshNodeConfiguration),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.refreshNodeConfiguration),
+            name: .openclawPermissionsChanged,
+            object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        self.refreshContinuation.finish()
     }
 
     func start() {
@@ -91,53 +121,61 @@ final class MacNodeModeCoordinator {
         self.task = Task { [weak self] in
             await self?.run()
         }
+        self.endpointRefreshTask = Task { [weak self] in
+            let states = await GatewayEndpointStore.shared.subscribe()
+            var previousState: GatewayEndpointState?
+            for await state in states {
+                if let previousState, state != previousState {
+                    self?.refresh()
+                }
+                previousState = state
+            }
+        }
     }
 
     func stop() {
         self.task?.cancel()
         self.task = nil
+        self.endpointRefreshTask?.cancel()
+        self.endpointRefreshTask = nil
+        self.reconnectProbeTask?.cancel()
+        self.reconnectProbeTask = nil
         Task { await self.session.disconnect() }
     }
 
     func setPreferredGatewayStableID(_ stableID: String?) {
         GatewayDiscoveryPreferences.setPreferredStableID(stableID)
-        Task { await self.session.disconnect() }
+        Task {
+            await self.session.disconnect()
+            self.refresh()
+        }
+    }
+
+    func refresh() {
+        self.refreshContinuation.yield()
     }
 
     private func run() async {
         var retryDelay: UInt64 = 1_000_000_000
-        var lastCameraEnabled: Bool?
-        var lastBrowserControlEnabled: Bool?
+        var refreshIterator = self.refreshEvents.makeAsyncIterator()
         let defaults = UserDefaults.standard
 
         while !Task.isCancelled {
             if await MainActor.run(body: { AppStateStore.shared.isPaused }) {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard await refreshIterator.next() != nil else { return }
                 continue
             }
 
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
-            if lastCameraEnabled == nil {
-                lastCameraEnabled = cameraEnabled
-            } else if lastCameraEnabled != cameraEnabled {
-                lastCameraEnabled = cameraEnabled
-                await self.session.disconnect()
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
             let browserControlEnabled = OpenClawConfigFile.browserControlEnabled()
-            if lastBrowserControlEnabled == nil {
-                lastBrowserControlEnabled = browserControlEnabled
-            } else if lastBrowserControlEnabled != browserControlEnabled {
-                lastBrowserControlEnabled = browserControlEnabled
-                await self.session.disconnect()
-                try? await Task.sleep(nanoseconds: 200_000_000)
-            }
 
             var attemptedURL: URL?
             do {
                 let config = try await GatewayEndpointStore.shared.requireConfig()
                 attemptedURL = config.url
-                let caps = self.currentCaps()
+                let caps = self.currentCaps(
+                    browserControlEnabled: browserControlEnabled,
+                    cameraEnabled: cameraEnabled)
                 let commands = self.currentCommands(caps: caps)
                 let permissions = await self.currentPermissions()
                 let connectOptions = GatewayConnectOptions(
@@ -163,6 +201,7 @@ final class MacNodeModeCoordinator {
                     sessionBox: sessionBox,
                     onConnected: { [weak self] in
                         guard let self else { return }
+                        await self.cancelReconnectProbe()
                         self.logger.info("mac node connected to gateway")
                         let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
                         await self.runtime.updateMainSessionKey(mainSessionKey)
@@ -174,6 +213,7 @@ final class MacNodeModeCoordinator {
                     onDisconnected: { [weak self] reason in
                         guard let self else { return }
                         await self.runtime.setEventSender(nil)
+                        await self.scheduleReconnectProbe()
                         self.logger.error("mac node disconnected: \(reason, privacy: .public)")
                     },
                     onInvoke: { [weak self] req in
@@ -187,7 +227,9 @@ final class MacNodeModeCoordinator {
                     })
 
                 retryDelay = 1_000_000_000
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                // GatewayNodeSession owns transport reconnects. Wait until inputs can
+                // actually change instead of rereading config and TCC state every second.
+                guard await refreshIterator.next() != nil else { return }
             } catch {
                 if await self.autoRepairStaleTLSPinIfNeeded(error: error, url: attemptedURL) {
                     retryDelay = 1_000_000_000
@@ -197,6 +239,28 @@ final class MacNodeModeCoordinator {
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
+        }
+    }
+
+    private func scheduleReconnectProbe() {
+        self.reconnectProbeTask?.cancel()
+        // GatewayChannel reconnects normally, but pauses after auth or pairing failures.
+        // Probe only while disconnected so recovery does not restore steady idle polling.
+        self.reconnectProbeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            self?.refresh()
+        }
+    }
+
+    private func cancelReconnectProbe() {
+        self.reconnectProbeTask?.cancel()
+        self.reconnectProbeTask = nil
+    }
+
+    @objc private nonisolated func refreshNodeConfiguration(_: Notification) {
+        Task { @MainActor [weak self] in
+            self?.refresh()
         }
     }
 
@@ -222,11 +286,11 @@ final class MacNodeModeCoordinator {
         return caps
     }
 
-    private func currentCaps() -> [String] {
+    private func currentCaps(browserControlEnabled: Bool, cameraEnabled: Bool) -> [String] {
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
         return Self.resolvedCaps(
-            browserControlEnabled: OpenClawConfigFile.browserControlEnabled(),
-            cameraEnabled: UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false,
+            browserControlEnabled: browserControlEnabled,
+            cameraEnabled: cameraEnabled,
             locationMode: OpenClawLocationMode(rawValue: rawLocationMode) ?? .off,
             connectionMode: AppStateStore.shared.connectionMode)
     }

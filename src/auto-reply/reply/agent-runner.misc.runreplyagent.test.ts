@@ -362,6 +362,75 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
+  async function runEmptyDirectReply(
+    agentResult: Record<string, unknown>,
+    options?: {
+      agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
+      config?: OpenClawConfig;
+      onBlockReply?: (payload: unknown) => Promise<void> | void;
+    },
+  ) {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const resultMeta = requireRecord(agentResult.meta, "agent result meta");
+    const agentMeta = requireRecord(resultMeta.agentMeta, "agent result agent meta");
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
+      if (typeof onAgentEvent === "function") {
+        for (const event of options?.agentEvents ?? []) {
+          await onAgentEvent(event);
+        }
+      }
+      return {
+        payloads: [],
+        ...agentResult,
+        meta: {
+          ...resultMeta,
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude",
+            ...agentMeta,
+          },
+          finalAssistantVisibleText: "",
+        },
+      };
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+      config: options?.config,
+    });
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
   async function runBaseReplyWithAgentMeta(params: {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
@@ -501,6 +570,96 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
+
+  it.each([
+    ["without side effects", { meta: { agentMeta: {} } }],
+    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }],
+  ] satisfies Array<[string, Record<string, unknown>]>)(
+    "surfaces empty interactive direct replies %s",
+    async (_label, agentResult) => {
+      const result = await runEmptyDirectReply(agentResult);
+      const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+      expect(payload.text).toContain("did not produce a visible reply");
+    },
+  );
+
+  it("threads the empty interactive direct fallback through normal final preparation", async () => {
+    const result = await runEmptyDirectReply(
+      { meta: { agentMeta: {} } },
+      { config: { channels: { whatsapp: { replyToMode: "first" } } } },
+    );
+
+    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(payload.replyToId).toBe("msg");
+  });
+
+  it.each([
+    ["reasoning", { text: "internal reasoning", isReasoning: true }],
+    ["commentary", { text: "internal commentary", isCommentary: true }],
+  ])("surfaces a fallback for disabled %s-only direct output", async (_label, payload) => {
+    const onBlockReply = vi.fn();
+    const result = await runEmptyDirectReply(
+      {
+        payloads: [payload],
+        meta: { agentMeta: {} },
+      },
+      { onBlockReply },
+    );
+
+    const fallback = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(fallback.text).toContain("did not produce a visible reply");
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps spawn-only empty direct replies silent", async () => {
+    expect(
+      await runEmptyDirectReply({
+        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+        meta: { agentMeta: {} },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("surfaces terminal direct failures after runtime compaction progress", async () => {
+    const onBlockReply = vi.fn();
+    const result = await runEmptyDirectReply(
+      {
+        meta: {
+          agentMeta: {},
+          error: { kind: "tool_result_mismatch", message: "terminal failure after notice" },
+        },
+      },
+      {
+        agentEvents: [
+          { stream: "compaction", data: { phase: "start" } },
+          { stream: "compaction", data: { phase: "end", completed: true } },
+        ],
+        config: {
+          agents: { defaults: { compaction: { notifyUser: true } } },
+        },
+        onBlockReply,
+      },
+    );
+
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expectRecordFields(result, { isError: true }, "terminal failure");
+  });
+
+  it("surfaces empty direct replies when runtime compaction notice delivery fails", async () => {
+    const result = await runEmptyDirectReply(
+      { meta: { agentMeta: {} } },
+      {
+        agentEvents: [{ stream: "compaction", data: { phase: "start" } }],
+        config: {
+          agents: { defaults: { compaction: { notifyUser: true } } },
+        },
+        onBlockReply: vi.fn().mockRejectedValue(new Error("delivery failed")),
+      },
+    );
+
+    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(payload.text).toContain("did not produce a visible reply");
   });
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
