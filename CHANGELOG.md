@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - **Compaction participant deduplication:** include canonical sender identity in duplicate long-message keys so identical turns from different participants remain in compacted transcripts. (#98310, #98336) Thanks @SunnyShu0925.
 - **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
 - **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
+- **Windows package-update task guard:** temporarily disable only an enabled managed Scheduled Task while replacing the package tree, then restore it before recovery or restart so legacy repeated triggers cannot relaunch the Gateway mid-update. (#88292, #87993) Thanks @vincentkoc.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
 - **Detail-less provider failures:** keep opaque upstream failures from cooling API-key auth profiles while preserving WHAM-backed OpenAI OAuth health checks and configured model fallback. (#100600, #100617) Thanks @fengjikui.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
