@@ -53,6 +53,10 @@ describe("extractUrls", () => {
     expect(extractUrls(`[Wikipedia](${url})`)).toEqual([url]);
   });
 
+  it("does not extract an incomplete markdown link destination", () => {
+    expect(extractUrls("[broken](https://)")).toEqual([]);
+  });
+
   it("handles bare URLs with trailing closing paren as punctuation", () => {
     const urls = extractUrls("(see https://example.com/path)");
     expect(urls).toEqual(["https://example.com/path"]);

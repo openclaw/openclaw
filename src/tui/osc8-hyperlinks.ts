@@ -9,7 +9,7 @@ const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 /** Allow one level of balanced parentheses inside a URL so markdown link
  *  targets like `https://en.wikipedia.org/wiki/URL_(disambiguation)` are
  *  fully captured instead of truncated at the first `)`. */
-const URL_PATH_WITH_PARENS = /https?:\/\/[^()\s<>]*(?:\([^()\s<>]*\)[^()\s<>]*)*/g;
+const URL_PATH_WITH_PARENS = /https?:\/\/[^()\s<>]+(?:\([^()\s<>]*\)[^()\s<>]*)*/g;
 
 /** Strip trailing `)` characters that don't have a matching `(` in the URL.
  *  Bare URLs in prose can pick up a trailing `)` that belongs to surrounding
@@ -58,7 +58,10 @@ export function extractUrls(markdown: string): string[] {
   const stripped = markdown.replace(mdLinkRe, "");
   const bareRe = /https?:\/\/[^\s\]>]+/g;
   while ((m = bareRe.exec(stripped)) !== null) {
-    urls.add(trimUnbalancedTrailingParens(m[0]));
+    const url = trimUnbalancedTrailingParens(m[0]);
+    if (url !== "http://" && url !== "https://") {
+      urls.add(url);
+    }
   }
 
   return [...urls];
