@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.
+
 Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
 
 Third-party Android builds can now opt into Always location through Android settings, with requested background checks disclosed in the persistent node notification while Play builds remain foreground-only. (#68581) Thanks @ioridev.

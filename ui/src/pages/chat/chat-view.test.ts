@@ -1204,11 +1204,20 @@ describe("chat composer workbench", () => {
       container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
     ).find((row) => row.textContent?.includes("ui"));
     browserDirectory?.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")?.click();
+    const browserFile = Array.from(
+      container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
+    ).find((row) => row.textContent?.includes("package.json"));
+    const browserFileButton = browserFile?.querySelector<HTMLButtonElement>(
+      ".chat-workspace-rail__file-open",
+    );
+    expect(browserFileButton?.disabled).toBe(false);
+    browserFileButton?.click();
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Collapse session workspace"]')
       ?.click();
 
-    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md");
+    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md", "session");
+    expect(onOpenFile).toHaveBeenCalledWith("package.json", "workspace");
     expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
     expect(onBrowsePath).toHaveBeenCalledWith("ui");
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);

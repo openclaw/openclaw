@@ -371,6 +371,7 @@ export type AgentsFilesSetResult = {
 
 export type SessionWorkspaceFileEntry = {
   path: string;
+  workspacePath?: string;
   name: string;
   kind: "modified" | "read";
   missing: boolean;

@@ -2999,6 +2999,16 @@
       "translated": "การสนทนาล่าสุด"
     },
     {
+      "id": "native.android.cbdaff5e476b7dad",
+      "source": "Browse",
+      "translated": "เรียกดู"
+    },
+    {
+      "id": "native.android.c093a2297a02405a",
+      "source": "Offline",
+      "translated": "ออฟไลน์"
+    },
+    {
       "id": "native.android.1196e848f04a3dc1",
       "source": "Working · $pendingRunCount active ${pluralize(\"run\", pendingRunCount)}",
       "translated": "กำลังทำงาน · $pendingRunCount ${pluralize(\"run\", pendingRunCount)} ที่กำลังใช้งานอยู่"
@@ -3492,6 +3502,56 @@
       "id": "native.android.09137c880dd8890e",
       "source": "OpenClaw is thinking…",
       "translated": "OpenClaw กำลังคิด…"
+    },
+    {
+      "id": "native.android.eb6ff96aba8f67b4",
+      "source": "Files unavailable",
+      "translated": "ไฟล์ไม่พร้อมใช้งาน"
+    },
+    {
+      "id": "native.android.fefb4a6c1717210d",
+      "source": "Empty folder",
+      "translated": "โฟลเดอร์ว่าง"
+    },
+    {
+      "id": "native.android.b74f90dc5f65b1da",
+      "source": "This folder has no files yet.",
+      "translated": "โฟลเดอร์นี้ยังไม่มีไฟล์"
+    },
+    {
+      "id": "native.android.8f0b5317c75e334d",
+      "source": "Could not load this folder.",
+      "translated": "ไม่สามารถโหลดโฟลเดอร์นี้ได้"
+    },
+    {
+      "id": "native.android.4e48916e1b0f86ab",
+      "source": "Load more",
+      "translated": "โหลดเพิ่มเติม"
+    },
+    {
+      "id": "native.android.f26b7b179d4765b0",
+      "source": "${entries.size} of $totalEntries",
+      "translated": "${entries.size} จาก $totalEntries"
+    },
+    {
+      "id": "native.android.b2a525ca00a799df",
+      "source": "Back",
+      "translated": "ย้อนกลับ"
+    },
+    {
+      "id": "native.android.737edf881bc586d5",
+      "source": "Share file",
+      "translated": "แชร์ไฟล์"
+    },
+    {
+      "id": "native.android.095574301bf487a1",
+      "source": "No preview",
+      "translated": "ไม่มีตัวอย่าง"
+    },
+    {
+      "id": "native.android.f57b231996a10d14",
+      "source": "This image could not be decoded.",
+      "translated": "ไม่สามารถถอดรหัสรูปภาพนี้ได้"
     },
     {
       "id": "native.android.4949d6815387ee5c",
@@ -6704,6 +6764,11 @@
       "translated": "รหัสผ่าน Gateway"
     },
     {
+      "id": "native.apple.438ae7e5b8544548",
+      "source": "Custom Headers",
+      "translated": "Headers แบบกำหนดเอง"
+    },
+    {
       "id": "native.apple.c9cd035bc39af480",
       "source": "Reset Onboarding",
       "translated": "รีเซ็ตการเริ่มต้นใช้งาน"
@@ -8257,6 +8322,41 @@
       "id": "native.apple.e69088f1f2dcbd99",
       "source": "Connection",
       "translated": "การเชื่อมต่อ"
+    },
+    {
+      "id": "native.apple.41e812a22a1b042d",
+      "source": "Value",
+      "translated": "ค่า"
+    },
+    {
+      "id": "native.apple.acc5936e406af08c",
+      "source": "Headers",
+      "translated": "Headers"
+    },
+    {
+      "id": "native.apple.8896386269ac4882",
+      "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
+      "translated": "ส่งพร้อมกับการเชื่อมต่อของแอปเบื้องหน้าไปยัง Gateway นี้ การเปลี่ยนแปลงจะมีผลเมื่อเชื่อมต่อใหม่ครั้งถัดไป ยังไม่รองรับการส่งผ่าน Share extension"
+    },
+    {
+      "id": "native.apple.319594454c1ff701",
+      "source": "Header name",
+      "translated": "ชื่อ Header"
+    },
+    {
+      "id": "native.apple.7c4ff27cd7fa2c96",
+      "source": "Header value",
+      "translated": "ค่า Header"
+    },
+    {
+      "id": "native.apple.a1368ad2d29a1152",
+      "source": "Add Header",
+      "translated": "เพิ่ม Header"
+    },
+    {
+      "id": "native.apple.19fba912c31023b5",
+      "source": "Custom Headers",
+      "translated": "Headers แบบกำหนดเอง"
     },
     {
       "id": "native.apple.4dac301c7e0c921c",

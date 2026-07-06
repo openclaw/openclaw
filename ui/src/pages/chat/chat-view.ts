@@ -132,6 +132,8 @@ export type ChatProps = {
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onRevealWorkspaceFile?: (path: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
@@ -183,6 +185,7 @@ export function renderChat(props: ChatProps) {
     autoExpandToolCalls: props.autoExpandToolCalls,
     realtimeTalkConversation: props.realtimeTalkConversation,
     onOpenSidebar: props.onOpenSidebar,
+    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
     onRequestUpdate: requestUpdate,
@@ -358,6 +361,8 @@ export function renderChat(props: ChatProps) {
                     .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
                     .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
                     .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
+                    .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
+                    .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
                   ></openclaw-chat-detail-panel>
                 `

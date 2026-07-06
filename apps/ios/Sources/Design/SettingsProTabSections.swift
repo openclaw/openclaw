@@ -890,6 +890,14 @@ extension SettingsProTab {
             }
             self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
             self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+            if let headersStableID = self.gatewayCustomHeadersTargetStableID {
+                NavigationLink {
+                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
+                } label: {
+                    Text("Custom Headers")
+                        .font(OpenClawType.body)
+                }
+            }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {

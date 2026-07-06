@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { TelegramBotMessage, TelegramBotUpdate } from "@openclaw/telegram/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -218,32 +219,22 @@ type TelegramRichMessage = {
   blocks?: unknown[];
 };
 
-type TelegramMessage = {
-  message_id: number;
-  date: number;
-  text?: string;
-  caption?: string;
+type TelegramMessage = Pick<TelegramBotMessage, "date" | "message_id"> &
+  Partial<Pick<TelegramBotMessage, "caption" | "text">> & {
+  audio?: unknown;
+  chat: { id: number };
+  document?: unknown;
+  from?: Pick<NonNullable<TelegramBotMessage["from"]>, "id" | "is_bot" | "username">;
+  photo?: unknown[];
   rich_message?: TelegramRichMessage;
   reply_markup?: TelegramReplyMarkup;
   reply_to_message?: { message_id?: number };
-  from?: {
-    id?: number;
-    is_bot?: boolean;
-    username?: string;
-  };
-  chat: {
-    id: number;
-  };
-  photo?: unknown[];
-  document?: unknown;
-  audio?: unknown;
+  sticker?: unknown;
   video?: unknown;
   voice?: unknown;
-  sticker?: unknown;
 };
 
-type TelegramUpdate = {
-  update_id: number;
+type TelegramUpdate = Pick<TelegramBotUpdate, "update_id"> & {
   edited_message?: TelegramMessage;
   message?: TelegramMessage;
 };
@@ -841,7 +832,7 @@ function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObser
     messageId: message.message_id,
     chatId: message.chat.id,
     senderId: message.from.id,
-    senderIsBot: message.from.is_bot === true,
+    senderIsBot: message.from.is_bot,
     senderUsername: message.from.username,
     text: selectTelegramObservedText(message),
     caption: message.caption,
@@ -2258,6 +2249,7 @@ export const testing = {
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
+  flushTelegramUpdates,
   isTelegramObservedMessageTimeoutError,
   listTelegramQaScenarioCatalog,
   matchesTelegramScenarioReply,

@@ -2433,6 +2433,7 @@ public struct SessionFileBrowserResult: Codable, Sendable {
 
 public struct SessionFileEntry: Codable, Sendable {
     public let path: String
+    public let workspacepath: String?
     public let name: String
     public let kind: SessionFileKind
     public let missing: Bool
@@ -2442,6 +2443,7 @@ public struct SessionFileEntry: Codable, Sendable {
 
     public init(
         path: String,
+        workspacepath: String?,
         name: String,
         kind: SessionFileKind,
         missing: Bool,
@@ -2450,6 +2452,7 @@ public struct SessionFileEntry: Codable, Sendable {
         content: String?)
     {
         self.path = path
+        self.workspacepath = workspacepath
         self.name = name
         self.kind = kind
         self.missing = missing
@@ -2460,6 +2463,7 @@ public struct SessionFileEntry: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case path
+        case workspacepath = "workspacePath"
         case name
         case kind
         case missing
