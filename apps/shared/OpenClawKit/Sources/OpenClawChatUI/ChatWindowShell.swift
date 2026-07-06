@@ -295,6 +295,8 @@ private struct ChatSessionSidebar: View {
         let sections = ChatSessionSidebarModel.sections(
             sessions: self.viewModel.sessions,
             currentSessionKey: self.viewModel.sessionKey,
+            mainSessionKey: self.viewModel.resolvedMainSessionKey,
+            activeAgentID: self.viewModel.activeAgentId,
             query: self.query)
         List(selection: self.selectionBinding) {
             ForEach(sections) { section in
@@ -369,7 +371,13 @@ private struct ChatSessionSidebar: View {
 
     private var selectionBinding: Binding<String?> {
         Binding(
-            get: { self.viewModel.sessionKey },
+            get: {
+                ChatSessionSidebarModel.selectedSessionKey(
+                    sessions: self.viewModel.sessions,
+                    currentSessionKey: self.viewModel.sessionKey,
+                    mainSessionKey: self.viewModel.resolvedMainSessionKey,
+                    activeAgentID: self.viewModel.activeAgentId)
+            },
             set: { next in
                 guard let next, next != self.viewModel.sessionKey else { return }
                 self.viewModel.switchSession(to: next)

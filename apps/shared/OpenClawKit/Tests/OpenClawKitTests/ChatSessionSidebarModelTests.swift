@@ -82,6 +82,35 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:main:main"])
     }
 
+    @Test func `main aliases select the resolved row without adding a placeholder`() {
+        let sessions = [self.entry(key: "agent:default:main", updatedAt: 100)]
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: sessions,
+            currentSessionKey: "main",
+            mainSessionKey: "agent:default:main",
+            activeAgentID: "default",
+            query: "")
+
+        #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:default:main"])
+        #expect(ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: "main",
+            mainSessionKey: "agent:default:main",
+            activeAgentID: "default") == "agent:default:main")
+    }
+
+    @Test func `global aliases select their agent wrapped row`() {
+        let sessions = [self.entry(key: "agent:ops:global", updatedAt: 100)]
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: sessions,
+            currentSessionKey: "global",
+            mainSessionKey: "agent:main:main",
+            activeAgentID: "ops",
+            query: "")
+
+        #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:ops:global"])
+    }
+
     @Test func `query filters on display name and key`() {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [

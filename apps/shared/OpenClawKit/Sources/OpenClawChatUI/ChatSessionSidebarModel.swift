@@ -18,11 +18,15 @@ enum ChatSessionSidebarModel {
     static func sections(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,
+        mainSessionKey: String = "main",
+        activeAgentID: String? = nil,
         query: String) -> [Section]
     {
         let visible = self.visibleSessions(
             sessions: sessions,
             currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
             query: query)
         let pinned = visible.filter { $0.pinned == true }
         let recent = visible.filter { $0.pinned != true }
@@ -57,6 +61,24 @@ enum ChatSessionSidebarModel {
         return normalized != "main" && normalized != "global" && normalized != normalizedMain
     }
 
+    static func selectedSessionKey(
+        sessions: [OpenClawChatSessionEntry],
+        currentSessionKey: String,
+        mainSessionKey: String,
+        activeAgentID: String?) -> String
+    {
+        if sessions.contains(where: { $0.key == currentSessionKey }) {
+            return currentSessionKey
+        }
+        return sessions.first(where: {
+            OpenClawChatViewModel.matchesCurrentSessionKey(
+                incoming: $0.key,
+                current: currentSessionKey,
+                mainSessionKey: mainSessionKey,
+                activeAgentId: activeAgentID)
+        })?.key ?? currentSessionKey
+    }
+
     /// Session keys read as routing ids ("agent:main:main"); show the human
     /// part and keep the owning agent as a suffix only when it disambiguates.
     static func displayName(forKey key: String) -> String {
@@ -74,13 +96,20 @@ enum ChatSessionSidebarModel {
     private static func visibleSessions(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,
+        mainSessionKey: String,
+        activeAgentID: String?,
         query: String) -> [OpenClawChatSessionEntry]
     {
+        let selectedSessionKey = self.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID)
         var entries = sessions.filter { entry in
-            entry.key == currentSessionKey ||
+            entry.key == selectedSessionKey ||
                 (!self.isHiddenInternalSession(entry.key) && entry.archived != true)
         }
-        if !entries.contains(where: { $0.key == currentSessionKey }),
+        if !entries.contains(where: { $0.key == selectedSessionKey }),
            !currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
