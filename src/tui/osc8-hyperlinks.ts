@@ -14,7 +14,9 @@ export function extractUrls(markdown: string): string[] {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
-  const mdLinkRe = /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  // Match balanced parentheses in URLs by allowing nested parens up to the final ) before optional title
+  const mdLinkRe =
+    /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/(?:[^\s>]+|\([^)]*\))*)>?(?:\s+["'][^"']*["'])?\s*\)/g;
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
     urls.add(m[1]);
@@ -22,10 +24,11 @@ export function extractUrls(markdown: string): string[] {
 
   // Bare URLs (remove markdown links first to avoid double-matching)
   const stripped = markdown.replace(
-    /\[(?:[^\]]*)\]\(\s*<?https?:\/\/[^)\s>]+>?(?:\s+["'][^"']*["'])?\s*\)/g,
+    /\[(?:[^\]]*)\]\(\s*<?https?:\/\/(?:[^\s>]+|\([^)]*\))*>?(?:\s+["'][^"']*["'])?\s*\)/g,
     "",
   );
-  const bareRe = /https?:\/\/[^\s)\]>]+/g;
+  // Match URLs with balanced parentheses
+  const bareRe = /https?:\/\/(?:[^\s\]>]|\([^)]*\))+/g;
   while ((m = bareRe.exec(stripped)) !== null) {
     urls.add(m[0]);
   }

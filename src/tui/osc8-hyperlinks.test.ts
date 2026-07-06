@@ -47,6 +47,37 @@ describe("extractUrls", () => {
     const urls = extractUrls("https://example.com/path?q=1&r=2#section");
     expect(urls).toEqual(["https://example.com/path?q=1&r=2#section"]);
   });
+
+  it("extracts URLs with parentheses from markdown links", () => {
+    const markdown = "[Wikipedia](https://en.wikipedia.org/wiki/URL_(disambiguation))";
+    const urls = extractUrls(markdown);
+    expect(urls).toEqual(["https://en.wikipedia.org/wiki/URL_(disambiguation)"]);
+  });
+
+  it("extracts multiple URLs with parentheses from markdown links", () => {
+    const markdown =
+      "[Link1](https://example.com/foo_(bar)) and [Link2](https://example.org/baz_(qux))";
+    const urls = extractUrls(markdown);
+    expect(urls).toEqual(["https://example.com/foo_(bar)", "https://example.org/baz_(qux)"]);
+  });
+
+  it("extracts bare URLs with parentheses", () => {
+    const markdown = "Check this: https://example.com/test_(file).txt";
+    const urls = extractUrls(markdown);
+    expect(urls).toEqual(["https://example.com/test_(file).txt"]);
+  });
+
+  it("handles URLs with multiple nested parentheses", () => {
+    const markdown = "[Complex](https://example.com/a_(b_(c))_d)";
+    const urls = extractUrls(markdown);
+    expect(urls).toEqual(["https://example.com/a_(b_(c))_d"]);
+  });
+
+  it("handles URLs with parentheses and query strings", () => {
+    const markdown = "[Query](https://example.com/search_(test)?q=foo_(bar))";
+    const urls = extractUrls(markdown);
+    expect(urls).toEqual(["https://example.com/search_(test)?q=foo_(bar)"]);
+  });
 });
 
 describe("addOsc8Hyperlinks", () => {
