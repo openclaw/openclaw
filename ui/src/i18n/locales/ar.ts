@@ -1611,7 +1611,7 @@ export const ar: TranslationMap = {
       discard: "تجاهل",
       faster: "أسرع",
       smarter: "أذكى",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "استخدام النموذج الافتراضي",
     },
     pairingQrExpired: {
       title: "انتهت صلاحية رمز الاقتران QR",
@@ -1622,10 +1622,10 @@ export const ar: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "إضافة مرفق",
+      attachPhoto: "صورة",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "ملف",
       contextUsage: {
         title: "تفاصيل استخدام السياق",
         open: "فتح تفاصيل استخدام السياق",

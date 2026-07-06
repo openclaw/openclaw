@@ -1640,7 +1640,7 @@ export const de: TranslationMap = {
       discard: "Verwerfen",
       faster: "Schneller",
       smarter: "Intelligenter",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "Standardmodell verwenden",
     },
     pairingQrExpired: {
       title: "Kopplungs-QR-Code abgelaufen",
@@ -1651,10 +1651,10 @@ export const de: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "Anhang hinzufügen",
+      attachPhoto: "Foto",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "Datei",
       contextUsage: {
         title: "Details zur Kontextnutzung",
         open: "Details zur Kontextnutzung öffnen",
