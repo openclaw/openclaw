@@ -318,38 +318,31 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
       pwMocks.executeActViaPlaywright.mockResolvedValueOnce({
-        downloads: {
-          count: 1,
-          recent: [
-            {
-              suggestedFilename: "report.pdf",
-              savedPath: "/tmp/openclaw/downloads/report.pdf",
-            },
-          ],
-        },
+        downloads: [
+          {
+            url: "https://example.com/report.pdf",
+            suggestedFilename: "report.pdf",
+            path: "/tmp/openclaw/downloads/report.pdf",
+          },
+        ],
       });
 
       const response = await postJson<{
         ok: boolean;
-        downloads?: {
-          count: number;
-          recent: Array<{ suggestedFilename?: string; savedPath?: string }>;
-        };
+        downloads?: Array<{ url?: string; suggestedFilename?: string; path?: string }>;
       }>(`${base}/act`, {
         kind: "click",
         ref: "5",
       });
 
       expect(response.ok).toBe(true);
-      expect(response.downloads).toEqual({
-        count: 1,
-        recent: [
-          {
-            suggestedFilename: "report.pdf",
-            savedPath: "/tmp/openclaw/downloads/report.pdf",
-          },
-        ],
-      });
+      expect(response.downloads).toEqual([
+        {
+          url: "https://example.com/report.pdf",
+          suggestedFilename: "report.pdf",
+          path: "/tmp/openclaw/downloads/report.pdf",
+        },
+      ]);
     },
     slowTimeoutMs,
   );
