@@ -30,10 +30,13 @@ struct GatewayCustomHeadersTests {
         #expect(headers == ["X-Allowed": "yes"])
     }
 
-    @Test func `sanitized drops empty names and control characters`() {
+    @Test func `sanitized drops invalid names and control characters`() {
         let headers = GatewayCustomHeaders.sanitized([
             "": "value",
             "   ": "value",
+            "X Bad": "value",
+            "X:Bad": "value",
+            "X-Bad-é": "value",
             "X-Split\r\nEvil": "value",
             "X-Value-Split": "a\r\nEvil: b",
             "X-Tab-Value": "a\tb",
