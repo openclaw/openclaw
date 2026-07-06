@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { renderProviderQuotaPill } from "../../components/provider-quota-pill.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   getContextNoticeViewModel,
@@ -424,6 +425,20 @@ describe("context notice", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetContextNoticeThemeCacheForTest();
+  });
+
+  it("treats unavailable provider usage as absent content", () => {
+    expect(renderProviderQuotaPill({ modelAuthStatusResult: null })).toBe(nothing);
+
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(undefined, 200_000, {
+        providerQuota: { modelAuthStatusResult: null },
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".context-usage")).toBeNull();
   });
 
   it("keeps provider usage available before context token metrics arrive", () => {

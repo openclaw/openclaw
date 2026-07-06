@@ -1522,7 +1522,7 @@ export function renderContextNotice(
 ) {
   const model = getContextNoticeViewModel(session, defaultContextTokens);
   const providerQuota = options.providerQuota ? renderProviderQuotaPill(options.providerQuota) : "";
-  if (!model && providerQuota === "") {
+  if (!model && (providerQuota === "" || providerQuota === nothing)) {
     return nothing;
   }
   const canRenderCompact = Boolean(model?.compactRecommended && options.onCompact);

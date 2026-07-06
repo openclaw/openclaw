@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
 import { renderChatControls, type ChatControlsProps } from "./components/chat-controls.ts";
 
 vi.mock("../../components/icons.ts", () => ({
@@ -75,7 +76,7 @@ describe("chat composer settings", () => {
     const container = document.createElement("div");
     render(renderChatControls(createProps()), container);
 
-    expect(container.querySelectorAll('button[aria-label="Settings"]')).toHaveLength(1);
+    expect(container.querySelectorAll(`button[aria-label="${t("chat.settings")}"]`)).toHaveLength(1);
     expect(container.querySelector('[aria-label="Talk settings"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll(".chat-settings-popover__label")).map((node) =>
