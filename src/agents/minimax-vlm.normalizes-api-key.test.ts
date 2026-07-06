@@ -277,7 +277,9 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(error.message).toBe(
       "MiniMax VLM response [Trace-Id=trace-success]: JSON response exceeds 16777216 bytes",
     );
-    expect(pullCount).toBe(17);
+    // WHATWG streams may pre-pull one chunk beyond the bytes consumed by the reader.
+    expect(pullCount).toBeGreaterThanOrEqual(17);
+    expect(pullCount).toBeLessThanOrEqual(18);
     expect(canceled).toBe(true);
   });
 });
