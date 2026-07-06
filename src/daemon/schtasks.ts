@@ -486,7 +486,12 @@ async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<
     return false;
   }
   const normalizedResult = normalizeTaskResultCode(runtime.lastRunResult);
-  return normalizedResult !== null && RUNNING_RESULT_CODES.has(normalizedResult);
+  if (normalizedResult !== null && RUNNING_RESULT_CODES.has(normalizedResult)) {
+    return true;
+  }
+  // The hidden VBS launcher exits after spawning gateway.cmd. A successful task
+  // result plus listener-backed runtime is its equivalent takeover evidence.
+  return shouldUseHiddenWindowsTaskLauncher(env) && normalizedResult === "0x0";
 }
 
 async function waitForScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
@@ -1110,9 +1115,9 @@ async function updateExistingScheduledTask(params: {
   scriptPath: string;
   taskLaunchPath: string;
   description?: string;
-}): Promise<boolean> {
+}): Promise<ScheduledTaskActivation | null> {
   if (!(await isRegisteredScheduledTask(params.env))) {
-    return false;
+    return null;
   }
   const change = await execSchtasks([
     "/Change",
@@ -1122,7 +1127,7 @@ async function updateExistingScheduledTask(params: {
     params.quotedLaunchPath,
   ]);
   if (change.code !== 0) {
-    return false;
+    return null;
   }
   // Re-apply the full XML on top of the `/Change` so tasks installed by older
   // versions inherit the `<DisallowStartIfOnBatteries>false</...>` and
@@ -1141,7 +1146,7 @@ async function updateExistingScheduledTask(params: {
   } finally {
     await fs.rm(path.dirname(upgradeXmlPath), { recursive: true, force: true }).catch(() => {});
   }
-  await runScheduledTaskOrThrow({
+  const activation = await runScheduledTaskOrThrow({
     taskName: params.taskName,
     env: params.env,
     scriptPath: params.scriptPath,
@@ -1154,7 +1159,7 @@ async function updateExistingScheduledTask(params: {
     ],
     { leadingBlankLine: true },
   );
-  return true;
+  return activation;
 }
 
 async function shouldFallbackScheduledTaskLaunch(params: {
@@ -1289,11 +1294,13 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   return true;
 }
 
+type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
+
 async function runScheduledTaskOrThrow(params: {
   taskName: string;
   env: GatewayServiceEnv;
   scriptPath: string;
-}): Promise<void> {
+}): Promise<ScheduledTaskActivation> {
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
@@ -1301,9 +1308,10 @@ async function runScheduledTaskOrThrow(params: {
   if (
     !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
   ) {
-    return;
+    return "scheduled-task";
   }
   await launchFallbackTaskScript(params.env);
+  return "direct-fallback";
 }
 
 async function activateScheduledTask(params: {
@@ -1312,14 +1320,19 @@ async function activateScheduledTask(params: {
   scriptPath: string;
   taskLaunchPath: string;
   description?: string;
-}): Promise<"scheduled-task" | "startup-fallback"> {
+}): Promise<ScheduledTaskActivation | "startup-fallback"> {
   const taskDescription = params.description ?? "OpenClaw Gateway";
 
   const taskName = resolveTaskName(params.env);
   const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
 
-  if (await updateExistingScheduledTask({ ...params, taskName, quotedLaunchPath })) {
-    return "scheduled-task";
+  const existingActivation = await updateExistingScheduledTask({
+    ...params,
+    taskName,
+    quotedLaunchPath,
+  });
+  if (existingActivation) {
+    return existingActivation;
   }
 
   const taskUser = resolveTaskUser(params.env);
@@ -1378,7 +1391,7 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await runScheduledTaskOrThrow({
+  const activation = await runScheduledTaskOrThrow({
     taskName,
     env: params.env,
     scriptPath: params.scriptPath,
@@ -1392,7 +1405,7 @@ async function activateScheduledTask(params: {
     ],
     { leadingBlankLine: true },
   );
-  return "scheduled-task";
+  return activation;
 }
 
 export async function installScheduledTask(
@@ -1663,14 +1676,14 @@ export async function restartScheduledTask({
       }
     }
   }
-  await runScheduledTaskOrThrow({
+  const activation = await runScheduledTaskOrThrow({
     taskName,
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),
   });
   const startupEntryInstalled = await isStartupEntryInstalled(effectiveEnv);
   const hasRunningEvidence = startupEntryInstalled
-    ? await waitForScheduledTaskRunningEvidence(effectiveEnv)
+    ? activation === "scheduled-task" && (await waitForScheduledTaskRunningEvidence(effectiveEnv))
     : await hasScheduledTaskRunningEvidence(effectiveEnv);
   if (startupEntryInstalled && hasRunningEvidence) {
     await removeStartupEntries(effectiveEnv, stdout);

@@ -254,6 +254,7 @@ function addAcceptedRunNeverStartsResponses(): void {
 
 function addSuccessfulScheduledTaskRestartResponses(
   cleanupEvidence: string[] = [runningTaskQueryOutput()],
+  launchEvidence = runningTaskQueryOutput(),
 ): void {
   schtasksResponses.push(
     { code: 0, stdout: "", stderr: "" },
@@ -261,7 +262,7 @@ function addSuccessfulScheduledTaskRestartResponses(
     { code: 0, stdout: "", stderr: "" },
     { code: 0, stdout: "", stderr: "" },
     { code: 0, stdout: "", stderr: "" },
-    { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+    { code: 0, stdout: launchEvidence, stderr: "" },
   );
   for (const output of cleanupEvidence) {
     schtasksResponses.push(
@@ -549,6 +550,61 @@ describe("Windows startup fallback", () => {
 
       expect(sleepMock).toHaveBeenCalledWith(250);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("accepts a clean hidden-launcher exit when its gateway listener is running", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const hiddenEnv = { ...env, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" };
+      const startupEntryPath = await writeStartupFallbackEntry(hiddenEnv);
+      await writeGatewayScript(hiddenEnv);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      addSuccessfulScheduledTaskRestartResponses(
+        [cleanExitTaskQueryOutput()],
+        cleanExitTaskQueryOutput(),
+      );
+
+      await restartScheduledTask({ env: hiddenEnv, stdout: new PassThrough() });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("does not accept a clean task exit for the foreground launcher", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      await writeGatewayScript(env);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      fastForwardTaskStartWait();
+      addSuccessfulScheduledTaskRestartResponses(
+        [cleanExitTaskQueryOutput()],
+        cleanExitTaskQueryOutput(),
+      );
+
+      await restartScheduledTask({ env, stdout: new PassThrough() });
+
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps the Startup launcher when a clean task exit needs the direct fallback", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const hiddenEnv = { ...env, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" };
+      const startupEntryPath = await writeStartupFallbackEntry(hiddenEnv);
+      await writeGatewayScript(hiddenEnv);
+      fastForwardTaskStartWait();
+      findVerifiedGatewayListenerPidsOnPortSync.mockImplementation(() =>
+        spawn.mock.calls.length > 0 ? [4242] : [],
+      );
+      addSuccessfulScheduledTaskRestartResponses(
+        [cleanExitTaskQueryOutput(), cleanExitTaskQueryOutput()],
+        cleanExitTaskQueryOutput(),
+      );
+
+      await restartScheduledTask({ env: hiddenEnv, stdout: new PassThrough() });
+
+      expect(spawn).toHaveBeenCalled();
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });
 
