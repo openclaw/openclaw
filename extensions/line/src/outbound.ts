@@ -12,6 +12,9 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
+import { getLineFlexContainerSize } from "./flex-size-limits.js";
+import type { FlexContainer } from "./flex-templates.js";
+import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { getLineRuntime } from "./runtime.js";
@@ -78,6 +81,24 @@ function buildLineMediaMessageObject(
   }
 }
 
+function appendFallbackText(text: string, fallback: string): string {
+  return text ? `${text}\n\n${fallback}` : fallback;
+}
+
+function keepSendableMarkdownFlexMessages(processed: ProcessedLineMessage): ProcessedLineMessage {
+  let text = processed.text;
+  const flexMessages = processed.flexMessages.filter((flexMsg) => {
+    const { byteSize, maxBytes } = getLineFlexContainerSize(flexMsg.contents as FlexContainer);
+    if (byteSize <= maxBytes) {
+      return true;
+    }
+    text = appendFallbackText(text, flexMsg.altText);
+    return false;
+  });
+
+  return { text, flexMessages };
+}
+
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -132,7 +153,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     };
 
     const processed = payload.text
-      ? outboundRuntime.processLineMessage(payload.text)
+      ? keepSendableMarkdownFlexMessages(outboundRuntime.processLineMessage(payload.text))
       : { text: "", flexMessages: [] };
 
     const chunkLimit =
@@ -342,10 +363,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   ...createAttachedChannelResultAdapter({
     channel: "line",
     sendText: async ({ cfg, to, text, accountId }) => {
+      const lineRuntime = getLineRuntime().channel.line;
       const outboundRuntime = await loadLineOutboundRuntime();
-      const sendText = outboundRuntime.pushMessageLine;
-      const sendFlex = outboundRuntime.pushFlexMessage;
-      const processed = outboundRuntime.processLineMessage(text);
+      const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
+      const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
+      const processed = keepSendableMarkdownFlexMessages(outboundRuntime.processLineMessage(text));
       let result: LineSendResult;
       if (processed.text.trim()) {
         result = await sendText(to, processed.text, {

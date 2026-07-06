@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getLineFlexContainerSize } from "./flex-size-limits.js";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
@@ -126,16 +127,11 @@ export async function deliverLineAutoReply(params: {
     ? deps.processLineMessage(payload.text)
     : { text: "", flexMessages: [] };
 
-  // LINE FlexMessage total payload includes wrapper ({ type, altText, contents }),
-  // use a conservative limit to account for ~200 bytes of wrapper + altText overhead.
-  // Official LINE API limit for contents is 50 KB (51200 bytes).
-  const FLEX_MAX_CONTENTS_BYTES = 32768 - 200;
-
   for (const flexMsg of processed.flexMessages) {
-    const flexBytes = new TextEncoder().encode(JSON.stringify(flexMsg.contents)).length;
-    if (flexBytes > FLEX_MAX_CONTENTS_BYTES) {
+    const { byteSize, maxBytes } = getLineFlexContainerSize(flexMsg.contents as FlexContainer);
+    if (byteSize > maxBytes) {
       deps.warn?.(
-        `[LINE] FlexMessage from markdown ${flexBytes} bytes exceeds ${FLEX_MAX_CONTENTS_BYTES}, skipping`,
+        `[LINE] FlexMessage from markdown ${byteSize} bytes exceeds ${maxBytes}, skipping`,
       );
       // Fall back to altText so the table/code content isn't silently dropped
       processed.text = processed.text

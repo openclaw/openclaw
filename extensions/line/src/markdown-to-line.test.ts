@@ -439,6 +439,15 @@ describe("convertCodeBlockToFlexBubble", () => {
     expect(codeText).toContain("chars truncated");
   });
 
+  it("wraps code text so multiline code and truncation hints remain visible", () => {
+    const block = { code: "const x = 1;\nconst y = 2;" };
+
+    const bubble = convertCodeBlockToFlexBubble(block);
+
+    const body = bubble.body as { contents: Array<{ contents?: Array<{ wrap?: boolean }> }> };
+    expect(body.contents[2].contents?.[0]?.wrap).toBe(true);
+  });
+
   it("does not truncate code exactly at 2000 chars", () => {
     const code = "x".repeat(2000);
     const block = { code };

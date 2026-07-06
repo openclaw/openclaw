@@ -5,12 +5,14 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getLineFlexContainerSize } from "./flex-size-limits.js";
 import {
   createAgendaCard,
   createAppleTvRemoteCard,
   createDeviceControlCard,
   createEventCard,
   createMediaPlayerCard,
+  type FlexContainer,
 } from "./flex-templates.js";
 import type { LineChannelData } from "./types.js";
 
@@ -305,13 +307,15 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   text = text.replace(/\n{3,}/g, "\n\n").trim();
 
-  // Validate Flex Message byte size: LINE API silently rejects payloads > 32KB
+  // Validate Flex container byte size before send so oversized LINE content
+  // falls back to text instead of being rejected by the Messaging API.
   if (lineData.flexMessage) {
-    const payloadJson = JSON.stringify(lineData.flexMessage.contents);
-    const byteSize = new TextEncoder().encode(payloadJson).length;
-    if (byteSize > 32768) {
+    const { byteSize, maxBytes } = getLineFlexContainerSize(
+      lineData.flexMessage.contents as FlexContainer,
+    );
+    if (byteSize > maxBytes) {
       console.warn(
-        `[LINE] FlexMessage byte size ${byteSize} exceeds 32KB limit. Falling back to plain text message.`,
+        `[LINE] FlexMessage byte size ${byteSize} exceeds ${maxBytes} byte limit. Falling back to plain text message.`,
       );
       const fallbackText = `[內容過長，已轉為純文字] ${lineData.flexMessage.altText}`;
       delete lineData.flexMessage;

@@ -161,6 +161,51 @@ describe("line outbound sendPayload", () => {
     });
   });
 
+  it("falls back to markdown Flex altText when generated bubble exceeds LINE bubble limit", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const largeCell = "A".repeat(31 * 1024);
+    const text = `Before\n\n| Name | Value | Notes |\n| --- | --- | --- |\n| Big | ${largeCell} | Done |`;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:group:1",
+      text,
+      payload: { text },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:group:1",
+      expect.stringContaining("Table: 1 rows × 3 cols"),
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("falls back to markdown Flex altText for direct sendText", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const largeCell = "A".repeat(31 * 1024);
+    const text = `Before\n\n| Name | Value | Notes |\n| --- | --- | --- |\n| Big | ${largeCell} | Done |`;
+
+    await lineOutboundAdapter.sendText!({
+      to: "line:group:1",
+      text,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:group:1",
+      expect.stringContaining("Table: 1 rows × 3 cols"),
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
   it("reports each platform result for text and media payloads", async () => {
     const { runtime } = createRuntime();
     setLineRuntime(runtime);

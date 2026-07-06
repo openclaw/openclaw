@@ -291,6 +291,7 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
               text: displayCode,
               size: "xs",
               color: "#333333",
+              wrap: true,
             } as FlexText,
           ],
           backgroundColor: "#F5F5F5",

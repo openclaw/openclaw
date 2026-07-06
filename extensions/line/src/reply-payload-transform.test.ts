@@ -391,8 +391,8 @@ describe("parseLineDirectives", () => {
     });
   });
 
-  describe("FlexMessage 32KB size validation", () => {
-    it("preserves flexMessage when under 32KB", () => {
+  describe("FlexMessage container size validation", () => {
+    it("preserves flexMessage when under the bubble limit", () => {
       const result = parseLineDirectives({
         text: "[[media_player: Song | Artist | Speaker | https://example.com/img.jpg | playing]]",
       });
@@ -400,7 +400,7 @@ describe("parseLineDirectives", () => {
       expect(flexMessage.altText).toBe("🎵 Song - Artist");
     });
 
-    it("falls back to plain text when flexMessage exceeds 32KB", () => {
+    it("falls back to plain text when flexMessage exceeds the bubble limit", () => {
       const longDescription = "A".repeat(50000);
       const result = parseLineDirectives({
         text: `[[event: Test Event | Jan 1 | ${longDescription}]]`,
@@ -417,17 +417,38 @@ describe("parseLineDirectives", () => {
       expect(result.text).toBe("Just plain text");
     });
 
-    it("preserves flexMessage at exactly 32768 bytes", () => {
-      const bodyContent = "X".repeat(32500);
+    it("preserves carousel flexMessage above the bubble limit when under the carousel limit", () => {
+      const carouselContents = {
+        type: "carousel",
+        contents: [
+          {
+            type: "bubble",
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [{ type: "text", text: "A".repeat(16 * 1024) }],
+            },
+          },
+          {
+            type: "bubble",
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [{ type: "text", text: "B".repeat(16 * 1024) }],
+            },
+          },
+        ],
+      };
       const result = parseLineDirectives({
-        text: `[[media_player: ${bodyContent.slice(0, 100)} | Artist | Speaker | https://example.com/img.jpg | playing]]`,
+        text: "Carousel",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: carouselContents },
+          },
+        },
       });
       const flexMessage = getLineData(result).flexMessage;
-      if (flexMessage) {
-        const payloadJson = JSON.stringify((flexMessage as { contents?: unknown }).contents);
-        const byteSize = new TextEncoder().encode(payloadJson).length;
-        expect(byteSize).toBeLessThanOrEqual(32768);
-      }
+      expect(flexMessage).toEqual({ altText: "Carousel", contents: carouselContents });
     });
   });
 });

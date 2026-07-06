@@ -249,18 +249,23 @@ describe("deliverLineAutoReply", () => {
     expect(pushOrder).toBeLessThan(replyOrder);
   });
 
-  it("falls back to altText when markdown flex message exceeds size limit", async () => {
-    // Build contents large enough to exceed FLEX_MAX_CONTENTS_BYTES (32568)
+  it("falls back to altText when markdown bubble exceeds the bubble size limit", async () => {
     const largeContents = {
       type: "bubble",
-      body: { type: "box", layout: "vertical", contents: Array.from({ length: 5000 }, (_, i) => ({ type: "text", text: `line ${i}` })) },
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [{ type: "text", text: "A".repeat(31 * 1024) }],
+      },
     } as messagingApi.FlexContainer;
     const chunkMarkdownTextSpy = vi.fn((text: string) => [text]);
     const sendLineReplyChunksSpy = vi.fn(async () => ({ replyTokenUsed: false }));
-    const { deps, replyMessageLine } = createDeps({
+    const { deps, pushMessagesLine } = createDeps({
       processLineMessage: () => ({
         text: "some text",
-        flexMessages: [{ type: "flex", altText: "Table: 50 rows x 3 cols", contents: largeContents }],
+        flexMessages: [
+          { type: "flex", altText: "Table: 50 rows x 3 cols", contents: largeContents },
+        ],
       }),
       chunkMarkdownText: chunkMarkdownTextSpy,
       sendLineReplyChunks: sendLineReplyChunksSpy,
@@ -279,10 +284,49 @@ describe("deliverLineAutoReply", () => {
       expect.any(Number),
     );
     // Verify oversized Flex was NOT added to richMessages
-    expect(replyMessageLine).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.arrayContaining([expect.objectContaining({ altText: "Table: 50 rows x 3 cols" })]),
-      expect.anything(),
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("keeps markdown carousel flex when it exceeds the bubble limit but fits carousel limit", async () => {
+    const carouselContents = {
+      type: "carousel",
+      contents: [
+        {
+          type: "bubble",
+          body: {
+            type: "box",
+            layout: "vertical",
+            contents: [{ type: "text", text: "A".repeat(16 * 1024) }],
+          },
+        },
+        {
+          type: "bubble",
+          body: {
+            type: "box",
+            layout: "vertical",
+            contents: [{ type: "text", text: "B".repeat(16 * 1024) }],
+          },
+        },
+      ],
+    } as messagingApi.FlexContainer;
+    const { deps, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({
+        text: "summary",
+        flexMessages: [{ type: "flex", altText: "Carousel", contents: carouselContents }],
+      }),
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "summary", channelData: { line: {} } },
+      lineData: {},
+      deps,
+    });
+
+    expect(pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:1",
+      [createFlexMessage("Carousel", carouselContents)],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
 
