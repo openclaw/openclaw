@@ -61,7 +61,7 @@ describe("resolveSlackThreadContextData", () => {
     };
     allowFromLower: string[];
     allowNameMatching: boolean;
-    sessionState?: "missing" | "fresh";
+    sessionState?: "missing" | "fresh" | "stale";
   }) {
     const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
@@ -129,6 +129,11 @@ describe("resolveSlackThreadContextData", () => {
       title: "does not hydrate starter media for an existing thread session",
       sessionState: "fresh" as const,
       hydrates: false,
+    },
+    {
+      title: "hydrates starter media after a thread session reset",
+      sessionState: "stale" as const,
+      hydrates: true,
     },
   ])("$title", async ({ sessionState, hydrates }) => {
     const resolveSlackMedia = vi
