@@ -30,6 +30,11 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -556,6 +561,21 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
     }
   }
   return undefined;
+}
+
+function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
+  };
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseInteractiveParam(payload);
+  } catch {
+    return false;
+  }
+  return hasReplyPayloadContent(payload);
 }
 
 function queuePendingToolMedia(
@@ -1268,6 +1288,7 @@ export async function handleToolExecutionEnd(
     });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
+  const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
@@ -1300,6 +1321,7 @@ export async function handleToolExecutionEnd(
       ...confirmedTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
