@@ -353,16 +353,20 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
-    if (evt.event === "chat") {
-      await this.handleChatEvent(evt);
-      return;
-    }
-    if (evt.event === "exec.approval.requested") {
-      this.handleExecApprovalRequestEvent(evt);
-      return;
-    }
-    if (evt.event === "agent") {
-      await this.handleAgentEvent(evt);
+    try {
+      if (evt.event === "chat") {
+        await this.handleChatEvent(evt);
+        return;
+      }
+      if (evt.event === "exec.approval.requested") {
+        this.handleExecApprovalRequestEvent(evt);
+        return;
+      }
+      if (evt.event === "agent") {
+        await this.handleAgentEvent(evt);
+      }
+    } catch (err) {
+      this.log(`handleGatewayEvent failed for ${evt.event}: ${String(err)}`);
     }
   }
 
