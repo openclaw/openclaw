@@ -58,6 +58,16 @@
         "type": "number",
         "minimum": 1,
         "maximum": 2147000
+      },
+      "env": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^(?!OPENSHELL_)[A-Za-z_][A-Za-z0-9_]*$",
+          "minLength": 1
+        },
+        "additionalProperties": {
+          "type": "string"
+        }
       }
     }
   },
@@ -113,6 +123,11 @@
     "timeoutSeconds": {
       "label": "Command Timeout Seconds",
       "help": "Timeout for openshell CLI operations such as create/upload/download.",
+      "advanced": true
+    },
+    "env": {
+      "label": "Environment Variables",
+      "help": "Non-secret env vars (KEY=VALUE) passed to the sandbox on creation. Use for API base URLs, model names, regions, and other non-sensitive runtime settings.",
       "advanced": true
     }
   }
