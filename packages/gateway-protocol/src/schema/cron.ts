@@ -115,6 +115,15 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("not-requested"),
 ]);
 const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
+const CronDeclarationKeySchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
+const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
+const CronOwnerSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
 const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
@@ -453,6 +462,9 @@ const CronJobStatePatchSchema = Type.Object(
 export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
+    declarationKey: Type.Optional(CronDeclarationKeySchema),
+    displayName: Type.Optional(CronDisplayNameSchema),
+    owner: Type.Optional(CronOwnerSchema),
     agentId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
     name: NonEmptyString,
@@ -468,6 +480,16 @@ export const CronJobSchema = Type.Object(
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
     state: CronJobStateSchema,
+    nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunStatus: Type.Optional(CronRunStatusSchema),
+    lastRunError: Type.Optional(Type.String()),
+    lastDelivered: Type.Optional(Type.Boolean()),
+    lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastDeliveryError: Type.Optional(Type.String()),
+    lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
+    lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -500,6 +522,9 @@ export const CronGetParamsSchema = cronIdOrJobIdParams({});
 export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
+    declarationKey: Type.Optional(CronDeclarationKeySchema),
+    displayName: Type.Optional(CronDisplayNameSchema),
+    owner: Type.Optional(CronOwnerSchema),
     ...CronCommonOptionalFields,
     schedule: CronScheduleSchema,
     sessionTarget: CronSessionTargetSchema,
@@ -511,10 +536,24 @@ export const CronAddParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Successful declaration-key convergence result. */
+export const CronDeclarativeAddResultSchema = Type.Object(
+  {
+    created: Type.Boolean(),
+    updated: Type.Optional(Type.Boolean()),
+    job: CronJobSchema,
+  },
+  { additionalProperties: false },
+);
+
+/** Successful result from imperative create or declaration-key convergence. */
+export const CronAddResultSchema = Type.Union([CronJobSchema, CronDeclarativeAddResultSchema]);
+
 /** Mutable cron job fields accepted by update APIs. */
 export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
+    displayName: Type.Optional(Type.Union([CronDisplayNameSchema, Type.Null()])),
     ...CronCommonOptionalFields,
     schedule: Type.Optional(CronScheduleSchema),
     sessionTarget: Type.Optional(CronSessionTargetSchema),

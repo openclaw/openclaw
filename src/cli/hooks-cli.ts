@@ -24,6 +24,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
@@ -168,6 +169,13 @@ async function runHooksCliAction(action: () => Promise<void> | void): Promise<vo
   }
 }
 
+async function runOneShotHooksCliAction(action: () => Promise<void> | void): Promise<void> {
+  await runHooksCliAction(action);
+  // Plugin registration can leave ref'd handles behind. Defer exit until runCli
+  // finishes shared teardown and drains both output streams.
+  requestExitAfterOneShotOutput();
+}
+
 /**
  * Format the hooks list output
  */
@@ -191,6 +199,7 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
         source: h.source,
         pluginId: h.pluginId,
         events: h.events,
+        unknownEvents: h.unknownEvents,
         homepage: h.homepage,
         missing: h.missing,
         managedByPlugin: h.managedByPlugin,
@@ -299,6 +308,13 @@ export function formatHookInfo(
   }
   if (hook.events.length > 0) {
     lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
+  }
+  if (hook.unknownEvents.length > 0) {
+    lines.push(
+      theme.warn(
+        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
+      ),
+    );
   }
   if (hook.managedByPlugin) {
     lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
@@ -476,7 +492,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) =>
-      runHooksCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksList(report, opts), opts.json);
@@ -488,7 +504,7 @@ export function registerHooksCli(program: Command): void {
     .description("Show detailed information about a hook")
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) =>
-      runHooksCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
@@ -500,7 +516,7 @@ export function registerHooksCli(program: Command): void {
     .description("Check hooks eligibility status")
     .option("--json", "Output as JSON", false)
     .action(async (opts) =>
-      runHooksCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksCheck(report, opts), opts.json);
@@ -511,7 +527,7 @@ export function registerHooksCli(program: Command): void {
     .command("enable <name>")
     .description("Enable a hook")
     .action(async (name) =>
-      runHooksCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         await enableHook(name);
       }),
     );
@@ -520,7 +536,7 @@ export function registerHooksCli(program: Command): void {
     .command("disable <name>")
     .description("Disable a hook")
     .action(async (name) =>
-      runHooksCliAction(async () => {
+      runOneShotHooksCliAction(async () => {
         await disableHook(name);
       }),
     );
@@ -570,7 +586,7 @@ export function registerHooksCli(program: Command): void {
     });
 
   hooks.action(async () =>
-    runHooksCliAction(async () => {
+    runOneShotHooksCliAction(async () => {
       const config = getRuntimeConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));

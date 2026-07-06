@@ -95,6 +95,82 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 }
 
 @Suite(.serialized) struct GatewaySettingsStoreTests {
+    @Test func `custom headers round trip per gateway`() {
+        let service = "\(gatewayService).custom-headers-test.\(UUID().uuidString)"
+        let gatewayID = "manual|headers.example.com|443|\(UUID().uuidString)"
+        let otherGatewayID = "manual|other.example.com|443|\(UUID().uuidString)"
+        defer { GatewaySettingsStore.clearGatewayCustomHeaders(service: service) }
+
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID, service: service).isEmpty)
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["CF-Access-Client-Id": "client-id", "CF-Access-Client-Secret": "client-secret"],
+            gatewayStableID: gatewayID,
+            service: service))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID, service: service) == [
+            "CF-Access-Client-Id": "client-id",
+            "CF-Access-Client-Secret": "client-secret",
+        ])
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: otherGatewayID,
+            service: service).isEmpty)
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Other": "other-value"],
+            gatewayStableID: otherGatewayID,
+            service: service))
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            [:],
+            gatewayStableID: gatewayID,
+            service: service))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: gatewayID,
+            service: service).isEmpty)
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: otherGatewayID,
+            service: service) == ["X-Other": "other-value"])
+    }
+
+    @Test func `custom header storage drops reserved names`() {
+        let service = "\(gatewayService).custom-headers-test.\(UUID().uuidString)"
+        let gatewayID = "manual|reserved.example.com|443|\(UUID().uuidString)"
+        defer { GatewaySettingsStore.clearGatewayCustomHeaders(service: service) }
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["Host": "smuggled.example", "X-Allowed": "yes"],
+            gatewayStableID: gatewayID,
+            service: service))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: gatewayID, service: service)
+            == ["X-Allowed": "yes"])
+    }
+
+    @Test func `custom header reset clears every gateway but preserves unrelated credentials`() {
+        let service = "\(gatewayService).custom-headers-test.\(UUID().uuidString)"
+        let firstGatewayID = "manual|first-reset.example.com|443|\(UUID().uuidString)"
+        let secondGatewayID = "manual|second-reset.example.com|443|\(UUID().uuidString)"
+        let unrelatedAccount = "unrelated-reset-secret.\(UUID().uuidString)"
+        defer { _ = KeychainStore.delete(service: gatewayService, account: unrelatedAccount) }
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Proxy-Token": "first"],
+            gatewayStableID: firstGatewayID,
+            service: service))
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Proxy-Token": "second"],
+            gatewayStableID: secondGatewayID,
+            service: service))
+        #expect(KeychainStore.saveString("keep", service: gatewayService, account: unrelatedAccount))
+
+        #expect(GatewaySettingsStore.clearGatewayCustomHeaders(service: service))
+
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: firstGatewayID,
+            service: service).isEmpty)
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: secondGatewayID,
+            service: service).isEmpty)
+        #expect(KeychainStore.loadString(service: gatewayService, account: unrelatedAccount) == "keep")
+    }
+
     @Test func `credentials stay bound to their gateway`() {
         let instanceID = "credential-owner-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID) }

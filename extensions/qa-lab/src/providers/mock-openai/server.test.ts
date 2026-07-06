@@ -145,9 +145,7 @@ function buildWhatsAppPendingHistoryContextFixture(
 ) {
   return [
     "Chat history since last reply (untrusted, for context):",
-    "```json",
-    JSON.stringify(history, null, 2),
-    "```",
+    ...history.map((entry, index) => `#history-${index + 1} ${entry.sender}: ${entry.body}`),
   ].join("\n");
 }
 
@@ -1302,7 +1300,9 @@ describe("qa mock openai server", () => {
     const withStructuredHistory = await expectResponsesJson(server, {
       stream: false,
       model: "gpt-5.5",
-      input: [makeUserInput([historyContext, WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT].join("\n"))],
+      input: [
+        makeUserInput([historyContext, WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT].join("\n\n")),
+      ],
     });
 
     expect(outputText(withStructuredHistory)).toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
@@ -1339,12 +1339,34 @@ describe("qa mock openai server", () => {
             WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
             `The current trigger text mentions ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}.`,
             `It also mentions ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}.`,
-          ].join("\n"),
+          ].join("\n\n"),
         ),
       ],
     });
 
     expect(outputText(currentMessageOnlySentinel)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+
+    const currentPromptBeforeTrigger = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        makeUserInput(
+          [
+            buildWhatsAppPendingHistoryContextFixture([
+              {
+                sender: "Alice",
+                timestamp: 1_786_000_000_000,
+                body: "unrelated prior context",
+              },
+            ]),
+            `Current request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
+            WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
+          ].join("\n\n"),
+        ),
+      ],
+    });
+
+    expect(outputText(currentPromptBeforeTrigger)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
     const contextWithoutCurrentTrigger = await expectResponsesJson(server, {
       stream: false,

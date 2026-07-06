@@ -98,6 +98,29 @@ describe("openclaw state database", () => {
     expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
   });
 
+  it("adds gateway boot lifecycle startup markers to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(gateway_boot_lifecycle)")
+      .all() as Array<{ name?: unknown }>;
+
+    expect(columns.map((column) => column.name)).toContain("startup_reason");
+  });
+
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

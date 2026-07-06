@@ -16,6 +16,11 @@ const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
+// This cold gateway graph can stall after warming Vitest's module cache; its
+// retry completes in seconds, so do not spend the global five-minute timeout.
+const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
+};
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 const COMPACT_NODE_TEST_JOB_WEIGHT = 192;
 const COMPACT_NODE_TEST_JOB_GROUPS = 8;
@@ -436,6 +441,10 @@ function createGatewayServerSplitShards() {
   ]
     .map((shardName) => ({
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      env:
+        shardName === "agentic-control-plane-startup-health-runtime"
+          ? GATEWAY_STARTUP_HEALTH_RUNTIME_ENV
+          : undefined,
       includePatterns: groups.get(shardName) ?? [],
       requiresDist: false,
       runner:

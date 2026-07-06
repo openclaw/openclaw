@@ -67,6 +67,17 @@ describe("openclaw-file-preview-modal", () => {
     expect(shadowText(modal)).toContain("noreply@example.com");
   });
 
+  it("shows the Escape shortcut only on the close button", async () => {
+    const modal = await renderPreview();
+    const state = modal.shadowRoot?.querySelector<HTMLElement>(".state");
+    const closeButton = modal.shadowRoot?.querySelector<HTMLButtonElement>(".button");
+
+    expect(state?.textContent?.trim()).toBe("2 files");
+    expect(state?.querySelector(".kbd")).toBeNull();
+    expect(closeButton?.textContent?.replace(/\s+/g, " ").trim()).toBe("Close esc");
+    expect(closeButton?.querySelector(".kbd")?.textContent).toBe("esc");
+  });
+
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
     const onQuery = vi.fn();

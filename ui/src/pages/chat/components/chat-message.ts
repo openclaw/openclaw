@@ -4,7 +4,11 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
+import {
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type {
@@ -76,7 +80,7 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
-export type ChatTimestampDisplay = {
+type ChatTimestampDisplay = {
   label: string;
   title: string;
   dateTime: string;
@@ -286,7 +290,8 @@ function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   }
   const ext = getFileExtension(path);
   return (
-    ext !== undefined && ["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
+    ext !== undefined &&
+    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
   );
 }
 
@@ -548,7 +553,7 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -1228,6 +1233,7 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   return (
+    isCanonicalInboundMediaSource(trimmed) ||
     trimmed.startsWith("file://") ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
@@ -1235,9 +1241,28 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
+function isCanonicalInboundMediaSource(source: string): boolean {
+  // Match the raw one-segment form first; URL parsing would erase dot segments.
+  const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
+  if (!match?.[1]) {
+    return false;
+  }
+  try {
+    const id = decodeURIComponent(match[1]);
+    return (
+      id !== "." && id !== ".." && !id.includes("/") && !id.includes("\\") && !id.includes("\0")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
   if (!isLocalAssistantAttachmentSource(trimmed)) {
+    return null;
+  }
+  if (isCanonicalInboundMediaSource(trimmed)) {
     return null;
   }
   if (trimmed.startsWith("file://")) {
@@ -1290,6 +1315,9 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
+  if (isCanonicalInboundMediaSource(source)) {
+    return true;
+  }
   const normalizedSource = normalizeLocalAttachmentPath(source);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
@@ -1905,7 +1933,10 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const markdownRenderOptions = role === "user" ? { codeBlockChrome: "none" as const } : undefined;
+  const markdownRenderOptions: MarkdownRenderOptions = {
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    fileLinks: true,
+  };
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
   const hasActions = canCopyMarkdown || canExpand;
@@ -1977,20 +2008,20 @@ function renderGroupedMessage(
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
     : singleToolDisplayDetail
-      ? singleToolCard?.outputText?.trim()
-        ? "output"
-        : undefined
+      ? !markdown && !hasImages
+        ? singleToolDisplayDetail
+        : singleToolCard?.outputText?.trim()
+          ? "output"
+          : undefined
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
-    : singleToolDisplayDetail && !markdown && !hasImages
-      ? singleToolDisplayDetail
-      : singleToolDisplay && !markdown && !hasImages
-        ? singleToolDisplay.label
-        : "Tool output";
+    : singleToolDisplay && !markdown && !hasImages
+      ? singleToolDisplay.label
+      : "Tool output";
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
@@ -2180,7 +2211,7 @@ function renderGroupedMessage(
 function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
-  markdownRenderOptions?: { codeBlockChrome: "copy" | "none" },
+  markdownRenderOptions?: MarkdownRenderOptions,
 ) {
   if (isStreaming) {
     return html`

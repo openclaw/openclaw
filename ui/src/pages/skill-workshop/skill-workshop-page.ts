@@ -186,7 +186,7 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpd
   `;
 }
 
-export function renderSkillWorkshopPage(
+function renderSkillWorkshopPage(
   state: SkillWorkshopState,
   { context, workshopAgentName, onRevisionRequest }: SkillWorkshopRenderContext,
   requestUpdate: () => void,
@@ -339,7 +339,7 @@ export function renderSkillWorkshopPage(
   `;
 }
 
-export class SkillWorkshopPage extends LitElement {
+class SkillWorkshopPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

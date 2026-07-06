@@ -173,14 +173,12 @@
     border-radius: 0;
   }
 
-  .sidebar-shell__header {
-    min-height: 0;
-    padding: 0 4px 16px;
-  }
-
   .sidebar-nav,
   .sidebar--collapsed .sidebar-nav {
-    flex: 1 1 auto;
+    /* Match the desktop pinned-nav layout so the session list keeps the
+       remaining drawer height. */
+    flex: 0 0 auto;
+    max-height: 60%;
     display: block;
     padding: 0;
     overflow-x: hidden;
@@ -230,10 +228,9 @@
     padding: 12px 8px 0;
   }
 
-  .sidebar--collapsed .sidebar-status {
-    width: auto;
-    min-height: 32px;
-    padding: 0 12px;
+  .sidebar--collapsed .sidebar-footer-bar {
+    flex-direction: row;
+    padding: 0 10px;
   }
 }
 
@@ -276,11 +273,6 @@
     gap: 6px;
     width: auto;
     flex-wrap: nowrap;
-  }
-
-  .topbar-search {
-    min-width: 0;
-    flex: 1;
   }
 
   .topbar-theme-mode {
@@ -441,30 +433,6 @@
     min-height: 44px;
     padding: 10px 12px;
     font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
-    position: static;
-    width: 100%;
-    max-height: min(52vh, 420px);
-    margin-top: 8px;
-    box-shadow: none;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
-    min-height: 44px;
-    font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-session-picker
-    .chat-session-picker__icon-button.btn--icon {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {

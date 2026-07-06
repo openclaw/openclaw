@@ -264,7 +264,7 @@ struct SettingsProTab: View {
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button(role: .destructive) {
-                    self.resetOnboarding()
+                    Task { await self.resetOnboarding() }
                 } label: {
                     Text("Reset")
                         .font(OpenClawType.subheadSemiBold)

@@ -2,6 +2,7 @@
 // protocol version checks, and token-backed operator/node clients.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/index.js";
 import {
   connectReq,
   ConnectErrorDetailCodes,
@@ -155,10 +156,14 @@ export function registerDefaultAuthTokenSuite(): void {
       const payload = res.payload as
         | {
             type?: unknown;
+            features?: { capabilities?: unknown };
             snapshot?: { configPath?: string; stateDir?: string };
           }
         | undefined;
       expect(payload?.type).toBe("hello-ok");
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+      );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 

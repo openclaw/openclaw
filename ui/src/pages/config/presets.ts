@@ -5,7 +5,7 @@
 
 export type ConfigPresetId = "personal" | "codeAgent" | "teamBot" | "minimal";
 
-export type ConfigPresetPatch = {
+type ConfigPresetPatch = {
   agents: {
     defaults: {
       bootstrapMaxChars: number;

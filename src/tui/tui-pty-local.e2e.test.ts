@@ -223,6 +223,9 @@ async function startMockModelServer(
     stop: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        // Aborted local runs can leave a provider keep-alive open. Force-close
+        // test-owned connections so cleanup does not wait for idle expiry.
+        server.closeAllConnections();
       });
     },
   };
@@ -378,7 +381,7 @@ async function startGatewayModeTui(params: {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-"));
   const workspaceDir = path.join(tempDir, "workspace");
   const mockModel = await startMockModelServer(params.firstReplyText ?? "FIRST_RUN_ACTIVE", {
-    firstResponseDelayMs: params.firstResponseDelayMs ?? 2_500,
+    firstResponseDelayMs: params.firstResponseDelayMs ?? 1_500,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
     invalidEditLoop: params.invalidEditLoop,
   });
@@ -750,7 +753,7 @@ describe("TUI PTY real backends", () => {
     async () => {
       const fixture = await startGatewayModeTui({
         queueMode: "followup",
-        firstResponseDelayMs: 3_000,
+        firstResponseDelayMs: 1_500,
       });
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
@@ -765,7 +768,7 @@ describe("TUI PTY real backends", () => {
         await sleep(150);
         await fixture.run.write("\u001b", { delay: false });
         await fixture.run.waitForOutput("aborted");
-        await sleep(3_250);
+        await sleep(1_750);
 
         expect(fixture.mockModel.requests()).toHaveLength(1);
         expect(fixture.run.output()).not.toContain("FOLLOWUP_RUN_COMPLETE");
@@ -784,8 +787,8 @@ describe("TUI PTY real backends", () => {
     async () => {
       const fixture = await startGatewayModeTui({
         queueMode: "collect",
-        firstResponseDelayMs: 4_000,
-        queueDebounceMs: 1_000,
+        firstResponseDelayMs: 1_500,
+        queueDebounceMs: 250,
       });
       const queueClient = new GatewayChatClient({
         url: fixture.gateway.url,
@@ -804,7 +807,7 @@ describe("TUI PTY real backends", () => {
           read: () => (queueClientConnected ? true : null),
           onTimeout: () => new Error("TUI Gateway client did not connect"),
         });
-        await fixture.run.write("/queue collect debounce:1s\r", { delay: false });
+        await fixture.run.write("/queue collect debounce:250ms\r", { delay: false });
         await fixture.run.waitForOutput("Queue mode set to collect.");
         await fixture.run.write("slow collect parent\r");
         await waitFor({
@@ -818,7 +821,7 @@ describe("TUI PTY real backends", () => {
           message: "collect prompt alpha",
           runId: "collect-alpha",
         });
-        await sleep(100);
+        await sleep(50);
         const betaSend = queueClient.sendChat({
           sessionKey: "agent:main:main",
           message: "collect prompt beta",
@@ -834,7 +837,7 @@ describe("TUI PTY real backends", () => {
               `collected prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        await sleep(1_000);
+        await sleep(500);
 
         const requests = fixture.mockModel.requests();
         expect(

@@ -197,6 +197,34 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it("uses the active agent model for the default label", () => {
+    const state = createChatModelState({
+      agentDefaultModel: "anthropic/claude-opus-4-5",
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        defaultsModel: "gpt-5.5",
+        defaultsProvider: "openai",
+        model: "claude-opus-4-5",
+        modelProvider: "anthropic",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.defaultModel).toBe("anthropic/claude-opus-4-5");
+    expect(resolved.defaultLabel).toBe("Default (Claude Opus 4.5)");
+  });
+
   it("disambiguates duplicate friendly names in picker options and default labels", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(

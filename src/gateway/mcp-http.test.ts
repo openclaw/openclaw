@@ -2,14 +2,19 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import { buildMcpToolSchema } from "./mcp-http.schema.js";
+import { buildMcpToolSchema, clearMcpToolSchemaWarningsForTest } from "./mcp-http.schema.js";
 
 type MockGatewayTool = {
   name: string;
+  label: string;
   description: string;
   parameters: Record<string, unknown>;
-  execute: (...args: unknown[]) => Promise<{ content: unknown[] }>;
+  execute: (...args: unknown[]) => Promise<{
+    content: unknown[];
+    details?: Record<string, unknown>;
+  }>;
 };
 
 type MockGatewayScopedTools = {
@@ -18,7 +23,19 @@ type MockGatewayScopedTools = {
 };
 
 type MockBeforeToolCallHookResult =
-  | { blocked: true; reason: string }
+  | {
+      blocked: true;
+      kind: "veto";
+      deniedReason?: "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+      reason: string;
+    }
+  | {
+      blocked: true;
+      kind: "failure";
+      disposition: "blocked" | "cancelled" | "failed" | "timed_out";
+      deniedReason?: "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+      reason: string;
+    }
   | { blocked: false; params: unknown };
 
 type ScopedToolsCall = {
@@ -74,6 +91,7 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
     tools: [
       {
         name: "message",
+        label: "Message",
         description: "send a message",
         parameters: { type: "object", properties: {} },
         execute: async () => ({
@@ -84,9 +102,19 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   })),
 );
 
+const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
+
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
 }));
+
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  return {
+    ...actual,
+    logWarn: (message: string) => logWarnMock(message),
+  };
+});
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
@@ -103,6 +131,7 @@ vi.mock("./tool-resolution.js", () => ({
 }));
 
 import { resetAttachGrantsForTest, mintAttachGrant } from "./mcp-grant-store.js";
+import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
@@ -511,6 +540,7 @@ function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
 function makeMockTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
   return {
     name: "mockplugin_tool",
+    label: "Mock tool",
     description: "mock tool",
     parameters: { type: "object", properties: {} },
     execute: async () => ({
@@ -568,6 +598,8 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 }
 
 beforeEach(() => {
+  clearMcpToolSchemaWarningsForTest();
+  logWarnMock.mockClear();
   clearMcpLoopbackToolCallCapturesForTest();
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
@@ -672,6 +704,90 @@ describe("buildMcpToolSchema", () => {
         ])[0]?.inputSchema,
       ).toEqual(testCase.expected);
     }
+  });
+
+  it("warns once for repeated union schema conflicts across loopback schema rebuilds", () => {
+    const tool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "message action" },
+              callId: { type: "string", description: "voice call id" },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "number", description: "different server action" },
+              callId: { type: "number", description: "different call id" },
+            },
+          },
+        ],
+      },
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+        type: "object",
+        properties: {
+          action: { type: "string", description: "message action" },
+          callId: { type: "string", description: "voice call id" },
+        },
+      });
+    }
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.callId", keeping the first variant',
+    ]);
+  });
+
+  it("warns per tool for the same conflicting field name across different tools", () => {
+    const conflictingUnion = (label: string) => ({
+      anyOf: [
+        { type: "object", properties: { action: { type: "string", description: `${label} a` } } },
+        { type: "object", properties: { action: { type: "number", description: `${label} b` } } },
+      ],
+    });
+    const messageTool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: conflictingUnion("message"),
+    });
+    const calendarTool = makeMockTool({
+      name: "mcp_calendar_create",
+      parameters: conflictingUnion("calendar"),
+    });
+
+    buildMockMcpToolSchema([messageTool, calendarTool]);
+    // Rebuild to prove per-(tool, field) dedupe survives repeated schema builds.
+    buildMockMcpToolSchema([messageTool, calendarTool]);
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_calendar_create.action", keeping the first variant',
+    ]);
+  });
+
+  it("warns once per tool for repeated malformed variant schemas across rebuilds", () => {
+    const tool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: {
+        anyOf: [
+          { type: "object", properties: { action: { type: "string" } } },
+          { type: "object", properties: { action: 123 } },
+        ],
+      },
+    });
+
+    buildMockMcpToolSchema([tool]);
+    buildMockMcpToolSchema([tool]);
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: malformed schema definition for "mcp_message_send.action", ignoring that variant',
+    ]);
   });
 });
 
@@ -942,6 +1058,7 @@ describe("mcp loopback server", () => {
       tools: [
         {
           name: "schema_probe",
+          label: "Schema probe",
           description: "exercise no-argument MCP schemas",
           parameters: { type: "object" },
           execute: async () => ({
@@ -1110,15 +1227,24 @@ describe("mcp loopback server", () => {
   it("captures only successful calls with an explicit CLI capture key", async () => {
     const captureKey = "google-gemini-cli";
     const captured: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+    const blockedResults: unknown[] = [];
     const startedTargets: unknown[] = [];
     const finishedTargets: unknown[] = [];
     beginMcpLoopbackToolCallCapture({
       captureKey,
-      onToolCallStart: ({ args }) => startedTargets.push(args.target),
+      onToolCallStart: ({ args }) => {
+        startedTargets.push(args.target);
+        return typeof args.target === "string" ? args.target : undefined;
+      },
       onToolCallFinish: ({ args }) => finishedTargets.push(args.target),
-      onToolCallResult: ({ toolName, args }) => {
-        if (toolName === "message" && args.action === "send") {
-          captured.push({ toolName, args });
+      onToolCallResult: (result) => {
+        if (result.outcome === "blocked") {
+          blockedResults.push({
+            correlationId: result.correlationId,
+            deniedReason: result.deniedReason,
+          });
+        } else if (result.toolName === "message" && result.args.action === "send") {
+          captured.push({ toolName: result.toolName, args: result.args });
         }
       },
     });
@@ -1137,6 +1263,7 @@ describe("mcp loopback server", () => {
 
     runBeforeToolCallHookMock.mockResolvedValueOnce({
       blocked: true,
+      kind: "veto",
       reason: "blocked for test",
     });
     expect(
@@ -1168,6 +1295,120 @@ describe("mcp loopback server", () => {
     ]);
     expect(startedTargets).toEqual(["chat123", "blocked"]);
     expect(finishedTargets).toEqual(["chat123", "blocked"]);
+    expect(blockedResults).toEqual([
+      { correlationId: "blocked", deniedReason: "plugin-before-tool-call" },
+    ]);
+  });
+
+  it("preserves hook failure dispositions in CLI capture", async () => {
+    const captureKey = "hook-failure-dispositions";
+    const captured: unknown[] = [];
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallStart: ({ args }) => String(args.target),
+      onToolCallResult: (result) => {
+        captured.push({
+          outcome: result.outcome,
+          correlationId: result.correlationId,
+          ...(result.outcome === "blocked" ? { deniedReason: result.deniedReason } : {}),
+        });
+      },
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const cases = [
+      { disposition: "failed" },
+      { disposition: "cancelled" },
+      { disposition: "timed_out" },
+      { disposition: "blocked", deniedReason: "plugin-approval" },
+    ] as const;
+
+    for (const testCase of cases) {
+      runBeforeToolCallHookMock.mockResolvedValueOnce({
+        blocked: true,
+        kind: "failure",
+        disposition: testCase.disposition,
+        ...(testCase.disposition === "blocked" ? { deniedReason: testCase.deniedReason } : {}),
+        reason: "hook prevented execution",
+      });
+      const response = await sendLoopbackToolCall({
+        token: runtime.ownerToken,
+        name: "message",
+        args: { action: "send", target: testCase.disposition, message: "not sent" },
+        headers: { "x-openclaw-cli-capture-key": captureKey },
+      });
+      expect(response.status).toBe(200);
+      expect((await readMcpPayload(response)).result?.isError).toBe(true);
+    }
+
+    expect(captured).toEqual([
+      { outcome: "failed", correlationId: "failed" },
+      { outcome: "cancelled", correlationId: "cancelled" },
+      { outcome: "timed_out", correlationId: "timed_out" },
+      {
+        outcome: "blocked",
+        correlationId: "blocked",
+        deniedReason: "plugin-approval",
+      },
+    ]);
+  });
+
+  it("classifies resolved structured results for CLI capture", async () => {
+    const captureKey = "structured-results";
+    const captured: unknown[] = [];
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallStart: ({ args }) => String(args.status),
+      onToolCallResult: (result) => {
+        captured.push({
+          outcome: result.outcome,
+          correlationId: result.correlationId,
+          ...(result.outcome === "blocked" ? { deniedReason: result.deniedReason } : {}),
+        });
+      },
+    });
+    mockScopedTools([
+      makeMessageTool({
+        execute: async (_toolCallId, args) => ({
+          content: [{ type: "text", text: "result" }],
+          details: args as Record<string, unknown>,
+        }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+    const cases = [
+      { status: "completed", expected: "completed" },
+      { status: "failed", expected: "failed" },
+      { status: "blocked", expected: "blocked" },
+      { status: "cancelled", expected: "cancelled" },
+      { status: "completed-timeout", expected: "timed_out", timedOut: true },
+    ] as const;
+
+    for (const testCase of cases) {
+      const response = await sendLoopbackToolCall({
+        token: runtime.ownerToken,
+        name: "message",
+        args: {
+          status: testCase.status === "completed-timeout" ? "completed" : testCase.status,
+          ...("timedOut" in testCase && testCase.timedOut ? { timedOut: true } : {}),
+        },
+        headers: { "x-openclaw-cli-capture-key": captureKey },
+      });
+      expect(response.status).toBe(200);
+      const payload = await readMcpPayload(response);
+      expect(payload.result?.isError).toBe(testCase.expected !== "completed");
+    }
+
+    expect(captured).toEqual([
+      { outcome: "completed", correlationId: "completed" },
+      { outcome: "failed", correlationId: "failed" },
+      {
+        outcome: "blocked",
+        correlationId: "blocked",
+        deniedReason: "tool_result_blocked",
+      },
+      { outcome: "cancelled", correlationId: "cancelled" },
+      { outcome: "timed_out", correlationId: "completed" },
+    ]);
   });
 
   it("updates capture accounting with hook-rewritten tool arguments", async () => {
@@ -1245,7 +1486,7 @@ describe("mcp loopback server", () => {
       toolName: "message",
       args: { action: "send", target: "chat123" },
       result: { content: "x".repeat(20 * 1024) },
-      isError: false,
+      outcome: "completed",
     });
     markMcpLoopbackToolCallFinished(captureHandle);
 
@@ -1283,7 +1524,7 @@ describe("mcp loopback server", () => {
       toolName: "message",
       args: { action: "send", target: "first-turn" },
       result: { status: "sent" },
-      isError: false,
+      outcome: "completed",
     });
     markMcpLoopbackToolCallFinished(firstHandle);
 
@@ -1354,7 +1595,7 @@ describe("mcp loopback server", () => {
       expect.objectContaining({
         toolName: "message",
         args: { action: "send", target: "late-body" },
-        isError: false,
+        outcome: "completed",
       }),
     );
   });
@@ -1435,8 +1676,44 @@ describe("mcp loopback server", () => {
     expect(captured).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "message",
-        isError: true,
+        outcome: "failed",
         result: expect.objectContaining({ sentBeforeError: true }),
+      }),
+    );
+  });
+
+  it("preserves thrown timeout outcomes in CLI capture", async () => {
+    const captureKey = "thrown-timeout";
+    const captured = vi.fn();
+    const timeoutError = Object.assign(new Error("tool deadline elapsed"), {
+      name: "TimeoutError",
+    });
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onToolCallResult: captured,
+    });
+    mockScopedTools([
+      makeMessageTool({
+        execute: async () => {
+          throw timeoutError;
+        },
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const response = await sendLoopbackToolCall({
+      token: runtime.ownerToken,
+      name: "message",
+      args: { action: "send", target: "chat123", message: "late" },
+      headers: { "x-openclaw-cli-capture-key": captureKey },
+    });
+
+    expect((await readMcpPayload(response)).result?.isError).toBe(true);
+    expect(captured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        outcome: "timed_out",
+        result: timeoutError,
       }),
     );
   });
@@ -1519,6 +1796,7 @@ describe("mcp loopback server", () => {
     }));
     runBeforeToolCallHookMock.mockResolvedValueOnce({
       blocked: true,
+      kind: "veto",
       reason: "blocked by hook",
     });
     const payload = await callMessageToolWithExecute(execute);
@@ -1546,6 +1824,41 @@ describe("mcp loopback server", () => {
     expect(callId).toMatch(/^mcp-/);
     expect(params).toEqual({ body: "hello" });
     expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("preserves request-disconnect evidence without classifying a tool failure", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const onToolCallResult = vi.fn();
+    const partialDelivery = Object.assign(new Error("request disconnected"), {
+      name: "AbortError",
+      sentBeforeError: true,
+    });
+    const tool = makeMessageTool({
+      execute: async () => {
+        throw partialDelivery;
+      },
+    });
+
+    await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+      signal: controller.signal,
+      onToolCallResult,
+    });
+
+    expect(onToolCallResult).toHaveBeenCalledWith({
+      toolName: "message",
+      args: { body: "hello" },
+      outcome: "unknown",
+      result: partialDelivery,
+    });
   });
 
   it("tracks the active runtime only while the server is running", async () => {

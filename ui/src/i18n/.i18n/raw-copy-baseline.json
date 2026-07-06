@@ -12,20 +12,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/app-sidebar.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/app-topbar.ts",
-      "text": "⌘K"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/command-palette.ts",
       "text": "esc"
     },
@@ -604,7 +590,7 @@
       "text": "Close"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
@@ -623,6 +609,41 @@
       "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
       "text": "No files match."
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Closed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Draft"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Merged"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Not planned"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Open"
     },
     {
       "count": 1,
@@ -1942,6 +1963,34 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Clear goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Edit goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Pause goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Resume goal"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-message.ts",
@@ -2173,6 +2222,48 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Copy path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Next match"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Previous match"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search in file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Show in Files"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
@@ -2200,7 +2291,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 4,
+      "count": 5,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
@@ -3563,13 +3654,6 @@
       "name": "text",
       "path": "ui/src/pages/cron/view.ts",
       "text": "Optional routing key for job delivery and wake routing."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/cron/view.ts",
-      "text": "Run if due"
     },
     {
       "count": 1,

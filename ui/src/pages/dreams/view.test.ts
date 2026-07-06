@@ -2,12 +2,9 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createDreamingViewState,
-  renderDreaming,
-  type DreamingProps,
-  type DreamingViewState,
-} from "./view.ts";
+import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
+
+type DreamingProps = Parameters<typeof renderDreaming>[0];
 
 let viewState = createDreamingViewState();
 

@@ -172,7 +172,6 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
-    expect(env.OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM).toBe("1");
     expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
     expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
     expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");

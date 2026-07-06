@@ -20,6 +20,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "sessions",
   "usage",
   "cron",
+  "tasks",
   "agents",
   "skills",
   "skill-workshop",
@@ -29,10 +30,10 @@ export const SIDEBAR_NAV_ROUTES = [
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
+// Sessions are the sidebar's core content; Overview is the only page pinned by
+// default. Users pin more via the customize menu.
 export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
   "overview",
-  "workboard",
-  "agents",
 ] as const satisfies readonly SidebarNavRoute[];
 
 /**
@@ -69,6 +70,7 @@ export const SETTINGS_NAVIGATION_ROUTES = [
   "automation",
   "mcp",
   "infrastructure",
+  "worktrees",
   "ai-agents",
   "debug",
   "logs",
@@ -79,11 +81,13 @@ const NAVIGATION_ICONS: NavigationItem = {
   activity: "activity",
   overview: "barChart",
   workboard: "folder",
+  worktrees: "folder",
   channels: "link",
   instances: "radio",
   sessions: "fileText",
   usage: "barChart",
   cron: "loader",
+  tasks: "loader",
   skills: "zap",
   "skill-workshop": "wrench",
   nodes: "monitor",
@@ -162,11 +166,13 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
+  worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
   instances: { titleKey: "tabs.instances", subtitleKey: "subtitles.instances" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
+  tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",

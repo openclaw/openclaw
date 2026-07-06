@@ -1,7 +1,7 @@
 // Regression: costUsageCache (usage.ts:65) has no production delete/prune/evict
 // path. The TTL at L310 is read-only — on a miss after expiry, set() overwrites
-// the same key but never removes stale keys. parseDateRange derives cacheKey
-// from getTodayStartMs so cacheKey rolls at every UTC 00:00, and additional
+// the same key but never removes stale keys. resolveDateRange derives cacheKey
+// from the current calendar day so cacheKey rolls at every UTC 00:00, and additional
 // axes (days, startDate, endDate, utcOffset) multiply cardinality.
 //
 // The same file has three sibling caches that implement MAX + FIFO eviction

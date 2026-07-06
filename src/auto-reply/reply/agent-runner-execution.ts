@@ -68,7 +68,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
-  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
@@ -1774,6 +1774,7 @@ async function runAgentTurnWithFallbackInternal(
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
+      agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
@@ -1857,12 +1858,12 @@ async function runAgentTurnWithFallbackInternal(
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
+    const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
+    if (!deliver) {
+      return;
+    }
     try {
-      if (params.opts?.onBlockReply) {
-        await params.opts.onBlockReply(noticePayload);
-        return;
-      }
-      await params.onCompactionNoticePayload?.(noticePayload);
+      await deliver(noticePayload);
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -2193,6 +2194,8 @@ async function runAgentTurnWithFallbackInternal(
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
+            reasoningPayloadsEnabled: params.opts?.reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled: params.opts?.commentaryPayloadsEnabled,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
@@ -2377,8 +2380,8 @@ async function runAgentTurnWithFallbackInternal(
                 sessionKey: params.sessionKey,
                 startedAt: cliLifecycleStartedAt,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -2617,8 +2620,8 @@ async function runAgentTurnWithFallbackInternal(
                 runId,
                 sessionKey: params.sessionKey,
                 getLifecycleGeneration: () => lifecycleGeneration,
-                resolveAbortLifecycleFields: () => ({
-                  ...resolveAgentRunAbortLifecycleFields(runAbortSignal),
+                resolveTerminationFields: (error) => ({
+                  ...resolveAgentRunErrorLifecycleFields(error, runAbortSignal),
                   ...(isReplyOperationRestartAbort(params.replyOperation)
                     ? {
                         aborted: true as const,
@@ -3483,7 +3486,7 @@ async function runAgentTurnWithFallbackInternal(
             ? params.opts.abortSignal
             : undefined;
       const abortLifecycleFields = {
-        ...resolveAgentRunAbortLifecycleFields(abortedSignal),
+        ...resolveAgentRunErrorLifecycleFields(err, abortedSignal),
         ...(isReplyOperationRestartAbort(params.replyOperation)
           ? {
               aborted: true as const,

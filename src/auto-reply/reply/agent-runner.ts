@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -11,7 +10,12 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import {
+  hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
+} from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -251,33 +255,8 @@ function hasSuccessfulSourceReplyDelivery(params: {
   return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
-    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+    hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
-}
-
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
-}
-
-function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const record = entry as { text?: unknown; mediaUrls?: unknown };
-    if ("text" in record || "mediaUrls" in record) {
-      return (
-        (typeof record.text === "string" && record.text.trim().length > 0) ||
-        hasNonEmptyStringArray(record.mediaUrls)
-      );
-    }
-    return true;
-  });
 }
 
 function hasSuccessfulTerminalSourceReplyDelivery(params: {
@@ -1291,6 +1270,9 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.userTurnTranscriptRecorder
+          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+          : {}),
       },
     );
     if (steerOutcome.queued) {
@@ -1413,7 +1395,7 @@ export async function runReplyAgent(params: {
         try {
           await opts.onBlockReply(noticePayload);
         } catch (err) {
-          logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
+          logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
         }
       }
     : undefined;
@@ -1583,34 +1565,52 @@ export async function runReplyAgent(params: {
     });
     return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
   };
-  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  type SessionResetOptions = {
+    failureLabel: string;
+    buildLogMessage: (nextSessionId: string) => string;
+    cleanupTranscripts?: boolean;
+  };
+  const resetSession = async ({
+    failureLabel,
+    buildLogMessage,
+    cleanupTranscripts,
+  }: SessionResetOptions): Promise<boolean> =>
+    await resetReplyRunSession({
+      options: {
+        failureLabel,
+        buildLogMessage,
+        cleanupTranscripts,
+      },
+      sessionKey,
+      queueKey,
+      activeSessionEntry,
+      activeSessionStore,
+      storePath,
+      messageThreadId:
+        typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
+      followupRun,
+      onActiveSessionEntry: (nextEntry) => {
+        activeSessionEntry = nextEntry;
+      },
+      onNewSession: () => {
+        activeIsNewSession = true;
+      },
+    });
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "role ordering conflict",
+      buildLogMessage: (nextSessionId) =>
+        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+      cleanupTranscripts: true,
+    });
   let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
 
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
-
-    const visibleMemoryFlushErrorPayloads: ReplyPayload[] = [];
-    activeSessionEntry = await traceAgentPhase("reply.memory_flush", () =>
+    // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
+    // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
+    const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
         followupRun,
@@ -1628,54 +1628,66 @@ export async function runReplyAgent(params: {
         isHeartbeat,
         replyOperation,
         onVisibleErrorPayloads: (payloads) => {
-          visibleMemoryFlushErrorPayloads.push(...payloads);
+          logVerbose(
+            `memory flush produced ${payloads.length} visible maintenance error payload(s); continuing user reply`,
+          );
         },
       }),
     );
+    activeSessionEntry = memoryFlushResult.sessionEntry;
 
     if (replyOperation.result?.kind === "aborted") {
       throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
     }
 
-    if (visibleMemoryFlushErrorPayloads.length > 0) {
-      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-      const payloadResult = await buildReplyPayloads({
-        config: cfg,
-        payloads: visibleMemoryFlushErrorPayloads,
-        isHeartbeat,
-        didLogHeartbeatStrip: false,
-        silentExpected: true,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        messageProvider: followupRun.run.messageProvider,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingChatType: sessionCtx.ChatType,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
+    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    try {
+      activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+        runPreflightCompactionIfNeeded({
+          cfg,
+          followupRun,
+          promptForEstimate: followupRun.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          runtimePolicySessionKey,
+          storePath,
+          isHeartbeat,
+          replyOperation,
+          onCompactionNotice: sendDirectCompactionNotice,
         }),
-        originatingThreadId: replyRouteThreadId,
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
-      const replyPayloads = payloadResult.replyPayloads.map((payload) =>
-        markReplyPayloadForSourceSuppressionDelivery(payload),
       );
-      if (replyPayloads.length > 0) {
-        replyOperation.freezeAbort();
-        replyOperation.fail(
-          "run_failed",
-          new Error("memory flush produced visible error payloads"),
-        );
-        await signalTypingIfNeeded(replyPayloads, typingSignals);
-        return returnWithQueuedFollowupDrain(
-          replyPayloads.length === 1 ? replyPayloads[0] : replyPayloads,
-        );
+      preflightCompactionApplied =
+        (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
+    } catch (err) {
+      const canRotateAfterPreflightFailure =
+        memoryFlushResult.outcome === "exhausted" &&
+        !replyOperation.abortSignal.aborted &&
+        isLikelyContextOverflowError(String(err));
+      if (!canRotateAfterPreflightFailure) {
+        throw err;
       }
+      logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
+    }
+
+    if (memoryFlushResult.outcome === "exhausted" && !preflightCompactionApplied) {
+      await resetSession({
+        failureLabel: "memory flush exhaustion",
+        buildLogMessage: (nextSessionId) =>
+          `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
+        // Rotate only when compaction could not recover the bloated context.
+        cleanupTranscripts: false,
+      });
+      if (activeSessionEntry?.sessionId) {
+        replyOperation.updateSessionId(activeSessionEntry.sessionId);
+      }
+    }
+
+    // Exhausted background maintenance is non-terminal: optionally notify, then reply normally.
+    if (memoryFlushResult.outcome === "exhausted") {
+      await sendDirectCompactionNotice?.("memory_flush_degraded");
     }
 
     runFollowupTurn = createFollowupRunner({
@@ -1690,45 +1702,6 @@ export async function runReplyAgent(params: {
       agentCfgContextTokens,
       toolProgressDetail,
     });
-
-    type SessionResetOptions = {
-      failureLabel: string;
-      buildLogMessage: (nextSessionId: string) => string;
-      cleanupTranscripts?: boolean;
-    };
-    const resetSession = async ({
-      failureLabel,
-      buildLogMessage,
-      cleanupTranscripts,
-    }: SessionResetOptions): Promise<boolean> =>
-      await resetReplyRunSession({
-        options: {
-          failureLabel,
-          buildLogMessage,
-          cleanupTranscripts,
-        },
-        sessionKey,
-        queueKey,
-        activeSessionEntry,
-        activeSessionStore,
-        storePath,
-        messageThreadId:
-          typeof sessionCtx.MessageThreadId === "string" ? sessionCtx.MessageThreadId : undefined,
-        followupRun,
-        onActiveSessionEntry: (nextEntry) => {
-          activeSessionEntry = nextEntry;
-        },
-        onNewSession: () => {
-          activeIsNewSession = true;
-        },
-      });
-    const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-      resetSession({
-        failureLabel: "role ordering conflict",
-        buildLogMessage: (nextSessionId) =>
-          `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-        cleanupTranscripts: true,
-      });
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
@@ -1979,23 +1952,6 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
-    const committedOutboundDelivery =
-      runResult.didSendViaMessagingTool === true ||
-      hasNonEmptyStringArray(runResult.messagingToolSentTexts) ||
-      hasNonEmptyStringArray(runResult.messagingToolSentMediaUrls) ||
-      hasCommittedMessagingTargetDeliveryEvidence(runResult.messagingToolSentTargets) ||
-      hasAcceptedSessionSpawn(runResult.acceptedSessionSpawns) ||
-      (runResult.successfulCronAdds ?? 0) > 0 ||
-      runResult.didSendDeterministicApprovalPrompt === true;
-    const successfulSideEffectDelivery =
-      committedOutboundDelivery ||
-      hasSuccessfulSourceReplyDelivery({ blockReplyPipeline, directlySentBlockKeys });
-    const successfulTerminalEffectDelivery =
-      committedOutboundDelivery ||
-      hasSuccessfulTerminalSourceReplyDelivery({
-        blockReplyPipeline,
-        directlySentBlockPayloads,
-      });
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -2004,12 +1960,24 @@ export async function runReplyAgent(params: {
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
     const committedMessagingToolSourceReplyDelivery =
-      runResult.didDeliverSourceReplyViaMessageTool === true ||
-      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+      hasCommittedSourceReplyDeliveryEvidence(runResult);
+    const successfulSideEffectDelivery =
+      successfulSourceReplyDelivery ||
+      committedMessagingToolSourceReplyDelivery ||
+      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      runResult.didSendDeterministicApprovalPrompt === true;
+    const successfulTerminalDelivery =
+      hasSuccessfulTerminalSourceReplyDelivery({
+        blockReplyPipeline,
+        directlySentBlockPayloads,
+      }) ||
+      committedMessagingToolSourceReplyDelivery ||
+      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      runResult.didSendDeterministicApprovalPrompt === true;
+    // Compaction notices are progress, not a terminal reply. Dispatcher-backed
+    // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(
-      terminalFailurePayload &&
-      !successfulTerminalEffectDelivery &&
-      !committedMessagingToolSourceReplyDelivery,
+      terminalFailurePayload && !successfulTerminalDelivery,
     );
     const fallbackFailureKnown =
       fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback;
@@ -2030,8 +1998,7 @@ export async function runReplyAgent(params: {
           hasPendingContinuation:
             runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
           hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-          hasCommittedDelivery:
-            successfulTerminalEffectDelivery || committedMessagingToolSourceReplyDelivery,
+          hasCommittedDelivery: successfulTerminalDelivery,
           sessionCtx,
           cfg,
         });
@@ -2041,12 +2008,73 @@ export async function runReplyAgent(params: {
     ) {
       await opts.onObservedReplyDelivery?.();
     }
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    // A terminal fallback is built separately after normal payload filtering.
+    // Share this state across deliverable lanes so replyToMode=first still threads
+    // at most one visible payload without hidden reasoning/commentary consuming it.
+    const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
+      replyToMode,
+      replyToChannel,
+    );
+    const applyFinalReplyToMode = (payload: ReplyPayload) => {
+      const isDisabledReasoningLane =
+        payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
+      const isDisabledCommentaryLane =
+        payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+      const isFilteredPayload =
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
+      return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
+        ? payload
+        : applyDeliveredReplyToMode(payload);
+    };
+    const buildFinalPayloads = (payloads: ReplyPayload[]) =>
+      buildReplyPayloads({
+        config: cfg,
+        payloads,
+        isHeartbeat,
+        didLogHeartbeatStrip,
+        silentExpected: followupRun.run.silentExpected,
+        blockStreamingEnabled,
+        blockReplyPipeline,
+        directlySentBlockKeys,
+        directlySentBlockPayloads,
+        replyToMode,
+        replyToChannel,
+        currentMessageId,
+        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+        applyReplyToMode: applyFinalReplyToMode,
+        messageProvider: followupRun.run.messageProvider,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        originatingChannel: sessionCtx.OriginatingChannel,
+        originatingChatType: sessionCtx.ChatType,
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+        originatingThreadId: replyRouteThreadId,
+        accountId: sessionCtx.AccountId,
+        normalizeMediaPaths: replyMediaContext.normalizePayload,
+      });
+    const returnPreparedFallbackPayload = async (
+      payload: ReplyPayload,
+    ): Promise<ReplyPayload | undefined> => {
+      const result = await buildFinalPayloads([payload]);
+      didLogHeartbeatStrip = result.didLogHeartbeatStrip;
+      const preparedPayload = result.replyPayloads[0];
+      if (!preparedPayload) {
+        return undefined;
+      }
+      await signalTypingIfNeeded([preparedPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(preparedPayload);
+    };
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
         fallbackFailureKnown,
         isHeartbeat,
-        hasSuccessfulTerminalDelivery: successfulTerminalEffectDelivery,
+        hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
@@ -2059,10 +2087,8 @@ export async function runReplyAgent(params: {
           `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
         ),
       );
-      await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
-      return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+      return returnPreparedFallbackPayload(silentFallbackFailurePayload);
     };
-
     const fallbackNoticePayloads: ReplyPayload[] = [];
     if (
       !fallbackExhausted &&
@@ -2147,59 +2173,15 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(undefined);
     }
 
-    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-    // A terminal fallback is built separately after normal payload filtering.
-    // Share this state across deliverable lanes so replyToMode=first still threads
-    // at most one visible payload without hidden reasoning/commentary consuming it.
-    const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(
-      replyToMode,
-      replyToChannel,
-    );
-    const applyFinalReplyToMode = (payload: ReplyPayload) => {
-      const isDisabledReasoningLane =
-        payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
-      const isDisabledCommentaryLane =
-        payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
-      const isFilteredPayload =
-        normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
-      return isDisabledReasoningLane || isDisabledCommentaryLane || isFilteredPayload
-        ? payload
-        : applyDeliveredReplyToMode(payload);
-    };
-    const buildFinalPayloads = (payloads: ReplyPayload[]) =>
-      buildReplyPayloads({
-        config: cfg,
-        payloads,
-        isHeartbeat,
-        didLogHeartbeatStrip,
-        silentExpected: followupRun.run.silentExpected,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        directlySentBlockKeys,
-        directlySentBlockPayloads,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        applyReplyToMode: applyFinalReplyToMode,
-        messageProvider: followupRun.run.messageProvider,
-        messagingToolSentTexts: runResult.messagingToolSentTexts,
-        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingChatType: sessionCtx.ChatType,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
-        }),
-        originatingThreadId: replyRouteThreadId,
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
-    const payloadCandidates =
+    const payloadCandidates = (
       fallbackNoticePayloads.length > 0
         ? [...fallbackNoticePayloads, ...payloadArray]
-        : payloadArray;
+        : payloadArray
+    ).filter(
+      (payload) =>
+        (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+        (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
+    );
     const payloadResult = await buildFinalPayloads(payloadCandidates);
     let { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
@@ -2232,8 +2214,12 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
-      (payload) => !isReplyPayloadStatusNotice(payload),
+    const hasVisibleReplyPayload = replyPayloads.some(
+      (payload) =>
+        !isReplyPayloadStatusNotice(payload) &&
+        (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+        (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
+        normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
     );
     const hasDeliveredBlockStream = Boolean(
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
@@ -2242,7 +2228,7 @@ export async function runReplyAgent(params: {
       hasDeliveredBlockStream || successfulSideEffectDelivery;
     if (
       replyPayloads.length === 0 ||
-      (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
+      (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
     ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {

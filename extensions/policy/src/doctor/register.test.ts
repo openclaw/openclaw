@@ -1739,6 +1739,136 @@ describe("registerPolicyDoctorChecks", () => {
     });
   });
 
+  it("dry-runs required tool deny repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { deny: ["read"] },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { denyTools: ["exec", "write"] } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck("policy/tools-required-deny-missing", {
+      ...repairCtx(configPath, cfg),
+      dryRun: true,
+    });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-required-deny-missing",
+          message: "global tools config does not deny required tool 'exec'.",
+          ocPath: "oc://openclaw.config/tools/deny",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-required-deny-missing",
+          message: "global tools config does not deny required tool 'write'.",
+          ocPath: "oc://openclaw.config/tools/deny",
+        }),
+      ]),
+    );
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Added exec to tools.deny for policy conformance.",
+      "Added write to tools.deny for policy conformance.",
+    ]);
+    expect(result.config.tools?.deny).toEqual(["read", "exec", "write"]);
+    expect(cfg.tools?.deny).toEqual(["read"]);
+  });
+
+  it("repairs required agent workspace deny tool findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { deny: ["exec"] },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/agents-tool-not-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Added edit to agents.list[0].tools.deny for policy conformance.",
+      "Added write to agents.list[0].tools.deny for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      tools: { deny: ["exec", "edit", "write"] },
+    });
+  });
+
+  it("skips scoped required deny repairs that would mutate root tools deny", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { deny: ["exec"] },
+      agents: {
+        list: [{ id: "reviewer" }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            tools: { denyTools: ["exec", "write"] },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-required-deny-missing",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped deny repair for write. The finding reports inherited root tools.deny, so changing it would affect more than the scoped policy target.",
+    ]);
+    expect(result.config.tools?.deny).toEqual(["exec"]);
+    expect(result.config.agents?.list?.[0]).toEqual({ id: "reviewer" });
+    expect(result.remainingFindings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-required-deny-missing",
+        ocPath: "oc://openclaw.config/tools/deny",
+        requirement: "oc://policy.jsonc/scopes/reviewer/tools/denyTools",
+      }),
+    ]);
+  });
+
   it("skips scoped data-handling repairs that would mutate shared config", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

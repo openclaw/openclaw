@@ -135,6 +135,10 @@ import {
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
+import {
+  isPrimaryBootstrapRun,
+  resolveWorkspaceBootstrapRouting,
+} from "../../bootstrap-routing.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   getChannelAgentToolMeta,
@@ -344,7 +348,6 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
-import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import {
@@ -372,10 +375,7 @@ import {
   type AsyncStartedToolMeta,
   type CompletionRequiredAsyncTaskWaitResult,
 } from "./attempt.async-tasks.js";
-import {
-  isPrimaryBootstrapRun,
-  remapInjectedContextFilesToWorkspace,
-} from "./attempt.bootstrap-context.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -918,6 +918,7 @@ export async function runEmbeddedAttempt(
   let idleTimedOut = false;
   let timedOutDuringCompaction = false;
   let timedOutDuringToolExecution = false;
+  let timedOutByRunBudget = false;
   let promptError: unknown = null;
   let emitDiagnosticRunCompleted:
     | ((
@@ -1152,12 +1153,13 @@ export async function runEmbeddedAttempt(
         forceMessageTool: forceDirectMessageTool,
       },
     );
+    const toolsEnabled = supportsModelTools(params.model);
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
+      toolsEnabled,
       toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
-    const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
     const toolSearchRuntimeConfig = forceDirectMessageTool
       ? params.config
@@ -1379,7 +1381,7 @@ export async function runEmbeddedAttempt(
       return completedBootstrapTurn;
     };
     const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
-      resolveAttemptWorkspaceBootstrapRouting({
+      resolveWorkspaceBootstrapRouting({
         isWorkspaceBootstrapPending,
         bootstrapFiles,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
@@ -1532,6 +1534,7 @@ export async function runEmbeddedAttempt(
           diagnostics,
           tools: sourceTools,
           runId: params.runId,
+          agentId: sessionAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
         }),
@@ -1614,6 +1617,7 @@ export async function runEmbeddedAttempt(
                 diagnostics,
                 tools: sourceTools,
                 runId: params.runId,
+                agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
               }),
@@ -1641,6 +1645,7 @@ export async function runEmbeddedAttempt(
       diagnostics: uncompactedToolSchemaProjection.diagnostics,
       tools: projectedUncompactedEffectiveTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -1747,6 +1752,7 @@ export async function runEmbeddedAttempt(
       diagnostics: toolSearchSchemaProjection.diagnostics,
       tools: projectedToolSearchTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -3814,6 +3820,7 @@ export async function runEmbeddedAttempt(
             ) {
               timedOutDuringCompaction = true;
             }
+            timedOutByRunBudget = true;
             abortRun(true);
             if (!abortWarnTimer) {
               abortWarnTimer = setTimeout(() => {
@@ -5032,12 +5039,21 @@ export async function runEmbeddedAttempt(
         const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
 
         try {
-          // Flush buffered block replies before waiting for compaction so the
-          // user receives the assistant response immediately.  Without this,
-          // coalesced/buffered blocks stay in the pipeline until compaction
-          // finishes — which can take minutes on large contexts (#35074).
+          // Flush or discard buffered block replies before waiting for
+          // compaction. Side-effecting consumers may deliver only a completed
+          // assistant attempt; retries must not leak rejected output.
           if (onBlockReplyFlush) {
-            await onBlockReplyFlush();
+            const currentAssistant = findCurrentAttemptAssistantMessage({
+              messagesSnapshot: snapshot,
+              prePromptMessageCount,
+            });
+            const attemptAccepted =
+              !promptError &&
+              !aborted &&
+              !timedOut &&
+              !yieldAborted &&
+              currentAssistant?.stopReason === "stop";
+            await onBlockReplyFlush({ reason: "pre_compaction", attemptAccepted });
           }
 
           // Skip compaction wait when yield aborted the run — the signal is
@@ -5654,6 +5670,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         promptErrorSource,
         terminalError: attemptTrajectoryTerminal.terminalError,
@@ -5674,6 +5691,7 @@ export async function runEmbeddedAttempt(
           idleTimedOut,
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
+          timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
           promptErrorSource,
           terminalError: attemptTrajectoryTerminal.terminalError,
@@ -5700,6 +5718,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         terminalError: attemptTrajectoryTerminal.terminalError,
       });
@@ -5715,6 +5734,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError,
         promptErrorSource,
         preflightRecovery,
@@ -5771,6 +5791,7 @@ export async function runEmbeddedAttempt(
           idleTimedOut,
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
+          timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }

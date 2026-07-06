@@ -1133,7 +1133,9 @@ The minimum adoption bar for a new channel:
    competing root command. Runner plugins should declare `qaRunners` in
    `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations`
    array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and
-   runner execution should stay behind separate entrypoints.
+   runner execution should stay behind separate entrypoints. An optional
+   `adapterFactory` exposes the transport to shared scenarios without changing
+   the command's existing scenario catalog.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.

@@ -771,6 +771,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker-full "full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
     expect(workflow).toContain(
       'add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"',
@@ -794,7 +795,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
-    expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
+    expect(workflow).toContain("inputs.live_suite_filter == matrix.suite_group");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
@@ -1095,8 +1096,22 @@ describe("package artifact reuse", () => {
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      "run_setup_command npm install -g @anthropic-ai/claude-code",
+      'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
     );
+    const acpBindScript = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
+    expect(acpBindScript).toContain(
+      "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH must be one of: auto, api-key, subscription.",
+    );
+    expect(acpBindScript).toContain(
+      'if [[ "$ACP_AGENT" == "claude" && "$CLAUDE_AUTH_MODE" == "subscription" ]]; then',
+    );
+    expect(acpBindScript).toContain(
+      "unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN",
+    );
+    expect(acpBindScript).toContain('-e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"');
+    expect(acpBindScript).not.toContain("    -e ANTHROPIC_API_KEY \\\n");
+    expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription/g)).toHaveLength(2);
+    expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key/g)).toHaveLength(2);
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
     );
@@ -1282,7 +1297,7 @@ describe("package artifact reuse", () => {
       reusableWorkflow.match(
         /if \[\[ -n "\$\{OPENCLAW_CLAUDE_CREDENTIALS_JSON:-\}" \|\| -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
   });
 
   it("finalizes Testbox delegation even when setup or the remote command fails", () => {
@@ -1404,6 +1419,27 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain(
       "QA release-check lanes are advisory and do not block release validation.",
     );
+  });
+
+  it("prefers fresh Claude OAuth credentials for direct Anthropic live provider lanes", () => {
+    const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
+
+    expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
+    expect(hydrateScript).toContain("access_token=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain('export ANTHROPIC_OAUTH_TOKEN="$access_token"');
+    expect(hydrateScript).toContain('local min_remaining_ms="$(( 90 * 60 * 1000 ))"');
+    expect(hydrateScript).toContain(
+      'printf \'ANTHROPIC_OAUTH_TOKEN=%s\\n\' "$access_token" >>"$GITHUB_ENV"',
+    );
+    for (const jobName of [
+      "validate_live_models_docker",
+      "validate_live_models_docker_targeted",
+      "validate_live_provider_suites",
+    ]) {
+      expect(workflowJob(LIVE_E2E_WORKFLOW, jobName).env?.ANTHROPIC_OAUTH_TOKEN).toBe(
+        "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+      );
+    }
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {

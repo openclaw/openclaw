@@ -74,13 +74,12 @@ export class AppTopbar extends LitElement {
           <div class="topnav-shell__actions">
             <openclaw-tooltip .content=${paletteLabel}>
               <button
-                class="topbar-search"
+                class="topbar-icon-btn topbar-search"
                 ?disabled=${this.searchDisabled || !this.onOpenPalette}
                 @click=${() => this.onOpenPalette?.()}
                 aria-label=${t("chat.openCommandPalette")}
               >
-                <span class="topbar-search__label">${t("common.search")}</span>
-                <kbd class="topbar-search__kbd">⌘K</kbd>
+                ${icons.search}
               </button>
             </openclaw-tooltip>
             <openclaw-tooltip .content=${this.navCollapsed ? t("nav.expand") : t("nav.collapse")}>

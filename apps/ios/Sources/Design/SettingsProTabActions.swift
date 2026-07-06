@@ -108,15 +108,6 @@ extension SettingsProTab {
         }
     }
 
-    func detailRow(_ label: String, value: String) -> some View {
-        LabeledContent(label) {
-            Text(value)
-                .font(OpenClawType.subhead)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-    }
-
     func reconnectGateway() async {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }
@@ -289,11 +280,11 @@ extension SettingsProTab {
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return false }
         self.stagedGatewaySetupLink = nil
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         return true
     }
 
-    func applyGatewayLink(_ link: GatewayConnectDeepLink) {
+    func applyGatewayLink(_ link: GatewayConnectDeepLink) async {
         self.manualGatewayHost = link.host
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
@@ -302,7 +293,7 @@ extension SettingsProTab {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            GatewayOnboardingReset.prepareForBootstrapPairing(
+            await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: instanceId,
                 gatewayStableID: setupAuth.targetStableID)
@@ -387,7 +378,7 @@ extension SettingsProTab {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
@@ -475,7 +466,7 @@ extension SettingsProTab {
         return true
     }
 
-    func resetOnboarding() {
+    func resetOnboarding() async {
         self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
         self.setupCode = ""
@@ -486,7 +477,7 @@ extension SettingsProTab {
         self.gatewayPassword = ""
         self.gatewayCredentialFieldStableID = nil
         self.pendingManualAuthOverride = nil
-        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+        await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
         self.onboardingComplete = false
         self.hasConnectedOnce = false
         self.manualGatewayEnabled = false
@@ -623,6 +614,19 @@ extension SettingsProTab {
         // Auth fields follow the selected route. Otherwise a discovered-gateway retry can save
         // credentials under the unrelated manual endpoint and immediately reload an empty bundle.
         self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID
+    }
+
+    var gatewayCustomHeadersTargetStableID: String? {
+        guard let stableID = self.gatewayCredentialTargetStableID else { return nil }
+        if self.currentManualGatewayStableID == stableID {
+            return self.manualGatewayTLS ? stableID : nil
+        }
+        if let active = self.appModel.activeGatewayConnectConfig,
+           active.effectiveStableID == stableID
+        {
+            return active.url.scheme?.lowercased() == "wss" ? stableID : nil
+        }
+        return nil
     }
 
     var manualGatewayEnabledBinding: Binding<Bool> {
