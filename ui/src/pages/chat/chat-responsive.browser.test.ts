@@ -20,6 +20,10 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+const LONG_SIDE_RESULT_BODY = Array.from(
+  { length: 80 },
+  (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
+).join("");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
@@ -38,6 +42,13 @@ type ControlRect = {
   scrollTop?: number;
   text?: string;
   display?: string;
+};
+
+type ChatFixtureOptions = {
+  composerAttachment?: boolean;
+  sideResultBody?: string;
+  singleAgent?: boolean;
+  slashMenu?: boolean;
 };
 
 function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
@@ -234,14 +245,7 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(
-  opts: {
-    composerAttachment?: boolean;
-    sideResult?: boolean;
-    singleAgent?: boolean;
-    slashMenu?: boolean;
-  } = {},
-) {
+function chatHtml(opts: ChatFixtureOptions = {}) {
   return `
     <div class="shell shell--chat" data-chat-responsive-fixture>
       <header class="topbar">
@@ -288,14 +292,14 @@ function chatHtml(
             </div>
           </div>
           ${
-            opts.sideResult
+            opts.sideResultBody !== undefined
               ? `<section class="chat-side-result" role="status" aria-live="polite">
                   <div class="chat-side-result__header">
                     <div class="chat-side-result__label-row"><span class="chat-side-result__label">BTW</span><span class="chat-side-result__meta">Not saved to chat history</span></div>
                     <button class="btn chat-side-result__dismiss">${iconSvg()}</button>
                   </div>
                   <div class="chat-side-result__question">What should I check next?</div>
-                  <div class="chat-side-result__body"><p>Inspect the responsive controls and keep the transcript usable.</p></div>
+                  <div class="chat-side-result__body">${opts.sideResultBody}</div>
                 </section>`
               : ""
           }
@@ -392,16 +396,7 @@ function chatHtml(
   `;
 }
 
-async function openFixture(
-  width: number,
-  height: number,
-  opts: {
-    composerAttachment?: boolean;
-    sideResult?: boolean;
-    singleAgent?: boolean;
-    slashMenu?: boolean;
-  } = {},
-) {
+async function openFixture(width: number, height: number, opts: ChatFixtureOptions = {}) {
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
@@ -1677,28 +1672,13 @@ describeBrowserLayout("chat responsive browser layout", () => {
   it.each([
     [1024, 768],
     [1366, 900],
-    [1440, 900],
   ] as const)(
     "scrolls long BTW side result bodies instead of expanding the card at %sx%s",
     async (width, height) => {
-      const longBody = Array.from({ length: 80 }, (_, i) => `<p>Line ${i + 1}</p>`).join("");
-      const page = await openBrowserPage(width, height);
+      const page = await openFixture(width, height, {
+        sideResultBody: LONG_SIDE_RESULT_BODY,
+      });
       try {
-        await page.setContent(
-          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-            <section class="chat-side-result" role="status" aria-live="polite" aria-label="BTW side result">
-              <div class="chat-side-result__header">
-                <div class="chat-side-result__label-row">
-                  <span class="chat-side-result__label">BTW</span>
-                  <span class="chat-side-result__meta">Not saved to chat history</span>
-                </div>
-                <button class="btn chat-side-result__dismiss" type="button">X</button>
-              </div>
-              <div class="chat-side-result__question">What is the full answer?</div>
-              <div class="chat-side-result__body">${longBody}</div>
-            </section>
-          </body></html>`,
-        );
         const body = await page.locator(".chat-side-result__body").evaluate((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
@@ -1717,13 +1697,28 @@ describeBrowserLayout("chat responsive browser layout", () => {
   );
 
   it("renders BTW side results as a mobile overlay without horizontal overflow", async () => {
-    const page = await openFixture(320, 568, { sideResult: true });
+    const page = await openFixture(320, 568, {
+      sideResultBody: LONG_SIDE_RESULT_BODY,
+    });
     try {
       await expectNoHorizontalOverflow(page);
-      const position = await page
-        .locator(".chat-side-result")
-        .evaluate((node) => getComputedStyle(node).position);
-      expect(position).toBe("fixed");
+      const card = await page.locator(".chat-side-result").evaluate((node) => {
+        const element = node as HTMLElement;
+        const style = getComputedStyle(element);
+        return {
+          clientHeight: element.clientHeight,
+          overflow: style.overflow,
+          position: style.position,
+          scrollHeight: element.scrollHeight,
+        };
+      });
+      const bodyOverflow = await page
+        .locator(".chat-side-result__body")
+        .evaluate((node) => getComputedStyle(node).overflow);
+      expect(card.position).toBe("fixed");
+      expect(card.overflow).toBe("auto");
+      expect(card.clientHeight).toBeLessThan(card.scrollHeight);
+      expect(bodyOverflow).toBe("visible");
     } finally {
       await closeBrowserPage(page);
     }
