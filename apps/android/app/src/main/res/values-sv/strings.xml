@@ -22,16 +22,6 @@
     <string name="password">Lösenord</string>
     <string name="run_onboarding_again">Kör introduktionen igen</string>
     <string name="resolved_endpoint">Löst slutpunkt</string>
-    <string name="gateway_setup">Gateway-konfiguration</string>
-    <string name="connect_to_gateway">Anslut till din gateway</string>
-    <string name="scan_setup_code">Skanna konfigurationskod</string>
-    <string name="use_gateway_qr">Använd gatewayens QR-kod eller konfigurationskod</string>
-    <string name="nearby_gateway">Gateway i närheten</string>
-    <string name="enter_gateway_url">Ange gateway-URL</string>
-    <string name="connect_manual_url">Anslut med en manuell URL</string>
-    <string name="permissions">Behörigheter</string>
-    <string name="done">Klar</string>
     <string name="gateway_trust_first_seen">Verifiera certifikatets fingeravtryck innan du litar på denna gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">Gateway-certifikatet har ändrats. Fortsätt bara om du förväntade dig denna ändring.\n\nTidigare SHA-256:\n%1$s\n\nNy SHA-256:\n%2$s</string>
-    <string name="gateway_recovery">Gateway-återställning</string>
 </resources>

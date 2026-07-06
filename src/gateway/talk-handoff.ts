@@ -1,6 +1,6 @@
 // Gateway Talk handoff registry.
 // Manages short-lived browser Talk rooms, tokens, events, and turn ownership.
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -8,6 +8,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   createTalkSessionController,
@@ -324,7 +325,7 @@ function pruneExpiredTalkHandoffs(now = Date.now()): void {
 }
 
 function hashTalkHandoffToken(token: string): string {
-  return createHash("sha256").update(token).digest("base64url");
+  return sha256Base64Url(token);
 }
 
 function toPublicTalkHandoffRecord(record: TalkHandoffRecord): TalkHandoffPublicRecord {

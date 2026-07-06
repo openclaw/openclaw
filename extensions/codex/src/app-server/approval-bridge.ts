@@ -669,6 +669,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       ...(params.paramsForRun.agentId ? { agentId: params.paramsForRun.agentId } : {}),
       ...(params.paramsForRun.config ? { config: params.paramsForRun.config } : {}),
       ...(cwd ? { cwd } : {}),
+      workspaceDir: params.paramsForRun.workspaceDir,
       ...(params.paramsForRun.sessionKey ? { sessionKey: params.paramsForRun.sessionKey } : {}),
       ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
       ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),

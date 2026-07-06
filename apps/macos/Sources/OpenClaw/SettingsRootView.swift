@@ -177,6 +177,8 @@ struct SettingsRootView: View {
                 showOnboarding: { DebugActions.restartOnboarding() }))
         case .voiceWake:
             AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
+        case .crestodian:
+            AnyView(CrestodianSettings(isActive: self.selectedTab == tab))
         case .channels:
             AnyView(ChannelsSettings(isActive: self.selectedTab == tab))
         case .skills:
@@ -239,7 +241,7 @@ private struct SettingsTabGroup: Identifiable {
 
     static func defaultGroups(showDebug: Bool) -> [SettingsTabGroup] {
         var groups = [
-            SettingsTabGroup(title: "Basics", tabs: [.general, .connection, .permissions, .voiceWake]),
+            SettingsTabGroup(title: "Basics", tabs: [.general, .connection, .permissions, .voiceWake, .crestodian]),
             SettingsTabGroup(title: "Automation", tabs: [.channels, .skills, .cron, .execApprovals]),
             SettingsTabGroup(title: "Data", tabs: [.sessions, .instances]),
             SettingsTabGroup(title: "Advanced", tabs: [.config]),
@@ -255,7 +257,7 @@ private struct SettingsTabGroup: Identifiable {
 }
 
 enum SettingsTab: CaseIterable, Identifiable, Hashable {
-    case general, connection, permissions, voiceWake, channels, skills, cron
+    case general, connection, permissions, voiceWake, crestodian, channels, skills, cron
     case execApprovals, sessions, instances, config, debug, about
     static let windowWidth: CGFloat = 1120
     static let windowHeight: CGFloat = 790
@@ -270,6 +272,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .connection: "Connection"
         case .permissions: "Permissions"
         case .voiceWake: "Voice & Talk"
+        case .crestodian: "Crestodian"
         case .channels: "Channels"
         case .skills: "Skills"
         case .cron: "Cron Jobs"
@@ -288,6 +291,7 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .connection: "point.3.connected.trianglepath.dotted"
         case .permissions: "lock.shield"
         case .voiceWake: "waveform.circle"
+        case .crestodian: "lifepreserver"
         case .channels: "link"
         case .skills: "sparkles"
         case .cron: "calendar.badge.clock"

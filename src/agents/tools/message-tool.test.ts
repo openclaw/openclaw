@@ -2,7 +2,10 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../auto-reply/reply/delivery-hints.js";
+import {
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  ROOM_EVENT_DELIVERY_HINT,
+} from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -2287,6 +2290,17 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
+  it("describes userId as required directly for member-info, not via target", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const userId = properties.userId as { description?: string } | undefined;
+
+    expect(userId?.description).toMatch(/member-info/i);
+    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+  });
+
   it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
@@ -3018,6 +3032,10 @@ describe("message tool internal-runtime-context sanitization", () => {
     {
       name: "narration-aware delivery hint only",
       message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+    },
+    {
+      name: "room-event delivery hint only",
+      message: ROOM_EVENT_DELIVERY_HINT,
     },
     {
       name: "inbound metadata only",

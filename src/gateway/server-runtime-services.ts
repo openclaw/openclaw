@@ -1,5 +1,6 @@
 // Gateway post-ready runtime services.
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -44,6 +45,7 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   clearInterval(maintenance.tickInterval);
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);
+  clearInterval(maintenance.worktreeCleanup);
   if (maintenance.mediaCleanup) {
     clearInterval(maintenance.mediaCleanup);
   }
@@ -228,7 +230,10 @@ export function activateGatewayScheduledServices(params: {
     // production starts without launching background loops.
     return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
   }
-  const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
+  const heartbeatRunner = startHeartbeatRunner({
+    cfg: params.cfgAtStart,
+    readCurrentConfig: getRuntimeConfig,
+  });
   if (params.startCron !== false) {
     startGatewayCronWithLogging({
       cron: params.cron,

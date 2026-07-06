@@ -77,10 +77,19 @@ export type QaGatewayChildCommand = {
   usePackagedPlugins?: boolean;
 };
 
+export type QaGatewayChildListeningContext = {
+  attempt: number;
+  baseUrl: string;
+  wsUrl: string;
+  token: string;
+  configPath: string;
+  runtimeEnv: NodeJS.ProcessEnv;
+};
+
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
-    server.once("error", reject);
+    server.once("error", (error) => reject(error));
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -228,6 +237,7 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: "2000",
@@ -317,6 +327,23 @@ async function fetchLocalGatewayHealth(params: {
   }
 }
 
+async function fetchLocalGatewayListening(baseUrl: string): Promise<boolean> {
+  const { release } = await fetchWithSsrFGuard({
+    url: `${baseUrl}/healthz`,
+    init: {
+      method: "HEAD",
+      headers: {
+        connection: "close",
+      },
+      signal: AbortSignal.timeout(2_000),
+    },
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-gateway-child-listening",
+  });
+  await release();
+  return true;
+}
+
 async function waitForQaGatewayRestartBoundary(params: {
   logs: () => string;
   offset: number;
@@ -385,11 +412,11 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
     process.kill(-child.pid, 0);
     return true;
   } catch (error) {
-    if (isProcessAlreadyExitedError(error)) {
-      return false;
+    if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
+      return true;
     }
-    return !hasChildExited(child);
   }
+  return false;
 }
 
 type QaGatewayTaskkillRunner = typeof spawnSync;
@@ -470,7 +497,10 @@ async function stopQaGatewayChildProcessTree(
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  if (!stopped) {
+    throw new Error("qa gateway process tree remained alive after forced shutdown");
+  }
 }
 
 function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
@@ -575,6 +605,47 @@ async function waitForGatewayReady(params: {
   );
 }
 
+async function waitForGatewayListening(params: {
+  baseUrl: string;
+  logs: () => string;
+  child: {
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  };
+  getSpawnError?: () => unknown;
+  timeoutMs?: number;
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
+    const spawnError = params.getSpawnError?.();
+    if (spawnError) {
+      throw new QaSuiteInfraError(
+        "gateway_startup_unhealthy",
+        `gateway failed to spawn: ${formatErrorMessage(spawnError)}\n${params.logs()}`,
+        { cause: spawnError },
+      );
+    }
+    if (params.child.exitCode !== null || params.child.signalCode !== null) {
+      throw new QaSuiteInfraError(
+        "gateway_startup_unhealthy",
+        `gateway exited before listening (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
+      );
+    }
+    try {
+      if (await fetchLocalGatewayListening(params.baseUrl)) {
+        return;
+      }
+    } catch {
+      // retry until the HTTP listener accepts requests
+    }
+    await sleep(100);
+  }
+  throw new QaSuiteInfraError(
+    "gateway_startup_unhealthy",
+    `gateway failed to listen before timeout:\n${params.logs()}`,
+  );
+}
+
 function isRetryableRpcStartupError(error: unknown) {
   const details = formatErrorMessage(error);
   return (
@@ -614,6 +685,7 @@ export async function startQaGatewayChild(params: {
   enabledPluginIds?: string[];
   forwardHostHome?: boolean;
   mockAuthAgentIds?: readonly string[];
+  onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
@@ -834,6 +906,21 @@ export async function startQaGatewayChild(params: {
       const getAttemptSpawnError = monitorQaGatewayChildSpawnError(attemptChild, output);
 
       try {
+        await waitForGatewayListening({
+          baseUrl,
+          logs,
+          child: attemptChild,
+          getSpawnError: getAttemptSpawnError,
+          timeoutMs: 120_000,
+        });
+        await params.onListening?.({
+          attempt,
+          baseUrl,
+          wsUrl,
+          token: gatewayToken,
+          configPath,
+          runtimeEnv: env,
+        });
         await waitForGatewayReady({
           baseUrl,
           logs,

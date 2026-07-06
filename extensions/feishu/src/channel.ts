@@ -33,6 +33,7 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
@@ -183,7 +184,18 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       if (!sendText) {
         throw new Error("Feishu text sending is not available.");
       }
-      return toFeishuMessageSendResult(await sendText(ctx), "text");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendText({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "text"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "text");
     },
     media: async (ctx) => {
       const runtime = await loadFeishuChannelRuntime();
@@ -191,7 +203,18 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       if (!sendMedia) {
         throw new Error("Feishu media sending is not available.");
       }
-      return toFeishuMessageSendResult(await sendMedia(ctx), "media");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendMedia({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "media"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "media");
     },
   },
 });
@@ -1367,6 +1390,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       presentationCapabilities: {
         supported: true,
         buttons: true,

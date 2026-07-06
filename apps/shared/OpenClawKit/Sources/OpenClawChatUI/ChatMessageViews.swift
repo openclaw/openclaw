@@ -15,7 +15,7 @@ struct ChatAgentAvatar: View {
 
     var body: some View {
         Text(self.displayText)
-            .font(.system(size: self.fontSize, weight: .bold, design: .rounded))
+            .font(OpenClawChatTypography.avatar(size: self.fontSize))
             .foregroundStyle(.white)
             .minimumScaleFactor(0.6)
             .lineLimit(1)
@@ -251,6 +251,7 @@ struct ChatMessageBubble: View {
 
 @MainActor
 private struct ChatMessageBody: View {
+    @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     let message: OpenClawChatMessage
     let isUser: Bool
     let style: OpenClawChatView.Style
@@ -298,7 +299,7 @@ private struct ChatMessageBody: View {
                     text: text,
                     context: .user,
                     variant: self.markdownVariant,
-                    font: .body,
+                    font: OpenClawChatTypography.body,
                     textColor: textColor)
             } else {
                 ChatAssistantTextBody(
@@ -338,7 +339,9 @@ private struct ChatMessageBody: View {
     }
 
     private var usesBubble: Bool {
-        self.isUser || self.style == .onboarding || !self.isClean
+        // Keep the guarded base condition; iOS additionally opts assistant
+        // messages into bubbles via the clean-chrome environment flag.
+        self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
     }
 
     private var primaryText: String {
@@ -468,7 +471,7 @@ private struct AttachmentRow: View {
         HStack(spacing: 8) {
             Image(systemName: "paperclip")
             Text(self.att.fileName ?? "Attachment")
-                .font(.footnote)
+                .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
             Spacer()
@@ -487,13 +490,13 @@ private struct ToolCallCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(self.toolName)
-                    .font(.footnote.weight(.semibold))
+                    .font(OpenClawChatTypography.footnoteSemiBold)
                 Spacer(minLength: 0)
             }
 
             if let summary = self.summary, !summary.isEmpty {
                 Text(summary)
-                    .font(.footnote.monospaced())
+                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -532,12 +535,12 @@ private struct ToolResultCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(self.title)
-                        .font(.footnote.weight(.semibold))
+                        .font(OpenClawChatTypography.footnoteSemiBold)
                     Spacer(minLength: 0)
                 }
 
                 Text(self.displayText)
-                    .font(.footnote.monospaced())
+                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                     .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
                     .lineLimit(self.expanded ? nil : Self.previewLineLimit)
 
@@ -546,7 +549,7 @@ private struct ToolResultCard: View {
                         self.expanded.toggle()
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                 }
             }
@@ -602,7 +605,7 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 TypingDots()
                 Text("Writing")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -612,6 +615,57 @@ struct ChatTypingIndicatorBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .focusable(false)
+    }
+}
+
+/// Status footer for a user bubble backed by the durable offline outbox.
+@MainActor
+struct ChatOutboxStatusLabel: View {
+    let state: OpenClawChatOutboxMessageState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: self.iconName)
+                .font(.system(size: 10, weight: .semibold))
+            Text(self.title)
+                .font(OpenClawChatTypography.caption)
+        }
+        .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(self.accessibilityText)
+    }
+
+    private var title: String {
+        switch self.state {
+        case .queued:
+            "Queued"
+        case .sending:
+            "Sending…"
+        case .failed:
+            "Not sent"
+        }
+    }
+
+    private var iconName: String {
+        switch self.state {
+        case .queued:
+            "clock"
+        case .sending:
+            "arrow.up.circle"
+        case .failed:
+            "exclamationmark.circle"
+        }
+    }
+
+    private var accessibilityText: String {
+        switch self.state {
+        case .queued:
+            "Queued, sends when reconnected"
+        case .sending:
+            "Sending"
+        case .failed:
+            "Not sent, touch and hold to retry or delete"
+        }
     }
 }
 
@@ -625,21 +679,31 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     }
 }
 
+extension EnvironmentValues {
+    /// Clients that want iMessage-style assistant bubbles in the clean chrome
+    /// (the iOS app) opt in; the default keeps the plain clean look elsewhere.
+    @Entry public var openClawAssistantBubblesInCleanChrome: Bool = false
+}
+
 private struct AssistantBubbleContainerStyle: ViewModifier {
     let isClean: Bool
     let cornerRadius: CGFloat
 
+    @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
+
     func body(content: Content) -> some View {
-        if self.isClean {
+        if self.isClean, !self.bubblesInClean {
             content
         } else {
             content
-                .background(
-                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .fill(OpenClawChatTheme.assistantBubble))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                    .padding(self.isClean ? 8 : 0)
+                    .background(
+                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                            .fill(OpenClawChatTheme.assistantBubble))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
         }
     }
 }
@@ -677,7 +741,8 @@ struct ChatStreamingAssistantBubble: View {
                 ChatAssistantTextBody(
                     text: self.text,
                     markdownVariant: self.markdownVariant,
-                    includesThinking: self.showsAssistantTrace)
+                    includesThinking: self.showsAssistantTrace,
+                    isComplete: false)
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
@@ -694,7 +759,7 @@ struct ChatPendingToolsBubble: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Running tools…", systemImage: "hammer")
-                .font(.caption)
+                .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
 
             ForEach(self.toolCalls) { call in
@@ -702,14 +767,14 @@ struct ChatPendingToolsBubble: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(display.emoji) \(display.label)")
-                            .font(.footnote.monospaced())
+                            .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         ProgressView().controlSize(.mini)
                     }
                     if let detail = display.detailLine, !detail.isEmpty {
                         Text(detail)
-                            .font(.caption.monospaced())
+                            .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }
@@ -774,18 +839,22 @@ private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
     let includesThinking: Bool
+    var isComplete: Bool = true
 
     var body: some View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
-                let font = segment.kind == .thinking ? Font.callout.italic() : Font.body
+                let font = segment.kind == .thinking
+                    ? OpenClawChatTypography.callout.italic()
+                    : OpenClawChatTypography.body
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,
                     variant: self.markdownVariant,
                     font: font,
-                    textColor: OpenClawChatTheme.assistantText)
+                    textColor: OpenClawChatTheme.assistantText,
+                    isComplete: self.isComplete)
             }
         }
     }

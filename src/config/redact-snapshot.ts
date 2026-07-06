@@ -538,7 +538,7 @@ function restoreOriginalValueOrThrow(params: {
   path: string;
   original: Record<string, unknown>;
 }): unknown {
-  if (params.key in params.original) {
+  if (Object.hasOwn(params.original, params.key)) {
     return params.original[params.key];
   }
   if (!suppressRestoreWarnings) {

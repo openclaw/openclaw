@@ -1,5 +1,8 @@
 // Research autocapture helpers decide when skill research signals should be captured.
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { recordSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
@@ -49,16 +52,13 @@ function isSkillResearchAutoCaptureEligible(ctx: SkillResearchAgentContext): boo
     .some((segment) => AUTO_CAPTURE_BLOCKED_SESSION_SEGMENTS.has(segment));
 }
 
-/** Captures durable skill research signals from a session transcript when enabled. */
+/** Captures or suggests durable skill research signals from a completed session turn. */
 export async function runSkillResearchAutoCapture(params: {
   event: SkillResearchAgentEndEvent;
   ctx: SkillResearchAgentContext;
   config?: OpenClawConfig;
 }): Promise<void> {
   const workshopConfig = resolveSkillWorkshopConfig(params.config);
-  if (!workshopConfig.autonomous.enabled) {
-    return;
-  }
   if (params.event.success === false) {
     return;
   }
@@ -83,6 +83,37 @@ export async function runSkillResearchAutoCapture(params: {
         entry.skillKey === proposal.skillName,
     )
   ) {
+    return;
+  }
+
+  if (!workshopConfig.autonomous.enabled) {
+    const sessionKey = params.ctx.sessionKey?.trim();
+    if (!sessionKey) {
+      return;
+    }
+    try {
+      const target = resolveSkillProposalTarget({
+        workspaceDir,
+        skillName: proposal.skillName,
+      });
+      if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
+        return;
+      }
+      const recorded = await recordSessionSkillSuggestion({
+        agentId: params.ctx.agentId,
+        sessionKey,
+        storePath: resolveStorePath(params.config?.session?.store, {
+          agentId: params.ctx.agentId,
+        }),
+        skillName: target.skillKey,
+        signalHash: sha256Hex(proposal.evidence),
+      });
+      if (recorded) {
+        log.info(`skill research queued suggestion ${target.skillKey}`);
+      }
+    } catch (error) {
+      log.warn(`skill research suggestion skipped: ${String(error)}`);
+    }
     return;
   }
 

@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticToolParamsSummary,
@@ -31,6 +32,8 @@ import {
   type CliOutput,
   type CliStreamJsonOutputLimits,
   type CliStreamingDelta,
+  type CliThinkingDelta,
+  type CliThinkingProgress,
   type CliToolResultDelta,
   type CliToolUseStartDelta,
   resolveCliStreamJsonOutputLimits,
@@ -58,6 +61,7 @@ type ClaudeLiveTurn = {
   timeoutTimer: NodeJS.Timeout | null;
   activeToolTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
+  observedStdout: boolean;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -73,8 +77,6 @@ type ClaudeLiveSession = {
   stderr: string;
   stdoutBuffer: string;
   currentTurn: ClaudeLiveTurn | null;
-  drainTimer: NodeJS.Timeout | null;
-  drainingAbortedTurn: boolean;
   idleTimer: NodeJS.Timeout | null;
   cleanup: () => Promise<void>;
   cleanupPromise: Promise<void> | null;
@@ -355,9 +357,7 @@ function buildClaudeLiveFingerprint(params: {
 }
 
 function createAbortError(): Error {
-  const error = new Error("CLI run aborted");
-  error.name = "AbortError";
-  return error;
+  return createNamedAbortError("CLI run aborted");
 }
 
 function clearTurnTimers(turn: ClaudeLiveTurn): void {
@@ -372,13 +372,6 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
   if (turn.activeToolTimer) {
     clearInterval(turn.activeToolTimer);
     turn.activeToolTimer = null;
-  }
-}
-
-function clearDrainTimer(session: ClaudeLiveSession): void {
-  if (session.drainTimer) {
-    clearTimeout(session.drainTimer);
-    session.drainTimer = null;
   }
 }
 
@@ -447,7 +440,6 @@ function closeLiveSession(
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
   }
-  clearDrainTimer(session);
   if (liveSessions.get(session.key) === session) {
     liveSessions.delete(session.key);
   }
@@ -854,20 +846,10 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   const parsed = parseClaudeLiveJsonLine(session, trimmed);
-  if (!parsed) {
-    return;
+  if (turn) {
+    turn.observedStdout = true;
   }
-  if (session.drainingAbortedTurn) {
-    if (parsed.type === "result") {
-      const turnToClear = session.currentTurn;
-      if (turnToClear) {
-        clearTurnTimers(turnToClear);
-        session.currentTurn = null;
-      }
-      session.drainingAbortedTurn = false;
-      clearDrainTimer(session);
-      scheduleIdleClose(session);
-    }
+  if (!parsed) {
     return;
   }
   if (!turn) {
@@ -894,13 +876,17 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   const raw = turn.rawLines.join("\n");
-  const output = parseCliOutput({
-    raw,
-    backend: turn.backend,
-    providerId: session.providerId,
-    outputMode: "jsonl",
-    fallbackSessionId: turn.sessionId,
-  });
+  // Reuse the parser that classified pre-tool text as commentary. Reparsing the
+  // transcript loses that boundary when Claude's terminal result is empty.
+  const output =
+    turn.streamingParser.getOutput() ??
+    parseCliOutput({
+      raw,
+      backend: turn.backend,
+      providerId: session.providerId,
+      outputMode: "jsonl",
+      fallbackSessionId: turn.sessionId,
+    });
   if (output.errorText) {
     failTurn(session, createParsedOutputError(session, output));
     scheduleIdleClose(session);
@@ -940,7 +926,6 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
   }
-  clearDrainTimer(session);
   if (liveSessions.get(session.key) === session) {
     liveSessions.delete(session.key);
   }
@@ -965,8 +950,22 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
   const fallbackMessage =
     exitCode === 0 ? "Claude CLI exited before completing the turn." : "Claude CLI failed.";
   const message = extractCliErrorMessage(stderr) ?? (stderr || fallbackMessage);
-  if (exitCode === 0) {
-    failTurn(session, new Error(message));
+  if (exitCode === 0 && !stderr) {
+    const turn = session.currentTurn;
+    const retryCode =
+      turn && !turn.observedStdout && turn.rawLines.length === 0
+        ? "cli_unknown_empty_failure"
+        : undefined;
+    failTurn(
+      session,
+      new FailoverError(message, {
+        reason: "empty_response",
+        provider: session.providerId,
+        model: session.modelId,
+        status: resolveFailoverStatus("empty_response"),
+        code: retryCode,
+      }),
+    );
     return;
   }
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
@@ -1076,8 +1075,6 @@ async function createClaudeLiveSession(params: {
     stderr: "",
     stdoutBuffer: "",
     currentTurn: null,
-    drainTimer: null,
-    drainingAbortedTurn: false,
     idleTimer: null,
     cleanup: async () => {
       await mcpCaptureAttempt.cleanup?.();
@@ -1106,6 +1103,8 @@ function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
+  onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -1129,10 +1128,13 @@ function createTurn(params: {
     timeoutTimer: null,
     activeToolTimer: null,
     activeTools: new Map(),
+    observedStdout: false,
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
       onAssistantDelta: params.onAssistantDelta,
+      onThinkingDelta: params.onThinkingDelta,
+      onThinkingProgress: params.onThinkingProgress,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
       onCommentaryText: params.onCommentaryText,
@@ -1167,7 +1169,7 @@ function createTurn(params: {
 
 function closeOldestIdleSession(): boolean {
   for (const session of liveSessions.values()) {
-    if (!session.currentTurn && !session.drainingAbortedTurn) {
+    if (!session.currentTurn) {
       closeLiveSession(session, "idle");
       return true;
     }
@@ -1204,6 +1206,8 @@ export async function runClaudeLiveSessionTurn(params: {
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
+  onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -1312,7 +1316,7 @@ export async function runClaudeLiveSessionTurn(params: {
     await cleanup();
     throw new Error("Claude CLI live session closed before handling the turn");
   }
-  if (session.currentTurn || session.drainingAbortedTurn) {
+  if (session.currentTurn) {
     throw new Error("Claude CLI live session is already handling a turn");
   }
   const liveSession = session;
@@ -1327,6 +1331,8 @@ export async function runClaudeLiveSessionTurn(params: {
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
+      onThinkingDelta: params.onThinkingDelta,
+      onThinkingProgress: params.onThinkingProgress,
       onToolUseStart: params.onToolUseStart,
       onToolResult: params.onToolResult,
       onCommentaryText: params.onCommentaryText,
