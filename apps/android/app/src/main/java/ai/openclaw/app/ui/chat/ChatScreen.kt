@@ -765,7 +765,7 @@ private fun ChatBubble(
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
@@ -787,8 +787,9 @@ private fun ChatBubble(
 private fun ChatText(
   text: String,
   textColor: Color,
+  isStreaming: Boolean,
 ) {
-  ChatMarkdown(text = text, textColor = textColor)
+  ChatMarkdown(text = text, textColor = textColor, isStreaming = isStreaming)
 }
 
 @Composable

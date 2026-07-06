@@ -29,6 +29,7 @@ import {
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
 } from "./chrome.js";
+import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -137,10 +138,17 @@ async function stopChromeWithProc(proc: ReturnType<typeof makeChromeTestProc>, t
   );
 }
 
-function makeChromeTestProc(overrides?: Partial<{ killed: boolean; exitCode: number | null }>) {
+function makeChromeTestProc(
+  overrides?: Partial<{
+    killed: boolean;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  }>,
+) {
   return {
     killed: overrides?.killed ?? false,
     exitCode: overrides?.exitCode ?? null,
+    signalCode: overrides?.signalCode ?? null,
     kill: vi.fn(),
   };
 }
@@ -230,6 +238,22 @@ describe("browser chrome profile decoration", () => {
         DEFAULT_DOWNLOAD_DIR,
       ),
     ).toBe(true);
+  });
+
+  it("records the managed profile keychain backend without changing existing profiles", async () => {
+    const userDataDir = await createUserDataDir();
+    decorateOpenClawProfile(userDataDir, {
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+      mockKeychain: true,
+    });
+
+    expect(usesOpenClawMockKeychain(userDataDir)).toBe(true);
+    decorateOpenClawProfile(userDataDir, { color: DEFAULT_OPENCLAW_BROWSER_COLOR });
+    expect(usesOpenClawMockKeychain(userDataDir)).toBe(true);
+
+    const existingUserDataDir = await createUserDataDir();
+    decorateOpenClawProfile(existingUserDataDir, { color: DEFAULT_OPENCLAW_BROWSER_COLOR });
+    expect(usesOpenClawMockKeychain(existingUserDataDir)).toBe(false);
   });
 
   it("treats missing managed download prefs as undecorated when required", async () => {
@@ -867,6 +891,19 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "exited", proc: makeChromeTestProc({ exitCode: 0 }) },
+    { label: "signaled", proc: makeChromeTestProc({ signalCode: "SIGTERM" }) },
+  ])("does not close a reused CDP port after the tracked process has $label", async ({ proc }) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await stopChromeWithProc(proc, 10);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
+
   it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     const proc = makeChromeTestProc();
@@ -874,15 +911,64 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
-    );
-    const proc = makeChromeTestProc();
-    await stopChromeWithProc(proc, 1);
-    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  it("stopOpenClawChrome asks Chrome to close gracefully before sending a signal", async () => {
+    let closeRequested = false;
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/graceful-stop",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            expect(req.method).toBe("Browser.close");
+            closeRequested = true;
+            ws.send(JSON.stringify({ id: req.id, result: {} }));
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/graceful-stop`;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => {
+            if (closeRequested) {
+              throw new Error("down");
+            }
+            return jsonResponse({ webSocketDebuggerUrl: browserWsUrl });
+          }),
+        );
+        const proc = makeChromeTestProc();
+        await stopChromeWithProc(proc, 20);
+
+        expect(closeRequested).toBe(true);
+        expect(proc.kill).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("stopOpenClawChrome escalates when graceful close leaves CDP reachable", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/stuck-stop",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            expect(req.method).toBe("Browser.close");
+            ws.send(JSON.stringify({ id: req.id, result: {} }));
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/stuck-stop`;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: browserWsUrl })),
+        );
+        const proc = makeChromeTestProc();
+        await stopChromeWithProc(proc, 1);
+        expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+        expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      },
+    });
   });
 
   it("stopOpenClawChrome releases the managed-proxy CDP bypass exactly once on a double stop", async () => {
@@ -902,7 +988,7 @@ describe("browser chrome helpers", () => {
   it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
+      vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
     );
     const proc = makeChromeTestProc();
     const release = vi.fn();

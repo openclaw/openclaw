@@ -12,8 +12,8 @@ import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
-  hasCommittedOutboundDeliveryEvidence,
-  hasVisibleAgentPayload,
+  hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   hasDeliberateSilentTerminalReply,
@@ -51,6 +51,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   getReplyPayloadMetadata,
@@ -72,9 +73,9 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import {
   buildEmptyInteractiveReplyPayload,
+  buildTerminalAgentRunFailureReplyPayload,
   buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  buildTerminalAgentRunFailureReplyPayload,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
@@ -408,7 +409,7 @@ export function createFollowupRunner(params: {
     queued: FollowupRun,
     resolvedRun: { provider: string; modelId: string },
     options: { kind?: ReplyDispatchKind; mirror?: boolean; runId?: string } = {},
-  ) => {
+  ): Promise<boolean> => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
@@ -427,27 +428,29 @@ export function createFollowupRunner(params: {
     );
 
     if (sendablePayloads.length === 0) {
-      return;
+      return false;
     }
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       defaultRuntime.error?.(
         "followup queue: completed with payloads but no origin route or visible dispatcher is available",
       );
-      return;
+      return false;
     }
 
+    let deliveredAnyPayload = false;
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
     const replyKind = options.kind ?? "final";
-    const sendDispatcherPayload = async (payload: ReplyPayload) => {
+    const sendDispatcherPayload = async (payload: ReplyPayload): Promise<boolean> => {
       if (!opts?.onBlockReply) {
-        return;
+        return false;
       }
       if (deliveryPlan.isSilentPayload(payload)) {
-        return;
+        return false;
       }
       await opts.onBlockReply(payload);
+      return true;
     };
     for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
@@ -508,14 +511,15 @@ export function createFollowupRunner(params: {
           });
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
-              await sendDispatcherPayload(payload);
+              deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
             } else {
               crossChannelRouteFailureNeedsNotice = true;
             }
           } else {
             defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           }
-        } else {
+        } else if (!result.suppressed) {
+          deliveredAnyPayload = true;
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
           });
@@ -527,7 +531,7 @@ export function createFollowupRunner(params: {
           }
         }
       } else if (deliveryRoute === "dispatcher") {
-        await sendDispatcherPayload(payload);
+        deliveredAnyPayload = (await sendDispatcherPayload(payload)) || deliveredAnyPayload;
       }
     }
     if (
@@ -537,16 +541,18 @@ export function createFollowupRunner(params: {
     ) {
       if (queued.currentInboundEventKind === "room_event") {
         logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
-        return;
+        return deliveredAnyPayload;
       }
-      await sendDispatcherPayload({
-        text:
-          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
-          "channel. The reply content was not forwarded to this channel to avoid " +
-          "cross-channel misdelivery.",
-        isError: true,
-      });
+      deliveredAnyPayload =
+        (await sendDispatcherPayload({
+          text:
+            "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+            "channel. The reply content was not forwarded to this channel to avoid " +
+            "cross-channel misdelivery.",
+          isError: true,
+        })) || deliveredAnyPayload;
     }
+    return deliveredAnyPayload;
   };
 
   return async (queued: FollowupRun) => {
@@ -670,29 +676,47 @@ export function createFollowupRunner(params: {
         return;
       }
       replyOperation = admission.operation;
+      // Failure paths may still drain progress or route a recovery payload. Keep lane ownership
+      // until finally completes so the next turn cannot overtake that asynchronous delivery.
+      replyOperation.retainFailureUntilComplete();
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
       effectiveQueued.queuedLifecycle?.onAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
-        const admittedSessionEntry = replySessionKey
-          ? (sessionStore?.[replySessionKey] ??
-            (storePath
-              ? loadSessionEntry({
-                  storePath,
-                  sessionKey: replySessionKey,
-                })
-              : undefined))
-          : undefined;
-        if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
-          activeSessionEntry = admittedSessionEntry;
-          if (admittedSessionEntry.sessionFile) {
-            run = { ...run, sessionFile: admittedSessionEntry.sessionFile };
-            effectiveQueued = { ...effectiveQueued, run };
-          }
+      }
+      // Admission may wait while session policy changes. Reload persisted state before any
+      // delivery decision; the enqueue-time in-memory snapshot is not authoritative here.
+      const admittedSessionEntry = replySessionKey
+        ? storePath
+          ? loadSessionEntry({ storePath, sessionKey: replySessionKey })
+          : sessionStore?.[replySessionKey]
+        : undefined;
+      if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
+        activeSessionEntry = admittedSessionEntry;
+        if (admittedSessionEntry.sessionFile) {
+          run = { ...run, sessionFile: admittedSessionEntry.sessionFile };
+          effectiveQueued = { ...effectiveQueued, run };
         }
       }
+      const sendPolicyDenied =
+        resolveSendPolicy({
+          cfg: runtimeConfig,
+          entry: activeSessionEntry,
+          sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+          channel: queued.originatingChannel ?? run.messageProvider,
+          chatType: run.chatType ?? activeSessionEntry?.chatType,
+        }) === "deny";
+      const progressOpts = sendPolicyDenied ? undefined : opts;
+      // Carry the admission-time policy through every queued delivery path; direct origin routing
+      // bypasses the outer dispatcher that normally enforces sendPolicy.
+      const sendRunPayloads: typeof sendFollowupPayloads = async (...args) => {
+        if (sendPolicyDenied) {
+          return false;
+        }
+        return sendFollowupPayloads(...args);
+      };
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -733,11 +757,12 @@ export function createFollowupRunner(params: {
           originatingReplyToMode: queued.originatingReplyToMode,
           originatingTo: queued.originatingTo,
           reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+          commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
         });
         if (noticePayloads.length === 0) {
           return;
         }
-        await sendFollowupPayloads(noticePayloads, effectiveQueued, resolvedRun, {
+        await sendRunPayloads(noticePayloads, effectiveQueued, resolvedRun, {
           kind: "block",
           mirror: false,
           runId,
@@ -796,7 +821,7 @@ export function createFollowupRunner(params: {
             );
             return;
           }
-          await sendFollowupPayloads(
+          await sendRunPayloads(
             [
               markReplyPayloadForSourceSuppressionDelivery({
                 text: preflightCompactionFailureText,
@@ -1022,7 +1047,7 @@ export function createFollowupRunner(params: {
                 ) {
                   return;
                 }
-                await sendFollowupPayloads(
+                await sendRunPayloads(
                   [payload],
                   effectiveQueued,
                   {
@@ -1067,9 +1092,9 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
-                  onReasoningText: createCliReasoningStreamBridge(opts?.onReasoningStream),
+                  onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
-                    await opts?.onReasoningProgress?.(payload);
+                    await progressOpts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
@@ -1081,20 +1106,20 @@ export function createFollowupRunner(params: {
                         stream: "tool",
                         data: { name: payload.name, phase: payload.phase, args: payload.args },
                       },
-                      opts,
+                      opts: progressOpts,
                       detailMode: toolProgressDetail,
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
                   },
                   onCommentaryText:
-                    opts?.commentaryProgressEnabled === true && opts.onItemEvent
+                    progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
                       ? async ({ text, itemId }) => {
                           await forwardFollowupProgressEvent({
                             evt: {
                               stream: "item",
                               data: { kind: "preamble", progressText: text, itemId },
                             },
-                            opts,
+                            opts: progressOpts,
                             detailMode: toolProgressDetail,
                           });
                         }
@@ -1106,7 +1131,7 @@ export function createFollowupRunner(params: {
                       if (isRoomEventFollowup()) {
                         return;
                       }
-                      await sendFollowupPayloads(
+                      await sendRunPayloads(
                         [payload],
                         effectiveQueued,
                         {
@@ -1323,7 +1348,7 @@ export function createFollowupRunner(params: {
                   return enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({
                       evt,
-                      opts,
+                      opts: progressOpts,
                       detailMode: toolProgressDetail,
                       emitChannelProgress: shouldEmitToolResultProgress(),
                       onCompactionComplete: () => {
@@ -1336,7 +1361,7 @@ export function createFollowupRunner(params: {
                     });
                     if (
                       hasFailedFollowupProgressEvent(evt) &&
-                      canForwardFailedFollowupProgressEvent(evt, opts)
+                      canForwardFailedFollowupProgressEvent(evt, progressOpts)
                     ) {
                       markVisibleToolErrorProgress();
                     }
@@ -1415,13 +1440,11 @@ export function createFollowupRunner(params: {
             ...terminalMetadata,
             fallbackExhaustedFailure: true,
           });
-          replyOperation.retainFailureUntilComplete();
           replyOperation.fail("run_failed", exhaustionError);
           terminalRunFailed = true;
         } else if (deferredLifecycleError || runResult.meta?.error) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
-          replyOperation.retainFailureUntilComplete();
           replyOperation.fail("run_failed", terminalError);
           terminalRunFailed = true;
         } else {
@@ -1449,9 +1472,6 @@ export function createFollowupRunner(params: {
         const message = formatErrorMessage(err);
         const shouldRouteFallbackExhaustion = isFallbackSummaryError(err);
         replyOperation.freezeAbort();
-        if (shouldRouteFallbackExhaustion) {
-          replyOperation.retainFailureUntilComplete();
-        }
         replyOperation.fail("run_failed", err);
         pendingLifecycleTerminal?.backstop.emit("error", err);
         pendingLifecycleTerminal = undefined;
@@ -1463,7 +1483,7 @@ export function createFollowupRunner(params: {
           await drainProgressDeliveries();
           return;
         }
-        // Fallback exhaustion can throw without a preserved candidate result.
+        // Fallback exhaustion can throw without preserving a candidate result.
         // Continue through the owner delivery path so interactive turns still get safe failure copy.
         runResult = { payloads: [], meta: { durationMs: 0 } };
         fallbackExhausted = true;
@@ -1513,9 +1533,8 @@ export function createFollowupRunner(params: {
       }
 
       const hasCommittedDelivery =
-        hasCommittedOutboundDeliveryEvidence(runResult) ||
-        runResult.didDeliverSourceReplyViaMessageTool === true ||
-        hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads }) ||
+        hasVisibleOutboundDeliveryEvidence(runResult) ||
+        hasCommittedSourceReplyDeliveryEvidence(runResult) ||
         runResult.didSendDeterministicApprovalPrompt === true;
       const hasDeliveryDestination = Boolean(
         (isRoutableChannel(queued.originatingChannel) && queued.originatingTo) ||
@@ -1525,39 +1544,36 @@ export function createFollowupRunner(params: {
         hasDeliveryDestination &&
         queued.currentInboundEventKind !== "room_event" &&
         (run.inputProvenance?.kind === undefined || run.inputProvenance.kind === "external_user");
-      const isMessageToolOnly = run.sourceReplyDeliveryMode === "message_tool_only";
       const failureConversationContext = {
         ChatType: queued.originatingChatType,
         Provider: run.messageProvider,
         SessionKey: replySessionKey,
         Surface: queued.originatingChannel,
       };
-      const fallbackPayload =
-        isInteractive && !isMessageToolOnly && !hasCommittedDelivery
-          ? terminalRunFailed
-            ? buildTerminalAgentRunFailureReplyPayload({
-                isHeartbeat: opts?.isHeartbeat,
-                sessionCtx: failureConversationContext,
-                cfg: runtimeConfig,
-              })
-            : buildEmptyInteractiveReplyPayload({
-                isInteractive,
-                isHeartbeat: opts?.isHeartbeat,
-                silentExpected: run.silentExpected,
-                allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
-                isMessageToolOnly,
-                hasPendingContinuation:
-                  runResult.meta?.yielded === true ||
-                  (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
-                hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
-                hasCommittedDelivery,
-                sessionCtx: failureConversationContext,
-                cfg: runtimeConfig,
-              })
-          : undefined;
-      const payloadArray = (runResult.payloads ?? []).filter(
-        (payload) => payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true,
-      );
+      const fallbackPayload = terminalRunFailed
+        ? isInteractive &&
+          run.sourceReplyDeliveryMode !== "message_tool_only" &&
+          !hasCommittedDelivery
+          ? buildTerminalAgentRunFailureReplyPayload({
+              isHeartbeat: opts?.isHeartbeat,
+              sessionCtx: failureConversationContext,
+              cfg: runtimeConfig,
+            })
+          : undefined
+        : buildEmptyInteractiveReplyPayload({
+            isInteractive,
+            isHeartbeat: opts?.isHeartbeat,
+            silentExpected: run.silentExpected,
+            allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
+            isMessageToolOnly: run.sourceReplyDeliveryMode === "message_tool_only",
+            hasPendingContinuation:
+              runResult.meta?.yielded === true ||
+              (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+            hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+            hasCommittedDelivery,
+            sessionCtx: failureConversationContext,
+            cfg: runtimeConfig,
+          });
       const deliveryPlan = buildAgentRuntimeDeliveryPlan({
         provider: providerUsed,
         modelId: modelUsed,
@@ -1577,13 +1593,14 @@ export function createFollowupRunner(params: {
           originatingTo: queued.originatingTo,
           originatingThreadId: queued.originatingThreadId,
           reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+          commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
           sentMediaUrls: runResult.messagingToolSentMediaUrls,
           sentTargets: runResult.messagingToolSentTargets,
           sentTexts: runResult.messagingToolSentTexts,
         }).filter(
           (payload) => hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
         );
-      let finalPayloads = resolveDeliveryPayloads(payloadArray);
+      let finalPayloads = resolveDeliveryPayloads(runResult.payloads ?? []);
       const hasTerminalReplyPayload = finalPayloads.some(
         (payload) =>
           payload.isReasoning !== true &&
@@ -1604,7 +1621,6 @@ export function createFollowupRunner(params: {
           (payload) => payload.isError === true && payload.text === fallbackPayload.text,
         )
       ) {
-        replyOperation.retainFailureUntilComplete();
         replyOperation.fail(
           "run_failed",
           new Error("interactive follow-up completed without a visible reply"),
@@ -1712,7 +1728,7 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      await sendFollowupPayloads(
+      await sendRunPayloads(
         deliveryPayloads,
         effectiveQueued,
         {

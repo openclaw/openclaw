@@ -2130,6 +2130,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
+      didSendViaMessagingTool: true,
       messagingToolSentTexts: ["  "],
       messagingToolSentMediaUrls: ["\t"],
       messagingToolSentTargets: [

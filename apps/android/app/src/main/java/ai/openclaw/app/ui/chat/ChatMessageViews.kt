@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.tools.ToolDisplayRegistry
+import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
@@ -42,6 +43,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -267,7 +269,7 @@ fun ChatStreamingAssistantBubble(text: String) {
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
     roleLabel = "OpenClaw · Live",
   ) {
-    ChatMarkdown(text = text, textColor = mobileText)
+    ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
   }
 }
 
@@ -359,7 +361,24 @@ private fun PulseDot(
 fun ChatCodeBlock(
   code: String,
   language: String?,
+  isComplete: Boolean = true,
 ) {
+  val display = code.trimEnd()
+  // Token colors come from the theme's code palette so light/dark both keep readable contrast.
+  val palette = MobileColorsAccessor.current
+  val tokenColors =
+    CodeTokenColors(
+      keyword = palette.codeKeyword,
+      string = palette.codeString,
+      comment = palette.codeComment,
+      number = palette.codeNumber,
+    )
+  // Keyed on content: streaming re-renders of unchanged blocks reuse the tokenized result,
+  // and still-open fences stay plain until the closing fence arrives.
+  val highlighted =
+    remember(display, language, isComplete, tokenColors) {
+      if (isComplete) buildHighlightedCode(display, language, tokenColors) else AnnotatedString(display)
+    }
   Surface(
     shape = RoundedCornerShape(8.dp),
     color = mobileCodeBg,
@@ -375,7 +394,7 @@ fun ChatCodeBlock(
         )
       }
       Text(
-        text = code.trimEnd(),
+        text = highlighted,
         fontFamily = FontFamily.Monospace,
         style = mobileCallout,
         color = mobileCodeText,

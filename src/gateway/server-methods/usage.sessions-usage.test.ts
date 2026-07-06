@@ -332,6 +332,18 @@ describe("sessions.usage", () => {
     expect(result.totals.totalTokens).toBe(60);
   });
 
+  it("passes the requested timezone offset to session daily summaries", async () => {
+    await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      utcOffset: "UTC-5",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ dailyUtcOffsetMinutes: -300 }),
+    );
+  });
+
   it("discovers usage for requested disk-only agents not listed in config", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "codex" });
 

@@ -1201,6 +1201,14 @@ export const ar: TranslationMap = {
       byType: "حسب النوع",
       tokensTitle: "استخدام الرموز اليومي",
       costTitle: "التكلفة اليومية",
+      compressedScaleHint: "يُبقي مقياس الجذر التربيعي الأيام ذات الاستخدام المنخفض مرئية.",
+    },
+    costWindows: {
+      title: "فترات التكلفة",
+      subtitle: "فترات التقويم المنتهية في {date}",
+      selectedRange: "النطاق المحدد",
+      lastDays: "آخر {count} أيام",
+      perDay: "/ يوم",
     },
     breakdown: {
       output: "المخرجات",
@@ -1247,6 +1255,7 @@ export const ar: TranslationMap = {
       cached: "مخزن مؤقتًا",
       prompt: "المطالبة",
       calls: "الاستدعاءات",
+      costShare: "{percent}% من التكلفة",
       topModels: "أهم النماذج",
       topProviders: "أهم المزودين",
       topTools: "أهم الأدوات",

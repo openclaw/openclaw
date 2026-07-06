@@ -1204,6 +1204,14 @@ export const ko: TranslationMap = {
       byType: "유형별",
       tokensTitle: "일별 토큰 사용량",
       costTitle: "일별 비용",
+      compressedScaleHint: "제곱근 척도로 사용량이 적은 날짜도 잘 보이게 표시합니다.",
+    },
+    costWindows: {
+      title: "비용 기간",
+      subtitle: "{date}에 끝나는 달력 기간",
+      selectedRange: "선택한 범위",
+      lastDays: "최근 {count}일",
+      perDay: "/ 일",
     },
     breakdown: {
       output: "출력",
@@ -1249,6 +1257,7 @@ export const ko: TranslationMap = {
       cached: "캐시됨",
       prompt: "프롬프트",
       calls: "호출",
+      costShare: "비용의 {percent}%",
       topModels: "상위 모델",
       topProviders: "상위 Provider",
       topTools: "상위 도구",

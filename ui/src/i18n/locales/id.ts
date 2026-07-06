@@ -1208,6 +1208,15 @@ export const id: TranslationMap = {
       byType: "Berdasarkan Jenis",
       tokensTitle: "Penggunaan Token Harian",
       costTitle: "Biaya Harian",
+      compressedScaleHint:
+        "Skala akar kuadrat menjaga hari dengan penggunaan rendah tetap terlihat.",
+    },
+    costWindows: {
+      title: "Rentang biaya",
+      subtitle: "Rentang kalender yang berakhir pada {date}",
+      selectedRange: "Rentang terpilih",
+      lastDays: "{count} hari terakhir",
+      perDay: "/ hari",
     },
     breakdown: {
       output: "Output",
@@ -1255,6 +1264,7 @@ export const id: TranslationMap = {
       cached: "di-cache",
       prompt: "prompt",
       calls: "panggilan",
+      costShare: "{percent}% dari biaya",
       topModels: "Model Teratas",
       topProviders: "Penyedia Teratas",
       topTools: "Alat Teratas",

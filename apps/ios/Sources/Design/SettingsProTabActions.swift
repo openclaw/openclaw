@@ -289,11 +289,11 @@ extension SettingsProTab {
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return false }
         self.stagedGatewaySetupLink = nil
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         return true
     }
 
-    func applyGatewayLink(_ link: GatewayConnectDeepLink) {
+    func applyGatewayLink(_ link: GatewayConnectDeepLink) async {
         self.manualGatewayHost = link.host
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
@@ -302,7 +302,7 @@ extension SettingsProTab {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            GatewayOnboardingReset.prepareForBootstrapPairing(
+            await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: instanceId,
                 gatewayStableID: setupAuth.targetStableID)
@@ -387,7 +387,7 @@ extension SettingsProTab {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
@@ -475,7 +475,7 @@ extension SettingsProTab {
         return true
     }
 
-    func resetOnboarding() {
+    func resetOnboarding() async {
         self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
         self.setupCode = ""
@@ -486,7 +486,7 @@ extension SettingsProTab {
         self.gatewayPassword = ""
         self.gatewayCredentialFieldStableID = nil
         self.pendingManualAuthOverride = nil
-        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+        await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
         self.onboardingComplete = false
         self.hasConnectedOnce = false
         self.manualGatewayEnabled = false

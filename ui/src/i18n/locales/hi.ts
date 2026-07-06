@@ -1204,6 +1204,14 @@ export const hi: TranslationMap = {
       byType: "प्रकार के अनुसार",
       tokensTitle: "दैनिक टोकन उपयोग",
       costTitle: "दैनिक लागत",
+      compressedScaleHint: "वर्गमूल पैमाना कम उपयोग वाले दिनों को भी दिखाई देता रखता है।",
+    },
+    costWindows: {
+      title: "लागत अवधियाँ",
+      subtitle: "{date} को समाप्त होने वाली कैलेंडर अवधियाँ",
+      selectedRange: "चुनी गई अवधि",
+      lastDays: "पिछले {count} दिन",
+      perDay: "/ दिन",
     },
     breakdown: {
       output: "आउटपुट",
@@ -1249,6 +1257,7 @@ export const hi: TranslationMap = {
       cached: "कैश्ड",
       prompt: "प्रॉम्प्ट",
       calls: "कॉल",
+      costShare: "लागत का {percent}%",
       topModels: "शीर्ष मॉडल",
       topProviders: "शीर्ष प्रदाता",
       topTools: "शीर्ष टूल",

@@ -1177,6 +1177,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it("records rich-content delivery when visible text is blank", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-rich-content";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-rich",
+          text: "  ",
+          presentation: JSON.stringify({
+            blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+          }),
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { details: { messageId: "message-rich" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-rich",
+        hasRichContent: true,
+      }),
+    ]);
+  });
+
   it("records reply target evidence without treating it as terminal send evidence", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-reply-target";
