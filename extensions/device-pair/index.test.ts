@@ -813,6 +813,30 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Gateway: ws://127.0.0.1:18789");
   });
 
+  it.each(["ws://0.0.0.0:18789", "ws://[::]:18789"])(
+    "rejects unspecified cleartext setup url %s before issuing setup codes",
+    async (publicUrl) => {
+      const command = registerPairCommand({
+        pluginConfig: {
+          publicUrl,
+        },
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel: "webchat",
+          args: "",
+          commandBody: "/pair",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(requireText(result)).toContain(
+        "Tailscale and public mobile pairing require a secure gateway URL",
+      );
+    },
+  );
+
   it("allows private LAN cleartext setup urls", async () => {
     const command = registerPairCommand({
       pluginConfig: {
