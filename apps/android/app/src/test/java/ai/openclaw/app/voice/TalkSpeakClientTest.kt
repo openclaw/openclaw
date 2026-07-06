@@ -78,6 +78,36 @@ class TalkSpeakClientTest {
     }
 
   @Test
+  fun fallsBackWhenGatewayMarksSynthesisFailureEligible() =
+    runTest {
+      val client =
+        TalkSpeakClient(
+          requestDetailed = { _, _, _ ->
+            GatewaySession.RpcResult(
+              ok = false,
+              payloadJson = null,
+              error =
+                GatewaySession.ErrorShape(
+                  code = "UNAVAILABLE",
+                  message = "provider failed",
+                  details =
+                    GatewayConnectErrorDetails(
+                      code = null,
+                      canRetryWithDeviceToken = false,
+                      recommendedNextStep = null,
+                      reason = "synthesis_failed",
+                      fallbackEligible = true,
+                    ),
+                ),
+            )
+          },
+        )
+
+      val result = client.synthesize(text = "Hello", directive = null)
+      assertTrue(result is TalkSpeakResult.FallbackToLocal)
+    }
+
+  @Test
   fun doesNotFallBackForSynthesisFailure() =
     runTest {
       val client =

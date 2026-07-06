@@ -87,6 +87,7 @@ data class GatewayConnectErrorDetails(
   val clientMaxProtocol: Int? = null,
   val expectedProtocol: Int? = null,
   val minimumProbeProtocol: Int? = null,
+  val fallbackEligible: Boolean? = null,
 )
 
 private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -1089,6 +1090,7 @@ class GatewaySession(
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
                 minimumProbeProtocol = it["minimumProbeProtocol"].asIntOrNull(),
+                fallbackEligible = it["fallbackEligible"].asBooleanOrNull(),
               )
             }
           ErrorShape(code, msg, details)

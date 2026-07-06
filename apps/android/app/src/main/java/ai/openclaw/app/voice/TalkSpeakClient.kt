@@ -98,10 +98,9 @@ internal class TalkSpeakClient(
   }
 
   private fun isFallbackEligible(error: GatewaySession.ErrorShape?): Boolean {
+    error?.details?.fallbackEligible?.let { return it }
     val reason = error?.details?.reason
     if (reason == null) return true
-    // Only provider/config absence should fall back to Android TTS; payload and
-    // transport errors should stay visible to the caller.
     return reason == "talk_unconfigured" ||
       reason == "talk_provider_unsupported" ||
       reason == "method_unavailable"
