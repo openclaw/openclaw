@@ -609,7 +609,7 @@
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
-            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GCLOUD_PROJECT"],
             "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
             "credentialMarker": "gcp-vertex-credentials",
             "source": "gcloud adc"

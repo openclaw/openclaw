@@ -345,10 +345,11 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
   const project =
     normalizeOptionalString((options as { project?: unknown } | undefined)?.project) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_PROJECT) ||
+    normalizeOptionalString(process.env.GOOGLE_CLOUD_PROJECT_ID) ||
     normalizeOptionalString(process.env.GCLOUD_PROJECT);
   if (!project) {
     throw new Error(
-      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
+      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_PROJECT_ID/GCLOUD_PROJECT or pass project in options.",
     );
   }
   return project;

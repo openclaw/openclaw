@@ -162,7 +162,7 @@ vi.mock("./model-auth-env-vars.js", () => {
             "${HOME}/.config/gcloud/application_default_credentials.json",
             "${APPDATA}/gcloud/application_default_credentials.json",
           ],
-          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GCLOUD_PROJECT"],
           requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
           credentialMarker: "gcp-vertex-credentials",
           source: "gcloud adc",
@@ -1396,7 +1396,7 @@ describe("getApiKeyForModel", () => {
     }
   });
 
-  it("resolveEnvApiKey('google-vertex') rejects GOOGLE_CLOUD_PROJECT_ID-only ADC auth evidence", async () => {
+  it("resolveEnvApiKey('google-vertex') accepts GOOGLE_CLOUD_PROJECT_ID-only ADC auth evidence", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-project-id-"));
     const credentialsPath = path.join(tempDir, "adc.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
@@ -1408,7 +1408,8 @@ describe("getApiKeyForModel", () => {
         GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
       } as NodeJS.ProcessEnv);
 
-      expect(resolved).toBeNull();
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

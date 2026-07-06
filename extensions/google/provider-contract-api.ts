@@ -37,6 +37,7 @@ export function createGoogleVertexProvider(): ProviderPlugin {
     envVars: [
       "GOOGLE_CLOUD_API_KEY",
       "GOOGLE_CLOUD_PROJECT",
+      "GOOGLE_CLOUD_PROJECT_ID",
       "GCLOUD_PROJECT",
       "GOOGLE_CLOUD_LOCATION",
       "GOOGLE_APPLICATION_CREDENTIALS",

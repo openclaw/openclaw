@@ -209,6 +209,16 @@ describe("google provider plugin hooks", () => {
       }),
     ).toBe("gcp-vertex-credentials");
     expect(
+      provider.resolveConfigApiKey?.({
+        provider: "google-vertex",
+        env: {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+          GOOGLE_CLOUD_LOCATION: "global",
+        },
+      }),
+    ).toBe("gcp-vertex-credentials");
+    expect(
       googleProviderDiscovery.resolveConfigApiKey?.({
         provider: "google-vertex",
         env: {
