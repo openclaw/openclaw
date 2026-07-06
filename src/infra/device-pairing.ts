@@ -84,6 +84,7 @@ export type RevokeDeviceTokenResult =
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
   | "displayName"
+  | "operatorLabel"
   | "platform"
   | "clientId"
   | "clientMode"
@@ -1217,6 +1218,9 @@ export async function updatePairedDeviceMetadata(
     const next = { ...existing };
     if ("displayName" in patch) {
       next.displayName = patch.displayName;
+    }
+    if ("operatorLabel" in patch) {
+      next.operatorLabel = patch.operatorLabel;
     }
     if ("platform" in patch) {
       next.platform = patch.platform;

@@ -29,6 +29,12 @@ export const DevicePairRemoveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Renames a paired device while preserving its stable device id. */
+export const DevicePairRenameParamsSchema = Type.Object(
+  { deviceId: NonEmptyString, displayName: NonEmptyString },
+  { additionalProperties: false },
+);
+
 /** Rotates or issues a device token for a specific role/scope grant. */
 export const DeviceTokenRotateParamsSchema = Type.Object(
   {
