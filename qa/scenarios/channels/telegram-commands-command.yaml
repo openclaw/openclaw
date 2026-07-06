@@ -44,7 +44,7 @@ flow:
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
         - assert:
-            expr: "config.expectedAny.every((needle) => joinedReply.includes(needle)) && (transport.id === 'telegram' ? joinedReply.includes('Commands (1/') : joinedReply.includes('Slash commands'))"
+            expr: "config.expectedAny.every((needle) => joinedReply.includes(needle)) && (transport.id === 'qa-channel' ? joinedReply.includes('Slash commands') : joinedReply.includes('Commands (1/'))"
             message:
               expr: "`commands reply missing expected text: ${joinedReply}`"
       detailsExpr: joinedReply
