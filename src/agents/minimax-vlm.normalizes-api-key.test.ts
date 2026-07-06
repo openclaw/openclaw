@@ -246,24 +246,14 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
   it("bounds large successful response bodies before parsing JSON", async () => {
     let canceled = false;
-    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let pullCount = 0;
     const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode(
-            JSON.stringify({
-              base_resp: { status_code: 0, status_msg: "ok" },
-              content: "x".repeat(300_000),
-            }),
-          ),
-        );
-        closeTimer = setTimeout(() => controller.close(), 0);
+      pull(controller) {
+        pullCount += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024));
       },
       cancel() {
         canceled = true;
-        if (closeTimer) {
-          clearTimeout(closeTimer);
-        }
       },
     });
     const fetchSpy = vi.fn(async () => {
@@ -284,8 +274,10 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     if (!(error instanceof Error)) {
       throw new Error("expected MiniMax VLM request to reject oversized successful JSON");
     }
-    expect(error.message).toContain("MiniMax VLM response body exceeded");
-    expect(error.message).toContain("Trace-Id: trace-success");
+    expect(error.message).toBe(
+      "MiniMax VLM response [Trace-Id=trace-success]: JSON response exceeds 16777216 bytes",
+    );
+    expect(pullCount).toBe(17);
     expect(canceled).toBe(true);
   });
 });
