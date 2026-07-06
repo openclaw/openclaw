@@ -1051,6 +1051,7 @@ class GatewayBootstrapAuthTest {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
     val runtime = createTestRuntime(app)
+    readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancel()
     runtime.setTalkModeEnabled(true)
     val micCapture = readField<Lazy<MicCaptureManager>>(runtime, "micCapture\$delegate").value
     micCapture.setMicEnabled(true)
