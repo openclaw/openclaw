@@ -126,6 +126,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       const restarted = await restartRunningGatewayServiceAfterUpdate(params.runtime);
       if (!restarted) {
         params.outro("Update completed, but gateway service restart failed.");
+        params.runtime.exit(1);
         return { updated: true, handled: true };
       }
       params.outro("Update completed (doctor already ran as part of the update).");

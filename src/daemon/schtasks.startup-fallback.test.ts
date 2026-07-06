@@ -428,6 +428,56 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("keeps a Startup-folder launcher when the busy port owner is not a verified gateway", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "other.exe" }],
+        hints: [],
+      });
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      expect(killProcessTree).not.toHaveBeenCalled();
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("relaunches the verified fallback when Scheduled Task takeover fails", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      await writeGatewayScript(env);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockImplementation(async (port) => {
+        schtasksResponses.length = 0;
+        schtasksResponses.push({ code: 1, stdout: "", stderr: "restart denied" });
+        return { port, status: "free", listeners: [], hints: [] };
+      });
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      ]);
+
+      await expect(installGatewayScheduledTask(env)).rejects.toThrow(
+        "schtasks run failed: restart denied",
+      );
+
+      expectGatewayTermination(4242);
+      expectStartupFallbackSpawn();
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+    });
+  });
+
   it("probes the old fallback port before replacing a drifted task script", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
@@ -436,7 +486,16 @@ describe("Windows startup fallback", () => {
       inspectPortUsage.mockImplementation(async (port) => ({
         port,
         status: port === 18789 ? "busy" : "free",
-        listeners: port === 18789 ? [{ pid: 4242, command: "node.exe" }] : [],
+        listeners:
+          port === 18789
+            ? [
+                {
+                  pid: 4242,
+                  command: "node.exe",
+                  commandLine: 'node "C:\\openclaw\\dist\\index.js" gateway --port 18789',
+                },
+              ]
+            : [],
         hints: [],
       }));
       addStartupFallbackMissingResponses([
@@ -879,14 +938,20 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("reports runtime from the gateway listener when using the Startup fallback", async () => {
+  it("reports runtime from a verified gateway listener when using the Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(env);
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 4242, command: "node.exe" }],
+        listeners: [
+          {
+            pid: 4242,
+            command: "node.exe",
+            commandLine: 'node "C:\\openclaw\\dist\\index.js" gateway --port 18789',
+          },
+        ],
         hints: [],
       });
 
@@ -918,18 +983,43 @@ describe("Windows startup fallback", () => {
   it("does not kill the gateway listener when stopping a node Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const nodeEnv = makeNodeServiceEnv(env);
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(nodeEnv);
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 5151, command: "node.exe" }],
+        listeners: [
+          {
+            pid: 5151,
+            command: "node.exe",
+            commandLine: 'node "C:\\openclaw\\dist\\index.js" gateway --port 18789',
+          },
+        ],
         hints: [],
       });
 
       await stopScheduledTask({ env: nodeEnv, stdout: new PassThrough() });
 
       expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+    });
+  });
+
+  it("refuses to stop a Startup fallback with an unverified busy port owner", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 5151, command: "other.exe" }],
+        hints: [],
+      });
+
+      await expect(stopScheduledTask({ env, stdout: new PassThrough() })).rejects.toThrow(
+        "not a verified gateway process",
+      );
       expect(killProcessTree).not.toHaveBeenCalled();
     });
   });
@@ -997,7 +1087,13 @@ describe("Windows startup fallback", () => {
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 5151, command: "node.exe" }],
+        listeners: [
+          {
+            pid: 5151,
+            command: "node.exe",
+            commandLine: 'node "C:\\openclaw\\dist\\index.js" gateway --port 18789',
+          },
+        ],
         hints: [],
       });
 
@@ -1007,6 +1103,25 @@ describe("Windows startup fallback", () => {
       });
       expectGatewayTermination(5151);
       expectStartupFallbackSpawn();
+    });
+  });
+
+  it("refuses to restart a Startup fallback with an unverified busy port owner", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 5151, command: "other.exe" }],
+        hints: [],
+      });
+
+      await expect(restartScheduledTask({ env, stdout: new PassThrough() })).rejects.toThrow(
+        "not a verified gateway process",
+      );
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
@@ -1046,6 +1161,7 @@ describe("Windows startup fallback", () => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
       await writeGatewayScript(env);
       await writeStartupFallbackEntry(env);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
         .mockResolvedValueOnce({
           port: 18789,

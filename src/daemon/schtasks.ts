@@ -7,7 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
-import { inspectPortUsage } from "../infra/ports.js";
+import { inspectPortUsage, type PortListener } from "../infra/ports.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import {
   getWindowsCmdExePath,
@@ -306,12 +306,6 @@ export type ScheduledTaskInfo = {
   lastRunResult?: string;
 };
 
-function hasListenerPid<T extends { pid?: number | null }>(
-  listener: T,
-): listener is T & { pid: number } {
-  return typeof listener.pid === "number";
-}
-
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
@@ -505,9 +499,13 @@ async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolea
   return res.code === 0;
 }
 
-async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
+async function launchFallbackTaskScript(
+  env: GatewayServiceEnv,
+  installedCommand?: GatewayServiceCommandConfig | null,
+): Promise<void> {
   const scriptPath = resolveTaskScriptPath(env);
-  const command = await readScheduledTaskCommand(env);
+  const command =
+    installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
     const [executable, ...args] = command.programArguments;
     const child = spawn(executable, args, {
@@ -664,20 +662,7 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
     return [];
   }
 
-  const matchedGatewayPids = Array.from(
-    new Set(
-      diagnostics.listeners
-        .filter(
-          (listener) =>
-            typeof listener.pid === "number" &&
-            listener.commandLine &&
-            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
-              allowGatewayBinary: true,
-            }),
-        )
-        .map((listener) => listener.pid as number),
-    ),
-  );
+  const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
   if (matchedGatewayPids.length > 0) {
     return matchedGatewayPids;
   }
@@ -687,6 +672,23 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
       diagnostics.listeners
         .map((listener) => listener.pid)
         .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
+    ),
+  );
+}
+
+function resolveGatewayListenerPids(listeners: PortListener[]): number[] {
+  return Array.from(
+    new Set(
+      listeners
+        .filter(
+          (listener) =>
+            typeof listener.pid === "number" &&
+            listener.commandLine &&
+            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
+              allowGatewayBinary: true,
+            }),
+        )
+        .map((listener) => listener.pid as number),
     ),
   );
 }
@@ -893,6 +895,14 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       detail: "Startup-folder login item installed; gateway port unknown.",
     };
   }
+  const verifiedPids = findVerifiedGatewayListenerPidsOnPortSync(port);
+  if (verifiedPids.length > 0) {
+    return {
+      status: "running",
+      pid: verifiedPids[0],
+      detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
+    };
+  }
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (!diagnostics) {
     return {
@@ -900,22 +910,41 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       detail: `Startup-folder login item installed; could not inspect port ${port}.`,
     };
   }
-  const listener = diagnostics.listeners.find(hasListenerPid);
+  if (diagnostics.status !== "busy") {
+    return {
+      status: diagnostics.status === "free" ? "stopped" : "unknown",
+      detail: `Startup-folder login item installed; no gateway listener detected on port ${port}.`,
+    };
+  }
+  const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
+  if (matchedGatewayPids.length > 0) {
+    return {
+      status: "running",
+      pid: matchedGatewayPids[0],
+      detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
+    };
+  }
   return {
-    status: diagnostics.status === "busy" ? "running" : "stopped",
-    ...(listener?.pid ? { pid: listener.pid } : {}),
-    detail:
-      diagnostics.status === "busy"
-        ? `Startup-folder login item installed; listener detected on port ${port}.`
-        : `Startup-folder login item installed; no listener detected on port ${port}.`,
+    status: "unknown",
+    detail: `Startup-folder login item installed; port ${port} is busy, but the listener is not a verified gateway process.`,
   };
+}
+
+async function resolveControllableFallbackRuntime(
+  env: GatewayServiceEnv,
+): Promise<GatewayServiceRuntime> {
+  const runtime = await resolveFallbackRuntime(env);
+  if (runtime.status === "unknown") {
+    throw new Error(runtime.detail ?? "Could not verify Windows login item ownership.");
+  }
+  return runtime;
 }
 
 async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
 ): Promise<void> {
-  const runtime = await resolveFallbackRuntime(env);
+  const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
@@ -926,7 +955,7 @@ async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
-  const runtime = await resolveFallbackRuntime(env);
+  const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
@@ -936,7 +965,7 @@ async function restartStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
 ): Promise<GatewayServiceRestartResult> {
-  const runtime = await resolveFallbackRuntime(env);
+  const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
@@ -1381,9 +1410,19 @@ export async function installScheduledTask(
     // Terminate its captured PID, then restart and prove the replacement.
     if (startupRuntime.pid) {
       await terminateGatewayProcessTree(startupRuntime.pid, 300);
-      await restartScheduledTask({ env: activationEnv, stdout: args.stdout });
+      try {
+        await restartScheduledTask({ env: activationEnv, stdout: args.stdout });
+      } catch (err) {
+        // Keep the gateway available if Task Scheduler takeover fails after
+        // terminating the captured fallback process.
+        await launchFallbackTaskScript(fallbackEnv, installedCommand);
+        throw err;
+      }
     }
-  } else if (await hasScheduledTaskRunningEvidence(activationEnv)) {
+  } else if (
+    startupRuntime?.status === "stopped" &&
+    (await hasScheduledTaskRunningEvidence(activationEnv))
+  ) {
     await removeStartupEntries(activationEnv, args.stdout);
   }
   return { scriptPath: staged.scriptPath };

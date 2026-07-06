@@ -308,5 +308,6 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Update completed, but gateway service restart failed: Error: schtasks failed",
     );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
