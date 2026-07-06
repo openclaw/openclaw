@@ -22,6 +22,16 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Browser client response bounds:** cap successful browser-control JSON reads before parsing and cancel oversized streams while preserving normal response bodies. (#100889) Thanks @mushuiyu886.
+- **Agent find subprocess streams:** stop and reject `fd` searches when stdout, stderr, or readline fails instead of leaking an unhandled stream error or child process. (#101020, #101158) Thanks @cxbAsDev.
+- **Device pairing IPv6 policy:** allow cleartext pairing for IPv6 ULA and link-local Gateway addresses while continuing to reject public IPv6 endpoints. (#101008) Thanks @zhangguiping-xydt.
+- **Device pairing unspecified hosts:** reject `0.0.0.0` and `::` pairing URLs before issuing bootstrap tokens instead of treating wildcard bind addresses as loopback. (#98617) Thanks @crh-code.
+- **Discord gateway metadata bounds:** cap `/gateway/bot` response reads at the Discord API boundary and cancel oversized bodies before JSON parsing. (#98682) Thanks @wings1029.
+- **ACP runtime option clears:** preserve explicit runtime-option removals while merging validated scalar values and nested extras. (#101044) Thanks @mushuiyu886.
+- **Tlon Memex upload bounds:** cap upload-target JSON responses before parsing, cancel oversized streams, and avoid continuing the upload after boundary failure. (#101115) Thanks @cxbAsDev.
+- **Assistant streamed payload sanitization:** apply the final visible-stream sanitizer to single streamed assistant payloads so hidden reasoning and tool scaffolding cannot bypass outbound cleanup. (#101036) Thanks @velanir-ai-manager.
+- **Hugging Face model discovery bounds:** cap live model-catalog JSON reads before parsing and fall back to the static catalog after oversized provider responses. (#101079) Thanks @cxbAsDev.
+- **Web fetch fallback bounds:** fail closed when a byte-capped response has no readable stream instead of calling whole-body `arrayBuffer()` or `text()` fallbacks that defeat the cap. (#99884) Thanks @zenglingbiao.
 - **Codex yielded native subagents:** keep the parent app-server subscription and shared client alive until yielded native subagent completion delivery settles, preventing lost wakeups and leaked one-shot cleanup.
 - **Discord streamed finals:** send completion replies as fresh messages so inactive channels become unread, while preserving targeted mentions without escalating `@everyone` or `@here`. (#99711, #99662) Thanks @davelutztx.
 - **OpenAI-compatible SSE parsing:** recognize event streams mislabeled as JSON without prepending a second `data:` prefix, preserving valid streamed responses from non-conforming providers. (#96503) Thanks @ZengWen-DT.
