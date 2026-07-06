@@ -243,6 +243,51 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(error.message.length).toBeLessThan(520);
     expect(canceled).toBe(true);
   });
+
+  it("bounds large successful response bodies before parsing JSON", async () => {
+    let canceled = false;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            JSON.stringify({
+              base_resp: { status_code: 0, status_msg: "ok" },
+              content: "x".repeat(300_000),
+            }),
+          ),
+        );
+        closeTimer = setTimeout(() => controller.close(), 0);
+      },
+      cancel() {
+        canceled = true;
+        if (closeTimer) {
+          clearTimeout(closeTimer);
+        }
+      },
+    });
+    const fetchSpy = vi.fn(async () => {
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Trace-Id": "trace-success" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to reject oversized successful JSON");
+    }
+    expect(error.message).toContain("MiniMax VLM response body exceeded");
+    expect(error.message).toContain("Trace-Id: trace-success");
+    expect(canceled).toBe(true);
+  });
 });
 
 describe("isMinimaxVlmModel", () => {

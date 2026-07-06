@@ -1,3 +1,4 @@
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
@@ -14,6 +15,7 @@ type MinimaxBaseResp = {
 
 const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
+const MINIMAX_VLM_SUCCESS_BODY_MAX_BYTES = 256 * 1024;
 const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
@@ -142,7 +144,19 @@ export async function minimaxUnderstandImage(params: {
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  const body = await readResponseWithLimit(res, MINIMAX_VLM_SUCCESS_BODY_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => {
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      return new Error(`MiniMax VLM response body exceeded ${maxBytes} bytes.${trace}`);
+    },
+  });
+  const json = (() => {
+    try {
+      return JSON.parse(body.toString("utf8")) as unknown;
+    } catch {
+      return null;
+    }
+  })();
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);
