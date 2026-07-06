@@ -173,17 +173,7 @@ struct ChatProTab: View {
             self.viewModelTransportModeID = transportModeID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelAgentID = agentID
-            self.viewModel = OpenClawChatViewModel(
-                sessionKey: sessionKey,
-                transport: self.appModel.makeChatTransport(),
-                activeAgentId: agentID,
-                transcriptCache: self.appModel.makeChatTranscriptCache(),
-                onSessionChanged: { sessionKey in
-                    self.appModel.focusChatSession(sessionKey)
-                },
-                diagnosticsLog: { message in
-                    GatewayDiagnostics.log(message)
-                })
+            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey, activeAgentId: agentID)
             return
         }
         if self.viewModelTransportModeID != transportModeID ||
@@ -193,21 +183,29 @@ struct ChatProTab: View {
             self.viewModelTransportModeID = transportModeID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelAgentID = agentID
-            self.viewModel = OpenClawChatViewModel(
-                sessionKey: sessionKey,
-                transport: self.appModel.makeChatTransport(),
-                activeAgentId: agentID,
-                transcriptCache: self.appModel.makeChatTranscriptCache(),
-                onSessionChanged: { sessionKey in
-                    self.appModel.focusChatSession(sessionKey)
-                },
-                diagnosticsLog: { message in
-                    GatewayDiagnostics.log(message)
-                })
+            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey, activeAgentId: agentID)
             return
         }
         guard viewModel.sessionKey != sessionKey else { return }
         viewModel.syncSession(to: sessionKey)
+    }
+
+    private func makeChatViewModel(sessionKey: String, activeAgentId: String? = nil) -> OpenClawChatViewModel {
+        // One store instance backs both seams so the transcript cache and the
+        // offline outbox share a single SQLite connection.
+        let offlineStore = self.appModel.makeChatOfflineStore()
+        return OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: self.appModel.makeChatTransport(),
+            activeAgentId: activeAgentId,
+            transcriptCache: offlineStore,
+            outbox: offlineStore,
+            onSessionChanged: { sessionKey in
+                self.appModel.focusChatSession(sessionKey)
+            },
+            diagnosticsLog: { message in
+                GatewayDiagnostics.log(message)
+            })
     }
 
     private var talkControl: OpenClawChatTalkControl {
