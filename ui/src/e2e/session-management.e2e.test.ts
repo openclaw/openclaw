@@ -409,6 +409,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const researchGroup = groups.filter({ hasText: "Research" });
       await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(2);
+      await captureUiProof(page, "sidebar-session-groups.png");
 
       // Rename group: every member session is patched, including the archived
       // row that only the unbounded archived list window can see.
@@ -416,8 +417,10 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         name: "Group options for Research",
       });
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
-      page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await groupMenuButton.click();
+      await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
+      await captureUiProof(page, "sidebar-group-menu.png");
+      page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await page.getByRole("menuitem", { name: "Rename group…" }).click();
       for (const key of ["agent:main:paper-a", "agent:main:paper-b", "agent:main:old-notes"]) {
         const patch = await waitForPatch(
@@ -443,6 +446,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       // Group by "None" flattens the category sections into the plain list.
       await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
+      await captureUiProof(page, "sidebar-groupby-sort-menu.png");
       await page.getByRole("menuitemradio", { name: "None" }).click();
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
