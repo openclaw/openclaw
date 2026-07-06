@@ -25,6 +25,7 @@ import {
   createSqliteAcpEventLedger,
   migrateFileAcpEventLedgerToSqlite,
   resolveDefaultAcpEventLedgerPath,
+  type AcpEventLedger,
 } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
@@ -122,10 +123,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     stopped = true;
     resolveGatewayReady();
     gateway.stop();
-    eventLedger?.close();
     // If no WebSocket is active (e.g. between reconnect attempts),
     // gateway.stop() won't trigger onClose, so resolve directly.
     onClosed();
+    // Close the event ledger only after all gateway event handlers have
+    // drained, so in-flight recordUpdate calls do not race with close.
+    eventLedger?.close();
   };
 
   process.once("SIGINT", shutdown);
