@@ -134,6 +134,14 @@ describe("loadCodexSupervisorEndpoints", () => {
     ]);
   });
 
+  it("reports malformed JSON endpoint definitions as a config error", () => {
+    expect(() =>
+      loadCodexSupervisorEndpoints({
+        OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS: "[not valid JSON",
+      }),
+    ).toThrow("OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS must be a valid JSON array.");
+  });
+
   it("rejects duplicate normalized endpoint ids", () => {
     expect(() =>
       loadCodexSupervisorEndpoints({
