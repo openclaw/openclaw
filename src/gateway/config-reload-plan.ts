@@ -229,20 +229,20 @@ function listReloadRules(): ReloadRule[] {
     ...channelPluginStateRules,
     ...BASE_RELOAD_RULES_TAIL,
   ];
+  // Narrow config contracts must override broad owner fallbacks. Sort once per
+  // registry snapshot so the hot path can retain first-match semantics.
+  rules.sort((a, b) => b.prefix.length - a.prefix.length);
   cachedReloadRules = rules;
   return rules;
 }
 
 function matchRule(path: string): ReloadRule | null {
-  let bestRule: ReloadRule | null = null;
   for (const rule of listReloadRules()) {
     if (path === rule.prefix || path.startsWith(`${rule.prefix}.`)) {
-      if (!bestRule || rule.prefix.length > bestRule.prefix.length) {
-        bestRule = rule;
-      }
+      return rule;
     }
   }
-  return bestRule;
+  return null;
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
