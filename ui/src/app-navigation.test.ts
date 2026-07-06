@@ -174,6 +174,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("worktrees")).toBe("/worktrees");
   });
 
   it("prepends base path", () => {
@@ -187,6 +188,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
