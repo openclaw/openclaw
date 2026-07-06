@@ -7,7 +7,7 @@ import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
-const mocks = {
+const mocks = vi.hoisted(() => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
@@ -15,7 +15,7 @@ const mocks = {
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
-};
+}));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;

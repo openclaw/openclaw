@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">เชื่อถือเกตเวย์นี้หรือไม่?</string>
     <string name="trust_and_continue">เชื่อถือและดำเนินการต่อ</string>
     <string name="cancel">ยกเลิก</string>
+    <string name="new_chat_in_worktree">แชทใหม่ใน worktree</string>
     <string name="endpoint">เอนด์พอยต์</string>
     <string name="status">สถานะ</string>
     <string name="connected_gateway_ready">เกตเวย์ของคุณเปิดใช้งานและพร้อมใช้งานแล้ว</string>

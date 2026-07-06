@@ -108,6 +108,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import type { GatewaySidecarStartupMode } from "./server-startup-post-attach.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -454,8 +455,6 @@ export type GatewayCloseOptions = {
 export type GatewayServer = {
   close: (opts?: GatewayCloseOptions) => Promise<void>;
 };
-
-export type GatewaySidecarStartupMode = "start" | "defer";
 
 export type GatewayServerOptions = {
   /**
@@ -1028,6 +1027,7 @@ export async function startGatewayServer(
       ...optsResult,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
+      getConfigReloaderHotReloadStatus: () => runtimeState?.configReloader.hotReloadStatus?.(),
     });
   const stopRegisteredPostReadySidecars = async () => {
     const postReadySidecars = runtimeState.postReadySidecars;

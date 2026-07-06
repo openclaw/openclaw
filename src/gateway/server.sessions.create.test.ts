@@ -1,9 +1,24 @@
 // Session creation tests protect dashboard-origin session records, transcript
 // creation, parent linkage, and model/provider overrides exposed by the gateway API.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, test, vi } from "vitest";
-import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import {
+  findLiveRegistryWorktreeByOwner,
+  listRegistryWorktrees,
+} from "../agents/worktrees/registry.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  agentCommand,
+  agentDiscoveryMock,
+  rpcReq,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
@@ -14,6 +29,25 @@ import {
 
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
+const execFileAsync = promisify(execFile);
+
+async function initializeGitWorkspace(root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
+  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Test"]);
+  await execFileAsync("git", [
+    "-C",
+    workspace,
+    "config",
+    "user.email",
+    "openclaw-test@example.invalid",
+  ]);
+  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
+  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
+  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
+  return await fs.realpath(workspace);
+}
 
 function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
@@ -21,6 +55,282 @@ function requireNonEmptyString(value: string | undefined, label: string): string
   }
   return value;
 }
+
+test("sessions.create provisions and reuses a session worktree for later runs", async () => {
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-worktree-"),
+  );
+  const workspace = await initializeGitWorkspace(root);
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  try {
+    const created = await directSessionReq<{
+      key: string;
+      entry: { spawnedCwd?: string };
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(true);
+    const key = requireNonEmptyString(created.payload?.key, "created session key");
+    const worktree = created.payload?.worktree;
+    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    worktreeId = worktree?.id;
+    expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toMatchObject({
+      id: worktree?.id,
+      path: worktree?.path,
+      ownerKind: "session",
+      ownerId: key,
+    });
+
+    const recreated = await directSessionReq<{
+      entry: { spawnedCwd?: string };
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      { key, agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(recreated.ok).toBe(true);
+    expect(recreated.payload?.worktree).toEqual(worktree);
+    expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    expect(
+      listRegistryWorktrees(process.env).filter(
+        (record) =>
+          record.ownerKind === "session" &&
+          record.ownerId === key &&
+          record.removedAt === undefined,
+      ),
+    ).toHaveLength(1);
+
+    agentCommand.mockClear();
+    const { ws } = await openClient();
+    const run = await rpcReq(ws, "agent", {
+      message: "verify worktree cwd",
+      sessionKey: key,
+      idempotencyKey: "session-worktree-cwd",
+    });
+    expect(run.ok).toBe(true);
+    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
+    expect(agentCommand.mock.calls.at(-1)?.[0]).toMatchObject({ cwd: worktree?.path });
+    ws.close();
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    testState.agentConfig = undefined;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions.create skips the worktree setup script for non-admin callers", async () => {
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-setup-scope-"),
+  );
+  const workspace = await initializeGitWorkspace(root);
+  await fs.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
+  const setupScript = path.join(workspace, ".openclaw", "worktree-setup.sh");
+  await fs.writeFile(setupScript, "#!/bin/sh\ntouch setup-marker.txt\n");
+  await fs.chmod(setupScript, 0o755);
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  try {
+    const created = await directSessionReq<{
+      key: string;
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.write"] } } as never },
+    );
+    expect(created.ok).toBe(true);
+    const worktree = requireNonEmptyString(created.payload?.worktree.path, "worktree path");
+    worktreeId = created.payload?.worktree.id;
+    // Write-scoped callers get provisioning but never repo-script execution.
+    await expect(fs.stat(path.join(worktree, "setup-marker.txt"))).rejects.toThrow();
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    testState.agentConfig = undefined;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions.create accepts a workspace configured as a repo subdirectory", async () => {
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-subdir-session-worktree-"),
+  );
+  const repoRoot = await initializeGitWorkspace(root);
+  const workspace = path.join(repoRoot, "packages", "app");
+  await fs.mkdir(workspace, { recursive: true });
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  let worktreeId: string | undefined;
+  try {
+    const created = await directSessionReq<{
+      key: string;
+      entry: { spawnedCwd?: string };
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(created.ok).toBe(true);
+    const worktree = created.payload?.worktree;
+    worktreeId = worktree?.id;
+    // The managed worktree anchors at the repo root even when the workspace is nested;
+    // the session cwd points at the equivalent subdirectory inside the worktree.
+    expect(worktree?.branch).toMatch(/^openclaw\/wt-[a-f0-9]{8}$/);
+    expect(created.payload?.entry.spawnedCwd).toBe(
+      path.join(requireNonEmptyString(worktree?.path, "worktree path"), "packages", "app"),
+    );
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    testState.agentConfig = undefined;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions.create reset-in-place persists the returned worktree cwd", async () => {
+  const root = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-reset-session-worktree-"),
+  );
+  const workspace = await initializeGitWorkspace(root);
+  // A remote makes the base commit reachable from `--remotes`, so leaving the worktree via a
+  // plain New Chat is lossless and the reset can remove it (the real leave-worktree flow).
+  const origin = path.join(root, "origin.git");
+  await execFileAsync("git", ["init", "--bare", origin]);
+  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", origin]);
+  await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
+  let worktreeId: string | undefined;
+  try {
+    const created = await directSessionReq<{
+      key: string;
+      entry: { spawnedCwd?: string };
+      worktree: { id: string; path: string; branch: string };
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        parentSessionKey: "main",
+        emitCommandHooks: true,
+        worktree: true,
+      },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe("agent:main:main");
+    const worktree = created.payload?.worktree;
+    worktreeId = worktree?.id;
+    expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      { spawnedCwd?: string }
+    >;
+    expect(store["agent:main:main"]?.spawnedCwd).toBe(worktree?.path);
+
+    // A later plain New Chat on the same main session must leave the worktree: cwd clears
+    // and the (clean) session worktree is lossless-removed rather than left orphaned.
+    const reset = await directSessionReq<{ key: string; entry: { spawnedCwd?: string } }>(
+      "sessions.create",
+      { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
+      { client: { connect: { scopes: ["operator.write"] } } as never },
+    );
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.spawnedCwd).toBeUndefined();
+    expect(
+      listRegistryWorktrees(process.env).filter(
+        (record) =>
+          record.ownerKind === "session" &&
+          record.ownerId === "agent:main:main" &&
+          record.removedAt === undefined,
+      ),
+    ).toHaveLength(0);
+    worktreeId = undefined;
+  } finally {
+    if (worktreeId) {
+      await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
+    }
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    testState.agentConfig = undefined;
+    testState.sessionConfig = undefined;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sessions.create rejects worktrees for non-git agent workspaces", async () => {
+  const workspace = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-plain-workspace-"),
+  );
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  try {
+    const created = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "agent workspace is not a git checkout",
+    });
+  } finally {
+    testState.agentConfig = undefined;
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
 
 test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
   const { dir, storePath } = await createSessionStoreDir();

@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -38,6 +41,43 @@ class ChatControllerMessageIdentityTest {
 
     assertEquals(listOf(ChatMessageContent(type = "text", text = "Hi there")), content)
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryDropsInternalRoleRows() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """
+              {
+                "messages": [
+                  { "role": "user", "content": "hello" },
+                  { "role": "toolResult", "content": "private tool output" },
+                  { "role": "internal", "text": "private reasoning" },
+                  { "role": "custom", "content": "visible plugin notice" },
+                  { "role": "Assistant", "content": "reply" }
+                ]
+              }
+              """.trimIndent()
+            } else {
+              "{}"
+            }
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertEquals(listOf("user", "custom", "assistant"), controller.messages.value.map { it.role })
+      assertEquals(
+        listOf("hello", "visible plugin notice", "reply"),
+        controller.messages.value.map { it.content.single().text },
+      )
+    }
 
   @Test
   fun reconcileMessageIdsReusesMatchingIdsAcrossHistoryReload() {

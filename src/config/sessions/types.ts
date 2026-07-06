@@ -298,8 +298,8 @@ export type SessionEntry = {
   goal?: SessionGoal;
   /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
   pendingSkillSuggestion?: PendingSkillSuggestion;
-  /** Fingerprint of the last signal queued as a skill suggestion. */
-  lastSkillSuggestionSignalHash?: string;
+  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+  skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */

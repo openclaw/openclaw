@@ -114,7 +114,7 @@ export function inspectGatewayCrashLoopBreaker(
         .limit(1),
     );
     return buildGatewayCrashLoopBreakerDecision({
-      uncleanBoots: Number(uncleanRow?.count ?? 0),
+      uncleanBoots: uncleanRow?.count ?? 0,
       latestBreakerStartedAtMs: latestBreaker?.startedAtMs,
       latestRecoveryStartedAtMs: latestRecovery?.startedAtMs,
     });

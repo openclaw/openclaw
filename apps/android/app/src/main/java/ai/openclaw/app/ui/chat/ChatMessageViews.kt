@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.mobileAccent
@@ -60,7 +61,7 @@ private data class ChatBubbleStyle(
 /** Renders one persisted chat message as text and image parts. */
 @Composable
 fun ChatMessageBubble(message: ChatMessage) {
-  val role = message.role.trim().lowercase(Locale.US)
+  val role = normalizeVisibleChatMessageRole(message.role) ?: return
   val style = bubbleStyle(role)
 
   // Filter to only displayable content parts (text with content, or base64 images).

@@ -1469,11 +1469,6 @@
       "translated": "Belum diberikan"
     },
     {
-      "id": "native.android.561d07951dc36959",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.3b7e036da1b10671",
       "source": "Back",
       "translated": "Kembali"
@@ -3349,6 +3344,11 @@
       "translated": "Chat baru"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "Lebih banyak opsi chat baru"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Segarkan chat"
@@ -3534,11 +3534,6 @@
       "translated": "Tidak ada yang perlu Anda perhatikan"
     },
     {
-      "id": "native.android.75e509075f59deaa",
-      "source": "Needs attention",
-      "translated": "Perlu perhatian"
-    },
-    {
       "id": "native.android.c5e56f0e8af094fb",
       "source": "Speaking · waiting for reply",
       "translated": "Berbicara · menunggu balasan"
@@ -3657,6 +3652,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "Batal"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "Chat baru di worktree"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4642,6 +4642,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Membuka Pengaturan / Gateway"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "Chat Baru"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Chat Baru di Worktree"
     },
     {
       "id": "native.apple.ced228bb4d20a726",
@@ -6174,7 +6184,7 @@
       "translated": "Speakerphone"
     },
     {
-      "id": "native.apple.e1383011b9ccc3a3",
+      "id": "native.apple.1604352fea16d495",
       "source": "Wake Words",
       "translated": "Kata Bangun"
     },
@@ -6249,7 +6259,7 @@
       "translated": "Status Layar Debug"
     },
     {
-      "id": "native.apple.2bb13c2d7465f99e",
+      "id": "native.apple.8584babe715b1133",
       "source": "Discovery Logs",
       "translated": "Log Penemuan"
     },
@@ -12697,6 +12707,31 @@
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "Model"
+    },
+    {
+      "id": "native.apple.745b004e0b5b6b80",
+      "source": "Pinned",
+      "translated": "Disematkan"
+    },
+    {
+      "id": "native.apple.69381a0a462ccd84",
+      "source": "Recent",
+      "translated": "Terbaru"
+    },
+    {
+      "id": "native.apple.aa321cf4820426ef",
+      "source": "Models",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.75550b03f06d6abc",
+      "source": "Pin model",
+      "translated": "Sematkan model"
+    },
+    {
+      "id": "native.apple.af4df27bdbacb5de",
+      "source": "Unpin model",
+      "translated": "Lepas sematan model"
     },
     {
       "id": "native.apple.5dfc0700d8dff8de",

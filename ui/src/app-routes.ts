@@ -80,15 +80,6 @@ export async function startApplicationRouter(
   await router.start(history, basePath, context);
 }
 
-export function startAppRouter(
-  router: ApplicationRouter,
-  history: RouterHistory,
-  basePath: string,
-  context: ApplicationContext<RouteId>,
-): Promise<void> {
-  return startApplicationRouter(router, history, basePath, context);
-}
-
 export {
   APP_ROUTE_DEFINITIONS,
   APP_ROUTE_IDS,

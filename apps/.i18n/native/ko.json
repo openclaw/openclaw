@@ -1469,11 +1469,6 @@
       "translated": "허용되지 않음"
     },
     {
-      "id": "native.android.561d07951dc36959",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.3b7e036da1b10671",
       "source": "Back",
       "translated": "뒤로"
@@ -3349,6 +3344,11 @@
       "translated": "새 채팅"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "더 많은 새 채팅 옵션"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "채팅 새로고침"
@@ -3534,11 +3534,6 @@
       "translated": "주의가 필요한 항목이 없습니다"
     },
     {
-      "id": "native.android.75e509075f59deaa",
-      "source": "Needs attention",
-      "translated": "주의 필요"
-    },
-    {
       "id": "native.android.c5e56f0e8af094fb",
       "source": "Speaking · waiting for reply",
       "translated": "말하는 중 · 응답 대기 중"
@@ -3657,6 +3652,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "취소"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "worktree에서 새 채팅"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4642,6 +4642,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "설정 / Gateway를 엽니다"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "새 채팅"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Worktree에서 새 채팅"
     },
     {
       "id": "native.apple.ced228bb4d20a726",
@@ -6174,9 +6184,9 @@
       "translated": "스피커폰"
     },
     {
-      "id": "native.apple.e1383011b9ccc3a3",
+      "id": "native.apple.1604352fea16d495",
       "source": "Wake Words",
-      "translated": "깨우기 단어"
+      "translated": "웨이크 워드"
     },
     {
       "id": "native.apple.698d47c5569f8d3b",
@@ -6249,7 +6259,7 @@
       "translated": "디버그 화면 상태"
     },
     {
-      "id": "native.apple.2bb13c2d7465f99e",
+      "id": "native.apple.8584babe715b1133",
       "source": "Discovery Logs",
       "translated": "검색 로그"
     },
@@ -12697,6 +12707,31 @@
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "모델"
+    },
+    {
+      "id": "native.apple.745b004e0b5b6b80",
+      "source": "Pinned",
+      "translated": "고정됨"
+    },
+    {
+      "id": "native.apple.69381a0a462ccd84",
+      "source": "Recent",
+      "translated": "최근"
+    },
+    {
+      "id": "native.apple.aa321cf4820426ef",
+      "source": "Models",
+      "translated": "모델"
+    },
+    {
+      "id": "native.apple.75550b03f06d6abc",
+      "source": "Pin model",
+      "translated": "모델 고정"
+    },
+    {
+      "id": "native.apple.af4df27bdbacb5de",
+      "source": "Unpin model",
+      "translated": "모델 고정 해제"
     },
     {
       "id": "native.apple.5dfc0700d8dff8de",

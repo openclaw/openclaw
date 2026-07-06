@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Considerare attendibile questo gateway?</string>
     <string name="trust_and_continue">Considera attendibile e continua</string>
     <string name="cancel">Annulla</string>
+    <string name="new_chat_in_worktree">Nuova chat nel worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Stato</string>
     <string name="connected_gateway_ready">Il tuo gateway è attivo e pronto.</string>

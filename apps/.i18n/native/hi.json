@@ -1469,11 +1469,6 @@
       "translated": "नहीं दी गई"
     },
     {
-      "id": "native.android.561d07951dc36959",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.3b7e036da1b10671",
       "source": "Back",
       "translated": "वापस"
@@ -3349,6 +3344,11 @@
       "translated": "नई चैट"
     },
     {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "नए चैट के और विकल्प"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "चैट रीफ़्रेश करें"
@@ -3534,11 +3534,6 @@
       "translated": "आपके ध्यान देने की कोई ज़रूरत नहीं है"
     },
     {
-      "id": "native.android.75e509075f59deaa",
-      "source": "Needs attention",
-      "translated": "ध्यान देने की ज़रूरत है"
-    },
-    {
       "id": "native.android.c5e56f0e8af094fb",
       "source": "Speaking · waiting for reply",
       "translated": "बोल रहा है · जवाब का इंतज़ार है"
@@ -3657,6 +3652,11 @@
       "id": "native.android.bc749f6034799c2e",
       "source": "Cancel",
       "translated": "रद्द करें"
+    },
+    {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "worktree में नया चैट"
     },
     {
       "id": "native.android.c12edfa8fda16801",
@@ -4642,6 +4642,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Settings / Gateway खोलता है"
+    },
+    {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "नया चैट"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Worktree में नया चैट"
     },
     {
       "id": "native.apple.ced228bb4d20a726",
@@ -6174,7 +6184,7 @@
       "translated": "Speakerphone"
     },
     {
-      "id": "native.apple.e1383011b9ccc3a3",
+      "id": "native.apple.1604352fea16d495",
       "source": "Wake Words",
       "translated": "वेक वर्ड्स"
     },
@@ -6249,9 +6259,9 @@
       "translated": "डीबग स्क्रीन स्थिति"
     },
     {
-      "id": "native.apple.2bb13c2d7465f99e",
+      "id": "native.apple.8584babe715b1133",
       "source": "Discovery Logs",
-      "translated": "डिस्कवरी लॉग"
+      "translated": "डिस्कवरी लॉग्स"
     },
     {
       "id": "native.apple.f0a16e985312895b",
@@ -12697,6 +12707,31 @@
       "id": "native.apple.0fce9d743a640218",
       "source": "Model",
       "translated": "मॉडल"
+    },
+    {
+      "id": "native.apple.745b004e0b5b6b80",
+      "source": "Pinned",
+      "translated": "पिन किया गया"
+    },
+    {
+      "id": "native.apple.69381a0a462ccd84",
+      "source": "Recent",
+      "translated": "हालिया"
+    },
+    {
+      "id": "native.apple.aa321cf4820426ef",
+      "source": "Models",
+      "translated": "मॉडल"
+    },
+    {
+      "id": "native.apple.75550b03f06d6abc",
+      "source": "Pin model",
+      "translated": "मॉडल पिन करें"
+    },
+    {
+      "id": "native.apple.af4df27bdbacb5de",
+      "source": "Unpin model",
+      "translated": "मॉडल अनपिन करें"
     },
     {
       "id": "native.apple.5dfc0700d8dff8de",
