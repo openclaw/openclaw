@@ -8,7 +8,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    readdirSync: vi.fn(actual.readdirSync as CallableFunction),
+    readdirSync: vi.fn(actual.readdirSync as (...args: unknown[]) => unknown),
   };
 });
 
@@ -60,7 +60,7 @@ describe("listPluginModelCatalogRelativePaths", () => {
   it("retries readdirSync once on transient error and succeeds", async () => {
     const mockDirent = (name: string) =>
       ({ name, isDirectory: () => true }) as import("node:fs").Dirent;
-    const fakeEntries = [mockDirent("anthropic"), mockDirent("minimax")];
+    const fakeEntries: any = [mockDirent("anthropic"), mockDirent("minimax")];
     // Sync requires cast because getReadDirMock is not visible in ESM surface
     const readdirMock = vi.mocked((await import("node:fs")).readdirSync);
 
