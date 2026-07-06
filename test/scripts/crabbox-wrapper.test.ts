@@ -107,6 +107,9 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  previous_arg="$arg"',
       "done",
       'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}" = "1" ]; then',
+      // Let the wrapper finish its synchronous keepalive check so this fixture
+      // exercises the post-exit checkout guard, not the active-child monitor.
+      "  sleep 0.1",
       '  deleted_cwd="$PWD"',
       "  cd / || exit 1",
       '  rm -rf "$deleted_cwd"',
