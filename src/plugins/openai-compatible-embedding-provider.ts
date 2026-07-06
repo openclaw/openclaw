@@ -1,7 +1,7 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { applyQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+import { applyQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/host/query-instruction-templates.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
