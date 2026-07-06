@@ -325,6 +325,80 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun renameSessionGroupPatchesEveryMemberIncludingArchivedOnlyOnes() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" ->
+                if (paramsJson.orEmpty().contains("\"archived\":true")) {
+                  """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:archived","category":" Work "}]}"""
+                } else {
+                  """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:other","category":"Play"}]}"""
+                }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.renameSessionGroup(from = "Work", to = "Focus")
+
+      // Membership enumeration sends the explicit high bound (absent limit is
+      // capped at 100 rows server-side) across active + archived rows.
+      val lists = requests.filter { it.first == "sessions.list" }.map { it.second.orEmpty() }
+      assertEquals(2, lists.count { it.contains("\"limit\":10000") })
+      assertEquals(1, lists.count { it.contains("\"archived\":true") })
+
+      val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
+      assertEquals(2, patches.size)
+      assertTrue(patches.any { it.contains("\"key\":\"agent:main:active\"") && it.contains("\"category\":\"Focus\"") })
+      assertTrue(patches.any { it.contains("\"key\":\"agent:main:archived\"") && it.contains("\"category\":\"Focus\"") })
+      // The session list refreshes (windowed) after the fan-out.
+      assertTrue(lists.last().contains("\"limit\""))
+    }
+
+  @Test
+  fun dissolveSessionGroupClearsCategoriesBestEffort() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      var patchCount = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" ->
+                if (paramsJson.orEmpty().contains("\"archived\":true")) {
+                  """{"sessions":[{"key":"agent:main:archived","category":"Work"}]}"""
+                } else {
+                  """{"sessions":[{"key":"agent:main:a","category":"Work"},{"key":"agent:main:b","category":"Work"}]}"""
+                }
+              "sessions.patch" -> {
+                patchCount += 1
+                if (patchCount == 1) throw RuntimeException("offline") else "{}"
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.dissolveSessionGroup("Work")
+
+      // One failed member patch must not abandon the remaining members.
+      val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
+      assertEquals(3, patches.size)
+      assertTrue(patches.all { it.contains("\"category\":null") })
+      assertEquals("offline", controller.errorText.value)
+    }
+
+  @Test
   fun forkSessionReturnsCreatedKeyAndRefreshesActiveSessions() =
     runTest {
       val requests = mutableListOf<Pair<String, String?>>()

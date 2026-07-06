@@ -389,6 +389,76 @@ class ChatController internal constructor(
     }
   }
 
+  /** Renames a session group everywhere: every member session moves to the new category. */
+  suspend fun renameSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    val fromName = from.trim().takeIf { it.isNotEmpty() } ?: return
+    val toName = to.trim().takeIf { it.isNotEmpty() } ?: return
+    patchSessionGroupMembers(group = fromName, category = toName)
+  }
+
+  /** Deletes a session group: member sessions are kept and move back to Ungrouped. */
+  suspend fun dissolveSessionGroup(group: String) {
+    val groupName = group.trim().takeIf { it.isNotEmpty() } ?: return
+    patchSessionGroupMembers(group = groupName, category = null)
+  }
+
+  private suspend fun patchSessionGroupMembers(
+    group: String,
+    category: String?,
+  ) {
+    try {
+      var firstError: Throwable? = null
+      for (member in listSessionGroupMembers(group)) {
+        try {
+          val params =
+            buildJsonObject {
+              put("key", JsonPrimitive(member.key))
+              put("category", category?.let(::JsonPrimitive) ?: JsonNull)
+            }
+          requestGateway("sessions.patch", params.toString())
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          // Best-effort: one failed member patch must not strand the rest of the group.
+          if (firstError == null) firstError = err
+        }
+      }
+      firstError?.let { updateErrorText(it.message) }
+      fetchSessionsForCurrentWindow()
+    } catch (err: CancellationException) {
+      throw err
+    } catch (err: Throwable) {
+      updateErrorText(err.message)
+    }
+  }
+
+  /**
+   * Enumerates every session assigned to the group. The UI session list is windowed
+   * (limited, archived either-or), so group mutations must not derive membership from
+   * it. An absent limit is capped at 100 rows server-side, so both queries send an
+   * explicit high bound; sessions.list filters archived rows either-or, hence two calls.
+   */
+  private suspend fun listSessionGroupMembers(group: String): List<ChatSessionEntry> {
+    val members = LinkedHashMap<String, ChatSessionEntry>()
+    for (archived in listOf(false, true)) {
+      val params =
+        buildJsonObject {
+          put("includeGlobal", JsonPrimitive(true))
+          put("includeUnknown", JsonPrimitive(false))
+          put("limit", JsonPrimitive(GROUP_MEMBER_FETCH_LIMIT))
+          if (archived) put("archived", JsonPrimitive(true))
+        }
+      val rows = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+      for (row in rows) {
+        if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row
+      }
+    }
+    return members.values.toList()
+  }
+
   suspend fun deleteSession(key: String) {
     val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return
     try {
@@ -2221,6 +2291,9 @@ private enum class ChatMetadataLoadState {
 }
 
 private const val NEW_CHAT_SESSION_LABEL = "New chat"
+
+// Group mutations enumerate whole stores; far past any realistic session count.
+private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
 
 internal fun nextNewChatSessionLabel(sessions: List<ChatSessionEntry>): String {
   val baseLabel = NEW_CHAT_SESSION_LABEL

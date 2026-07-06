@@ -15,10 +15,16 @@ struct CommandSessionSection: Identifiable {
 }
 
 enum CommandSessionGrouping {
-    static func sections(from entries: [OpenClawChatSessionEntry]) -> [CommandSessionSection] {
+    static func sections(
+        from entries: [OpenClawChatSessionEntry],
+        knownGroups: [String] = []) -> [CommandSessionSection]
+    {
         let pinned = self.sortedByActivity(entries.filter { $0.pinned == true })
         let unpinned = entries.filter { $0.pinned != true }
+        // Stored-but-empty groups still render as sections so they remain
+        // visible move targets after their last member leaves.
         let categoryNames = Set(unpinned.compactMap { self.normalizedCategory($0.category) })
+            .union(knownGroups.compactMap(self.normalizedCategory))
             .sorted(by: self.categoryComesBefore)
         var sections: [CommandSessionSection] = []
 
@@ -79,9 +85,27 @@ enum CommandSessionGrouping {
         return [current] + capped.prefix(max(0, limit - 1))
     }
 
-    static func categories(from entries: [OpenClawChatSessionEntry]) -> [String] {
+    static func categories(
+        from entries: [OpenClawChatSessionEntry],
+        knownGroups: [String] = []) -> [String]
+    {
         Set(entries.compactMap { self.normalizedCategory($0.category) })
+            .union(knownGroups.compactMap(self.normalizedCategory))
             .sorted(by: self.categoryComesBefore)
+    }
+
+    /// Union of the active and archived enumerations, deduped by key. Group
+    /// mutations must patch archived members too so restores land back in the
+    /// renamed group instead of the stale one.
+    static func members(
+        of group: String,
+        in lists: [[OpenClawChatSessionEntry]]) -> [OpenClawChatSessionEntry]
+    {
+        guard let target = self.normalizedCategory(group) else { return [] }
+        var seen = Set<String>()
+        return lists.flatMap(\.self).filter { entry in
+            self.normalizedCategory(entry.category) == target && seen.insert(entry.key).inserted
+        }
     }
 
     static func activityTimestamp(_ entry: OpenClawChatSessionEntry) -> Double {
