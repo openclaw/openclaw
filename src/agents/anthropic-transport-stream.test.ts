@@ -3519,6 +3519,42 @@ describe("anthropic transport stream", () => {
     expect(result.responseModel).toBe("claude-fable-5");
   });
 
+  it("uses mandatory adaptive thinking and default sampling for Claude Mythos 5 transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "prod-mythos",
+      name: "Production Claude",
+      provider: "microsoft-foundry",
+      params: { canonicalModelId: "claude-mythos-5" },
+      reasoning: false,
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      maxTokens: 128_000,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "off",
+        temperature: 0.2,
+        onPayload: (payload) => ({
+          ...(payload as Record<string, unknown>),
+          top_p: 0.9,
+          top_k: 40,
+        }),
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.output_config).toEqual({ effort: "low" });
+    expect(payload).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("top_p");
+    expect(payload).not.toHaveProperty("top_k");
+  });
+
   it("uses adaptive thinking for canonical Claude Mythos Preview transport aliases", async () => {
     const model = makeAnthropicTransportModel({
       id: "prod-mythos-preview",
@@ -3573,6 +3609,36 @@ describe("anthropic transport stream", () => {
     expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
+
+  it.each(["claude-opus-4-8", "claude-mythos-preview"])(
+    "restores default sampling for %s transport requests after payload hooks",
+    async (modelId) => {
+      await runTransportStream(
+        makeAnthropicTransportModel({
+          id: modelId,
+          name: modelId,
+          maxTokens: 128_000,
+        }),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        {
+          apiKey: "sk-ant-api",
+          reasoning: "high",
+          temperature: 0.2,
+          onPayload: (payload) => ({
+            ...(payload as Record<string, unknown>),
+            temperature: 0.2,
+            top_p: 0.9,
+            top_k: 40,
+          }),
+        } as AnthropicStreamOptions,
+      );
+
+      const payload = latestAnthropicRequest().payload;
+      expect(payload).not.toHaveProperty("temperature");
+      expect(payload).not.toHaveProperty("top_p");
+      expect(payload).not.toHaveProperty("top_k");
+    },
+  );
 
   it("maps Claude Fable 5 transport thinking levels to adaptive effort", async () => {
     const model = makeAnthropicTransportModel({

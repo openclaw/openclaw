@@ -46,6 +46,7 @@ import {
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
 import {
+  applyClaudeRequestContract,
   prepareClaudeSonnet5RequestContext,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeSonnet5ModelIdentity,
@@ -575,6 +576,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
+      applyClaudeRequestContract(params as unknown as Record<string, unknown>, model);
       const requestOptions = {
         ...(options?.signal ? { signal: options.signal } : {}),
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -1014,14 +1016,18 @@ export const streamSimpleAnthropic: StreamFunction<
     toolChoice: options?.toolChoice,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
-  const fable5 = usesClaudeFable5MessagesContract(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: false,
     } satisfies AnthropicOptions);
   }
-  const reasoning = options?.reasoning === "off" ? (fable5 ? "low" : "high") : options?.reasoning;
+  const reasoning =
+    options?.reasoning === "off"
+      ? mandatoryAdaptiveThinking
+        ? "low"
+        : "high"
+      : options?.reasoning;
   if (resolveClaudeSonnet5ModelIdentity(model)) {
     return streamAnthropic(model, context, {
       ...base,
@@ -1239,8 +1245,8 @@ function buildParams(
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
 } {
-  const fable5 = usesClaudeFable5MessagesContract(model);
-  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
   const compat = context.tools ? getAnthropicCompat(model) : undefined;
@@ -1304,18 +1310,18 @@ function buildParams(
     params.tools = tools;
   }
 
-  // Configure thinking mode: always-on adaptive (Fable 5), adaptive (Opus
-  // 4.6+ and Sonnet 4.6),
+  // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
+  // adaptive (Opus 4.6+ and Sonnet 4.6),
   // budget-based (older models), or explicitly disabled.
-  if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
-    if (fable5 || options?.thinkingEnabled) {
+  if (mandatoryAdaptiveThinking || model.reasoning || supportsAdaptiveThinking(model)) {
+    if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
       // Default to "summarized" so Opus 4.7+ and Mythos Preview behave like
       // older Claude 4 models (whose API default is also "summarized").
       const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
       if (supportsAdaptiveThinking(model)) {
         // Adaptive thinking: Claude decides when and how much to think.
         params.thinking = { type: "adaptive", display };
-        const effort = options?.effort ?? (fable5 ? "high" : undefined);
+        const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
         if (effort) {
           // The Anthropic SDK types can lag newly supported effort values such as "xhigh".
           params.output_config =

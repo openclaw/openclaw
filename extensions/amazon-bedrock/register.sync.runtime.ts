@@ -15,6 +15,7 @@ import {
   normalizeProviderId,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -57,7 +58,8 @@ function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeReso
   }
   const reasoning =
     model.reasoning ||
-    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
   const current = model.thinkingLevelMap;
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
   if (

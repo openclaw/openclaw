@@ -14,7 +14,9 @@ import {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -60,11 +62,11 @@ function isClaudeSonnet5Model(modelId: string): boolean {
 }
 
 function isClaudeMythos5Model(modelId: string): boolean {
-  return /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
+  return resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId }) || isClaudeMythos5Model(modelId);
+  return supportsClaudeAdaptiveThinking({ id: modelId });
 }
 
 function mapAnthropicAdaptiveEffort(
@@ -153,15 +155,14 @@ export function createAnthropicVertexStreamFn(
       requestedMaxTokens: options?.maxTokens,
     });
     const contractModelId = resolveClaudeModelIdentity(model);
-    const fable5 = isClaudeFable5Model(contractModelId);
     const sonnet5 = isClaudeSonnet5Model(contractModelId);
-    const mandatoryAdaptiveThinking = fable5 || isClaudeMythos5Model(contractModelId);
+    const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking({
+      id: contractModelId,
+    });
     const requestedReasoning = options?.reasoning;
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
-        ? fable5
-          ? "low"
-          : "high"
+        ? "low"
         : (requestedReasoning ?? (mandatoryAdaptiveThinking || sonnet5 ? "high" : undefined));
     const adaptiveThinking =
       mandatoryAdaptiveThinking ||
@@ -206,7 +207,7 @@ export function createAnthropicVertexStreamFn(
             ? budgets[reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
       }
-    } else if (fable5) {
+    } else if (mandatoryAdaptiveThinking) {
       opts.thinkingEnabled = true;
       opts.effort = "high";
     } else {

@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,7 +17,7 @@ import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexRegion } from
 /** Default Anthropic Vertex model used for implicit provider catalogs. */
 export const ANTHROPIC_VERTEX_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW = 1_000_000;
-const ANTHROPIC_VERTEX_FABLE_MAX_TOKENS = 128_000;
+const ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS = 128_000;
 // Vertex's introductory rate expires at the documented UTC month boundary.
 const SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
 const SONNET_5_SUPPORTED_REGIONS = new Set(["global", "us", "eu"]);
@@ -96,7 +97,16 @@ function buildAnthropicVertexCatalog(region: string, nowMs: number): ModelDefini
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-      maxTokens: ANTHROPIC_VERTEX_FABLE_MAX_TOKENS,
+      maxTokens: ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    }),
+    buildAnthropicVertexModel({
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      maxTokens: ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS,
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
     }),
     ...sonnet5,
@@ -137,15 +147,16 @@ export function normalizeAnthropicVertexResolvedModel(
 ): ProviderRuntimeModel | undefined {
   const ref = { id: modelId, params: model.params };
   const fable5 = resolveClaudeFable5ModelIdentity(ref) !== undefined;
+  const mythos5 = resolveClaudeMythos5ModelIdentity(ref) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(ref) !== undefined;
-  if (!fable5 && !sonnet5) {
+  if (!fable5 && !mythos5 && !sonnet5) {
     return undefined;
   }
   const input: ProviderRuntimeModel["input"] = model.input.includes("image")
     ? model.input
     : [...model.input, "image"];
   const nativeThinkingLevelMap = {
-    ...(fable5 ? { off: "low" as const, minimal: "low" as const } : {}),
+    ...(fable5 || mythos5 ? { off: "low" as const, minimal: "low" as const } : {}),
     xhigh: "xhigh",
     max: "max",
   };
@@ -156,7 +167,8 @@ export function normalizeAnthropicVertexResolvedModel(
   const nativeThinkingLevelsMatch =
     model.thinkingLevelMap?.xhigh === "xhigh" &&
     model.thinkingLevelMap.max === "max" &&
-    (!fable5 || (model.thinkingLevelMap.off === "low" && model.thinkingLevelMap.minimal === "low"));
+    (!(fable5 || mythos5) ||
+      (model.thinkingLevelMap.off === "low" && model.thinkingLevelMap.minimal === "low"));
   const cost = sonnet5
     ? resolveSonnet5Cost(resolveAnthropicVertexClientRegion({ baseUrl: model.baseUrl }))
     : undefined;
@@ -171,7 +183,7 @@ export function normalizeAnthropicVertexResolvedModel(
     input === model.input &&
     model.contextWindow === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
     model.contextTokens === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
-    (model.maxTokens ?? 0) >= ANTHROPIC_VERTEX_FABLE_MAX_TOKENS &&
+    (model.maxTokens ?? 0) >= ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS &&
     nativeThinkingLevelsMatch &&
     costMatches
   ) {
@@ -183,7 +195,7 @@ export function normalizeAnthropicVertexResolvedModel(
     input,
     contextWindow: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
     contextTokens: ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: Math.max(model.maxTokens ?? 0, ANTHROPIC_VERTEX_FABLE_MAX_TOKENS),
+    maxTokens: Math.max(model.maxTokens ?? 0, ANTHROPIC_VERTEX_CLAUDE_5_MAX_TOKENS),
     thinkingLevelMap,
     ...(cost ? { cost } : {}),
   };

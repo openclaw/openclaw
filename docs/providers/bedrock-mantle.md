@@ -3,7 +3,7 @@ summary: "Use Amazon Bedrock Mantle OpenAI-compatible and Claude Messages models
 read_when:
   - You want to use Bedrock Mantle hosted OSS models with OpenClaw
   - You need the Mantle OpenAI-compatible endpoint for GPT-OSS, Qwen, Kimi, or GLM
-  - You want to use Claude Sonnet 5 through Amazon Bedrock Mantle
+  - You want to use Claude Sonnet 5 or Mythos 5 through Amazon Bedrock Mantle
 title: "Amazon Bedrock Mantle"
 ---
 
@@ -162,10 +162,11 @@ want to use.
   </Accordion>
 
   <Accordion title="Claude via the Anthropic Messages route">
-    When automatic discovery owns the model list, OpenClaw appends three Claude
+    When automatic discovery owns the model list, OpenClaw appends four Claude
     models after a successful lookup, regardless of what `/v1/models` returns:
     `amazon-bedrock-mantle/anthropic.claude-sonnet-5` (Claude Sonnet 5),
     `amazon-bedrock-mantle/anthropic.claude-opus-4-7` (Claude Opus 4.7), and
+    `amazon-bedrock-mantle/anthropic.claude-mythos-5` (Claude Mythos 5), plus
     `amazon-bedrock-mantle/anthropic.claude-mythos-preview` (Claude Mythos
     Preview). They use the `anthropic-messages` API surface and stream through
     the same bearer-authenticated Anthropic-compatible endpoint
@@ -176,6 +177,11 @@ want to use.
     effort. `/think off` and `/think minimal` map to `low` because the Mantle
     route cannot disable thinking. OpenClaw also omits custom temperature for
     Sonnet 5 requests.
+
+    Claude Mythos 5 is limited access. It publishes a 1,000,000-token context
+    window and 128,000-token output limit, always uses adaptive thinking, maps
+    `/think off` and `/think minimal` to `low`, and omits caller-selected
+    sampling parameters.
 
     Claude Mythos Preview always requests reasoning, defaulting to `high`
     effort when no `/think` level is set (mapped from `xhigh`/`max` down to
