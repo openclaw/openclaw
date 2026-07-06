@@ -5,7 +5,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threading
+      - channels.threads
+      - channels.thread-parent-child-placement
     secondary:
       - runtime.delivery
   objective: Verify a follow-up sent inside a thread receives one reply in the same thread.

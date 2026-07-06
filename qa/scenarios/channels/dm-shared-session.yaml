@@ -6,7 +6,7 @@ scenario:
   coverage:
     primary:
       - channels.dm
-      - runtime.sessions
+      - memory.session-key-construction
   objective: Verify the default Matrix per-user DM session emits a cross-room notice when the same sender moves to another DM room.
   successCriteria:
     - Both DM rooms receive top-level marker replies.
