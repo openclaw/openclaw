@@ -341,7 +341,9 @@ private fun WorkspaceFilePreview(
 @Composable
 private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
   if (file.isBase64 && file.mimeType.startsWith("image/")) {
-    val bitmap = remember(file.path) { decodeBase64Bitmap(file.content) }
+    // Malformed base64 from the gateway boundary must degrade to the
+    // no-preview state, not crash composition (Base64.decode throws).
+    val bitmap = remember(file.path) { runCatching { decodeBase64Bitmap(file.content) }.getOrNull() }
     if (bitmap != null) {
       Image(
         bitmap = bitmap.asImageBitmap(),
@@ -383,7 +385,8 @@ private fun shareWorkspaceFile(
   val safeName = file.name.substringAfterLast('/').ifEmpty { "file" }
   val target = File(directory, safeName)
   if (file.isBase64) {
-    target.writeBytes(Base64.decode(file.content, Base64.DEFAULT))
+    val bytes = runCatching { Base64.decode(file.content, Base64.DEFAULT) }.getOrNull() ?: return
+    target.writeBytes(bytes)
   } else {
     target.writeText(file.content)
   }
