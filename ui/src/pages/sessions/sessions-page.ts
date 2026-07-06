@@ -638,7 +638,15 @@ class SessionsPage extends LitElement {
     const row = this.result?.sessions.find((session) => session.key === sessionKey);
     const hasCheckpoints =
       (row?.compactionCheckpointCount ?? 0) > 0 || Boolean(row?.latestCompactionCheckpoint);
-    if (!hasCheckpoints || this.checkpointItemsByKey[sessionKey]) {
+    if (!hasCheckpoints) {
+      // Seed an empty cache entry so reconcileCheckpointCache sees this key
+      // and reloads the open drawer if the session compacts on a refresh.
+      if (!this.checkpointItemsByKey[sessionKey]) {
+        this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: [] };
+      }
+      return;
+    }
+    if (this.checkpointItemsByKey[sessionKey]) {
       return;
     }
     await this.loadCheckpoint(sessionKey);
