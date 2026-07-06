@@ -290,6 +290,21 @@ describe("gateway usage helpers", () => {
     });
   });
 
+  it("resolveDateRange keeps trailing gateway ranges on calendar days across DST", () => {
+    withTimeZone("America/New_York", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          days: 2,
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 10).getTime() - 1);
+    });
+  });
+
   it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
