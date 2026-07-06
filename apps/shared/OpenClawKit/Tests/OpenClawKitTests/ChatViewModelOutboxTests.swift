@@ -368,7 +368,11 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
         _ = await iterator.next()
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         OpenClawChatSessionsListResponse(
             ts: nil,
             path: nil,

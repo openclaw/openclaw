@@ -28,7 +28,7 @@ extension OpenClawChatViewModel {
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
-        let sorted = sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let sorted = OpenClawChatSessionListOrganizer.organize(sessions)
         let mainSessionKey = resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
@@ -46,7 +46,8 @@ extension OpenClawChatViewModel {
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
             guard entry.key == sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
-            guard (entry.updatedAt ?? 0) >= cutoff else { continue }
+            // Pinned sessions stay reachable regardless of recency.
+            guard (entry.updatedAt ?? 0) >= cutoff || entry.isPinned else { continue }
             result.append(entry)
             included.insert(entry.key)
         }
