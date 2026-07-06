@@ -206,12 +206,16 @@ function addStartupFallbackMissingResponses(
   );
 }
 
-function installGatewayScheduledTask(env: Record<string, string>, stdout = new PassThrough()) {
+function installGatewayScheduledTask(
+  env: Record<string, string>,
+  stdout = new PassThrough(),
+  port = "18789",
+) {
   return installScheduledTask({
     env,
     stdout,
-    programArguments: ["node", "gateway.js", "--port", "18789"],
-    environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    programArguments: ["node", "gateway.js", "--port", port],
+    environment: { OPENCLAW_GATEWAY_PORT: port },
   });
 }
 
@@ -402,6 +406,33 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env);
 
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("probes the old fallback port before replacing a drifted task script", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      await writeGatewayScript(env, 18789);
+      env.OPENCLAW_GATEWAY_PORT = "19433";
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: port === 18789 ? "busy" : "free",
+        listeners: port === 18789 ? [{ pid: 4242, command: "node.exe" }] : [],
+        hints: [],
+      }));
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      ]);
+
+      await installGatewayScheduledTask(env, new PassThrough(), "19433");
+
+      expect(inspectPortUsage).toHaveBeenCalledWith(18789);
       await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });

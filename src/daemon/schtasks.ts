@@ -1356,11 +1356,15 @@ async function activateScheduledTask(params: {
 export async function installScheduledTask(
   args: GatewayServiceInstallArgs,
 ): Promise<{ scriptPath: string }> {
+  const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
+  const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
+  // Capture fallback ownership from installed metadata before replacing the
+  // script. A repair can change the port or profile that locates the old process.
+  const startupEntryWasRunning =
+    (await isStartupEntryInstalled(fallbackEnv)) &&
+    (await resolveFallbackRuntime(fallbackEnv).catch(() => null))?.status === "running";
   const staged = await writeScheduledTaskScript(args);
   const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
-  const startupEntryWasRunning =
-    (await isStartupEntryInstalled(activationEnv)) &&
-    (await resolveFallbackRuntime(activationEnv).catch(() => null))?.status === "running";
   const activation = await activateScheduledTask({
     env: activationEnv,
     stdout: args.stdout,
