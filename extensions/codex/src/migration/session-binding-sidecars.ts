@@ -6,19 +6,19 @@ import {
   resolveAgentDir,
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { listSessionEntries, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import {
+  listSessionEntries,
   resolveSessionFilePath,
+  resolveStorePath,
   updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "../app-server/session-binding-meta.js";
-import type { StoredCodexAppServerBinding } from "../app-server/session-binding.js";
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";
@@ -58,6 +58,22 @@ type SourceMigrationResult = {
   importedKeys: number;
   warning?: string;
 };
+
+// Keep the doctor contract graph independent from the full Codex runtime.
+// The runtime parser loaded in migrateSource validates binding payloads before writes.
+type MigratedBindingRow =
+  | {
+      version: 1;
+      state: "active";
+      binding: unknown;
+      sessionId?: string;
+    }
+  | {
+      version: 1;
+      state: "cleared";
+      sessionId?: string;
+      retired?: true;
+    };
 
 async function collectSessionSurfaces(params: MigrationEnvironment): Promise<SessionSurface[]> {
   const surfaces = new Map<string, SessionSurface>();
@@ -295,10 +311,7 @@ function resolveLegacyBindingOwnerAgentId(params: {
   }).sessionAgentId;
 }
 
-function copyBindingForSession(
-  stored: StoredCodexAppServerBinding,
-  sessionId: string,
-): StoredCodexAppServerBinding {
+function copyBindingForSession(stored: MigratedBindingRow, sessionId: string): MigratedBindingRow {
   return stored.state === "active"
     ? { version: 1, state: "active", binding: stored.binding, sessionId }
     : {
@@ -313,7 +326,7 @@ async function migrateSource(
   source: LegacyBindingSource,
   owner: LegacyBindingOwner | undefined,
   params: MigrationParams,
-  store: PluginStateKeyedStore<StoredCodexAppServerBinding>,
+  store: PluginStateKeyedStore<MigratedBindingRow>,
 ): Promise<SourceMigrationResult> {
   let importedKeys = 0;
   const retain = (reason: string): SourceMigrationResult => ({
@@ -368,7 +381,7 @@ async function migrateSource(
           bindingId: legacyCodexConversationBindingId(sessionFile),
         }),
       );
-      let currentConversation: StoredCodexAppServerBinding | undefined;
+      let currentConversation: MigratedBindingRow | undefined;
       for (const key of conversationKeys) {
         currentConversation ??= await store.lookup(key);
       }
@@ -390,10 +403,7 @@ async function migrateSource(
           ? [{ key: sessionKey, value: copyBindingForSession(stored, owner.sessionId) }]
           : []),
       ];
-      const hasExpected = (
-        value: StoredCodexAppServerBinding | undefined,
-        expected: StoredCodexAppServerBinding,
-      ) =>
+      const hasExpected = (value: MigratedBindingRow | undefined, expected: MigratedBindingRow) =>
         expected.state === "cleared"
           ? value?.state === "cleared" &&
             value.sessionId === expected.sessionId &&
@@ -539,7 +549,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         return { changes, warnings };
       }
       const owners = await collectBindingOwners(sources, surfaces, params);
-      const store = params.context.openPluginStateKeyedStore<StoredCodexAppServerBinding>({
+      const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         overflowPolicy: "reject-new",

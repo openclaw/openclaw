@@ -1,7 +1,11 @@
 // Codex tests cover harness plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
-import { testCodexAppServerBindingStore } from "./src/app-server/session-binding.test-helpers.js";
+import {
+  createCodexTestBindingStore,
+  sessionBindingIdentity,
+  testCodexAppServerBindingStore,
+} from "./src/app-server/session-binding.test-helpers.js";
 
 describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness({
@@ -49,5 +53,33 @@ describe("Codex agent harness supports()", () => {
     });
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
+  });
+});
+
+describe("Codex agent harness reset()", () => {
+  it("retires the physical session generation", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+    });
+    await bindingStore.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    const harness = createCodexAppServerAgentHarness({ bindingStore });
+    if (!harness.reset) {
+      throw new Error("expected Codex harness reset hook");
+    }
+
+    await harness.reset({
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+      reason: "reset",
+    });
+
+    await expect(bindingStore.read(identity)).resolves.toBeUndefined();
   });
 });
