@@ -2832,24 +2832,45 @@ describe("resolveModel", () => {
     );
   });
 
-  it("suggests running doctor for legacy openai-codex provider", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai-codex/gpt-5.4": {},
+  it.each([
+    {
+      name: "agent model entry",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
           },
         },
       },
-    } as unknown as OpenClawConfig;
-
-    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
-      runtimeHooks: createRuntimeHooks(),
-      skipAgentDiscovery: true,
-    });
+    },
+    {
+      name: "legacy provider config",
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [{ id: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+            },
+          },
+        },
+      },
+    },
+  ])("suggests running doctor for openai-codex from $name", async ({ cfg }) => {
+    const result = await resolveModelAsync(
+      "openai-codex",
+      "gpt-5.4",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
 
     expect(result.error).toBe(
-      'Unknown model: openai-codex/gpt-5.4. Found agents.defaults.models["openai-codex/gpt-5.4"], but "openai-codex" is a legacy provider ID. Run `openclaw doctor --fix` to migrate to the current OpenAI provider format. If the provider has no authenticated profile, run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+      'Unknown model: openai-codex/gpt-5.4. "openai-codex" is a legacy provider ID. Run `openclaw doctor --fix` to migrate legacy model and provider config to the current OpenAI format. If the provider has no authenticated profile, run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 
