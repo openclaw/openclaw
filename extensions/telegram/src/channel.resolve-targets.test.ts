@@ -29,6 +29,7 @@ describe("telegram resolveTargets integration", () => {
       accountId: "default",
       inputs: ["@testuser"],
       kind: "user",
+      runtime: { log: vi.fn(), error: vi.fn() } as any,
     });
 
     expect(results).toEqual([
