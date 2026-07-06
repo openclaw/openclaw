@@ -2,9 +2,9 @@
  * Summarization and fallback helpers for transcript compaction.
  */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { isAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildOversizedFallbackPlanWithWorker,
@@ -340,29 +340,27 @@ export async function summarizeWithFallback(params: {
 
 /** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
 function extractChunkTimeRange(chunk: AgentMessage[]): string {
-  let min = Infinity;
-  let max = -Infinity;
-  for (const msg of chunk) {
-    const ts = (msg as { timestamp?: number }).timestamp;
-    if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) {
-      if (ts < min) {
-        min = ts;
-      }
-      if (ts > max) {
-        max = ts;
-      }
+  let earliest: number | undefined;
+  let latest: number | undefined;
+  for (const message of chunk) {
+    const timestamp = message.timestamp;
+    if (
+      typeof timestamp !== "number" ||
+      timestamp <= 0 ||
+      !Number.isFinite(new Date(timestamp).getTime())
+    ) {
+      continue;
     }
+    earliest = earliest === undefined ? timestamp : Math.min(earliest, timestamp);
+    latest = latest === undefined ? timestamp : Math.max(latest, timestamp);
   }
-  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+  if (earliest === undefined || latest === undefined) {
     return "";
   }
-  const fmtTime = (ts: number): string => {
-    const d = new Date(ts);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
-  const range = min === max ? fmtTime(min) : `${fmtTime(min)} — ${fmtTime(max)}`;
-  return ` [${range}]`;
+  const format = (timestamp: number) =>
+    new Date(timestamp).toISOString().replace("T", " ").slice(0, 16);
+  const range = earliest === latest ? format(earliest) : `${format(earliest)} — ${format(latest)}`;
+  return ` [${range} UTC]`;
 }
 
 /** Summarizes history in multiple stages when a single pass would be too large. */
@@ -413,14 +411,12 @@ export async function summarizeInStages(params: {
     return partialSummaries[0];
   }
 
-  // Capture once so descending timestamps are strictly monotonic across
+  // Capture once so timestamps are strictly monotonic across
   // all synthetic messages regardless of how long the map iteration takes.
   const now = Date.now();
   const summaryMessages: AgentMessage[] = partialSummaries.map((summary, index) => {
-    // Annotate each partial summary with chunk order and source time range so
-    // the LLM merger can distinguish old from new context.  The label goes into
-    // message content because serializeConversation (in agent-core) preserves
-    // only text, discarding timestamps.
+    // serializeConversation preserves content but not timestamps, so chronology
+    // must be explicit in the text consumed by the merge model.
     const chunk = plan.chunks[index];
     const timeRange = extractChunkTimeRange(chunk);
     const label =
