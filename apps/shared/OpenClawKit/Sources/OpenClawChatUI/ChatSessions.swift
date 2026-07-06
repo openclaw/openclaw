@@ -109,6 +109,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public let inputTokens: Int?
     public let outputTokens: Int?
     public let totalTokens: Int?
+    public let totalTokensFresh: Bool?
 
     public let modelProvider: String?
     public let model: String?
@@ -134,6 +135,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         inputTokens: Int?,
         outputTokens: Int?,
         totalTokens: Int?,
+        totalTokensFresh: Bool? = nil,
         modelProvider: String?,
         model: String?,
         contextTokens: Int?,
@@ -171,6 +173,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.totalTokens = totalTokens
+        self.totalTokensFresh = totalTokensFresh
         self.modelProvider = modelProvider
         self.model = model
         self.contextTokens = contextTokens

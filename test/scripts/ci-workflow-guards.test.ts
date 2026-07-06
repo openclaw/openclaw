@@ -21,6 +21,10 @@ function readBuildArtifactsTestboxWorkflow() {
   return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
 }
 
+function readTestboxWorkflow() {
+  return parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
+}
+
 function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
@@ -119,6 +123,37 @@ describe("ci workflow guards", () => {
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
+
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
+      if (typeof runsOn !== "string" || !runsOn.includes("blacksmith-")) {
+        continue;
+      }
+      expect(runsOn, `${jobName} must use GitHub-hosted capacity for release gates`).toContain(
+        "github.event_name == 'workflow_dispatch'",
+      );
+    }
+  });
+
+  it("keeps Testbox pull request validation off leased runner capacity", () => {
+    const workflow = readTestboxWorkflow();
+
+    expect(workflow.jobs.check["runs-on"]).toBe(
+      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
+    );
+    const beginStep = workflow.jobs.check.steps.find(
+      (step: { name?: string }) => step.name === "Begin Testbox",
+    );
+    const runStep = workflow.jobs.check.steps.find(
+      (step: { name?: string }) => step.name === "Run Testbox",
+    );
+    expect(beginStep).toMatchObject({
+      if: "github.event_name == 'workflow_dispatch'",
+      with: { testbox_id: "${{ inputs.testbox_id }}" },
+    });
+    expect(runStep).toMatchObject({
+      if: "github.event_name == 'workflow_dispatch' && always()",
+    });
   });
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {

@@ -2229,6 +2229,11 @@
       "translated": "सेटअप बदलें"
     },
     {
+      "id": "native.android.66aad1078731e6a3",
+      "source": "Forget gateway?",
+      "translated": "Gateway भूलें?"
+    },
+    {
       "id": "native.android.c6c8e0c4b8a9a7cf",
       "source": "Cancel",
       "translated": "रद्द करें"
@@ -2269,14 +2274,34 @@
       "translated": "डिस्कनेक्ट करें"
     },
     {
-      "id": "native.android.68959b6e93aec68b",
-      "source": "Clear this phone's saved gateway access and scan a fresh setup code.",
-      "translated": "इस फ़ोन की सहेजी गई gateway एक्सेस साफ़ करें और नया सेटअप कोड स्कैन करें।"
+      "id": "native.android.87eee1e2bafbf13b",
+      "source": "Gateways",
+      "translated": "Gateways"
     },
     {
-      "id": "native.android.7fd6bb4d56f1fb3f",
-      "source": "Pair New Gateway",
-      "translated": "नया Gateway पेयर करें"
+      "id": "native.android.c3974020a08e239e",
+      "source": "No paired gateways.",
+      "translated": "कोई युग्मित gateways नहीं।"
+    },
+    {
+      "id": "native.android.74ee3bbbd2e37e9c",
+      "source": "Forget",
+      "translated": "भूलें"
+    },
+    {
+      "id": "native.android.56e98811c4e9b027",
+      "source": "Gateway setup",
+      "translated": "Gateway सेटअप"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "कोई और gateway जोड़ने के लिए सेटअप कोड स्कैन करें या पेस्ट करें।"
+    },
+    {
+      "id": "native.android.a7c243ff3f1d6447",
+      "source": "Add gateway",
+      "translated": "Gateway जोड़ें"
     },
     {
       "id": "native.android.77a03c8c22155ec5",
@@ -4034,6 +4059,11 @@
       "translated": "बोल रहा है…"
     },
     {
+      "id": "native.android.6fbf0916309dbaba",
+      "source": "Mic on · waiting for gateway",
+      "translated": "माइक चालू · gateway की प्रतीक्षा में"
+    },
+    {
       "id": "native.android.d84c6c14e42763ff",
       "source": "Mic off",
       "translated": "माइक बंद"
@@ -4267,6 +4297,21 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "gateway प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इसकी अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s"
+    },
+    {
+      "id": "native.android.7c49ec7fe94a9063",
+      "source": "Switch gateway",
+      "translated": "Gateway बदलें"
+    },
+    {
+      "id": "native.android.9e0a677fd629a15f",
+      "source": "Select gateway",
+      "translated": "Gateway चुनें"
+    },
+    {
+      "id": "native.android.b0034ac5bbc6b25f",
+      "source": "Active gateway",
+      "translated": "सक्रिय gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",

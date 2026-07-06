@@ -121,10 +121,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
         .toBe("Microphone input");
       await expect.poll(() => microphoneMenu.count()).toBe(0);
-      await page.getByRole("button", { name: "Start Talk" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
-      expect(createRequest.params).toEqual({ sessionKey: "main" });
+      expect(createRequest.params).toMatchObject({ sessionKey: "main" });
       await expect
         .poll(() =>
           page.evaluate(
@@ -150,44 +150,34 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .poll(async () =>
           (await page.locator(".agent-chat__talk-status-text").textContent())?.trim(),
         )
-        .toBe("Talk live");
+        .toBe("Listening...");
 
-      await page.getByRole("button", { name: "Stop Talk" }).click();
+      await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Start Talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
       await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
       await expect
         .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  openclawTalkE2eState?: {
-                    audioContextsClosed: number;
-                    tracksStopped: number;
-                  };
+          page.evaluate(() => {
+            const state = (
+              window as Window & {
+                openclawTalkE2eState?: { audioContextsClosed: number; tracksStopped: number };
+              }
+            ).openclawTalkE2eState;
+            return state
+              ? {
+                  audioContextsClosed: state.audioContextsClosed,
+                  tracksStopped: state.tracksStopped,
                 }
-              ).openclawTalkE2eState?.audioContextsClosed,
-          ),
+              : null;
+          }),
         )
-        .toBe(2);
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  openclawTalkE2eState?: { tracksStopped: number };
-                }
-              ).openclawTalkE2eState?.tracksStopped,
-          ),
-        )
-        .toBe(1);
+        .toEqual({ audioContextsClosed: 2, tracksStopped: 1 });
 
       await gateway.deliverLatest({ setupComplete: {} });
       await expect
-        .poll(() => page.getByRole("button", { name: "Start Talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
     } finally {
       await context.close();

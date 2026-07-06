@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -170,6 +171,52 @@ class ChatControllerCommandControlsTest {
       val commandRequests = requests.filter { it.first == "chat.metadata" }
       assertTrue(commandRequests.any { it.second.orEmpty().contains("\"agentId\":\"main\"") })
       assertTrue(commandRequests.any { it.second.orEmpty().contains("\"agentId\":\"ops\"") })
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun delayedCommandListFromPreviousGatewayCannotReplaceCurrentCommands() =
+    runTest {
+      var cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val gatewayAResponse = CompletableDeferred<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ -> error("gateway-bound request expected") },
+          requestGatewayForGateway = { gatewayId, method, _ ->
+            require(method == "chat.metadata")
+            if (gatewayId == "gateway-a") {
+              gatewayAResponse.await()
+            } else {
+              commandResponse("gateway-b")
+            }
+          },
+          cacheScope = { cacheScope },
+        )
+
+      controller.refreshCommands()
+      runCurrent()
+      cacheScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.refreshCommands()
+      runCurrent()
+      assertEquals(
+        "gateway-b",
+        controller.commands.value
+          .single()
+          .name,
+      )
+
+      gatewayAResponse.complete(commandResponse("gateway-a"))
+      advanceUntilIdle()
+
+      assertEquals(
+        "gateway-b",
+        controller.commands.value
+          .single()
+          .name,
+      )
     }
 
   @OptIn(ExperimentalCoroutinesApi::class)
@@ -736,4 +783,6 @@ class ChatControllerCommandControlsTest {
       assertEquals("other-session", controller.sessionId.value)
       assertTrue(requests.any { it.first == "sessions.create" })
     }
+
+  private fun commandResponse(name: String): String = """{"commands":[{"name":"$name","textAliases":["/$name"],"acceptsArgs":false}]}"""
 }

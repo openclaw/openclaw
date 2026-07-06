@@ -1,4 +1,4 @@
-// Control UI controller manages models gateway state.
+// Control UI model metadata boundary.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
@@ -12,13 +12,6 @@ type ModelCatalogCacheEntry = {
 
 const modelCatalogCache = new WeakMap<GatewayBrowserClient, ModelCatalogCacheEntry>();
 
-/**
- * Fetch the model catalog from the gateway.
- *
- * Accepts a {@link GatewayBrowserClient} (matching the existing ui/ controller
- * convention).  Returns an array of {@link ModelCatalogEntry}; on failure the
- * caller receives an empty array rather than throwing.
- */
 export async function loadModels(client: GatewayBrowserClient): Promise<ModelCatalogEntry[]> {
   const cached = modelCatalogCache.get(client);
   const now = Date.now();

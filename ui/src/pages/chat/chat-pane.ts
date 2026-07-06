@@ -8,6 +8,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -27,7 +28,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
-import { refreshSlashCommands } from "./chat-commands.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
@@ -51,6 +51,7 @@ import {
   handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
+  refreshChatMetadata,
   refreshChatModelAuthStatus,
   refreshPageChat,
   refreshRouteSessionOptions,
@@ -85,7 +86,7 @@ type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -188,10 +189,7 @@ export class ChatPane extends LitElement {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state);
-    void refreshSlashCommands({
-      client: state.client,
-      agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
-    });
+    void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();
@@ -793,6 +791,9 @@ export class ChatPane extends LitElement {
       : selectedSessionArchived
         ? t("chat.archivedSessionDisabled")
         : null;
+    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
+      this.context.gateway.snapshot.hello?.auth ?? null,
+    );
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -822,7 +823,6 @@ export class ChatPane extends LitElement {
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
-      realtimeTalkTranscript: state.realtimeTalkTranscript,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkInputOpen: state.realtimeTalkInputOpen,
       realtimeTalkInputDevices: state.realtimeTalkInputDevices,
@@ -834,6 +834,10 @@ export class ChatPane extends LitElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
+      providerQuota: {
+        basePath: state.basePath,
+        modelAuthStatusResult: state.modelAuthStatusResult,
+      },
       composerControls: renderChatControls({
         paneId: this.paneId,
         agentsList: state.agentsList,
@@ -845,6 +849,7 @@ export class ChatPane extends LitElement {
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,
+          draftScope: state,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
@@ -855,15 +860,14 @@ export class ChatPane extends LitElement {
           sessionKey: state.sessionKey,
           sessionsResult: state.sessionsResult,
           stream: state.chatStream,
-          onFastModeSelect: (next) => switchChatFastMode(state, next),
-          onModelSelect: (next) => switchChatModel(state, next),
-          onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
+          onRequestUpdate: () => state.requestUpdate?.(),
+          onFastModeSelect: (next, targetSessionKey) =>
+            switchChatFastMode(state, next, targetSessionKey),
+          onModelSelect: (next, targetSessionKey) => switchChatModel(state, next, targetSessionKey),
+          onThinkingSelect: (next, targetSessionKey) =>
+            switchChatThinkingLevel(state, next, targetSessionKey),
         },
         onboarding: state.onboarding,
-        quota: {
-          basePath: state.basePath,
-          modelAuthStatusResult: state.modelAuthStatusResult,
-        },
         runId: state.chatRunId,
         sending: state.chatSending,
         settings: state.settings,
@@ -871,7 +875,16 @@ export class ChatPane extends LitElement {
         sessionKey: state.sessionKey,
         sessionsResult: state.sessionsResult,
         stream: state.chatStream,
+        realtimeTalkOptions: state.realtimeTalkOptions,
+        canOpenRealtimeTalkSettings,
         onRefresh: () => handleChatManualRefresh(state),
+        onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
+        onOpenRealtimeTalkSettings: () => {
+          if (!canOpenRealtimeTalkSettings) {
+            return;
+          }
+          this.context.navigate("communications", { search: "?section=talk" });
+        },
         onSettingsChange: state.applySettings,
         onSettingsOpenChange: state.setChatMobileControlsOpen,
         onToggleCronSessions: () => {

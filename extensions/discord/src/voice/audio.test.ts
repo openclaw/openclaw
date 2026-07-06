@@ -25,12 +25,17 @@ function createFakeFfmpeg() {
     stdout: PassThrough;
     stderr: PassThrough;
     stdin: PassThrough;
+    killed: boolean;
     kill: ReturnType<typeof vi.fn>;
   };
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.stdin = new PassThrough();
-  child.kill = vi.fn();
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
   return child;
 }
 
@@ -124,6 +129,8 @@ describe("createDiscordOpusPlaybackStream child stream errors", () => {
       expect(() => ffmpeg[streamName].emit("error", streamError)).not.toThrow();
 
       await expect(errorSeen).resolves.toBe(streamError);
+      expect(ffmpeg.kill).toHaveBeenCalledOnce();
+      expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
     },
   );
 });

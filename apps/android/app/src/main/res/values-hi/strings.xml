@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">रिज़ॉल्व किया गया एंडपॉइंट</string>
     <string name="gateway_trust_first_seen">इस गेटवे पर भरोसा करने से पहले प्रमाणपत्र फ़िंगरप्रिंट सत्यापित करें।\n\n%1$s</string>
     <string name="gateway_trust_changed">गेटवे प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इस बदलाव की अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Gateway बदलें</string>
+    <string name="select_gateway">Gateway चुनें</string>
+    <string name="active_gateway">सक्रिय gateway</string>
 </resources>

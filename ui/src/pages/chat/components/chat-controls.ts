@@ -8,10 +8,6 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
-import {
-  renderProviderQuotaPill,
-  type ProviderQuotaPillProps,
-} from "../../../components/provider-quota-pill.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { isCronSessionKey } from "../../../lib/session-display.ts";
@@ -21,6 +17,7 @@ import {
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
+import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
 type ChatControlsProps = {
   paneId: string;
@@ -31,7 +28,6 @@ type ChatControlsProps = {
   manualRefreshInFlight: boolean;
   model: ChatModelControlsProps;
   onboarding: boolean;
-  quota: ProviderQuotaPillProps;
   runId: string | null;
   sending: boolean;
   settings: UiSettings;
@@ -39,7 +35,11 @@ type ChatControlsProps = {
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
+  realtimeTalkOptions?: RealtimeTalkOptions;
+  canOpenRealtimeTalkSettings?: boolean;
+  onOpenRealtimeTalkSettings?: () => void;
   onRefresh: () => Promise<void> | void;
+  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
   onSettingsChange: (next: UiSettings) => void;
   onSettingsOpenChange: (
     open: boolean,
@@ -203,36 +203,10 @@ export function renderChatControls(props: ChatControlsProps) {
       : t("chat.showCronSessions")
     : t("chat.hideCronSessions");
   const settingsOpen = props.settingsOpen;
-  const settingsLabel = t("chat.settings");
   const settingsTitle = t("chat.settings");
   const settingsPopoverId = `chat-composer-settings-popover-${encodeURIComponent(props.paneId)}`;
 
   return html`
-    <div
-      class="chat-composer-model-control"
-      @click=${() => {
-        if (props.settingsOpen) {
-          props.onSettingsOpenChange(false);
-        }
-      }}
-    >
-      ${renderChatModelControls(props.model)}
-    </div>
-    ${renderProviderQuotaPill(props.quota)}
-    ${props.onOpenSplitView
-      ? html`
-          <openclaw-tooltip .content=${t("chat.splitView.open")}>
-            <button
-              class="btn btn--sm btn--icon chat-open-split-view"
-              type="button"
-              aria-label=${t("chat.splitView.open")}
-              @click=${props.onOpenSplitView}
-            >
-              ${icons.panelRightOpen}
-            </button>
-          </openclaw-tooltip>
-        `
-      : ""}
     <div class="chat-settings-popover-wrapper">
       <openclaw-tooltip .content=${settingsTitle}>
         <button
@@ -253,8 +227,6 @@ export function renderChatControls(props: ChatControlsProps) {
           }}
         >
           <span class="chat-settings-chip__icon">${icons.settings}</span>
-          <span class="chat-settings-chip__text">${settingsLabel}</span>
-          <span class="chat-settings-chip__chevron">${icons.chevronDown}</span>
         </button>
       </openclaw-tooltip>
       <div
@@ -264,7 +236,7 @@ export function renderChatControls(props: ChatControlsProps) {
         aria-label=${settingsTitle}
       >
         <div class="chat-settings-popover__section">
-          <span class="chat-settings-popover__label">${settingsLabel}</span>
+          <span class="chat-settings-popover__label">${t("nav.chat")}</span>
           <div class="chat-settings-popover__toggles">
             <openclaw-tooltip .content=${t("common.refresh")}>
               <button
@@ -360,7 +332,45 @@ export function renderChatControls(props: ChatControlsProps) {
           </div>
           ${renderChatSendShortcutPreference(props)}
         </div>
+        ${props.realtimeTalkOptions && props.onRealtimeTalkOptionsChange
+          ? html`
+              <div class="chat-settings-popover__section">
+                <span class="chat-settings-popover__label">${t("chat.voiceSettings")}</span>
+                ${renderRealtimeTalkOptions({
+                  realtimeTalkOptions: props.realtimeTalkOptions,
+                  onRealtimeTalkOptionsChange: props.onRealtimeTalkOptionsChange,
+                  canOpenRealtimeTalkSettings: props.canOpenRealtimeTalkSettings,
+                  onOpenRealtimeTalkSettings: props.onOpenRealtimeTalkSettings,
+                  embedded: true,
+                })}
+              </div>
+            `
+          : ""}
       </div>
     </div>
+    <div
+      class="chat-composer-model-control"
+      @click=${() => {
+        if (props.settingsOpen) {
+          props.onSettingsOpenChange(false);
+        }
+      }}
+    >
+      ${renderChatModelControls(props.model)}
+    </div>
+    ${props.onOpenSplitView
+      ? html`
+          <openclaw-tooltip .content=${t("chat.splitView.open")}>
+            <button
+              class="btn btn--sm btn--icon chat-open-split-view"
+              type="button"
+              aria-label=${t("chat.splitView.open")}
+              @click=${props.onOpenSplitView}
+            >
+              ${icons.panelRightOpen}
+            </button>
+          </openclaw-tooltip>
+        `
+      : ""}
   `;
 }

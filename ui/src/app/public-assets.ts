@@ -7,7 +7,8 @@ type ControlUiPublicAsset =
   | "favicon.ico"
   | "favicon.svg"
   | "manifest.webmanifest"
-  | "sw.js";
+  | "sw.js"
+  | `provider-icons/ProviderIcon-${string}.svg`;
 
 type WindowWithControlUiBasePath = Window &
   typeof globalThis & {
