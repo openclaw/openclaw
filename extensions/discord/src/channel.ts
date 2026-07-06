@@ -107,8 +107,39 @@ const discordMessageAdapterBase = createChannelMessageAdapterFromOutbound({
  *  fails during a network outage, the delivery queue entry is marked
  *  `send_attempt_started`. Without `reconcileUnknownSend` the reconnect
  *  drain refuses blind replay and the message is permanently dropped.
- *  Returning `not_sent` allows safe retry — the common case is a network
- *  error where the message never reached Discord. (#100979) */
+ *
+ *  Only returns `not_sent` when the last recorded error is a connection-phase
+ *  failure that proves the HTTP request never reached Discord
+ *  (UND_ERR_CONNECT_TIMEOUT, ECONNREFUSED, ENOTFOUND, EAI_AGAIN,
+ *  ENETUNREACH). Falls back to `unresolved` otherwise to avoid blindly
+ *  duplicating messages that may have already been delivered. (#100979) */
+const PRE_DISPATCH_ERROR_RE =
+  /\b(UND_ERR_CONNECT_TIMEOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|ERR_CONNECT_TIMEOUT|EADDRNOTAVAIL|ETIMEDOUT)\b/iu;
+
+function reconcileDiscordUnknownSend(ctx: {
+  lastError?: string | null;
+  retryCount: number;
+}): { status: "not_sent" } | { status: "unresolved"; error: string; retryable: boolean } {
+  if (ctx.lastError && PRE_DISPATCH_ERROR_RE.test(ctx.lastError)) {
+    return { status: "not_sent" };
+  }
+  // On a first attempt without a matching connection error (process crash,
+  // unknown failure) stay unresolved so the duplicate-send guard is kept.
+  if (!ctx.lastError && ctx.retryCount === 0) {
+    return {
+      status: "unresolved",
+      error:
+        "Discord unknown-send reconciliation has no last error to prove the message was not sent",
+      retryable: true,
+    };
+  }
+  return {
+    status: "unresolved",
+    error: `Discord unknown-send reconciliation cannot prove the message was not sent (lastError: ${ctx.lastError ? ctx.lastError.slice(0, 128) : "none"})`,
+    retryable: false,
+  };
+}
+
 const discordMessageAdapter = {
   ...discordMessageAdapterBase,
   durableFinal: {
@@ -117,7 +148,8 @@ const discordMessageAdapter = {
       reconcileUnknownSend: true,
     },
     reconcileUnknownSendKinds: { text: true },
-    reconcileUnknownSend: async () => ({ status: "not_sent" as const }),
+    reconcileUnknownSend: async (ctx: { lastError?: string | null; retryCount: number }) =>
+      reconcileDiscordUnknownSend(ctx),
   },
 } satisfies typeof discordMessageAdapterBase;
 

@@ -200,6 +200,7 @@ async function reconcileUnknownQueuedDelivery(opts: {
       ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
       ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
       ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
+      ...(entry.lastError !== undefined ? { lastError: entry.lastError } : {}),
     });
   } catch (err) {
     const error = formatErrorMessage(err);

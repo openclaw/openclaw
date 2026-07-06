@@ -289,6 +289,8 @@ export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   replyToMode?: ReplyToMode;
   threadId?: string | number | null;
   silent?: boolean;
+  /** Last recorded error when the send failed (if any). */
+  lastError?: string | null;
 };
 
 /** Adapter verdict for whether an unknown queued send reached the platform. */

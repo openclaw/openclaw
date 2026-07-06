@@ -113,7 +113,7 @@ describe("durable Discord delivery", () => {
     expect(capabilities?.reconcileUnknownSend).toBe(true);
   });
 
-  it("returns not_sent so reconnect drain can safely retry failed sends", async () => {
+  it("returns not_sent when lastError is a connection-phase failure", async () => {
     const durable = (discordPlugin.message as Record<string, unknown>).durableFinal as
       | { reconcileUnknownSend?: Function }
       | undefined;
@@ -126,7 +126,47 @@ describe("durable Discord delivery", () => {
       enqueuedAt: Date.now(),
       retryCount: 0,
       payloads: [{ text: "t" }],
+      lastError: "UND_ERR_CONNECT_TIMEOUT",
     });
     expect(result).toEqual({ status: "not_sent" });
+  });
+
+  it("returns unresolved when lastError is not a connection-phase error", async () => {
+    const durable = (discordPlugin.message as Record<string, unknown>).durableFinal as
+      | { reconcileUnknownSend?: Function }
+      | undefined;
+    expect(durable?.reconcileUnknownSend).toBeDefined();
+    const result = await durable!.reconcileUnknownSend!({
+      cfg: {},
+      queueId: "test-q",
+      channel: "discord",
+      to: "channel:1",
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      payloads: [{ text: "t" }],
+      lastError: "HTTP 500 Internal Server Error",
+    });
+    const unresolved = result as { status: string; error: string; retryable: boolean };
+    expect(unresolved.status).toBe("unresolved");
+    expect(unresolved.retryable).toBe(false);
+  });
+
+  it("returns unresolved when lastError is missing and retryCount > 0", async () => {
+    const durable = (discordPlugin.message as Record<string, unknown>).durableFinal as
+      | { reconcileUnknownSend?: Function }
+      | undefined;
+    expect(durable?.reconcileUnknownSend).toBeDefined();
+    const result = await durable!.reconcileUnknownSend!({
+      cfg: {},
+      queueId: "test-q",
+      channel: "discord",
+      to: "channel:1",
+      enqueuedAt: Date.now(),
+      retryCount: 2,
+      payloads: [{ text: "t" }],
+    });
+    const unresolved = result as { status: string; error: string; retryable: boolean };
+    expect(unresolved.status).toBe("unresolved");
+    expect(unresolved.retryable).toBe(false);
   });
 });
