@@ -2316,6 +2316,7 @@ async function requestGatewayAgentText(params: {
   context: string;
   idempotencyKey: string;
   modelKey?: string;
+  assistantText?: "required" | "optional";
   attachments?: Array<{
     mimeType: string;
     fileName: string;
@@ -2340,6 +2341,18 @@ async function requestGatewayAgentText(params: {
   );
   if (accepted?.status !== "accepted") {
     throw new Error(`agent status=${String(accepted?.status)}`);
+  }
+  if (params.assistantText === "optional") {
+    // Tool-only turns intentionally may not append assistant text. Their
+    // contract is terminal completion; the following turn proves tool state.
+    await waitForGatewayAgentRun({
+      client: params.client,
+      runId,
+      context: `${params.context}: agent-wait`,
+      timeoutMs: GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS,
+    });
+    const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
+    return assistantTexts.length > baselineAssistantCount ? (assistantTexts.at(-1) ?? "") : "";
   }
   const transcriptPromise = waitForSessionAssistantText({
     sessionKey: params.sessionKey,
@@ -3411,6 +3424,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
                   thinkingLevel,
                   context: `${progressLabel}: tool-only-regression-first`,
+                  assistantText: "optional",
                 });
                 assertNoReasoningTags({
                   text: firstText,

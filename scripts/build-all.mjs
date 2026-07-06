@@ -53,7 +53,7 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+    args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
     env: {
       OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1",
     },
@@ -77,12 +77,12 @@ export const BUILD_ALL_STEPS = [
   {
     label: "copy-hook-metadata",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-hook-metadata.ts"],
+    args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
   },
   {
     label: "copy-export-html-templates",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-export-html-templates.ts"],
+    args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
     cache: {
       inputs: [
         "scripts/copy-export-html-templates.ts",
@@ -105,17 +105,17 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-build-info",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-build-info.ts"],
+    args: ["--import", "tsx", "scripts/write-build-info.ts"],
   },
   {
     label: "write-cli-startup-metadata",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-cli-startup-metadata.ts"],
+    args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
   {
     label: "write-cli-compat",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-cli-compat.ts"],
+    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
   },
 ];
 

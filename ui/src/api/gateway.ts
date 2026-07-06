@@ -67,15 +67,16 @@ export class GatewayRequestError extends Error {
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
+    const details = enrichProtocolMismatchDetails(error.message, error.details);
     super(
       formatConnectErrorMessage({
         message: error.message,
-        details: enrichProtocolMismatchDetails(error.message, error.details),
+        details,
       }),
     );
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
-    this.details = error.details;
+    this.details = details;
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
   }
@@ -111,14 +112,10 @@ function shouldContinueReconnectForPairingRequired(details: unknown): boolean {
 }
 
 /**
- * Auth errors that won't resolve without user action — don't auto-reconnect.
- *
- * NOTE: AUTH_TOKEN_MISMATCH is intentionally NOT included here because the
- * browser client supports a bounded one-time retry with a cached device token
- * when the endpoint is trusted. Reconnect suppression for mismatch is handled
- * with client state (after retry budget is exhausted).
+ * Connect failures that cannot recover while client and server state stay unchanged.
+ * AUTH_TOKEN_MISMATCH stays out: the close handler owns its bounded cached-token retry.
  */
-export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): boolean {
+export function isNonRecoverableConnectError(error: { details?: unknown } | undefined): boolean {
   if (!error) {
     return false;
   }
@@ -137,6 +134,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
+    code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
@@ -597,7 +595,7 @@ export class GatewayBrowserClient {
         !this.closed &&
         (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
           ? this.pendingDeviceTokenRetry
-          : !isNonRecoverableAuthError(connectError));
+          : !isNonRecoverableConnectError(connectError));
       this.notifyClose({ code: ev.code, reason, error: connectError, willRetry });
       if (willRetry) {
         this.scheduleReconnect();

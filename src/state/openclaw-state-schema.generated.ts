@@ -543,6 +543,19 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
 
+CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
+  boot_id TEXT NOT NULL PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  outcome TEXT,
+  startup_reason TEXT,
+  reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
+  ON gateway_boot_lifecycle(started_at_ms);
+
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,
   session_id TEXT,

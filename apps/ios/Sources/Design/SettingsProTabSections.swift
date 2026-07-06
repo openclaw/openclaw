@@ -113,9 +113,9 @@ extension SettingsProTab {
             NavigationLink(value: SettingsRoute.gateway) {
                 self.gatewayConnectionRow
             }
-            LabeledContent("Address", value: self.gatewayAddress)
-            LabeledContent("Server", value: self.gatewayServer)
-            LabeledContent("Agents", value: "\(self.appModel.gatewayAgents.count)")
+            SettingsDetailRow("Address", value: self.gatewayAddress)
+            SettingsDetailRow("Server", value: self.gatewayServer)
+            SettingsDetailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
             self.gatewayActions
         }
     }
@@ -272,11 +272,11 @@ extension SettingsProTab {
                 color: self.gatewayStatusColor)
 
             self.detailListCard {
-                self.detailRow("Address", value: self.gatewayAddress)
-                self.detailRow("Server", value: self.gatewayServer)
-                self.detailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
-                self.detailRow("Default Agent", value: self.appModel.activeAgentName)
-                self.detailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
+                SettingsDetailRow("Address", value: self.gatewayAddress)
+                SettingsDetailRow("Server", value: self.gatewayServer)
+                SettingsDetailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
+                SettingsDetailRow("Default Agent", value: self.appModel.activeAgentName)
+                SettingsDetailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
             }
 
             Section {
@@ -457,10 +457,10 @@ extension SettingsProTab {
             self.diagnosticChecksCard
 
             self.detailListCard {
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                self.detailRow("App", value: DeviceInfoHelper.openClawVersionString())
-                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
+                SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                SettingsDetailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
+                SettingsDetailRow("App", value: DeviceInfoHelper.openClawVersionString())
+                SettingsDetailRow("Model", value: DeviceInfoHelper.modelIdentifier())
             }
 
             self.diagnosticsAdvancedCard
@@ -638,9 +638,9 @@ extension SettingsProTab {
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
             detailListCard {
-                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
+                SettingsDetailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
+                SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                SettingsDetailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
 
             Section {
@@ -942,8 +942,8 @@ extension SettingsProTab {
             NavigationLink {
                 VoiceWakeWordsSettingsView()
             } label: {
-                self.simpleSettingsRow(
-                    title: "Wake Words",
+                SettingsDetailRow(
+                    "Wake Words",
                     value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
             }
         }
@@ -979,13 +979,13 @@ extension SettingsProTab {
                     }
                     .font(OpenClawType.body)
                 }
-                self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-                self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
+                SettingsDetailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                SettingsDetailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
                 if let issue = self.gatewayTalkLastIssueDetail {
-                    self.detailRow("Last Voice Issue", value: issue)
+                    SettingsDetailRow("Last Voice Issue", value: issue)
                 }
-                self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
-                self.detailRow("API Key", value: self.talkApiKeyStatus)
+                SettingsDetailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
+                SettingsDetailRow("API Key", value: self.talkApiKeyStatus)
             }
         }
     }
@@ -1027,7 +1027,7 @@ extension SettingsProTab {
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {
-                self.simpleSettingsRow(title: "Discovery Logs", value: self.gatewayController.discoveryStatusText)
+                SettingsDetailRow("Discovery Logs", value: self.gatewayController.discoveryStatusText)
             }
         }
     }
@@ -1036,7 +1036,7 @@ extension SettingsProTab {
         Section("Device") {
             TextField("Device Name", text: self.$displayName)
                 .font(OpenClawType.body)
-            self.detailRow("Instance ID", value: self.instanceId)
+            SettingsDetailRow("Instance ID", value: self.instanceId)
         }
     }
 
@@ -1047,19 +1047,10 @@ extension SettingsProTab {
     {
         Toggle(isOn: isOn) {
             Text(title)
-                .font(OpenClawType.subhead)
+                .font(OpenClawType.body)
         }
         .onChange(of: isOn.wrappedValue) { _, enabled in
             onChange?(enabled)
-        }
-    }
-
-    func simpleSettingsRow(title: String, value: String) -> some View {
-        LabeledContent(title) {
-            Text(value)
-                .font(OpenClawType.subhead)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
     }
 }
