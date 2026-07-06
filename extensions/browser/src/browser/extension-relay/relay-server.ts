@@ -20,6 +20,12 @@ import { ExtensionRelayBridge } from "./relay-bridge.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
+/**
+ * Cap relay frame size to bound memory from a hostile/buggy peer while leaving
+ * headroom for CDP payloads (base64 screenshots, DOM snapshots, network bodies).
+ */
+const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+
 /** Running relay server handle owned by the profile runtime state. */
 export type ExtensionRelayHandle = {
   port: number;
@@ -89,7 +95,10 @@ export async function startExtensionRelayServer(params: {
   onStateChange?: () => void;
 }): Promise<ExtensionRelayHandle> {
   const bridge = new ExtensionRelayBridge({ onStateChange: params.onStateChange });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
+  });
 
   const server: Server = http.createServer((req, res) => {
     if (!hasLoopbackHostHeader(req)) {

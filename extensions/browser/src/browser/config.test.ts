@@ -46,7 +46,8 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   }
 
   try {
-    for (const [key, value] of Object.entries(env)) {
+    for (const key of Object.keys(env)) {
+      const value = env[key];
       if (value === undefined) {
         delete process.env[key];
       } else {

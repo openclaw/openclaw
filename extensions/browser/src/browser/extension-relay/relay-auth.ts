@@ -73,12 +73,13 @@ export function resolveExtensionRelayToken(env: NodeJS.ProcessEnv = process.env)
   return readExtensionRelayToken(env);
 }
 
-/** Constant-time token comparison. */
+/**
+ * Constant-time token comparison. Both sides are hashed to a fixed length
+ * before timingSafeEqual so no length short-circuit leaks token length.
+ */
 export function extensionRelayTokenMatches(expected: string, candidate: string): boolean {
-  const expectedBuf = Buffer.from(expected);
-  const candidateBuf = Buffer.from(candidate);
-  if (expectedBuf.length !== candidateBuf.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(expectedBuf, candidateBuf);
+  return crypto.timingSafeEqual(
+    crypto.createHash("sha256").update(expected).digest(),
+    crypto.createHash("sha256").update(candidate).digest(),
+  );
 }
