@@ -609,6 +609,118 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     }
   });
 
+  it("refreshes agent-scoped models when the pane switches sessions", async () => {
+    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      defaultAgentId: "work",
+      sessionKey: "agent:work:main",
+      methodResponses: {
+        "chat.metadata": {
+          cases: [
+            {
+              match: { agentId: "work" },
+              response: {
+                commands: [],
+                models: [
+                  {
+                    id: "work-model",
+                    name: "Work Model",
+                    provider: "openai",
+                    available: true,
+                  },
+                ],
+              },
+            },
+            {
+              match: { agentId: "other" },
+              response: {
+                commands: [],
+                models: [
+                  {
+                    id: "other-model",
+                    name: "Other Model",
+                    provider: "anthropic",
+                    available: true,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        "sessions.list": {
+          count: 2,
+          defaults: {
+            contextTokens: 200_000,
+            model: "other-model",
+            modelProvider: "anthropic",
+          },
+          path: "",
+          sessions: [
+            {
+              key: "agent:work:main",
+              kind: "direct",
+              model: "work-model",
+              modelProvider: "openai",
+              status: "done",
+              updatedAt: Date.now(),
+            },
+            {
+              key: "agent:other:main",
+              kind: "direct",
+              model: "other-model",
+              modelProvider: "anthropic",
+              status: "done",
+              updatedAt: Date.now(),
+            },
+          ],
+          ts: Date.now(),
+        },
+      },
+      models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("chat.metadata");
+          return requests.some(
+            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+          );
+        })
+        .toBe(true);
+
+      const composer = page.locator(".agent-chat__input");
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
+        .toBe(1);
+
+      await page.locator("openclaw-chat-pane").evaluate((pane) => {
+        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:other:main";
+      });
+
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("chat.metadata");
+          return requests.some(
+            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "other",
+          );
+        })
+        .toBe(true);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="anthropic/other-model"]').count())
+        .toBe(1);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
+        .toBe(0);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
   it("keeps startup models when the metadata refresh fails", async () => {
     const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -625,7 +737,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         code: "UNAVAILABLE",
         message: "metadata unavailable",
       });
-
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
@@ -642,31 +753,53 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.metadata"],
+      deferredMethods: ["chat.startup", "chat.metadata"],
       models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-      methodResponses: {
-        "chat.startup": {
-          agentsList: {
-            agents: [{ id: "work", name: "Work" }],
-            defaultId: "main",
-            mainKey: "agent:work:main",
-            scope: "agent",
-          },
-          messages: [],
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
-        },
-      },
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
-      await gateway.waitForRequest("chat.metadata");
+      await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+      await gateway.waitForRequest("chat.startup");
+      await page.locator("openclaw-chat-pane").evaluate((pane) => {
+        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:work:main";
+      });
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("chat.metadata");
+          return requests.some(
+            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+          );
+        })
+        .toBe(true);
       await gateway.rejectDeferred("chat.metadata", {
         code: "UNAVAILABLE",
         message: "metadata unavailable",
       });
+      await gateway.resolveDeferred("chat.startup", {
+        agentsList: {
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "work", name: "Work" },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        messages: [],
+        metadata: {
+          commands: [],
+          models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
+        },
+        sessionId: "control-ui-e2e-session",
+        thinkingLevel: null,
+      });
+      await page.waitForTimeout(150);
 
+      const metadataRequests = await gateway.getRequests("chat.metadata");
+      expect(metadataRequests).toHaveLength(1);
+      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
+        "work",
+      );
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(async () =>

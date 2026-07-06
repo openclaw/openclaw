@@ -28,7 +28,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
-import { refreshSlashCommands } from "./chat-commands.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
@@ -52,6 +51,7 @@ import {
   handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
+  refreshChatMetadata,
   refreshChatModelAuthStatus,
   refreshPageChat,
   refreshRouteSessionOptions,
@@ -189,10 +189,7 @@ export class ChatPane extends LitElement {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state);
-    void refreshSlashCommands({
-      client: state.client,
-      agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
-    });
+    void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();

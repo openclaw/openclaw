@@ -728,14 +728,24 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   });
 
   const refreshedSessionKey = host.sessionKey;
+  const ownsScheduledMetadataRefresh = () =>
+    host.sessionKey === refreshedSessionKey &&
+    host.connected &&
+    (startupMetadataRequestVersion === null ||
+      host.chatMetadataRequestVersion === startupMetadataRequestVersion);
   scheduleChatMetadataRefresh(() => {
-    if (host.sessionKey !== refreshedSessionKey || !host.connected) {
+    if (!ownsScheduledMetadataRefresh()) {
       return;
     }
     void startupMetadataApplied
       .catch(() => ({ commands: false, models: false }))
-      .then((metadataApplied) => {
-        return Promise.allSettled([
+      .then(async (metadataApplied) => {
+        // Startup metadata can settle after a session switch. Recheck ownership
+        // so stale startup work cannot supersede the new pane's catalog refresh.
+        if (!ownsScheduledMetadataRefresh()) {
+          return;
+        }
+        await Promise.allSettled([
           refreshChatAvatar(host),
           refreshChatMetadata(host, {
             preserveModelCatalogOnFallback: opts?.startup === true && metadataApplied.models,
