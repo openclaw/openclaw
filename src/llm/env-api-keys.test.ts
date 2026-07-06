@@ -3,12 +3,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const envKeys = [
   "GOOGLE_APPLICATION_CREDENTIALS",
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_PROJECT_ID",
   "KIMI_API_KEY",
   "KIMICODE_API_KEY",
   "MOONSHOT_API_KEY",
@@ -16,6 +18,7 @@ const envKeys = [
 
 const originalEnv = captureEnv([...envKeys]);
 const tempDirs: string[] = [];
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -46,6 +49,27 @@ describe("getEnvApiKey", () => {
         GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
         GOOGLE_CLOUD_LOCATION: "us-central1",
         GOOGLE_CLOUD_PROJECT: "vertex-project",
+      },
+      async () => {
+        vi.resetModules();
+        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+        expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
+      },
+    );
+  });
+
+  it("detects Google Vertex ADC credentials with GOOGLE_CLOUD_PROJECT_ID only", async () => {
+    const dir = autoCleanupTempDirs.make("openclaw-vertex-adc-project-id-");
+    const credentialsPath = join(dir, "application_default_credentials.json");
+    await writeFile(credentialsPath, "{}", "utf-8");
+    await withEnvAsync(
+      {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: undefined,
+        GOOGLE_CLOUD_PROJECT_ID: "vertex-project-id",
+        GCLOUD_PROJECT: undefined,
       },
       async () => {
         vi.resetModules();

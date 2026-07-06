@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Model } from "openclaw/plugin-sdk/llm";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const {
   buildGuardedModelFetchMock,
@@ -43,8 +43,6 @@ let resolveGoogleGemini3FirstResponseRetryMs: typeof import("./transport-stream.
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
 let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
 let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -1207,42 +1205,43 @@ describe("google transport stream", () => {
   });
 
   it("uses GOOGLE_CLOUD_PROJECT_ID for Google Vertex credential marker requests", async () => {
-    const tempDir = tempDirs.make("openclaw-google-vertex-project-id-");
-    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
-    vi.stubEnv("HOME", path.join(tempDir, "home"));
-    vi.stubEnv("APPDATA", "");
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT_ID", "vertex-project-id");
-    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
-    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
-    const tokenFetchMock = vi.fn();
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
-        },
-      ]),
-    );
+    await withTempDir("openclaw-google-vertex-project-id-", async (tempDir) => {
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+      vi.stubEnv("HOME", path.join(tempDir, "home"));
+      vi.stubEnv("APPDATA", "");
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT_ID", "vertex-project-id");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+      googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
+      const tokenFetchMock = vi.fn();
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
 
-    const streamFn = createGoogleVertexTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        buildGoogleVertexModel(),
-        {
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        } as Parameters<typeof streamFn>[1],
-        {
-          apiKey: "gcp-vertex-credentials",
-          fetch: tokenFetchMock,
-        } as Parameters<typeof streamFn>[2],
-      ),
-    );
-    await stream.result();
+      const streamFn = createGoogleVertexTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          buildGoogleVertexModel(),
+          {
+            messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          } as Parameters<typeof streamFn>[1],
+          {
+            apiKey: "gcp-vertex-credentials",
+            fetch: tokenFetchMock,
+          } as Parameters<typeof streamFn>[2],
+        ),
+      );
+      await stream.result();
 
-    expect(tokenFetchMock).not.toHaveBeenCalled();
-    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
-    expect(guardedCall[0]).toBe(
-      "https://us-central1-aiplatform.googleapis.com/v1/projects/vertex-project-id/locations/us-central1/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
-    );
+      expect(tokenFetchMock).not.toHaveBeenCalled();
+      const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+      expect(guardedCall[0]).toBe(
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/vertex-project-id/locations/us-central1/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+      );
+    });
   });
 
   it("strips redundant google provider prefixes from Google Vertex model paths", async () => {

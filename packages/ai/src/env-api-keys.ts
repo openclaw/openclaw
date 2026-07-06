@@ -228,7 +228,9 @@ export function getEnvApiKey(provider: string): string | undefined {
   if (provider === "google-vertex") {
     const hasCredentials = hasVertexAdcCredentials();
     const hasProject = Boolean(
-      getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
+      getEnvValue("GOOGLE_CLOUD_PROJECT") ||
+      getEnvValue("GOOGLE_CLOUD_PROJECT_ID") ||
+      getEnvValue("GCLOUD_PROJECT"),
     );
     const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
 
