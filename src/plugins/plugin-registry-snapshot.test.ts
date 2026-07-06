@@ -16,10 +16,7 @@ import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
-import {
-  markRetainedManagedNpmInstall,
-  RETAINED_MANAGED_NPM_INSTALL_MARKER,
-} from "./managed-npm-retention.js";
+import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
@@ -507,7 +504,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       version: "2026.6.10-beta.1",
     });
     fs.writeFileSync(
-      path.join(codexDir, RETAINED_MANAGED_NPM_INSTALL_MARKER),
+      path.join(codexDir, ".openclaw-retained-npm-install.json"),
       '{"version":1,"pluginId":"codex"}\n',
       "utf8",
     );

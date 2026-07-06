@@ -1899,9 +1899,14 @@ describe("runCodexAppServerSideQuestion", () => {
       releaseUnsubscribe = resolve;
     });
     let toolAborted = false;
+    let resolveToolStarted: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      resolveToolStarted = resolve;
+    });
     toolExecuteMock.mockImplementation(
       (_callId: string, _args: unknown, signal?: AbortSignal) =>
         new Promise((_resolve, reject) => {
+          resolveToolStarted?.();
           signal?.addEventListener(
             "abort",
             () => {
@@ -1921,18 +1926,21 @@ describe("runCodexAppServerSideQuestion", () => {
       }
       if (method === "turn/start") {
         setTimeout(() => {
-          void client.handleRequest({
-            id: 42,
-            method: "item/tool/call",
-            params: {
-              threadId: "side-thread",
-              turnId: "turn-1",
-              callId: "tool-1",
-              tool: "wiki_status",
-              arguments: {},
-            },
-          });
-          client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
+          void (async () => {
+            void client.handleRequest({
+              id: 42,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-1",
+                tool: "wiki_status",
+                arguments: {},
+              },
+            });
+            await toolStarted;
+            client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
+          })();
         }, 0);
         return turnStartResult("turn-1");
       }
