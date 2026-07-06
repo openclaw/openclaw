@@ -641,6 +641,10 @@ struct ChatOutboxStatusLabel: View {
             "Queued"
         case .sending:
             "Sending…"
+        case .confirming:
+            "Confirming…"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "Delivery unknown"
         case .failed:
             "Not sent"
         }
@@ -652,6 +656,10 @@ struct ChatOutboxStatusLabel: View {
             "clock"
         case .sending:
             "arrow.up.circle"
+        case .confirming:
+            "checkmark.circle"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "questionmark.circle"
         case .failed:
             "exclamationmark.circle"
         }
@@ -663,6 +671,10 @@ struct ChatOutboxStatusLabel: View {
             "Queued, sends when reconnected"
         case .sending:
             "Sending"
+        case .confirming:
+            "Sent, waiting for chat history confirmation"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "Delivery unconfirmed, touch and hold to retry or delete"
         case .failed:
             "Not sent, touch and hold to retry or delete"
         }
@@ -842,8 +854,19 @@ private struct ChatAssistantTextBody: View {
     var isComplete: Bool = true
 
     var body: some View {
+        if self.isComplete {
+            self.completeBody
+        } else {
+            ChatStreamingAssistantTextBody(
+                text: self.text,
+                markdownVariant: self.markdownVariant,
+                includesThinking: self.includesThinking)
+        }
+    }
+
+    private var completeBody: some View {
         let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
-        VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
                 let font = segment.kind == .thinking
                     ? OpenClawChatTypography.callout.italic()
@@ -856,6 +879,182 @@ private struct ChatAssistantTextBody: View {
                     textColor: OpenClawChatTheme.assistantText,
                     isComplete: self.isComplete)
             }
+        }
+    }
+}
+
+@MainActor
+private struct ChatStreamingAssistantTextBody: View {
+    let text: String
+    let markdownVariant: ChatMarkdownVariant
+    let includesThinking: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var snapshot: Snapshot
+    @State private var revealState: ChatStreamingRevealState
+    @State private var revealLocation: Snapshot.ProseLocation?
+    @State private var pendingUntil: TimeInterval?
+
+    init(text: String, markdownVariant: ChatMarkdownVariant, includesThinking: Bool) {
+        self.text = text
+        self.markdownVariant = markdownVariant
+        self.includesThinking = includesThinking
+
+        let now = Date.timeIntervalSinceReferenceDate
+        let snapshot = Snapshot(text: text, includesThinking: includesThinking)
+        let location = snapshot.lastProseLocation
+        let revealState = location.map {
+            step(state: ChatStreamingRevealState(), newText: snapshot.prose(at: $0).plainText, now: now)
+        } ?? ChatStreamingRevealState()
+        self._snapshot = State(initialValue: snapshot)
+        self._revealState = State(initialValue: revealState)
+        self._revealLocation = State(initialValue: location)
+        self._pendingUntil = State(initialValue: revealState.latestDeadline)
+    }
+
+    var body: some View {
+        Group {
+            if self.reduceMotion || self.pendingUntil == nil {
+                self.render(now: nil)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                    self.render(now: timeline.date.timeIntervalSinceReferenceDate)
+                }
+            }
+        }
+        .onChange(of: self.text) { _, _ in
+            self.updateSnapshot()
+        }
+        .onChange(of: self.includesThinking) { _, _ in
+            self.updateSnapshot()
+        }
+        .onChange(of: self.reduceMotion) { _, reduceMotion in
+            self.pendingUntil = reduceMotion ? nil : self.futureDeadline()
+        }
+        .onAppear {
+            if self.snapshot.sourceText != self.text || self.snapshot.includesThinking != self.includesThinking {
+                self.updateSnapshot()
+            }
+        }
+        .task(id: self.pendingUntil) {
+            guard let pendingUntil = self.pendingUntil else { return }
+            let delay = max(0, pendingUntil - Date.timeIntervalSinceReferenceDate)
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            guard !Task.isCancelled, self.pendingUntil == pendingUntil else { return }
+            self.pendingUntil = nil
+        }
+    }
+
+    private func render(now: TimeInterval?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(self.snapshot.segments.enumerated()), id: \.offset) { entry in
+                let segment = entry.element
+                let font = segment.kind == .thinking
+                    ? OpenClawChatTypography.callout.italic()
+                    : OpenClawChatTypography.body
+                let reveal = self.reveal(
+                    segmentIndex: entry.offset,
+                    now: now)
+                ChatMarkdownRenderer(
+                    snapshot: segment.markdown,
+                    context: .assistant,
+                    variant: self.markdownVariant,
+                    font: font,
+                    textColor: OpenClawChatTheme.assistantText,
+                    reveal: reveal)
+            }
+        }
+    }
+
+    private func reveal(segmentIndex: Int, now: TimeInterval?) -> ChatMarkdownProseReveal? {
+        guard let now,
+              let location = self.revealLocation,
+              location.segmentIndex == segmentIndex
+        else { return nil }
+        return ChatMarkdownProseReveal(
+            blockIndex: location.blockIndex,
+            state: self.revealState,
+            now: now)
+    }
+
+    private func updateSnapshot() {
+        let now = Date.timeIntervalSinceReferenceDate
+        let nextSnapshot = Snapshot(text: self.text, includesThinking: self.includesThinking)
+        let nextLocation = nextSnapshot.lastProseLocation
+        let nextRevealState: ChatStreamingRevealState
+        if let nextLocation {
+            let nextText = nextSnapshot.prose(at: nextLocation).plainText
+            if nextLocation == self.revealLocation {
+                nextRevealState = step(state: self.revealState, newText: nextText, now: now)
+            } else {
+                nextRevealState = step(state: ChatStreamingRevealState(), newText: nextText, now: now)
+            }
+        } else {
+            nextRevealState = ChatStreamingRevealState()
+        }
+
+        self.snapshot = nextSnapshot
+        self.revealLocation = nextLocation
+        self.revealState = nextRevealState
+        self.pendingUntil = self.reduceMotion ? nil : self.futureDeadline(now: now, state: nextRevealState)
+    }
+
+    private func futureDeadline(
+        now: TimeInterval = Date.timeIntervalSinceReferenceDate,
+        state: ChatStreamingRevealState? = nil) -> TimeInterval?
+    {
+        guard let deadline = (state ?? self.revealState).latestDeadline, deadline > now else {
+            return nil
+        }
+        return deadline
+    }
+
+    private struct Snapshot {
+        struct Segment {
+            let kind: AssistantTextSegment.Kind
+            let markdown: ChatMarkdownRenderSnapshot
+        }
+
+        struct ProseLocation: Equatable {
+            let segmentIndex: Int
+            let blockIndex: Int
+        }
+
+        let segments: [Segment]
+        let lastProseLocation: ProseLocation?
+        let sourceText: String
+        let includesThinking: Bool
+
+        init(text: String, includesThinking: Bool) {
+            let segments = AssistantTextParser.segments(
+                from: text,
+                includeThinking: includesThinking).map {
+                Segment(
+                    kind: $0.kind,
+                    markdown: ChatMarkdownRenderSnapshot(
+                        text: $0.text,
+                        isComplete: false,
+                        preparesReveal: true))
+            }
+            self.segments = segments
+            self.sourceText = text
+            self.includesThinking = includesThinking
+            self.lastProseLocation = segments.indices.reversed().compactMap { segmentIndex in
+                segments[segmentIndex].markdown.lastProseIndex.map {
+                    ProseLocation(segmentIndex: segmentIndex, blockIndex: $0)
+                }
+            }.first
+        }
+
+        func prose(at location: ProseLocation) -> ChatMarkdownProse {
+            guard case let .prose(prose) = self.segments[location.segmentIndex]
+                .markdown.blocks[location.blockIndex]
+            else {
+                preconditionFailure("Streaming reveal location must identify prose")
+            }
+            return prose
         }
     }
 }

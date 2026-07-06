@@ -62,7 +62,7 @@ function readDocumentTerminalEnabled(): boolean | null {
   return value === "true" ? true : value === "false" ? false : null;
 }
 
-export const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
+const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   assistantIdentity: {
     agentId: null,
     name: "Assistant",
@@ -118,7 +118,7 @@ function applyControlUiSeamColor(value: unknown): void {
   );
 }
 
-export function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
+function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): ApplicationConfig {
   const identity = normalizeAssistantIdentity({
     agentId: parsed.assistantAgentId ?? null,
     name: parsed.assistantName,
@@ -155,7 +155,7 @@ export function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Ap
   };
 }
 
-export async function loadApplicationConfig(params: {
+async function loadApplicationConfig(params: {
   basePath: string;
   auth?: ApplicationConfigAuthSource;
   skipWithoutAuthCandidate?: boolean;

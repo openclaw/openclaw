@@ -23,7 +23,11 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
+import {
+  resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
+} from "../media/media-reference.js";
+import { extractOriginalFilename } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -629,7 +633,8 @@ export async function handleControlUiAssistantMediaRequest(
     await opened.handle.close().catch(() => {});
   };
   try {
-    localPath = await resolveMediaReferenceLocalPath(source);
+    const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
+    localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
     opened = await openLocalFileSafely({ filePath: localPath });
     const sniffLength = Math.min(opened.stat.size, 8192);
@@ -643,10 +648,14 @@ export async function handleControlUiAssistantMediaRequest(
       filePath: localPath,
     });
     const contentType = mime ?? "application/octet-stream";
+    const filename =
+      resolvedReference.kind === "inbound"
+        ? extractOriginalFilename(localPath)
+        : path.basename(localPath);
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",
-      buildAssistantMediaContentDisposition(path.basename(localPath), contentType),
+      buildAssistantMediaContentDisposition(filename, contentType),
     );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));

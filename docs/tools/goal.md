@@ -25,6 +25,7 @@ footer.
 ```text
 /goal start get CI green for PR 87469 and push the fix
 /goal
+/goal edit get CI green for PR 87469, push the fix, and update docs
 /goal pause waiting for CI
 /goal resume
 /goal complete pushed and verified
@@ -64,7 +65,7 @@ Objective: get CI green for PR 87469 and push the fix
 Tokens used: 12k
 Token budget: 12k/50k
 
-Commands: /goal pause, /goal complete, /goal clear
+Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 ```
 
 | Command                                             | Effect                                                                   |
@@ -73,6 +74,7 @@ Commands: /goal pause, /goal complete, /goal clear
 | `/goal start <objective>`                           | Create a new goal for the current session.                               |
 | `/goal set <objective>`, `/goal create <objective>` | Aliases for `start`.                                                     |
 | `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word). |
+| `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.      |
 | `/goal pause [note]`                                | Pause an active goal.                                                    |
 | `/goal resume [note]`                               | Resume a paused, blocked, usage-limited, or budget-limited goal.         |
 | `/goal complete [note]`                             | Mark the goal achieved.                                                  |
@@ -154,6 +156,25 @@ Active goal: <objective> — advance it or update its status (get_goal/update_go
 OpenClaw keeps the line compact by truncating long objectives. Paused,
 blocked, budget-limited, usage-limited, and complete goals are not injected,
 so an operator stop remains in effect until the goal is resumed.
+
+## Control UI
+
+The web Control UI shows the goal as a compact pill above the chat composer:
+a status icon, the status label (for example `Pursuing goal`), the truncated
+objective, and a live elapsed timer.
+
+The pill carries inline controls:
+
+- **Pencil** prefills the composer with `/goal edit <objective>` so the
+  objective can be reworded and submitted.
+- **Pause / resume** toggles between `/goal pause` and `/goal resume` based
+  on the current status.
+- **Trash** sends `/goal clear`.
+- **Chevron** expands the pill to show the full objective, the latest status
+  note, token usage, and elapsed time.
+
+The action buttons are hidden while the composer cannot send (for example
+when the gateway connection is down); the expand chevron keeps working.
 
 ## TUI
 

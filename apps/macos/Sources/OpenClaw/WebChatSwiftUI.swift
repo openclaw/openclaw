@@ -18,6 +18,16 @@ private enum WebChatSwiftUILayout {
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
+    private let outboxGatewayID: String?
+
+    init(outboxGatewayID: String? = nil) {
+        self.outboxGatewayID = outboxGatewayID
+    }
+
+    var outboxRequiresSessionRoutingContract: Bool {
+        true
+    }
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
     }
@@ -117,6 +127,89 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             thinking: thinking,
             idempotencyKey: idempotencyKey,
             attachments: attachments)
+    }
+
+    func sendMessage(
+        sessionKey: String,
+        agentID: String?,
+        expectedSessionRoutingContract: String?,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        if let outboxGatewayID {
+            try await Self.requireGateway(outboxGatewayID)
+        }
+        guard let route = await GatewayConnection.shared.captureRoute(),
+              let supportsRoutingContract = await GatewayConnection.shared.supportsServerCapability(
+                  .chatSendRoutingContract,
+                  ifCurrentRoute: route)
+        else { throw OpenClawChatTransportSendError.notDispatched }
+        // Outbox replay is capability-gated in acquireOutboxRouteLease. A
+        // live send keeps its captured route on older gateways and omits the
+        // unsupported atomic routing field.
+        let guardedContract = OpenClawChatSessionRoutingContract.expectedValue(
+            expectedSessionRoutingContract,
+            serverSupportsGuard: supportsRoutingContract)
+        return try await GatewayConnection.shared.chatSend(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            expectedSessionRoutingContract: guardedContract,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: true)
+    }
+
+    func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
+        guard let outboxGatewayID else { return .unavailable(reason: nil) }
+        let currentGatewayID = await MainActor.run { MacChatTranscriptCache.currentGatewayID() }
+        guard currentGatewayID == outboxGatewayID,
+              let route = await GatewayConnection.shared.captureRoute()
+        else { return .unavailable(reason: nil) }
+        guard let supportsRoutingContract = await GatewayConnection.shared.supportsServerCapability(
+            .chatSendRoutingContract,
+            ifCurrentRoute: route)
+        else { return .unavailable(reason: nil) }
+        guard supportsRoutingContract else {
+            return .unavailable(reason: OpenClawChatTransportUpgradeMessage.routingContract)
+        }
+        guard let routingIdentity = try? await GatewayConnection.shared.sessionRoutingIdentity(
+            ifCurrentRoute: route)
+        else { return .unavailable(reason: nil) }
+        let routingContract = routingIdentity.contract
+        return .available(OpenClawChatTransportRouteLease(
+            sendTargetedMessage: { sessionKey, agentID, message, thinking, idempotencyKey, attachments in
+                try await Self.requireGateway(outboxGatewayID)
+                return try await GatewayConnection.shared.chatSend(
+                    sessionKey: sessionKey,
+                    agentID: agentID,
+                    expectedSessionRoutingContract: routingContract,
+                    message: message,
+                    thinking: thinking,
+                    idempotencyKey: idempotencyKey,
+                    attachments: attachments,
+                    ifCurrentRoute: route,
+                    distinguishPreDispatchRouteChange: true)
+            },
+            requestTargetedHistory: { sessionKey, agentID in
+                try await Self.requireGateway(outboxGatewayID)
+                return try await GatewayConnection.shared.chatHistory(
+                    sessionKey: sessionKey,
+                    agentID: agentID,
+                    ifCurrentRoute: route)
+            },
+            sessionRoutingContract: routingContract))
+    }
+
+    private static func requireGateway(_ gatewayID: String) async throws {
+        let currentGatewayID = await MainActor.run { MacChatTranscriptCache.currentGatewayID() }
+        guard currentGatewayID == gatewayID else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
@@ -232,7 +325,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             modelID: model.id,
             name: model.name,
             provider: model.provider,
-            contextWindow: model.contextwindow)
+            contextWindow: model.contextwindow,
+            reasoning: model.reasoning)
     }
 }
 
@@ -254,11 +348,14 @@ final class WebChatSwiftUIWindowController {
         // so binding the cache identity at construction stays correct. One
         // store instance backs both the transcript cache and the offline
         // command outbox.
-        let store = MacChatTranscriptCache.make()
+        let context = MacChatTranscriptCache.makeContext()
+        let store = context?.store
         self.init(
             sessionKey: sessionKey,
             presentation: presentation,
-            transport: MacGatewayChatTransport(),
+            transport: MacGatewayChatTransport(outboxGatewayID: store?.gatewayID),
+            initialActiveAgentID: context?.routingIdentity?.defaultAgentID,
+            initialSessionRoutingContract: context?.routingIdentity?.contract,
             transcriptCache: store,
             outbox: store)
     }
@@ -267,6 +364,8 @@ final class WebChatSwiftUIWindowController {
         sessionKey: String,
         presentation: WebChatPresentation,
         transport: any OpenClawChatTransport,
+        initialActiveAgentID: String? = nil,
+        initialSessionRoutingContract: String? = nil,
         transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
         outbox: (any OpenClawChatCommandOutbox)? = nil)
     {
@@ -275,6 +374,8 @@ final class WebChatSwiftUIWindowController {
         let vm = OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
+            activeAgentId: initialActiveAgentID,
+            sessionRoutingContract: initialSessionRoutingContract,
             transcriptCache: transcriptCache,
             outbox: outbox,
             initialThinkingLevel: Self.persistedThinkingLevel(),
@@ -286,8 +387,25 @@ final class WebChatSwiftUIWindowController {
             for await push in pushes {
                 guard let vm else { return }
                 guard case .snapshot = push else { continue }
-                let activeAgentId = await GatewayConnection.shared.cachedDefaultAgentId()
-                vm.syncActiveAgentId(activeAgentId)
+                let route = await GatewayConnection.shared.captureRoute()
+                let routingIdentity: GatewayConnection.SessionRoutingIdentity? = if let route {
+                    try? await GatewayConnection.shared.sessionRoutingIdentity(
+                        ifCurrentRoute: route)
+                } else {
+                    nil
+                }
+                if let routingIdentity {
+                    if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
+                       store.gatewayID == MacChatTranscriptCache.currentGatewayID(),
+                       let persistedIdentity = OpenClawChatSessionRoutingIdentity(
+                           contract: routingIdentity.contract)
+                    {
+                        await store.storeSessionRoutingIdentity(persistedIdentity)
+                    }
+                    vm.syncDeliveryIdentity(
+                        activeAgentId: routingIdentity.defaultAgentID,
+                        sessionRoutingContract: routingIdentity.contract)
+                }
             }
         }
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)

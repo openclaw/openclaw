@@ -292,16 +292,25 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   return { ok: checks.every((check) => check.ok), checks, status };
 }
 
+type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";
+
 function usesChromeMcpTransport(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: BrowserProfileDriver;
 }): boolean {
   return params.transport === "chrome-mcp" || params.driver === "existing-session";
 }
 
+function usesExtensionTransport(params: {
+  transport?: BrowserTransport;
+  driver?: BrowserProfileDriver;
+}): boolean {
+  return params.transport === "extension" || params.driver === "extension";
+}
+
 function formatBrowserConnectionSummary(params: {
   transport?: BrowserTransport;
-  driver?: "openclaw" | "existing-session";
+  driver?: BrowserProfileDriver;
   isRemote?: boolean;
   cdpPort?: number | null;
   cdpUrl?: string | null;
@@ -315,6 +324,9 @@ function formatBrowserConnectionSummary(params: {
     return userDataDir
       ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
       : "transport: chrome-mcp";
+  }
+  if (usesExtensionTransport(params)) {
+    return `transport: extension, relayPort: ${params.cdpPort ?? "(unset)"}`;
   }
   if (params.isRemote) {
     return `cdpUrl: ${params.cdpUrl ? redactCdpUrl(params.cdpUrl) : "(unset)"}`;

@@ -165,8 +165,8 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
 
 function cronPayloadObjectSchema(params: {
   model: TSchema;
-  fallbacks: TSchema;
   toolsAllow: TSchema;
+  fallbacks: TSchema;
 }) {
   return Type.Object(
     {
@@ -218,8 +218,8 @@ function createCronPayloadSchema(): TSchema {
   return Type.Optional(
     cronPayloadObjectSchema({
       model: Type.Optional(Type.String({ description: "Model override" })),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
     }),
   );
 }
@@ -371,8 +371,8 @@ function createCronPatchObjectSchema(): TSchema {
         payload: Type.Optional(
           cronPayloadObjectSchema({
             model: nullableStringSchema("Model override, or null to clear"),
-            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
           }),
         ),
         delivery: createCronDeliveryPatchSchema(),

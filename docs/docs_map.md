@@ -199,6 +199,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Notification policies
   - H2: CLI reference
   - H2: Chat task board (/tasks)
+  - H3: Control UI
   - H2: Status integration (task pressure)
   - H2: Storage and maintenance
   - H3: Where tasks live
@@ -1241,6 +1242,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/attach
 - Headings: none
 
+## cli/audit.md
+
+- Route: /cli/audit
+- Headings:
+  - H1: openclaw audit
+  - H2: Filters
+  - H2: Recorded events
+  - H2: Gateway RPC
+  - H2: Related
+
 ## cli/backup.md
 
 - Route: /cli/backup
@@ -1357,7 +1368,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Operations and approval
   - H2: Setup bootstrap
-  - H2: Model-assisted planner
+  - H2: AI conversation
   - H3: CLI harness trust model
   - H2: Switching to an agent
   - H2: Message rescue mode
@@ -2361,6 +2372,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Layout and names
   - H2: Provision ignored files
   - H2: Run repository setup
+  - H2: Session worktrees
   - H2: Snapshots, cleanup, and restore
   - H2: CLI
   - H2: Gateway methods
@@ -2913,6 +2925,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What it is
   - H2: Where it shows up
+  - H2: Anthropic and OpenAI cost history
   - H2: Default usage footer mode
   - H3: Three distinct session states
   - H3: Precedence
@@ -3221,6 +3234,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Secret providers config
   - H2: Auth storage
   - H3: auth.cooldowns
+  - H2: Audit
   - H2: Logging
   - H2: Diagnostics
   - H2: Update
@@ -3585,6 +3599,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: RPC method families
   - H3: Common event families
   - H3: Node helper methods
+  - H2: Audit ledger RPC
   - H2: Task ledger RPCs
   - H2: Operator helper methods
   - H3: models.list views
@@ -4852,6 +4867,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 7. Canvas + camera
   - H4: Gateway Canvas Host (recommended for web content)
   - H3: 8. Voice + expanded Android command surface
+  - H3: 9. Workspace files (read-only)
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
@@ -6245,6 +6261,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
+## plugins/reference/logbook.md
+
+- Route: /plugins/reference/logbook
+- Headings:
+  - H1: Logbook plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/longcat.md
+
+- Route: /plugins/reference/longcat
+- Headings:
+  - H1: LongCat plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/matrix.md
 
 - Route: /plugins/reference/matrix
@@ -6907,6 +6941,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
+  - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends
   - H2: Compatibility dispatch
@@ -7198,6 +7233,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/anthropic
 - Headings:
+  - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
@@ -7546,6 +7582,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Authentication errors (HTTP 401)
   - H2: Related
 
+## providers/longcat.md
+
+- Route: /providers/longcat
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H3: Non-interactive setup
+  - H2: Reasoning behavior
+  - H2: Pricing
+  - H2: Self-hosted LongCat-2.0
+  - H2: Troubleshooting
+  - H2: Related
+
 ## providers/minimax.md
 
 - Route: /providers/minimax
@@ -7654,6 +7703,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/openai
 - Headings:
+  - H2: Usage and cost tracking
   - H2: Quick choice
   - H2: Naming map
   - H2: GPT-5.6 limited preview
@@ -8985,7 +9035,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Plugin control
   - H2: Agent guidance
   - H2: Missing browser command or tool
-  - H2: Profiles: openclaw vs user
+  - H2: Profiles: openclaw, user, chrome
   - H2: Configuration
   - H3: Screenshot vision (text-only model support)
   - H2: Use Brave or another Chromium-based browser
@@ -9024,6 +9074,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/capability-cookbook
 - Headings:
   - H2: Related
+
+## tools/chrome-extension.md
+
+- Route: /tools/chrome-extension
+- Headings:
+  - H1: Chrome extension
+  - H2: How it works
+  - H2: Install and pair
+  - H2: Use it
+  - H2: Remote browser nodes
+  - H2: Diagnostics
+  - H2: Security model
 
 ## tools/clawhub.md
 
@@ -9064,6 +9126,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Syntax highlighting
   - H2: Output details contract
   - H3: Collapsed unchanged sections
+  - H3: Multi-file navigation
   - H2: Plugin defaults
   - H3: Persistent viewer URL config
   - H2: Security config
@@ -9218,6 +9281,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Token budgets
   - H2: Model tools
   - H2: Goal context on every turn
+  - H2: Control UI
   - H2: TUI
   - H2: Channel behavior
   - H2: Troubleshooting

@@ -10,14 +10,14 @@ const RICH_ENTITY_INVALID_RE =
   /RICH_MESSAGE_(?:EMAIL|URL|MENTION|HASHTAG|CASHTAG|BOT_COMMAND|PHONE|BANK_CARD)_INVALID/i;
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
-export type TelegramPlainFallbackTrigger = "rich-entity-invalid" | "html-parse";
+type TelegramPlainFallbackTrigger = "rich-entity-invalid" | "html-parse";
 
-export type TelegramPlainFallbackPlan = {
+type TelegramPlainFallbackPlan = {
   plainText: string;
   chunks: string[];
 };
 
-export function isTelegramRichEntityInvalidError(err: unknown): boolean {
+function isTelegramRichEntityInvalidError(err: unknown): boolean {
   return RICH_ENTITY_INVALID_RE.test(formatErrorMessage(err));
 }
 
@@ -25,9 +25,7 @@ export function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
-export function getTelegramPlainFallbackTrigger(
-  err: unknown,
-): TelegramPlainFallbackTrigger | undefined {
+function getTelegramPlainFallbackTrigger(err: unknown): TelegramPlainFallbackTrigger | undefined {
   if (isTelegramRichEntityInvalidError(err)) {
     return "rich-entity-invalid";
   }

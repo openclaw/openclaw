@@ -2340,14 +2340,22 @@ function splitTargetChunks(targets, chunkCount) {
   return chunks;
 }
 
+let cachedBroadScriptTestTargets = null;
+let cachedBroadScriptTestTargetsCwd = null;
+
 function listBroadScriptTestTargets(pattern, cwd) {
   const root = path.join(cwd, "test/scripts");
-  if (!fs.existsSync(root)) {
-    return [];
+  if (cachedBroadScriptTestTargetsCwd !== cwd) {
+    // Broad-target expansion can ask for the same process-stable checkout twice.
+    // Keep one inventory so planning does not repeat the directory walk.
+    cachedBroadScriptTestTargets = fs.existsSync(root)
+      ? listRepoFilesRecursive(root, cwd)
+          .filter((file) => file.endsWith(".test.ts"))
+          .toSorted((left, right) => left.localeCompare(right))
+      : [];
+    cachedBroadScriptTestTargetsCwd = cwd;
   }
-  return listRepoFilesRecursive(root, cwd)
-    .filter((file) => file.endsWith(".test.ts") && path.matchesGlob(file, pattern))
-    .toSorted((left, right) => left.localeCompare(right));
+  return cachedBroadScriptTestTargets.filter((file) => path.matchesGlob(file, pattern));
 }
 
 function listBroadToolingScriptTestTargets(pattern, cwd) {
@@ -2356,14 +2364,24 @@ function listBroadToolingScriptTestTargets(pattern, cwd) {
   );
 }
 
+let cachedToolingFullSuiteTestTargets = null;
+let cachedToolingFullSuiteTestTargetsCwd = null;
+
 function listToolingFullSuiteTestTargets(cwd) {
-  return uniqueOrdered(
+  if (cachedToolingFullSuiteTestTargets && cachedToolingFullSuiteTestTargetsCwd === cwd) {
+    return cachedToolingFullSuiteTestTargets;
+  }
+  // The CLI plans against one process-stable checkout. Reuse its inventory when
+  // callers compare full-suite modes instead of walking the tree for every mode.
+  cachedToolingFullSuiteTestTargets = uniqueOrdered(
     [path.join(cwd, "test"), path.join(cwd, "src", "scripts")].flatMap((root) =>
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
     .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
     .toSorted((left, right) => left.localeCompare(right));
+  cachedToolingFullSuiteTestTargetsCwd = cwd;
+  return cachedToolingFullSuiteTestTargets;
 }
 
 function listUnitFastFullSuiteTestTargets() {
@@ -3729,6 +3747,13 @@ function createVitestArgs(params) {
   ];
 }
 
+export function createVitestPreflightPnpmArgs(config) {
+  if (config !== UI_E2E_VITEST_CONFIG) {
+    return null;
+  }
+  return ["exec", "node", "scripts/ensure-playwright-chromium.mjs"];
+}
+
 export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
@@ -4254,6 +4279,7 @@ export function createVitestRunSpecs(args, params = {}) {
       includeFilePath,
       includePatterns: plan.includePatterns,
       pnpmArgs: createVitestArgs(plan),
+      preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };
   });

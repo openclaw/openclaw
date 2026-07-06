@@ -204,11 +204,11 @@ agent session or the CLI.
 
 ## Suggested skills
 
-OpenClaw detects durable instructions such as “next time” and “remember to” after successful
-interactive turns. On the next turn, the agent offers to save the detected workflow through
-`skill_workshop`; the user decides whether to create a proposal. This built-in suggestion does not
-create or change a skill by itself. Enable `skills.workshop.autonomous.enabled` to create pending
-proposals directly instead.
+OpenClaw detects durable instructions such as “next time,” “remember to,” and reactive corrections
+when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
+the most recent detected workflow through `skill_workshop`; the user decides whether to create a
+proposal. This built-in suggestion does not create or change a skill by itself. Enable
+`skills.workshop.autonomous.enabled` to create pending proposals directly instead.
 
 ## Approval and autonomy
 
@@ -230,11 +230,16 @@ proposals directly instead.
 
 | Setting                    | Default     | Effect                                                                                                                                                                 |
 | -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Lets OpenClaw create pending proposals from durable conversation signals after a successful turn.                                                                      |
+| `autonomous.enabled`       | `false`     | Creates pending proposals directly instead of offering the most recent detected workflow on the next turn.                                                             |
 | `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
 | `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
 | `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
 | `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+
+Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
+corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
+to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
+revises its own pending proposal when another correction targets the same skill.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.

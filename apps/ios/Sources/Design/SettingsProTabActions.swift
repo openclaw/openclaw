@@ -616,6 +616,19 @@ extension SettingsProTab {
         self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID
     }
 
+    var gatewayCustomHeadersTargetStableID: String? {
+        guard let stableID = self.gatewayCredentialTargetStableID else { return nil }
+        if self.currentManualGatewayStableID == stableID {
+            return self.manualGatewayTLS ? stableID : nil
+        }
+        if let active = self.appModel.activeGatewayConnectConfig,
+           active.effectiveStableID == stableID
+        {
+            return active.url.scheme?.lowercased() == "wss" ? stableID : nil
+        }
+        return nil
+    }
+
     var manualGatewayEnabledBinding: Binding<Bool> {
         Binding(
             get: { self.manualGatewayEnabled },

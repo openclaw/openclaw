@@ -344,6 +344,21 @@ private actor WatchSnapshotSendGate {
     @Test @MainActor func `chat session key defaults to main base`() {
         let appModel = NodeAppModel()
         #expect(appModel.chatSessionKey == "main")
+        #expect(appModel.chatDeliveryAgentId == nil)
+    }
+
+    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+        let appModel = NodeAppModel()
+        #expect(appModel.chatDeliveryAgentId == nil)
+
+        appModel.gatewayDefaultAgentId = " Agent-A "
+        #expect(appModel.chatDeliveryAgentId == "agent-a")
+
+        appModel.setSelectedAgentId(" Agent-B ")
+        #expect(appModel.chatDeliveryAgentId == "agent-b")
+
+        appModel.openChat(sessionKey: "agent:Agent-C:incident")
+        #expect(appModel.chatDeliveryAgentId == "agent-c")
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -381,6 +396,7 @@ private actor WatchSnapshotSendGate {
                 name: "Joshtimus Prime",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
             AgentSummary(
@@ -388,6 +404,7 @@ private actor WatchSnapshotSendGate {
                 name: "Rust Claw",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]
@@ -410,6 +427,7 @@ private actor WatchSnapshotSendGate {
                 name: "Rust Claw",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]
@@ -1015,6 +1033,7 @@ private actor WatchSnapshotSendGate {
                     "emoji": AnyCodable("OC"),
                 ],
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]

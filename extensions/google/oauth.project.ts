@@ -1,4 +1,5 @@
 // Google plugin module implements oauth.project behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithTimeout } from "./oauth.http.js";
 import {
   CODE_ASSIST_ENDPOINT_PROD,
@@ -21,7 +22,7 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (response.ok) {
-      const data = (await response.json()) as { email?: string };
+      const data = await readProviderJsonResponse<{ email?: string }>(response, "google.userinfo");
       return data.email;
     }
   } catch {
@@ -74,10 +75,10 @@ async function pollOperation(
     if (!response.ok) {
       continue;
     }
-    const data = (await response.json()) as {
+    const data = await readProviderJsonResponse<{
       done?: boolean;
       response?: { cloudaicompanionProject?: { id?: string } };
-    };
+    }>(response, "google.poll-operation");
     if (data.done) {
       return data;
     }
@@ -135,7 +136,10 @@ async function discoverProject(accessToken: string): Promise<string> {
       });
 
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => null);
+        const errorPayload = await readProviderJsonResponse(
+          response,
+          "google.load-code-assist",
+        ).catch(() => null);
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
           activeEndpoint = endpoint;
@@ -146,7 +150,7 @@ async function discoverProject(accessToken: string): Promise<string> {
         continue;
       }
 
-      data = (await response.json()) as typeof data;
+      data = await readProviderJsonResponse<typeof data>(response, "google.load-code-assist");
       activeEndpoint = endpoint;
       loadError = undefined;
       break;
@@ -211,11 +215,11 @@ async function discoverProject(accessToken: string): Promise<string> {
     throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
   }
 
-  let lro = (await onboardResponse.json()) as {
+  let lro = await readProviderJsonResponse<{
     done?: boolean;
     name?: string;
     response?: { cloudaicompanionProject?: { id?: string } };
-  };
+  }>(onboardResponse, "google.onboard-user");
 
   if (!lro.done && lro.name) {
     lro = await pollOperation(activeEndpoint, lro.name, headers);

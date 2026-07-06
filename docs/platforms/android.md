@@ -289,6 +289,10 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
   - `sms.search`
   - `motion.activity`, `motion.pedometer`
 
+### 9. Workspace files (read-only)
+
+The Home overview includes a **Files** card that browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+
 ## Assistant entrypoints
 
 Android supports launching OpenClaw from the system assistant trigger (Google Assistant). Holding the home button (or another `ACTION_ASSIST` trigger) opens the app; saying "Hey Google, ask OpenClaw `<prompt>`" matches the app's declared App Actions query pattern and hands the prompt into the chat composer without auto-sending it.

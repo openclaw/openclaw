@@ -638,6 +638,28 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("retries snippet-only network errors when sending typing", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledTimes(2);
+  });
+
   it("pins and unpins Telegram messages", async () => {
     loadConfig.mockReturnValue({
       channels: {

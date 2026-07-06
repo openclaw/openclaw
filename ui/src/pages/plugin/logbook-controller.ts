@@ -21,7 +21,7 @@ export type LogbookStatusPayload = {
   timeZone: string;
 };
 
-export type LogbookDistractionPayload = { startMs: number; endMs: number; title: string };
+type LogbookDistractionPayload = { startMs: number; endMs: number; title: string };
 
 export type LogbookCardPayload = {
   id: number;
@@ -38,7 +38,7 @@ export type LogbookCardPayload = {
   keyframeId?: number;
 };
 
-export type LogbookDayStatsPayload = {
+type LogbookDayStatsPayload = {
   trackedMs: number;
   distractionMs: number;
   categories: Array<{ category: string; ms: number }>;

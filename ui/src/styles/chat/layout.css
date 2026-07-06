@@ -360,17 +360,39 @@ openclaw-chat-page {
 .agent-chat__goal {
   align-self: center;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   max-width: calc(100% - 20px);
-  gap: 8px;
+  min-width: 0;
   margin: 0 auto 8px;
-  padding: 7px 12px;
+  padding: 5px 8px 5px 12px;
   color: color-mix(in srgb, var(--text) 82%, var(--muted));
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   font-size: 12px;
   line-height: 1.25;
+}
+
+.agent-chat__goal-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.agent-chat__goal-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.agent-chat__goal-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__goal-label,
@@ -382,13 +404,76 @@ openclaw-chat-page {
 }
 
 .agent-chat__goal-label {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   font-weight: 700;
 }
 
 .agent-chat__goal-objective {
   flex: 1 1 auto;
   color: var(--muted);
+}
+
+.agent-chat__goal-elapsed {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__goal-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.agent-chat__goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.agent-chat__goal-action:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.agent-chat__goal-action svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__goal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px 2px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--text);
+}
+
+.agent-chat__goal-detail-objective {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-chat__goal-detail-note,
+.agent-chat__goal-detail-meta {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .agent-chat__goal--active {
@@ -1005,6 +1090,25 @@ openclaw-chat-page {
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-settings-popover__preference {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-settings-popover__preference select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 74%, transparent);
+  color: var(--text);
+  font: inherit;
 }
 
 .agent-chat__stt-interim {
@@ -2082,155 +2186,6 @@ openclaw-chat-page {
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
-}
-
-.chat-session-picker {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 90;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(520px, calc(100vh - 132px));
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
-  overflow: hidden;
-}
-
-.chat-session-picker__search-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.chat-session-picker__search {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.chat-session-picker__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 36px;
-  padding: 0 12px;
-  font-size: 13px;
-}
-
-.chat-session-picker .chat-session-picker__icon-button.btn--icon {
-  flex: 0 0 36px;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: var(--radius-md);
-}
-
-.chat-session-picker .chat-session-picker__icon-button.btn--icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.chat-session-picker__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* Rows are single-line and minimal: label + trailing time/spinner. The
-   whole row (option button + aside) shares one hover surface so the
-   session-row hover-reveal actions feel like part of the row. */
-.chat-session-picker__option-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  padding-right: 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  transition:
-    background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
-
-.chat-session-picker__option-row:hover,
-.chat-session-picker__option-row:focus-within {
-  background: var(--bg-hover);
-  border-color: color-mix(in srgb, var(--border) 78%, transparent);
-}
-
-.chat-session-picker__option-row--selected {
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
-.chat-session-picker__option {
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 34px;
-  padding: 6px 8px 6px 10px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.chat-session-picker__option-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.chat-session-picker__option-row--selected .chat-session-picker__option-label {
-  font-weight: 600;
-}
-
-/* Touch has no hover: the picker is a deliberate management surface, so
-   keep the actions visible there instead of unreachable. */
-@media (hover: none) {
-  .chat-session-picker .session-action {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .chat-session-picker .session-row-trail {
-    opacity: 0;
-  }
-}
-
-.chat-session-picker__status {
-  padding: 14px 10px;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-}
-
-.chat-session-picker__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-}
-
-.chat-session-picker__count {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .chat-controls__agent {

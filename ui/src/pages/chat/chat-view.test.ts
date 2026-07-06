@@ -29,13 +29,18 @@ import {
 } from "./attachment-payload-store.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { renderChat, resetChatViewState } from "./chat-view.ts";
-import { renderChatQueue } from "./components/chat-composer.ts";
+import { renderChatQueue, resetChatComposerState } from "./components/chat-composer.ts";
 import {
   renderChatModelControls,
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
+import {
+  isChatThreadSearchOpen,
+  resetChatThreadPresentationState,
+  toggleChatThreadSearch,
+} from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
@@ -226,7 +231,6 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
 vi.mock("../../lib/agents/display.ts", () => ({
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
-  agentLogoUrl: () => "/openclaw-logo.svg",
   assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
   resolveChatAvatarRenderUrl: (
     candidate: string | null | undefined,
@@ -562,6 +566,7 @@ function createChatProps(
   overrides: Partial<Parameters<typeof renderChat>[0]> = {},
 ): Parameters<typeof renderChat>[0] {
   return {
+    paneId: "single",
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
@@ -596,6 +601,7 @@ function createChatProps(
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
     assistantName: "Val",
+    sendShortcut: "enter",
     assistantAvatar: null,
     userName: null,
     userAvatar: null,
@@ -960,35 +966,121 @@ describe("chat history render window", () => {
 });
 
 describe("chat goal status", () => {
-  it("renders the active session goal inside the composer", () => {
-    const container = renderChatView({
-      sessions: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
+  function goalSessions(goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {}) {
+    return createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 2,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "Land the web goal UI",
+          status: "active",
+          createdAt: Date.now() - 15_000,
           updatedAt: 2,
-          goal: {
-            schemaVersion: 1,
-            id: "goal-1",
-            objective: "Land the web goal UI",
-            status: "active",
-            createdAt: 1,
-            updatedAt: 2,
-            tokenStart: 100,
-            tokensUsed: 12_400,
-            tokenBudget: 50_000,
-            continuationTurns: 0,
-          },
+          tokenStart: 100,
+          tokensUsed: 12_400,
+          tokenBudget: 50_000,
+          continuationTurns: 0,
+          ...goal,
         },
-      ]),
-    });
+      },
+    ]);
+  }
+
+  it("renders the goal pill with status, objective, and elapsed time", () => {
+    const container = renderChatView({ sessions: goalSessions() });
 
     const goal = container.querySelector(".agent-chat__goal");
-    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Pursuing goal (12k/50k) Land the web goal UI",
+    expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
+    expect(goal?.querySelector(".agent-chat__goal-objective")?.textContent).toBe(
+      "Land the web goal UI",
     );
+    expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("15s");
     expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
     expect(goal?.closest(".agent-chat__composer-status-stack")).not.toBeNull();
+  });
+
+  it("dispatches goal commands from the pill controls", () => {
+    const onGoalCommand = vi.fn();
+    const container = renderChatView({ sessions: goalSessions(), onGoalCommand });
+
+    container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
+    container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
+
+    expect(onGoalCommand).toHaveBeenNthCalledWith(1, "/goal pause");
+    expect(onGoalCommand).toHaveBeenNthCalledWith(2, "/goal clear");
+    expect(container.querySelector('button[aria-label="Resume goal"]')).toBeNull();
+  });
+
+  it("offers resume instead of pause for paused goals", () => {
+    const onGoalCommand = vi.fn();
+    const container = renderChatView({
+      sessions: goalSessions({ status: "paused", pausedAt: Date.now() }),
+      onGoalCommand,
+    });
+
+    expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
+    container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
+    expect(onGoalCommand).toHaveBeenCalledWith("/goal resume");
+  });
+
+  it("prefills the composer draft when editing the goal", () => {
+    const onDraftChange = vi.fn();
+    const container = renderChatView({
+      sessions: goalSessions(),
+      onGoalCommand: vi.fn(),
+      onDraftChange,
+    });
+
+    container.querySelector<HTMLButtonElement>('button[aria-label="Edit goal"]')?.click();
+
+    expect(onDraftChange).toHaveBeenCalledWith("/goal edit Land the web goal UI");
+  });
+
+  it("expands goal details on demand", () => {
+    const props = createChatProps({
+      sessions: goalSessions({ lastStatusNote: "Waiting for CI" }),
+      onGoalCommand: vi.fn(),
+    });
+    const container = document.createElement("div");
+    render(renderChat(props), container);
+
+    expect(container.querySelector(".agent-chat__goal-detail")).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show goal details"]',
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    toggle?.click();
+    render(renderChat(props), container);
+
+    const detail = container.querySelector(".agent-chat__goal-detail");
+    expect(detail?.querySelector(".agent-chat__goal-detail-objective")?.textContent).toBe(
+      "Land the web goal UI",
+    );
+    expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
+      "Waiting for CI",
+    );
+    expect(detail?.querySelector(".agent-chat__goal-detail-meta")?.textContent?.trim()).toBe(
+      "12k/50k · 15s",
+    );
+    expect(
+      container
+        .querySelector('button[aria-label="Hide goal details"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("hides goal action buttons when the composer cannot send", () => {
+    const container = renderChatView({
+      sessions: goalSessions(),
+      onGoalCommand: vi.fn(),
+      connected: false,
+    });
+
+    expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Show goal details"]')).not.toBeNull();
   });
 });
 
@@ -1080,11 +1172,20 @@ describe("chat composer workbench", () => {
       container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
     ).find((row) => row.textContent?.includes("ui"));
     browserDirectory?.querySelector<HTMLButtonElement>(".chat-workspace-rail__file-open")?.click();
+    const browserFile = Array.from(
+      container.querySelectorAll<HTMLDivElement>(".chat-workspace-rail__file"),
+    ).find((row) => row.textContent?.includes("package.json"));
+    const browserFileButton = browserFile?.querySelector<HTMLButtonElement>(
+      ".chat-workspace-rail__file-open",
+    );
+    expect(browserFileButton?.disabled).toBe(false);
+    browserFileButton?.click();
     container
       .querySelector<HTMLButtonElement>('button[aria-label="Collapse session workspace"]')
       ?.click();
 
-    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md");
+    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md", "session");
+    expect(onOpenFile).toHaveBeenCalledWith("package.json", "workspace");
     expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
     expect(onBrowsePath).toHaveBeenCalledWith("ui");
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
@@ -1199,6 +1300,54 @@ afterEach(() => {
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
   vi.unstubAllGlobals();
+});
+
+describe("per-pane chat presentation state", () => {
+  it("keeps slash menus independent and resets only the targeted pane", () => {
+    const paneA = document.createElement("div");
+    const paneB = document.createElement("div");
+    const renderPane = (container: HTMLElement, paneId: string, draft: string) => {
+      render(renderChat(createChatProps({ paneId, draft, getDraft: () => draft })), container);
+    };
+    const openSlashMenu = (container: HTMLElement) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (!textarea) {
+        throw new Error("expected composer textarea");
+      }
+      textarea.value = "/";
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    };
+
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    openSlashMenu(paneA);
+    renderPane(paneA, "pane-a", "/");
+
+    expect(paneA.querySelector(".slash-menu")).not.toBeNull();
+    expect(paneB.querySelector(".slash-menu")).toBeNull();
+
+    openSlashMenu(paneB);
+    renderPane(paneB, "pane-b", "/");
+    expect(paneA.querySelector(".slash-menu")?.id).toBe("chat-pane-a-slash-menu-listbox");
+    expect(paneB.querySelector(".slash-menu")?.id).toBe("chat-pane-b-slash-menu-listbox");
+    resetChatComposerState("pane-a");
+    renderPane(paneA, "pane-a", "/");
+
+    expect(paneA.querySelector(".slash-menu")).toBeNull();
+    expect(paneB.querySelector(".slash-menu")).not.toBeNull();
+  });
+
+  it("keeps thread search independent and resets only the targeted pane", () => {
+    toggleChatThreadSearch("pane-a", vi.fn());
+    expect(isChatThreadSearchOpen("pane-a")).toBe(true);
+    expect(isChatThreadSearchOpen("pane-b")).toBe(false);
+
+    toggleChatThreadSearch("pane-b", vi.fn());
+    resetChatThreadPresentationState("pane-a");
+
+    expect(isChatThreadSearchOpen("pane-a")).toBe(false);
+    expect(isChatThreadSearchOpen("pane-b")).toBe(true);
+  });
 });
 
 describe("chat transcript rendering cache", () => {
@@ -1947,10 +2096,12 @@ describe("chat slash menu accessibility", () => {
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  function keydownComposer(container: HTMLElement, key: string) {
+  function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
+    textarea!.dispatchEvent(event);
+    return event;
   }
 
   it("requests slash command hydration only after slash intent", () => {
@@ -2241,6 +2392,46 @@ describe("chat slash menu accessibility", () => {
 
     expect(onDraftChange).toHaveBeenCalledWith("send from enter");
     expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe("Enter");
+  });
+
+  it("requires Ctrl or Meta to send in modifier mode", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({
+      onDraftChange,
+      onSend,
+      sendShortcut: "modifier-enter",
+    });
+
+    inputDraft(container, "compose across lines");
+    const plainEnter = keydownComposer(container, "Enter");
+    const shiftedEnter = keydownComposer(container, "Enter", { ctrlKey: true, shiftKey: true });
+
+    expect(plainEnter.defaultPrevented).toBe(false);
+    expect(shiftedEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+
+    keydownComposer(container, "Enter", { ctrlKey: true });
+    keydownComposer(container, "Enter", { metaKey: true });
+
+    expect(onDraftChange).toHaveBeenCalledWith("compose across lines");
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe(
+      "Control+Enter Meta+Enter",
+    );
+  });
+
+  it("does not send a modifier shortcut during IME composition", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, sendShortcut: "modifier-enter" });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    keydownComposer(container, "Enter", { ctrlKey: true });
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("commits local draft input on blur", () => {
@@ -2300,7 +2491,7 @@ describe("chat slash menu accessibility", () => {
 
     const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
     expect(wrapper?.hasAttribute("role")).toBe(false);
@@ -2310,10 +2501,10 @@ describe("chat slash menu accessibility", () => {
     expect(textarea?.hasAttribute("role")).toBe(false);
     expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
     expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(textarea?.getAttribute("aria-controls")).toBe("chat-slash-menu-listbox");
+    expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
     expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
     expect(listbox?.getAttribute("role")).toBe("listbox");
-    expect(activeId).toMatch(/^chat-slash-option-command-/u);
+    expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
   });
 
@@ -2338,7 +2529,7 @@ describe("chat slash menu accessibility", () => {
     const activeOption = nextActiveId
       ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
       : null;
-    const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
+    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
 
     if (!nextActiveId) {
       throw new Error("Expected command navigation to set aria-activedescendant");
@@ -2371,11 +2562,11 @@ describe("chat slash menu accessibility", () => {
     container = renderChatView({ draft, onDraftChange });
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
     expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
-    expect(activeId).toBe("chat-slash-option-arg-tools-compact");
+    expect(activeId).toBe("chat-single-slash-option-arg-tools-compact");
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
   });
 

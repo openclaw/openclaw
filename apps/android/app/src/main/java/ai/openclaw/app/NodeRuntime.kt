@@ -405,7 +405,6 @@ class NodeRuntime private constructor(
       camera = camera,
       externalAudioCaptureActive = externalAudioCaptureActive,
       showCameraHud = ::showCameraHud,
-      triggerCameraFlash = ::triggerCameraFlash,
       invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
     )
 
@@ -421,6 +420,8 @@ class NodeRuntime private constructor(
       location = location,
       json = json,
       isForeground = { _isForeground.value },
+      locationMode = { locationMode.value },
+      backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
       locationPreciseEnabled = { locationPreciseEnabled.value },
     )
 
@@ -599,9 +600,6 @@ class NodeRuntime private constructor(
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
   val cameraHud: StateFlow<CameraHudState?> = _cameraHud.asStateFlow()
 
-  private val _cameraFlashToken = MutableStateFlow(0L)
-  val cameraFlashToken: StateFlow<Long> = _cameraFlashToken.asStateFlow()
-
   private val _canvasA2uiHydrated = MutableStateFlow(false)
   val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
   private val _canvasRehydratePending = MutableStateFlow(false)
@@ -714,6 +712,7 @@ class NodeRuntime private constructor(
   private val voiceCaptureOwnershipEpoch = AtomicLong()
   private val talkPttCommandEpoch = AtomicLong()
   private val talkPttOwnership = AtomicReference<TalkPttOwnership?>()
+
   // Keep ownership epochs and their service/capture state transitions atomic.
   // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
   private val voiceCaptureOwnershipLock = Any()
@@ -810,6 +809,7 @@ class NodeRuntime private constructor(
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
+      customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
   private suspend fun subscribeOperatorSessionEvents() {
@@ -874,6 +874,7 @@ class NodeRuntime private constructor(
       onTlsFingerprint = { stableId, fingerprint ->
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
       },
+      customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
   /**
@@ -942,6 +943,7 @@ class NodeRuntime private constructor(
       transcriptCache = chatTranscriptCache,
       cacheScope = ::chatCacheScope,
       commandOutbox = chatCommandOutbox,
+      recordModelRecent = prefs::recordModelRecent,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -1444,6 +1446,8 @@ class NodeRuntime private constructor(
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
+  val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
+  val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
@@ -1734,6 +1738,12 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
+      talkMode.finishingPushToTalkCaptureId?.let {
+        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+          code = "PTT_BUSY",
+          message = "PTT_BUSY: previous push-to-talk turn is still finishing",
+        )
+      }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
@@ -1772,14 +1782,17 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      talkMode.activePushToTalkCaptureId?.let { captureId ->
-        val payload = TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy")
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      currentTalkPttOnceBusy()?.let { busy ->
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
       }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       val start =
-        withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
+        withPreparedTalkPttCommand(
+          lifecycleEpoch = lifecycleEpoch,
+          commandEpoch = commandEpoch,
+          beforePrepare = ::currentTalkPttOnceBusy,
+        ) { ownershipEpoch ->
           val started =
             talkMode.beginPushToTalkOnce(
               canStartCapture = {
@@ -1789,12 +1802,11 @@ class NodeRuntime private constructor(
                   voiceCaptureOwnershipEpoch.get() == ownershipEpoch
               },
             )
-          val captureId =
-            when (started) {
-              is TalkPttOnceStart.Busy -> started.payload.captureId
-              is TalkPttOnceStart.Started -> started.captureId
-            }
-          recordTalkPttOwnership(captureId = captureId, ownershipEpoch = ownershipEpoch)
+          when (started) {
+            is TalkPttOnceStart.Busy -> cleanupFailedTalkCapture(ownershipEpoch)
+            is TalkPttOnceStart.Started ->
+              recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          }
           started
         }
       val payload =
@@ -1808,9 +1820,17 @@ class NodeRuntime private constructor(
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
+  private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
+    val captureId = talkMode.activePushToTalkCaptureId ?: talkMode.finishingPushToTalkCaptureId ?: return null
+    return TalkPttOnceStart.Busy(
+      TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy"),
+    )
+  }
+
   private suspend fun <T> withPreparedTalkPttCommand(
     lifecycleEpoch: Long,
     commandEpoch: Long,
+    beforePrepare: () -> T? = { null },
     block: suspend (ownershipEpoch: Long) -> T,
   ): T =
     voiceCapturePreparationMutex.withLock {
@@ -1823,6 +1843,7 @@ class NodeRuntime private constructor(
       ) {
         throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
       }
+      beforePrepare()?.let { return@withLock it }
       val ownershipEpoch = prepareTalkCapture(lifecycleEpoch, commandEpoch)
       try {
         if (
@@ -1941,12 +1962,6 @@ class NodeRuntime private constructor(
       val ownership = talkPttOwnership.get()
       if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
       finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
-    }
-  }
-
-  private fun finishTalkCaptureIfIdle(ownershipEpoch: Long) {
-    synchronized(voiceCaptureOwnershipLock) {
-      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
     }
   }
 
@@ -2643,12 +2658,50 @@ class NodeRuntime private constructor(
     chat.refresh()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    chat.refreshSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    chat.refreshSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    chat.patchSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    chat.deleteSession(key)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = chat.forkSession(parentKey)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
+  }
+
+  fun setChatSessionModel(
+    sessionKey: String,
+    modelRef: String?,
+  ) {
+    chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
   }
 
   fun switchChatSession(sessionKey: String) {
@@ -2659,8 +2712,8 @@ class NodeRuntime private constructor(
     chat.abort()
   }
 
-  fun startNewChat() {
-    chat.startNewChat()
+  fun startNewChat(worktree: Boolean = false) {
+    chat.startNewChat(worktree = worktree)
   }
 
   fun sendChat(
@@ -2772,6 +2825,36 @@ class NodeRuntime private constructor(
     }
   }
 
+  /** Lists one directory of the active agent's workspace (read-only RPC). */
+  suspend fun listWorkspaceFiles(
+    path: String?,
+    offset: Int? = null,
+  ): GatewayWorkspaceListing {
+    val params =
+      buildJsonObject {
+        put("agentId", JsonPrimitive(workspaceAgentId()))
+        if (!path.isNullOrEmpty()) put("path", JsonPrimitive(path))
+        if (offset != null && offset > 0) put("offset", JsonPrimitive(offset))
+      }
+    val res = operatorSession.request("agents.workspace.list", params.toString())
+    return parseWorkspaceListing(json.parseToJsonElement(res))
+      ?: throw IllegalStateException("agents.workspace.list returned no listing")
+  }
+
+  /** Fetches one workspace file preview (UTF-8 text or base64 image). */
+  suspend fun fetchWorkspaceFile(path: String): GatewayWorkspaceFile {
+    val params =
+      buildJsonObject {
+        put("agentId", JsonPrimitive(workspaceAgentId()))
+        put("path", JsonPrimitive(path))
+      }
+    val res = operatorSession.request("agents.workspace.get", params.toString(), timeoutMs = 30_000)
+    return parseWorkspaceFile(json.parseToJsonElement(res))
+      ?: throw IllegalStateException("agents.workspace.get returned no file")
+  }
+
+  private fun workspaceAgentId(): String = resolveActiveAgentId().ifEmpty { "main" }
+
   private suspend fun refreshAgentsFromGateway() {
     if (!operatorConnected) return
     try {
@@ -2795,6 +2878,7 @@ class NodeRuntime private constructor(
             id = id,
             name = name?.takeIf { it.isNotEmpty() },
             emoji = emoji?.takeIf { it.isNotEmpty() },
+            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
           )
         } ?: emptyList()
 
@@ -3334,27 +3418,6 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
-    models
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
-        if (id.isEmpty()) return@mapNotNull null
-        val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
-        val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
-        GatewayModelSummary(
-          id = id,
-          name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
-          provider = provider,
-          available = obj.optionalBoolean("available"),
-          supportsVision = "image" in inputTypes,
-          supportsAudio = "audio" in inputTypes,
-          supportsDocuments = "document" in inputTypes,
-          supportsReasoning = obj["reasoning"].toString().trim() == "true",
-          contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
-        )
-      }.orEmpty()
-
   private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
     val sanitizedLine = sanitizeGatewayLogText(line)
     val root =
@@ -3500,11 +3563,6 @@ class NodeRuntime private constructor(
       }.orEmpty()
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
-
-  private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
-    nodes
-      ?.mapNotNull(::parseGatewayNodeSummary)
-      .orEmpty()
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
@@ -3860,11 +3918,6 @@ class NodeRuntime private constructor(
     return trimmed.ifEmpty { null }
   }
 
-  private fun triggerCameraFlash() {
-    // Token is used as a pulse trigger; value doesn't matter as long as it changes.
-    _cameraFlashToken.value = SystemClock.elapsedRealtimeNanos()
-  }
-
   private fun showCameraHud(
     message: String,
     kind: CameraHudKind,
@@ -3995,6 +4048,7 @@ data class GatewayAgentSummary(
   val id: String,
   val name: String?,
   val emoji: String?,
+  val workspaceGit: Boolean = false,
 )
 
 data class GatewayModelSummary(
@@ -4008,6 +4062,27 @@ data class GatewayModelSummary(
   val supportsReasoning: Boolean,
   val contextTokens: Long?,
 )
+
+internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
+  models
+    ?.mapNotNull { item ->
+      val obj = item.asObjectOrNull() ?: return@mapNotNull null
+      val id = obj["id"].asStringOrNull()?.trim().orEmpty()
+      if (id.isEmpty()) return@mapNotNull null
+      val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
+      val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
+      GatewayModelSummary(
+        id = id,
+        name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
+        provider = provider,
+        available = obj.optionalBoolean("available"),
+        supportsVision = "image" in inputTypes,
+        supportsAudio = "audio" in inputTypes,
+        supportsDocuments = "document" in inputTypes,
+        supportsReasoning = obj["reasoning"].toString().trim() == "true",
+        contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+      )
+    }.orEmpty()
 
 data class GatewayModelProviderSummary(
   val id: String,

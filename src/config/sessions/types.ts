@@ -263,6 +263,12 @@ export type SessionEntry = {
   archivedAt?: number;
   /** Timestamp (ms) when the session was pinned for quick access. */
   pinnedAt?: number;
+  /** Timestamp (ms) when an operator client last marked the session read. */
+  lastReadAt?: number;
+  /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
+  markedUnreadAt?: number;
+  /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
+  lastActivityAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
@@ -298,8 +304,8 @@ export type SessionEntry = {
   goal?: SessionGoal;
   /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
   pendingSkillSuggestion?: PendingSkillSuggestion;
-  /** Fingerprint of the last signal queued as a skill suggestion. */
-  lastSkillSuggestionSignalHash?: string;
+  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+  skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */

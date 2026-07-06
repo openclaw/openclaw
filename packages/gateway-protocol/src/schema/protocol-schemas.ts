@@ -80,6 +80,14 @@ import {
   ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
+  AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFileSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+} from "./agents-workspace.js";
+import {
   ArtifactSummarySchema,
   ArtifactsDownloadParamsSchema,
   ArtifactsDownloadResultSchema,
@@ -88,6 +96,7 @@ import {
   ArtifactsListParamsSchema,
   ArtifactsListResultSchema,
 } from "./artifacts.js";
+import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
@@ -118,6 +127,8 @@ import {
   TalkSessionTurnParamsSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
+  TtsSpeakParamsSchema,
+  TtsSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
@@ -281,8 +292,10 @@ import {
   SessionFileKindSchema,
   SessionFileRelevanceSchema,
   SessionOperationEventSchema,
+  SessionWorktreeInfoSchema,
   SessionsCleanupParamsSchema,
   SessionsCreateParamsSchema,
+  SessionsCreateResultSchema,
   SessionsDeleteParamsSchema,
   SessionsDescribeParamsSchema,
   SessionsFilesGetParamsSchema,
@@ -449,7 +462,9 @@ export const ProtocolSchemas = {
   SessionsFilesListResult: SessionsFilesListResultSchema,
   SessionsFilesGetParams: SessionsFilesGetParamsSchema,
   SessionsFilesGetResult: SessionsFilesGetResultSchema,
+  SessionWorktreeInfo: SessionWorktreeInfoSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
+  SessionsCreateResult: SessionsCreateResultSchema,
   SessionsSendParams: SessionsSendParamsSchema,
   SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
@@ -462,7 +477,10 @@ export const ProtocolSchemas = {
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
 
-  // Task ledger and config/wizard setup payloads.
+  // Audit/task ledgers and config/wizard setup payloads.
+  AuditEvent: AuditEventSchema,
+  AuditListParams: AuditListParamsSchema,
+  AuditListResult: AuditListResultSchema,
   TaskSummary: TaskSummarySchema,
   TasksListParams: TasksListParamsSchema,
   TasksListResult: TasksListResultSchema,
@@ -521,6 +539,8 @@ export const ProtocolSchemas = {
   TalkSessionOkResult: TalkSessionOkResultSchema,
   TalkSpeakParams: TalkSpeakParamsSchema,
   TalkSpeakResult: TalkSpeakResultSchema,
+  TtsSpeakParams: TtsSpeakParamsSchema,
+  TtsSpeakResult: TtsSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
@@ -544,6 +564,12 @@ export const ProtocolSchemas = {
   AgentsFilesGetResult: AgentsFilesGetResultSchema,
   AgentsFilesSetParams: AgentsFilesSetParamsSchema,
   AgentsFilesSetResult: AgentsFilesSetResultSchema,
+  AgentsWorkspaceEntry: AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFile: AgentsWorkspaceFileSchema,
+  AgentsWorkspaceListParams: AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResult: AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceGetParams: AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResult: AgentsWorkspaceGetResultSchema,
   ArtifactSummary: ArtifactSummarySchema,
   ArtifactsListParams: ArtifactsListParamsSchema,
   ArtifactsListResult: ArtifactsListResultSchema,

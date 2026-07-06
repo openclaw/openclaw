@@ -266,6 +266,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
+    "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
