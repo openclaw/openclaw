@@ -412,6 +412,46 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
+  it("redacts per-agent env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  agents: {
+    list: [
+      {
+        id: "reviewer",
+        env: {
+          OPENCLAW_AGENT_ENV: "plain-agent-env-value",
+        },
+      },
+    ],
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        agents: {
+          list: [
+            {
+              id: "reviewer",
+              env: {
+                OPENCLAW_AGENT_ENV: "plain-agent-env-value",
+              },
+            },
+          ],
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const agents = result.config.agents as { list: Array<{ env: Record<string, string> }> };
+    expect(agents.list[0]?.env.OPENCLAW_AGENT_ENV).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("plain-agent-env-value");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.agents.list[0]?.env.OPENCLAW_AGENT_ENV).toBe("plain-agent-env-value");
+  });
+
   it("redacts install policy env values from config snapshots", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{
