@@ -177,6 +177,31 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
   });
 
+  it("does NOT apply graphMediaFallback to channel conversations", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    // Channel Graph URL building still has known team-GUID and reply-URL
+    // defects, so the widened trigger must not route channel traffic there.
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      conversationType: "channel",
+      conversationId: "19:channel@thread.tacv2",
+      graphMediaFallback: true,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: "<div>please read the attached file</div>",
+        },
+      ],
+    });
+
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+  });
+
   it("does NOT apply graphMediaFallback to personal Bot Framework chats", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
