@@ -76,7 +76,7 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
-export type ChatTimestampDisplay = {
+type ChatTimestampDisplay = {
   label: string;
   title: string;
   dateTime: string;
@@ -548,7 +548,7 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -1228,6 +1228,7 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   return (
+    isCanonicalInboundMediaSource(trimmed) ||
     trimmed.startsWith("file://") ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
@@ -1235,9 +1236,28 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
+function isCanonicalInboundMediaSource(source: string): boolean {
+  // Match the raw one-segment form first; URL parsing would erase dot segments.
+  const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
+  if (!match?.[1]) {
+    return false;
+  }
+  try {
+    const id = decodeURIComponent(match[1]);
+    return (
+      id !== "." && id !== ".." && !id.includes("/") && !id.includes("\\") && !id.includes("\0")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
   if (!isLocalAssistantAttachmentSource(trimmed)) {
+    return null;
+  }
+  if (isCanonicalInboundMediaSource(trimmed)) {
     return null;
   }
   if (trimmed.startsWith("file://")) {
@@ -1290,6 +1310,9 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
+  if (isCanonicalInboundMediaSource(source)) {
+    return true;
+  }
   const normalizedSource = normalizeLocalAttachmentPath(source);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]

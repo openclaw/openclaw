@@ -279,7 +279,7 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
-export type WorkboardLifecycleState =
+type WorkboardLifecycleState =
   | "unlinked"
   | "missing"
   | "idle"

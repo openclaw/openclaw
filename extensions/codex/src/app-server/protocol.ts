@@ -363,6 +363,7 @@ export type CodexDynamicToolCallParams = {
 export type CodexDynamicToolCallResponse = {
   asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
+  diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
   success: boolean;
@@ -370,6 +371,7 @@ export type CodexDynamicToolCallResponse = {
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
+export type CodexDynamicToolDiagnosticTerminalReason = "failed" | "cancelled" | "timed_out";
 
 export type CodexDynamicToolCallOutputContentItem =
   | {

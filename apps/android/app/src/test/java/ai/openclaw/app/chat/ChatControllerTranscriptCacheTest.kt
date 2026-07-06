@@ -267,6 +267,81 @@ class ChatControllerTranscriptCacheTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun sessionListParsesGroupingAndUnreadMetadata() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {
+                  "sessions": [{
+                    "key": "main",
+                    "label": "Daily",
+                    "category": "Work",
+                    "pinned": true,
+                    "archived": false,
+                    "unread": true,
+                    "lastReadAt": 10,
+                    "lastActivityAt": 20
+                  }]
+                }
+                """.trimIndent()
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      val session = controller.sessions.value.single()
+      assertEquals("Daily", session.label)
+      assertEquals("Work", session.category)
+      assertEquals(true, session.pinned)
+      assertEquals(false, session.archived)
+      assertEquals(true, session.unread)
+      assertEquals(10L, session.lastReadAt)
+      assertEquals(20L, session.lastActivityAt)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun partialSessionChangedEventPreservesExistingMetadata() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" ->
+                """{"sessions":[{"key":"main","label":"Daily","category":"Work","pinned":true,"unread":true}]}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"main","lastActivityAt":30}}""",
+      )
+
+      val session = controller.sessions.value.single()
+      assertEquals("Daily", session.label)
+      assertEquals("Work", session.category)
+      assertEquals(true, session.pinned)
+      assertEquals(true, session.unread)
+      assertEquals(30L, session.lastActivityAt)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun truncatedSessionListRetainsActiveDeepTranscript() =
     runTest {
       val cache = FakeTranscriptCache()

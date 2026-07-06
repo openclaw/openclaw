@@ -44,6 +44,7 @@ import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
+import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
 import {
   type GatewayChannelManager,
   startGatewayChannelHealthMonitor,
@@ -735,7 +736,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   return { applyHotReload, requestGatewayRestart };
 }
 
-export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigReloaderParams) {
+export function startManagedGatewayConfigReloader(
+  params: ManagedGatewayConfigReloaderParams,
+): GatewayConfigReloaderHandle {
   if (params.minimalTestGateway) {
     return { stop: async () => {} };
   }
@@ -901,5 +904,6 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       abortActiveGmailRestart();
       await configReloader.stop();
     },
+    hotReloadStatus: configReloader.hotReloadStatus,
   };
 }

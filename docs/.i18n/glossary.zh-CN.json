@@ -1240,6 +1240,10 @@
     "target": "Agent 配置参考"
   },
   {
+    "source": "Audit records",
+    "target": "审计记录"
+  },
+  {
     "source": "Background process",
     "target": "后台进程"
   },

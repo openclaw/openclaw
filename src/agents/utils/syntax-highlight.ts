@@ -13,7 +13,7 @@ export type HighlightFormatter = (text: string) => string;
 export type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
 
 /** Options used when highlighting code and rendering themed text. */
-export interface HighlightOptions {
+interface HighlightOptions {
   language?: string;
   ignoreIllegals?: boolean;
   languageSubset?: string[];
@@ -96,7 +96,7 @@ function isSpanOpenTagStart(html: string, index: number): boolean {
 }
 
 /** Renders highlight.js span HTML into themed plain text. */
-export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
+function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
   let output = "";
   let textBuffer = "";
   const scopes: Array<string | undefined> = [];

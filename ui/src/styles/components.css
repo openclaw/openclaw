@@ -3013,6 +3013,13 @@
   min-width: 0;
 }
 
+.session-key-cell__key {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
 .session-key-cell .session-link,
 .session-key-display-name {
   min-width: 0;
@@ -6917,6 +6924,16 @@ details[open] > .ov-expandable-toggle::after {
    and stays visible for pinned rows even without hover. */
 .session-row-host {
   position: relative;
+}
+
+.session-unread-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .session-row-aside {

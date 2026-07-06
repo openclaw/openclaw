@@ -427,6 +427,7 @@ describe("prepare gate stamp transitions", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("ARG:hosted CI/Testbox gates");
+    expect(result.stdout).toContain(`ARG:${repoRoot}/scripts/verify-pr-hosted-gates.mjs`);
     expect(result.stdout).toContain("ARG:--pr\nARG:100606");
     expect(result.stdout).toContain("ARG:--recent-sha\nARG:cafebabe");
   });

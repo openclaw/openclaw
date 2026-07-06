@@ -21,6 +21,7 @@ const sharedSwiftFiles = [
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownPreprocessor.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerStore.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatModels.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatPayloadDecoding.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessions.swift",

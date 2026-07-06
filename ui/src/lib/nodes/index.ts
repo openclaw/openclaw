@@ -14,7 +14,7 @@ type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-export type NodesGatewaySnapshot = {
+type NodesGatewaySnapshot = {
   client: GatewayRequestClient | null;
   connected: boolean;
 };

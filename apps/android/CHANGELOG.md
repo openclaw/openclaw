@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
+
+Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
+
+Android chat messages now expose long-press actions for whole-message copy, selective text copy, sharing, and quoted replies.
+
 The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
 
 Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
@@ -13,6 +19,8 @@ Canvas main-frame navigation now blocks device-local loopback and unspecified we
 Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
 
 Camera clip capture no longer emits release-path diagnostics containing temporary file details.
+
+Push-to-talk now waits for realtime input and output to stop, keeps finishing turns serialized, and safely resumes the matching relay capture.
 
 ## 2026.6.11 - 2026-07-01
 

@@ -1727,6 +1727,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
@@ -1821,7 +1822,7 @@ jobs:
           }
 
           case "${LIVE_MODEL_PROVIDERS}" in
-            anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+            anthropic) require_any Anthropic ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
             moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
@@ -1851,6 +1852,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
@@ -1996,7 +1998,7 @@ jobs:
           IFS=',' read -r -a providers <<<"${OPENCLAW_LIVE_PROVIDERS}"
           for provider in "${providers[@]}"; do
             case "$provider" in
-              anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+              anthropic) require_any Anthropic ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
               google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
               minimax) require_any MiniMax MINIMAX_API_KEY ;;
               moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
@@ -2213,6 +2215,7 @@ jobs:
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
@@ -2316,6 +2319,11 @@ jobs:
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
             live-acp-bind-docker)
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
                 echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
               else
@@ -2551,6 +2559,11 @@ jobs:
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
             live-acp-bind-docker)
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
                 echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
               else

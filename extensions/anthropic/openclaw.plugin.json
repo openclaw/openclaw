@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerUsageAuthEnvVars": {
+    "anthropic": ["ANTHROPIC_ADMIN_KEY", "ANTHROPIC_ADMIN_API_KEY"]
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "runtimeAugment": true,

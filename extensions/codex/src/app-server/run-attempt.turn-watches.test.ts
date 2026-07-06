@@ -135,8 +135,10 @@ function completedCommand(id: string, command: string): CodexServerNotification 
 
 async function runTurnWatchTimeoutScenario(notifications: CodexServerNotification[]) {
   const harness = createStartedThreadHarness();
+  const onRunAgentEvent = vi.fn();
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
   params.timeoutMs = 100;
+  params.onAgentEvent = onRunAgentEvent;
   const run = runCodexAppServerAttempt(params, {
     turnCompletionIdleTimeoutMs: 500,
     turnAssistantCompletionIdleTimeoutMs: 1_000,
@@ -146,7 +148,7 @@ async function runTurnWatchTimeoutScenario(notifications: CodexServerNotificatio
   for (const notification of notifications) {
     await harness.notify(notification);
   }
-  return { params, result: await run };
+  return { onRunAgentEvent, params, result: await run };
 }
 
 async function runClientCloseScenario(notifications: CodexServerNotification[]) {
@@ -572,7 +574,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
   it("recovers completed assistant output from a non-completion timeout", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const { params, result } = await runTurnWatchTimeoutScenario([
+    const { onRunAgentEvent, params, result } = await runTurnWatchTimeoutScenario([
       completedCommand("cmd-1", "touch done.txt"),
       completedAssistant("msg-1", "Finished."),
     ]);
@@ -586,6 +588,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.itemLifecycle.completedCount).toBe(2);
     expect(result.codexAppServerFailure).toBeUndefined();
     expect(result.promptTimeoutOutcome).toBeUndefined();
+    const terminalLifecycle = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.stream === "lifecycle" && event.data.phase === "end")?.data;
+    expect(terminalLifecycle).toMatchObject({ phase: "end" });
+    expect(terminalLifecycle?.status).toBeUndefined();
+    expect(terminalLifecycle?.aborted).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
       "codex app-server recovered completed assistant output after missing turn completion",
       expect.objectContaining({
@@ -3366,11 +3374,13 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("does not treat global rate-limit notifications as turn progress", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createStartedThreadHarness();
+    const onRunAgentEvent = vi.fn();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 200;
+    params.onAgentEvent = onRunAgentEvent;
 
     const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 15 });
     await harness.waitForMethod("turn/start");
@@ -3433,6 +3443,17 @@ describe("runCodexAppServerAttempt turn watches", () => {
         turnId: "turn-1",
       }),
     );
+    expect(
+      onRunAgentEvent.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.stream === "lifecycle" && event.data.phase === "error")?.data,
+    ).toMatchObject({
+      aborted: true,
+      status: "timed_out",
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
   });
 
   it("clears the thread binding after a completion-idle timeout so the next turn starts fresh", async () => {
@@ -5161,11 +5182,13 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("keeps upstream cancellation aborted when Codex completes the turn as interrupted", async () => {
     const harness = createStartedThreadHarness();
     const abortController = new AbortController();
+    const onRunAgentEvent = vi.fn();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
     params.abortSignal = abortController.signal;
+    params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
 
     await harness.waitForMethod("turn/start");
@@ -5183,6 +5206,52 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.aborted).toBe(true);
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
+    expect(
+      onRunAgentEvent.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.stream === "lifecycle" && event.data.phase === "end")?.data,
+    ).toMatchObject({ aborted: true, status: "cancelled", stopReason: "stop" });
+  });
+
+  it("classifies an upstream hard timeout as timed out lifecycle", async () => {
+    const harness = createStartedThreadHarness();
+    const abortController = new AbortController();
+    const onRunAgentEvent = vi.fn();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.abortSignal = abortController.signal;
+    params.onAgentEvent = onRunAgentEvent;
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+
+    await harness.waitForMethod("turn/start");
+    const timeoutError = new Error("cron watchdog timeout");
+    timeoutError.name = "TimeoutError";
+    abortController.abort(timeoutError);
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(
+      onRunAgentEvent.mock.calls
+        .map(([event]) => event)
+        .find((event) => event.stream === "lifecycle" && event.data.phase === "end")?.data,
+    ).toMatchObject({
+      aborted: true,
+      status: "timed_out",
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
   });
 
   it("releases completion when the app-server client closes during an active turn", async () => {
@@ -5517,11 +5586,13 @@ describe("runCodexAppServerAttempt turn watches", () => {
     // gateway session lane stays locked and every follow-up message queues
     // behind a run that will never resolve.
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let turnStarted = false;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
       if (method === "turn/start") {
+        turnStarted = true;
         return turnStartResult("turn-1", "inProgress");
       }
       return {};
@@ -5543,6 +5614,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "workspace"),
     );
     params.onAgentEvent = () => {
+      // Only explode once the turn is live: pre-turn run-lifecycle events
+      // would otherwise kill the attempt before the projector path under
+      // test (turn/completed handling) ever runs.
+      if (!turnStarted) {
+        return;
+      }
       throw new Error("downstream consumer exploded");
     };
     const run = runCodexAppServerAttempt(params);

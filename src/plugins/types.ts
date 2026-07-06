@@ -645,6 +645,11 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
+  /** Ordered API-key/token candidates, including resolved SecretRefs, for credential classification. */
+  resolveApiKeyCandidatesFromConfigAndStore?: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => Promise<string[]>;
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 

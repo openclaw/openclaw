@@ -90,7 +90,7 @@ export async function loadAgentsList(client: GatewayBrowserClient): Promise<Agen
   return client.request<AgentsListResult>("agents.list", {});
 }
 
-export async function loadAgentFilesList(
+async function loadAgentFilesList(
   client: GatewayBrowserClient,
   agentId: string,
 ): Promise<AgentsFilesListResult | null> {

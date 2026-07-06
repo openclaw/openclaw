@@ -23,6 +23,7 @@ import {
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
@@ -70,8 +71,6 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;
 };
-
-export type GatewaySidecarStartupMode = "start" | "defer";
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
 export function stopPostReadySidecarsAfterCloseStarted(params: {

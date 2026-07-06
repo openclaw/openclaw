@@ -34,6 +34,7 @@ import {
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
+import { flushExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
@@ -52,6 +53,7 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -905,6 +907,7 @@ export async function runCli(argv: string[] = process.argv) {
   let onSigterm: (() => void) | null = null;
   let onSigint: (() => void) | null = null;
   let onExit: (() => void) | null = null;
+  let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
@@ -932,6 +935,8 @@ export async function runCli(argv: string[] = process.argv) {
     }
   };
   const stopStartedProxy = async () => {
+    unregisterProxySignalExitBarrier?.();
+    unregisterProxySignalExitBarrier = null;
     uninstallProxySignalHandlers();
     const handle = proxyHandle;
     proxyHandle = null;
@@ -949,8 +954,9 @@ export async function runCli(argv: string[] = process.argv) {
     if (!proxyHandle || onSigterm || onSigint || onExit) {
       return;
     }
+    unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
     const shutdown = (exitCode: number) => {
-      void stopStartedProxy().finally(() => {
+      void waitForSignalExitBarriers().finally(() => {
         process.exit(exitCode);
       });
     };
@@ -1346,5 +1352,6 @@ export async function runCli(argv: string[] = process.argv) {
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
+    flushExitAfterOneShotOutput();
   }
 }

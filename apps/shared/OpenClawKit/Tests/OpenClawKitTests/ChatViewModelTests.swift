@@ -158,6 +158,7 @@ private func commandChoice(
         acceptsArgs: acceptsArgs)
 }
 
+@MainActor
 private func makeViewModel(
     sessionKey: String = "main",
     activeAgentId: String? = nil,
@@ -178,10 +179,15 @@ private func makeViewModel(
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
+    modelPickerStore: ChatModelPickerStore? = nil,
     onSessionChanged: (@MainActor (String) -> Void)? = nil,
     onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil) async
     -> (TestChatTransport, OpenClawChatViewModel)
 {
+    // Default to a throwaway suite so model selections in unrelated tests never
+    // write favorites/recents into the test host's standard UserDefaults.
+    let pickerStore = modelPickerStore
+        ?? ChatModelPickerStore(defaults: UserDefaults(suiteName: "ChatViewModelTests.\(UUID().uuidString)") ?? .standard)
     let transport = TestChatTransport(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
@@ -199,15 +205,14 @@ private func makeViewModel(
         sendMessageStatus: sendMessageStatus,
         waitForRunCompletionHook: waitForRunCompletionHook,
         healthResponses: healthResponses)
-    let vm = await MainActor.run {
-        OpenClawChatViewModel(
-            sessionKey: sessionKey,
-            transport: transport,
-            activeAgentId: activeAgentId,
-            initialThinkingLevel: initialThinkingLevel,
-            onSessionChanged: onSessionChanged,
-            onThinkingLevelChanged: onThinkingLevelChanged)
-    }
+    let vm = OpenClawChatViewModel(
+        sessionKey: sessionKey,
+        transport: transport,
+        activeAgentId: activeAgentId,
+        modelPickerStore: pickerStore,
+        initialThinkingLevel: initialThinkingLevel,
+        onSessionChanged: onSessionChanged,
+        onThinkingLevelChanged: onThinkingLevelChanged)
     return (transport, vm)
 }
 
@@ -508,7 +513,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func createSession(
         key: String,
         label _: String?,
-        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey: String?,
+        worktree _: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
         if let createSessionHook {
             try await createSessionHook(key, parentSessionKey)
@@ -4697,6 +4703,43 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
     }
 
+    @Test @MainActor func `successful model selection records recent and selected pin updates sections`() async throws {
+        let suiteName = "ChatViewModelTests.modelPicker.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let modelPickerStore = ChatModelPickerStore(defaults: defaults)
+        let now = Date().timeIntervalSince1970 * 1000
+        let selectedID = "openai/gpt-5.4"
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+            modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6"),
+        ]
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [sessionEntry(key: "main", updatedAt: now, model: nil)])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            modelPickerStore: modelPickerStore)
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run { vm.selectModel(selectedID) }
+        try await waitUntil("successful model selection recorded as recent") {
+            await MainActor.run { vm.modelPickerSections.recent.map(\.selectionID) == [selectedID] }
+        }
+        #expect(await transport.patchedModels() == [selectedID])
+        #expect(modelPickerStore.recents == [selectedID])
+
+        await MainActor.run { vm.toggleSelectedModelPinned() }
+        #expect(await MainActor.run { vm.isSelectedModelPinned })
+        #expect(await MainActor.run { vm.modelPickerSections.pinned.map(\.selectionID) } == [selectedID])
+        #expect(await MainActor.run { vm.modelPickerSections.recent.isEmpty })
+    }
+
     @Test func `selecting provider qualified model disambiguates duplicate model I ds`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
@@ -4763,7 +4806,11 @@ struct ChatViewModelTests {
         }
     }
 
-    @Test func `stale model patch completions do not overwrite newer selection`() async throws {
+    @Test @MainActor func `stale model patch completions do not overwrite newer selection`() async throws {
+        let suiteName = "ChatViewModelTests.staleModelPicker.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let modelPickerStore = ChatModelPickerStore(defaults: defaults)
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
@@ -4787,7 +4834,8 @@ struct ChatViewModelTests {
                 if model == "openai/gpt-5.4" {
                     try await Task.sleep(for: .milliseconds(200))
                 }
-            })
+            },
+            modelPickerStore: modelPickerStore)
 
         try await loadAndWaitBootstrap(vm: vm)
 
@@ -4806,6 +4854,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4-pro")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
+        #expect(modelPickerStore.recents == ["openai/gpt-5.4-pro"])
     }
 
     @Test func `send waits for in flight model patch to finish`() async throws {

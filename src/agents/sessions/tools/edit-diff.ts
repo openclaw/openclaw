@@ -150,7 +150,7 @@ function applyReplacements(content: string, replacements: TextReplacement[], off
  * Rewrite only lines touched by fuzzy replacements. Untouched lines retain
  * their original bytes even though matching used normalized content.
  */
-export function applyReplacementsPreservingUnchangedLines(
+function applyReplacementsPreservingUnchangedLines(
   originalContent: string,
   baseContent: string,
   replacements: TextReplacement[],

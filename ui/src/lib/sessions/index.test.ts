@@ -22,6 +22,44 @@ function deferred<T>() {
 }
 
 describe("createSessionCapability", () => {
+  it("passes transcript fork parameters to sessions.create", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return { key: "agent:main:forked" };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client,
+        connected: true,
+        sessionKey: "agent:main:source",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await expect(
+      sessions.create({
+        agentId: "main",
+        parentSessionKey: "agent:main:source",
+        fork: true,
+      }),
+    ).resolves.toBe("agent:main:forked");
+    expect(request).toHaveBeenCalledWith("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "agent:main:source",
+      fork: true,
+    });
+    sessions.dispose();
+  });
+
   it("keeps background hydration non-blocking and retains an omitted selected row", async () => {
     const secondList = deferred<SessionsListResult>();
     let listCalls = 0;

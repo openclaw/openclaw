@@ -12,8 +12,12 @@ run_hosted_prepare_gates() {
 
   local repo
   repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  local scripts_dir="${script_parent_dir:-}"
+  if [ -z "$scripts_dir" ]; then
+    scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  fi
   local args=(
-    scripts/verify-pr-hosted-gates.mjs
+    "$scripts_dir/verify-pr-hosted-gates.mjs"
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"
@@ -337,6 +341,11 @@ prepare_gates() {
   fi
 
   if [ "$has_changelog_update" = "true" ]; then
+    if ! root_changelog_update_allowed_for_pr; then
+      echo "CHANGELOG.md is release-owned; normal PRs should put release-note context in the PR body or commit message."
+      echo "Set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 only for explicit release automation or maintainer release closeout."
+      exit 1
+    fi
     normalize_pr_changelog_entries "$pr"
     validate_changelog_attribution_policy
   fi
