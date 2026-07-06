@@ -732,7 +732,12 @@ export const OpenClawSchema = z
                 mcpCommand: z.string().optional(),
                 mcpArgs: z.array(z.string()).optional(),
                 driver: z
-                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
+                  .union([
+                    z.literal("openclaw"),
+                    z.literal("clawd"),
+                    z.literal("existing-session"),
+                    z.literal("extension"),
+                  ])
                   .optional(),
                 headless: z.boolean().optional(),
                 executablePath: z.string().optional(),
@@ -741,13 +746,21 @@ export const OpenClawSchema = z
               })
               .strict()
               .refine(
-                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+                (value) =>
+                  value.driver === "existing-session" ||
+                  value.driver === "extension" ||
+                  value.cdpPort ||
+                  value.cdpUrl,
                 {
                   message: "Profile must set cdpPort or cdpUrl",
                 },
               )
               .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
                 message: 'Profile userDataDir is only supported with driver="existing-session"',
+              })
+              .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
+                message:
+                  'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
               }),
           )
           .optional(),

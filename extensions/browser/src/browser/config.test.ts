@@ -76,6 +76,58 @@ describe("browser config", () => {
     });
   });
 
+  it("provides a built-in chrome extension-relay profile with a derived loopback port", () => {
+    const resolved = resolveBrowserConfig(undefined);
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.driver).toBe("extension");
+    expect(chrome?.attachOnly).toBe(true);
+    // Relay port sits just below the CDP allocation range (controlPort + 8).
+    expect(chrome?.cdpPort).toBe(resolved.extensionRelayDefaultPort);
+    expect(resolved.extensionRelayDefaultPort).toBe(resolved.controlPort + 8);
+    // Without gateway auth material there is no derived token yet, so the relay
+    // cdpUrl carries no Basic credentials.
+    expect(chrome?.cdpUrl).toBe(`http://127.0.0.1:${resolved.extensionRelayDefaultPort}`);
+    expect(chrome?.cdpIsLoopback).toBe(true);
+  });
+
+  it("assigns distinct relay ports to multiple extension profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", color: "#00AA00" },
+      },
+    });
+    const chrome = resolveProfile(resolved, "chrome");
+    const work = resolveProfile(resolved, "work");
+    // Both are extension profiles without an explicit cdpPort; they must not
+    // collide on one relay port (the second would fail to bind).
+    expect(chrome?.cdpPort).not.toBe(work?.cdpPort);
+    expect(new Set([chrome?.cdpPort, work?.cdpPort]).size).toBe(2);
+    // Ports count down from the default, staying below the CDP allocation band.
+    expect(Math.max(chrome?.cdpPort ?? 0, work?.cdpPort ?? 0)).toBe(
+      resolved.extensionRelayDefaultPort,
+    );
+  });
+
+  it("honors an explicit cdpPort on an extension profile", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", cdpPort: 20123, color: "#00AA00" },
+      },
+    });
+    expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
+  });
+
+  it("embeds the derived relay token as Basic auth in the extension cdpUrl", () => {
+    const resolved = resolveBrowserConfig(undefined, {
+      gateway: { auth: { mode: "token", token: "gw-secret" } },
+    });
+    expect(resolved.extensionRelayToken).toBeTruthy();
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.cdpUrl).toBe(
+      `http://openclaw:${resolved.extensionRelayToken}@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
+    );
+  });
+
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
     withEnv({ OPENCLAW_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
