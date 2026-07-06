@@ -1440,6 +1440,104 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("restores the selected agent model after clearing a session override", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const agentsList = {
+      agents: [
+        {
+          id: "ops",
+          model: { primary: "anthropic/claude-opus-4-5" },
+          name: "Operations",
+        },
+      ],
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "agent",
+    };
+    const sessionsList = {
+      count: 1,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: [
+        {
+          key: "agent:ops:session-a",
+          kind: "direct",
+          label: "Operations",
+          updatedAt: Date.now(),
+        },
+      ],
+      ts: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "ops",
+      defaultAgentId: "ops",
+      methodResponses: {
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: {
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+              {
+                id: "claude-opus-4-5",
+                name: "Claude Opus 4.5",
+                provider: "anthropic",
+              },
+            ],
+          },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+        "sessions.list": sessionsList,
+      },
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "anthropic" },
+      ],
+      sessionKey: "agent:ops:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+
+      await modelSelect.click();
+      await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      const firstPatch = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(firstPatch.params)).toMatchObject({
+        key: "agent:ops:session-a",
+        model: "openai/gpt-5.5",
+      });
+      expect(await modelSelect.textContent()).toContain("GPT-5.5");
+
+      await modelSelect.click();
+      await main.locator('[data-chat-model-option=""]').click();
+      const patches = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patches[1]?.params)).toMatchObject({
+        key: "agent:ops:session-a",
+        model: null,
+      });
+      expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("clears hover marquee state when a session switch reshuffles recent rows", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
