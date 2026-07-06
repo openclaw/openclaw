@@ -53,7 +53,7 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+    args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
     env: {
       OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1",
     },
@@ -77,12 +77,12 @@ export const BUILD_ALL_STEPS = [
   {
     label: "copy-hook-metadata",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-hook-metadata.ts"],
+    args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
   },
   {
     label: "copy-export-html-templates",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-export-html-templates.ts"],
+    args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
     cache: {
       inputs: [
         "scripts/copy-export-html-templates.ts",
@@ -105,17 +105,17 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-build-info",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-build-info.ts"],
+    args: ["--import", "tsx", "scripts/write-build-info.ts"],
   },
   {
     label: "write-cli-startup-metadata",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-cli-startup-metadata.ts"],
+    args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
   {
     label: "write-cli-compat",
     kind: "node",
-    args: ["--experimental-strip-types", "scripts/write-cli-compat.ts"],
+    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
   },
 ];
 
@@ -276,22 +276,6 @@ function resolveStepEnv(step, env, platform) {
   };
 }
 
-// Some CI runners use Node builds where process.features.typescript is absent or false.
-// Keep --experimental-strip-types build steps working there by preserving the script contract
-// through tsx; removing this makes affected runners fail late in build-all.
-function resolveNodeStepArgs(args, params = {}) {
-  const nodeSupportsTypeScript =
-    params.nodeSupportsTypeScript ?? Boolean(process.features?.typescript);
-  if (nodeSupportsTypeScript || args[0] !== "--experimental-strip-types") {
-    return args;
-  }
-  const scriptPath = args[1];
-  if (typeof scriptPath !== "string" || !scriptPath.endsWith(".ts")) {
-    return args;
-  }
-  return ["--import", "tsx", scriptPath, ...args.slice(2)];
-}
-
 export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
@@ -329,7 +313,7 @@ export function resolveBuildAllStep(step, params = {}) {
   }
   return {
     command: params.nodeExecPath ?? nodeBin,
-    args: resolveNodeStepArgs(step.args, params),
+    args: step.args,
     options: {
       stdio: "inherit",
       env,

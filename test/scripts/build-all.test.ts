@@ -118,69 +118,49 @@ describe("resolveBuildAllStep", () => {
 
   it.each([
     {
-      name: "routes TypeScript stripping through tsx when native stripping is unavailable",
-      step: getBuildAllStep("write-plugin-sdk-entry-dts"),
-      expectedArgs: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
+      label: "write-plugin-sdk-entry-dts",
+      scriptPath: "scripts/write-plugin-sdk-entry-dts.ts",
+      expectedEnv: { FOO: "bar", OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" },
     },
     {
-      name: "forwards extra TypeScript script args through the tsx fallback",
-      step: {
-        label: "custom-typescript-step",
-        kind: "node",
-        args: ["--experimental-strip-types", "scripts/custom.ts", "--check"],
-      },
-      expectedArgs: ["--import", "tsx", "scripts/custom.ts", "--check"],
+      label: "copy-hook-metadata",
+      scriptPath: "scripts/copy-hook-metadata.ts",
+      expectedEnv: { FOO: "bar" },
     },
     {
-      name: "passes through non-TypeScript-strip node args",
-      step: {
-        label: "custom-node-step",
-        kind: "node",
-        args: ["scripts/custom.mjs"],
-      },
-      expectedArgs: ["scripts/custom.mjs"],
+      label: "copy-export-html-templates",
+      scriptPath: "scripts/copy-export-html-templates.ts",
+      expectedEnv: { FOO: "bar" },
     },
     {
-      name: "passes through non-TypeScript files using strip-types",
-      step: {
-        label: "custom-js-step",
-        kind: "node",
-        args: ["--experimental-strip-types", "scripts/custom.mjs"],
-      },
-      expectedArgs: ["--experimental-strip-types", "scripts/custom.mjs"],
+      label: "write-build-info",
+      scriptPath: "scripts/write-build-info.ts",
+      expectedEnv: { FOO: "bar" },
     },
-  ])("$name", ({ step, expectedArgs }) => {
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
-      env: { FOO: "bar" },
-      nodeSupportsTypeScript: false,
-    });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: expectedArgs,
-      options: {
-        stdio: "inherit",
-        env: { FOO: "bar" },
-      },
-    });
-  });
-
-  it("keeps native TypeScript stripping when the node binary supports it", () => {
-    const step = getBuildAllStep("write-plugin-sdk-entry-dts");
+    {
+      label: "write-cli-startup-metadata",
+      scriptPath: "scripts/write-cli-startup-metadata.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+    {
+      label: "write-cli-compat",
+      scriptPath: "scripts/write-cli-compat.ts",
+      expectedEnv: { FOO: "bar" },
+    },
+  ])("runs the $label TypeScript step through tsx", ({ label, scriptPath, expectedEnv }) => {
+    const step = getBuildAllStep(label);
 
     const result = resolveBuildAllStep(step, {
       nodeExecPath: "/custom/node",
       env: { FOO: "bar" },
-      nodeSupportsTypeScript: true,
     });
 
     expect(result).toEqual({
       command: "/custom/node",
-      args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
+      args: ["--import", "tsx", scriptPath],
       options: {
         stdio: "inherit",
-        env: { FOO: "bar" },
+        env: expectedEnv,
       },
     });
   });
