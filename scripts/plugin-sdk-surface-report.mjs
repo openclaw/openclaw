@@ -100,9 +100,9 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "setup-adapter-runtime": 1,
   "channel-streaming": 48,
   "approval-reply-runtime": 1,
-  "config-runtime": 123,
+  "config-runtime": 125,
   "config-contracts": 1,
-  "config-types": 421,
+  "config-types": 422,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -192,7 +192,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10430,
+      10436,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

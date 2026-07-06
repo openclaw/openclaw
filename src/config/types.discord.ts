@@ -296,6 +296,18 @@ export type DiscordThreadBindingsConfig = {
   spawnAcpSessions?: boolean;
 };
 
+export type DiscordSlashCommandDeployMode =
+  /** Reconcile on gateway startup whenever native commands are enabled. */
+  | "always"
+  /** Default: persist command-set fingerprints and skip Discord deploy REST when unchanged since last successful deploy. */
+  | "changed-only"
+  /** Skip automatic background deploy when native commands stay enabled. */
+  | "disabled";
+
+export type DiscordSlashCommandDeployConfig = {
+  mode?: DiscordSlashCommandDeployMode;
+};
+
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
@@ -438,6 +450,8 @@ export type DiscordAccountConfig = {
   ui?: DiscordUiConfig;
   /** Slash command configuration. */
   slashCommand?: DiscordSlashCommandConfig;
+  /** Native slash command deploy behavior for this account. */
+  slashCommandDeploy?: DiscordSlashCommandDeployMode | DiscordSlashCommandDeployConfig;
   /** Thread binding lifecycle settings (focus/subagent thread sessions). */
   threadBindings?: DiscordThreadBindingsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */

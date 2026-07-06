@@ -1,10 +1,8 @@
 // Discord provider module implements model/runtime integration.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Client,
@@ -106,6 +104,8 @@ export async function createDiscordMonitorClient(params: {
   createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
   createAutoPresenceController: typeof createDiscordAutoPresenceController;
   isDisallowedIntentsError: (err: unknown) => boolean;
+  /** Persisted fingerprints for Discord command deploy (`slashCommandDeploy.mode=changed-only`). */
+  commandDeployInitialHashes?: Record<string, string>;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
   const clientPlugins: Plugin[] = [
@@ -139,11 +139,10 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
-      commandDeployHashStorePath: path.join(
-        resolveStateDir(process.env),
-        "discord",
-        "command-deploy-cache.json",
-      ),
+      ...(params.commandDeployInitialHashes &&
+      Object.keys(params.commandDeployInitialHashes).length > 0
+        ? { commandDeployInitialHashes: params.commandDeployInitialHashes }
+        : {}),
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",

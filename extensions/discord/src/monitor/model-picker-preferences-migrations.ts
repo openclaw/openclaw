@@ -6,6 +6,15 @@ import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channe
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { listDiscordAccountIds, mergeDiscordAccountConfig } from "../accounts.js";
+import {
+  buildDiscordSlashCommandDeployStoreKey,
+  DISCORD_COMMAND_DEPLOY_CACHE_LEGACY_JSON_RELATIVE_PATH,
+  DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH,
+  DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+  DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+  sanitizeSlashCommandDeployScopeHashes,
+} from "./slash-command-deploy-state.js";
 import {
   normalizePersistedBinding,
   THREAD_BINDINGS_MAX_ENTRIES,
@@ -31,6 +40,12 @@ type LegacyThreadBindingsStore = {
   bindings?: unknown;
 };
 
+type LegacySlashCommandDeployStore = {
+  version?: unknown;
+  entries?: unknown;
+  hashes?: unknown;
+};
+
 function fileExists(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isFile();
@@ -45,6 +60,15 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
     return parsed && typeof parsed === "object"
       ? (parsed as LegacyModelPickerPreferencesStore)
       : null;
+  } catch {
+    return null;
+  }
+}
+
+function readLegacySlashCommandDeployStore(filePath: string): LegacySlashCommandDeployStore | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as LegacySlashCommandDeployStore) : null;
   } catch {
     return null;
   }
@@ -127,6 +151,7 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
 
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
+  cfg,
 }) => {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
   const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
@@ -202,6 +227,95 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
           }
         }
         return out;
+      },
+    });
+  }
+
+  const slashCommandDeploySourcePath = path.join(
+    stateDir,
+    DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH,
+  );
+  if (fileExists(slashCommandDeploySourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord slash command deploy fingerprints",
+      sourcePath: slashCommandDeploySourcePath,
+      targetPath: `plugin state:${DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+      maxEntries: DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "rename",
+      readEntries: () => {
+        const store = readLegacySlashCommandDeployStore(slashCommandDeploySourcePath);
+        if (!store?.entries || typeof store.entries !== "object") {
+          return [];
+        }
+        const out: Array<{ key: string; value: unknown }> = [];
+        for (const [rawKey, rawHashes] of Object.entries(
+          store.entries as Record<string, unknown>,
+        )) {
+          const key = rawKey.trim();
+          if (!key.includes(":")) {
+            continue;
+          }
+          const hashes = sanitizeSlashCommandDeployScopeHashes(rawHashes);
+          if (Object.keys(hashes).length === 0) {
+            continue;
+          }
+          out.push({ key, value: { version: 1, hashes } });
+        }
+        return out;
+      },
+    });
+  }
+
+  const commandDeployCachePath = path.join(
+    stateDir,
+    DISCORD_COMMAND_DEPLOY_CACHE_LEGACY_JSON_RELATIVE_PATH,
+  );
+  if (fileExists(commandDeployCachePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deploy cache (v2026.5.28 and earlier)",
+      sourcePath: commandDeployCachePath,
+      targetPath: `plugin state:${DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE,
+      maxEntries: DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "rename",
+      // Only import when a newer migration hasn't already written plugin state.
+      shouldReplaceExistingEntry: () => false,
+      readEntries: () => {
+        const store = readLegacySlashCommandDeployStore(commandDeployCachePath);
+        // Shipped schema: { hashes: { "<scopeKey>": "<sha256>" } } — flat map, no appId/accountId.
+        // Fan the same hashes out to every known (applicationId, accountId) pair from config so
+        // changed-only comparisons work on the first restart after upgrade.
+        if (!store?.hashes || typeof store.hashes !== "object") {
+          return [];
+        }
+        const hashes = sanitizeSlashCommandDeployScopeHashes(store.hashes);
+        if (Object.keys(hashes).length === 0) {
+          return [];
+        }
+        const accountIds = listDiscordAccountIds(cfg);
+        const entries: Array<{ key: string; value: unknown }> = [];
+        for (const accountId of accountIds) {
+          const merged = mergeDiscordAccountConfig(cfg, accountId);
+          const appId =
+            typeof (merged as Record<string, unknown>).applicationId === "string"
+              ? ((merged as Record<string, unknown>).applicationId as string).trim()
+              : "";
+          if (!appId) {
+            continue;
+          }
+          entries.push({
+            key: buildDiscordSlashCommandDeployStoreKey({ applicationId: appId, accountId }),
+            value: { version: 1, hashes },
+          });
+        }
+        return entries;
       },
     });
   }
