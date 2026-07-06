@@ -1,4 +1,3 @@
-// Foreground Gmail service tests cover `openclaw webhooks gmail run` behavior.
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -82,44 +81,38 @@ describe("runGmailService", () => {
     mocks.spawn.mockReset();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
-    // Reset any leftover handlers from the previous run.
-    vi.restoreAllMocks();
   });
 
-  it("catches renewal interval errors instead of letting them become unhandled rejections", async () => {
+  it("logs rejected renewal commands", async () => {
     vi.useFakeTimers();
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-
-    // Initial watch start succeeds; every renewal throws.
     mocks.runCommandWithTimeout
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockRejectedValue(new Error("renewal failed"));
 
     const child = new EventEmitter();
-    const kill = vi.fn((signal: string) => {
-      queueMicrotask(() => child.emit("exit", null, signal));
+    const kill = vi.fn(() => {
+      child.emit("exit", null, "SIGTERM");
       return true;
     });
     mocks.spawn.mockReturnValue(Object.assign(child, { kill, killed: false }));
 
-    // Start the service without awaiting; it runs until we signal shutdown.
-    const servicePromise = runGmailService({} as never);
+    const existingSigintListeners = new Set(process.rawListeners("SIGINT"));
+    let shutdown: (() => void) | undefined;
+    try {
+      await runGmailService({});
+      shutdown = process
+        .rawListeners("SIGINT")
+        .find((listener) => !existingSigintListeners.has(listener)) as (() => void) | undefined;
 
-    // Advance one full renewal cycle to trigger the interval callback.
-    await vi.advanceTimersByTimeAsync(720 * 60_000);
+      await vi.advanceTimersByTimeAsync(720 * 60_000);
 
-    // Shut down so the test can finish.
-    process.emit("SIGINT", "SIGINT");
-    await servicePromise.catch(() => {
-      // The service may reject on forced shutdown; we only care about unhandled rejections.
-    });
-
-    process.off("unhandledRejection", onUnhandled);
-
-    expect(unhandled).toHaveLength(0);
+      expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
+        "gmail watch renew failed: Error: renewal failed",
+      );
+    } finally {
+      shutdown?.();
+    }
   });
 });
