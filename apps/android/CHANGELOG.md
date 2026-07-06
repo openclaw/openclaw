@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
+
 The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
 
 Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
