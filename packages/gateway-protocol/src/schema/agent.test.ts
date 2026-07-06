@@ -1,7 +1,7 @@
 // Gateway Protocol tests cover agent behavior.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { AgentParamsSchema } from "./agent.js";
+import { AgentParamsSchema, validateAgentParams } from "../index.js";
 
 /**
  * Regression coverage for agent-run schema payloads that carry internal
@@ -81,7 +81,7 @@ describe("AgentParamsSchema", () => {
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
   });
 
-  it("accepts the Paperclip adapter's paperclip metadata field", () => {
+  it("accepts the Paperclip adapter's paperclip metadata field via the gateway validator", () => {
     const params = {
       message: "Heartbeat dispatch from Paperclip adapter.",
       idempotencyKey: "paperclip:heartbeat:001",
@@ -91,10 +91,13 @@ describe("AgentParamsSchema", () => {
       },
     };
 
+    // Value.Check validates the schema shape; validateAgentParams is the same
+    // compiled validator the gateway agent handler uses before dispatch.
     expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+    expect(validateAgentParams(params)).toBe(true);
   });
 
-  it("still rejects other unknown top-level properties", () => {
+  it("still rejects other unknown top-level properties via the gateway validator", () => {
     const params = {
       message: "Heartbeat dispatch from Paperclip adapter.",
       idempotencyKey: "paperclip:heartbeat:002",
@@ -102,5 +105,7 @@ describe("AgentParamsSchema", () => {
     };
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
+    expect(validateAgentParams(params)).toBe(false);
+    expect(validateAgentParams.errors?.[0]?.keyword).toBe("additionalProperties");
   });
 });
