@@ -14,6 +14,9 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
+
+export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import {
   isJsonObject,
   type CodexDynamicToolCallParams,
@@ -31,44 +34,12 @@ export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
 export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
 const LOG_FIELD_MAX_LENGTH = 160;
-const CODEX_TIMEOUT_ABORT_REASONS = new Set([
-  "codex_startup_timeout",
-  "turn_completion_idle_timeout",
-  "turn_progress_idle_timeout",
-  "turn_terminal_idle_timeout",
-]);
 
 type DynamicToolTimeoutDetails = {
   responseMessage: string;
   consoleMessage: string;
   meta: Record<string, unknown>;
 };
-
-/** Preserves timeout provenance when an enclosing run aborts an active tool. */
-export function resolveCodexToolAbortTerminalReason(
-  signal: AbortSignal,
-): "failed" | "cancelled" | "timed_out" {
-  try {
-    const reason = signal.reason;
-    if (typeof reason === "string") {
-      if (CODEX_TIMEOUT_ABORT_REASONS.has(reason)) {
-        return "timed_out";
-      }
-      // Transport loss is a run failure, not an operator cancellation. Native
-      // and dynamic tool diagnostics share this helper and must agree with it.
-      return reason === "client_closed" ? "failed" : "cancelled";
-    }
-    if (reason && typeof reason === "object") {
-      const record = reason as { name?: unknown; reason?: unknown };
-      if (record.name === "TimeoutError" || record.reason === "timeout") {
-        return "timed_out";
-      }
-    }
-  } catch {
-    return "cancelled";
-  }
-  return "cancelled";
-}
 
 function normalizeLogField(value: unknown): string | undefined {
   if (typeof value !== "string") {

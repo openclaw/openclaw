@@ -97,8 +97,8 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.stopped = 0;
   });
 
-  afterEach(() => {
-    unsubs?.agentUnsub();
+  afterEach(async () => {
+    await unsubs?.agentUnsub();
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
