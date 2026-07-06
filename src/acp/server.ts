@@ -128,8 +128,10 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     }
     stopped = true;
     resolveGatewayReady();
-    eventLedger?.close();
+    // Stop the gateway first to prevent in-flight events from writing to the
+    // ledger after the database handles are closed.
     gateway.stop();
+    eventLedger?.close();
     // If no WebSocket is active (e.g. between reconnect attempts),
     // gateway.stop() won't trigger onClose, so resolve directly.
     onClosed();
