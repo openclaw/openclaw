@@ -526,6 +526,55 @@ describe("provider local service", () => {
       expect(policy?.allowedHostnames).toBeUndefined();
       expect(policy?.hostnameAllowlist).toEqual(["my-service.internal"]);
     });
+
+    it("includes allowedHostnames for RFC1918 IPv4 literals so the guard skips private-network checks for that literal", () => {
+      expect(resolveLocalServiceProbePolicy("http://192.168.1.20:8000/v1/models")).toEqual({
+        allowedHostnames: ["192.168.1.20"],
+        hostnameAllowlist: ["192.168.1.20"],
+      });
+    });
+
+    it("includes allowedHostnames for RFC1918 10.0.0.0/8 IPv4 literals", () => {
+      expect(resolveLocalServiceProbePolicy("http://10.0.0.5:11434/v1/models")).toEqual({
+        allowedHostnames: ["10.0.0.5"],
+        hostnameAllowlist: ["10.0.0.5"],
+      });
+    });
+
+    it("includes allowedHostnames for RFC1918 172.16.0.0/12 IPv4 literals", () => {
+      expect(resolveLocalServiceProbePolicy("http://172.20.10.4:9000/v1/models")).toEqual({
+        allowedHostnames: ["172.20.10.4"],
+        hostnameAllowlist: ["172.20.10.4"],
+      });
+    });
+
+    it("includes allowedHostnames for IPv6 unique-local (fc00::/7) literals", () => {
+      expect(resolveLocalServiceProbePolicy("http://[fd00::1]:11434/v1/models")).toEqual({
+        allowedHostnames: ["fd00::1"],
+        hostnameAllowlist: ["fd00::1"],
+      });
+    });
+
+    it("does NOT include allowedHostnames for IPv4 cloud metadata literals (169.254.169.254)", () => {
+      const policy = resolveLocalServiceProbePolicy("http://169.254.169.254/v1/models");
+      expect(policy?.allowedHostnames).toBeUndefined();
+      expect(policy?.hostnameAllowlist).toEqual(["169.254.169.254"]);
+    });
+
+    it("does NOT include allowedHostnames for IPv6 cloud metadata literals (fd00:ec2::254)", () => {
+      const policy = resolveLocalServiceProbePolicy("http://[fd00:ec2::254]/v1/models");
+      expect(policy?.allowedHostnames).toBeUndefined();
+      expect(policy?.hostnameAllowlist).toEqual(["fd00:ec2::254"]);
+    });
+
+    it("does NOT include allowedHostnames for non-RFC1918 IPv4 literals (0.0.0.0, broadcast)", () => {
+      expect(
+        resolveLocalServiceProbePolicy("http://0.0.0.0:8000/v1/models")?.allowedHostnames,
+      ).toBeUndefined();
+      expect(
+        resolveLocalServiceProbePolicy("http://255.255.255.255/v1/models")?.allowedHostnames,
+      ).toBeUndefined();
+    });
   });
 
   it("blocks health probe when public-looking healthUrl resolves to a private IP via DNS rebind", async () => {
@@ -549,5 +598,31 @@ describe("provider local service", () => {
       }),
     ).rejects.toThrow(/resolves to private/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows health probe for operator-configured RFC1918 IPv4 literal without DNS resolution", async () => {
+    // The narrow policy for a private-network IP literal MUST include
+    // `allowedHostnames` so existing operator setups (e.g. a LAN-hosted model
+    // service at `http://192.168.1.20:8000`) keep working after this guard
+    // wiring. The DNS-rebind defense is irrelevant for a literal IP since
+    // there is no DNS lookup to hijack, so `allowedHostnames` does not
+    // re-introduce the public-hostname bypass that the round-2 review fixed.
+    const url = "http://192.168.1.20:8000/v1/models";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    const lookupFn = vi.fn(async () => [
+      { address: "192.168.1.20", family: 4 },
+    ]) as unknown as LookupFn;
+
+    const result = await fetchWithSsrFGuard({
+      url,
+      fetchImpl,
+      lookupFn,
+      policy: resolveLocalServiceProbePolicy(url),
+      auditContext: "test-rfc1918-allow",
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
   });
 });

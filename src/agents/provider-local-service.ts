@@ -4,7 +4,12 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import {
+  isCloudMetadataIpAddress,
+  isLoopbackIpAddress,
+  isRfc1918Ipv4Address,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
@@ -225,17 +230,24 @@ function buildHealthProbeHeaders(
  * The local-service `healthUrl` is operator-controlled, so the guard must
  * accept the configured URL. But because the URL is operator-supplied and
  * not a hardened provider origin, we must NOT use target-derived
- * `allowedHostnames` — that would make every configured hostname bypass
- * private-network checks and accept DNS rebinding to RFC1918/LAN. Instead:
+ * `allowedHostnames` for arbitrary hostnames — that would make every
+ * configured hostname bypass private-network checks and accept DNS
+ * rebinding to RFC1918/LAN. Instead:
  *
- * - For loopback literal hosts (`127.0.0.1`, `::1`, `localhost`), include
- *   the literal in `allowedHostnames` so the guard skips private-network
- *   checks for that loopback literal (the dispatcher's DNS pin still
- *   verifies the resolved address is actually loopback).
- * - For any other hostname, only include `hostnameAllowlist`. The hostname
- *   check passes, but the guard still validates resolved IPs against the
- *   private-network block, so a public-looking healthUrl that DNS-resolves
- *   to a private IP is blocked.
+ * - For loopback literal hosts (`127.0.0.1`, `::1`, `localhost`) and other
+ *   private-network literal IPs (RFC1918 IPv4 + IPv6 unique-local), include
+ *   the literal in `allowedHostnames`. These are operator-chosen IP
+ *   literals with no DNS resolution involved, so the guard's DNS-rebind
+ *   defense cannot apply; including them in `allowedHostnames` keeps
+ *   existing operator setups working without re-introducing the public-
+ *   hostname DNS-rebind bypass fixed in the round-2 review. Cloud metadata
+ *   literals are explicitly excluded so the guard still blocks them via
+ *   `hostnameAllowlist` + its private-network + metadata block.
+ * - For any other hostname (public-looking DNS, public IP literal,
+ *   link-local, unspecified), only include `hostnameAllowlist`. The
+ *   hostname check passes, but the guard still validates resolved IPs
+ *   against the private-network block, so a public-looking healthUrl that
+ *   DNS-resolves to a private IP is blocked.
  */
 export function resolveLocalServiceProbePolicy(url: string): SsrFPolicy | undefined {
   let hostname: string;
@@ -247,8 +259,9 @@ export function resolveLocalServiceProbePolicy(url: string): SsrFPolicy | undefi
   if (!hostname) {
     return undefined;
   }
-  // Strip the brackets `URL` wraps around IPv6 literals so the loopback check
-  // and allowlist entries compare against the canonical `::1` form.
+  // Strip the brackets `URL` wraps around IPv6 literals so the loopback /
+  // RFC1918 / metadata checks and allowlist entries compare against the
+  // canonical `::1` / numeric form.
   const unwrapped = hostname.replace(/^\[(.*)\]$/, "$1");
   const isLoopbackLiteral = unwrapped === "localhost" || isLoopbackIpAddress(unwrapped);
   if (isLoopbackLiteral) {
@@ -257,7 +270,26 @@ export function resolveLocalServiceProbePolicy(url: string): SsrFPolicy | undefi
       hostnameAllowlist: [unwrapped],
     };
   }
-  return { hostnameAllowlist: [hostname] };
+  const isOperatorPrivateLiteral =
+    parseCanonicalIpAddress(unwrapped) !== undefined &&
+    !isCloudMetadataIpAddress(unwrapped) &&
+    (isRfc1918Ipv4Address(unwrapped) || isUniqueLocalIpv6Address(unwrapped));
+  if (isOperatorPrivateLiteral) {
+    return {
+      allowedHostnames: [unwrapped],
+      hostnameAllowlist: [unwrapped],
+    };
+  }
+  return { hostnameAllowlist: [unwrapped] };
+}
+
+/** True for canonical IPv6 unique-local (fc00::/7, RFC 4193) literals. */
+function isUniqueLocalIpv6Address(raw: string): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  if (!parsed || parsed.kind() !== "ipv6") {
+    return false;
+  }
+  return parsed.range() === "uniqueLocal";
 }
 
 async function probeHealth(
