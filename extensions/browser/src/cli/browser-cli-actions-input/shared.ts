@@ -97,8 +97,8 @@ export async function readFields(opts: {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
-  } catch {
-    throw new Error("fields must be valid JSON.");
+  } catch (cause) {
+    throw new Error("fields must be valid JSON.", { cause });
   }
   if (!Array.isArray(parsed)) {
     throw new Error("fields must be an array");
