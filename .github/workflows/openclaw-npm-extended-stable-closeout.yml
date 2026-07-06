@@ -1,0 +1,235 @@
+name: OpenClaw NPM Extended-Stable Closeout
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact final extended-stable release tag (vYYYY.M.PATCH)
+        required: true
+        type: string
+      preflight_run_id:
+        description: Successful OpenClaw NPM Release preflight run id for this branch and SHA
+        required: true
+        type: string
+      plugin_npm_run_id:
+        description: Successful Plugin NPM Release run id for this branch and SHA
+        required: true
+        type: string
+      core_npm_run_id:
+        description: Core npm publication run id that owns the selector baseline
+        required: true
+        type: string
+      full_release_validation_run_id:
+        description: Successful Full Release Validation run id for this branch and SHA
+        required: true
+        type: string
+
+concurrency:
+  group: openclaw-npm-extended-stable-closeout-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  closeout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate closeout input shape
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]{4})\.([1-9]|1[0-2])\.([0-9]+)$ ]]; then
+            echo "Closeout requires an exact final vYYYY.M.P release tag." >&2
+            exit 1
+          fi
+          release_year="${BASH_REMATCH[1]}"
+          release_month="${BASH_REMATCH[2]}"
+          release_patch="${BASH_REMATCH[3]}"
+          if (( release_patch < 33 )); then
+            echo "Closeout requires PATCH >= 33." >&2
+            exit 1
+          fi
+          expected_ref="refs/heads/extended-stable/${release_year}.${release_month}.33"
+          if [[ "$WORKFLOW_REF" != "$expected_ref" ]]; then
+            echo "Closeout must run from ${expected_ref}; got ${WORKFLOW_REF}." >&2
+            exit 1
+          fi
+
+      - name: Checkout exact release
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require tag at canonical branch tip
+        env:
+          WORKFLOW_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${WORKFLOW_BRANCH}:refs/remotes/origin/${WORKFLOW_BRANCH}"
+          branch_sha="$(git rev-parse "refs/remotes/origin/${WORKFLOW_BRANCH}")"
+          release_sha="$(git rev-parse HEAD)"
+          if [[ "$release_sha" != "$branch_sha" ]]; then
+            echo "Release tag must resolve to the canonical extended-stable branch tip." >&2
+            exit 1
+          fi
+          if [[ "$release_sha" != "$WORKFLOW_SHA" ]]; then
+            echo "Release tag must resolve to the exact workflow-dispatch SHA." >&2
+            exit 1
+          fi
+
+      - name: Validate closeout release identity
+        env:
+          BYPASS_EXTENDED_STABLE_GUARD: "false"
+          NPM_WORKFLOW_REF: ${{ github.ref }}
+          RELEASE_NPM_DIST_TAG: extended-stable
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Verify preflight run
+        env:
+          EXPECTED_PREFLIGHT_ARTIFACT: openclaw-npm-preflight-${{ inputs.tag }}
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+        run: |
+          set -euo pipefail
+          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
+          export EXPECTED_RELEASE_SHA
+          run_json="$(gh run view "$PREFLIGHT_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,status,conclusion,url)"
+          jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/jobs?per_page=100")"
+          artifacts_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts?per_page=100")"
+          jq -n \
+            --argjson run "$run_json" \
+            --argjson jobs "$jobs_json" \
+            --argjson artifacts "$artifacts_json" \
+            '{run: $run, jobs: $jobs.jobs, artifacts: $artifacts.artifacts}' |
+            node scripts/openclaw-npm-extended-stable-closeout.mjs verify-preflight-run
+
+      - name: Verify plugin npm run
+        env:
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NPM_DIST_TAG: extended-stable
+          RUN_ID: ${{ inputs.plugin_npm_run_id }}
+          RUN_KIND: plugin
+        run: |
+          set -euo pipefail
+          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
+          export EXPECTED_RELEASE_SHA
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url |
+            node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+
+      - name: Verify Full Release Validation run
+        env:
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NPM_DIST_TAG: extended-stable
+          RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RUN_KIND: validation
+        run: |
+          set -euo pipefail
+          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
+          export EXPECTED_RELEASE_SHA
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --json workflowName,headBranch,headSha,event,status,conclusion,url |
+            node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+
+      - name: Verify core npm run
+        env:
+          CORE_NPM_RUN_ID: ${{ inputs.core_npm_run_id }}
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
+          export EXPECTED_RELEASE_SHA
+          run_json="$(gh run view "$CORE_NPM_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,status,conclusion,url)"
+          jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CORE_NPM_RUN_ID}/jobs?per_page=100")"
+          jq -n --argjson run "$run_json" --argjson jobs "$jobs_json" \
+            '{run: $run, jobs: $jobs.jobs}' |
+            node scripts/openclaw-npm-extended-stable-closeout.mjs verify-core-run
+
+      - name: Download selector baseline
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-npm-extended-stable-baseline-${{ inputs.tag }}
+          path: extended-stable-closeout
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.core_npm_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download frozen plugin plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: plugin-npm-release-plan-${{ github.sha }}
+          path: extended-stable-closeout/plugin-plan
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.plugin_npm_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify final npm registry state
+        id: registry_closeout
+        env:
+          BASELINE_FILE: extended-stable-closeout/extended-stable-selector-baseline.json
+          EXPECTED_RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_VERSION: ${{ inputs.tag }}
+          PLUGIN_PLAN_FILE: extended-stable-closeout/plugin-plan/plugin-npm-release-plan.json
+          SNAPSHOT_FILE: extended-stable-registry-snapshot.json
+        run: node scripts/openclaw-npm-extended-stable-closeout.mjs verify-registry
+
+      - name: Summarize closeout recovery
+        if: ${{ always() }}
+        env:
+          CLOSEOUT_OUTCOME: ${{ steps.registry_closeout.outcome }}
+          EXPECTED_VERSION: ${{ inputs.tag }}
+        run: |
+          {
+            echo "## npm extended-stable closeout"
+            echo "- Registry verification: ${CLOSEOUT_OUTCOME}"
+            if [[ "$CLOSEOUT_OUTCOME" != "success" ]]; then
+              echo "- If package bytes exist and either core selector is stale, run only the applicable credential-isolated command, then rerun closeout:"
+              while IFS= read -r repair_command; do
+                echo "  - \`${repair_command}\`"
+              done < <(node scripts/openclaw-npm-extended-stable-release.mjs repair-command)
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload compact registry snapshot
+        id: registry_snapshot
+        if: ${{ steps.registry_closeout.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: extended-stable-registry-snapshot-${{ inputs.tag }}
+          path: extended-stable-registry-snapshot.json
+          if-no-files-found: error
+
+      - name: Summarize registry snapshot artifact
+        if: ${{ steps.registry_snapshot.outcome == 'success' }}
+        env:
+          ARTIFACT_DIGEST: ${{ steps.registry_snapshot.outputs.artifact-digest }}
+          ARTIFACT_NAME: extended-stable-registry-snapshot-${{ inputs.tag }}
+        run: |
+          {
+            echo "## npm extended-stable registry snapshot"
+            echo "- Artifact: \`${ARTIFACT_NAME}\`"
+            echo "- GitHub artifact digest: \`${ARTIFACT_DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
