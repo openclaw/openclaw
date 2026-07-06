@@ -51,7 +51,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(specs.map((spec) => spec.skillName)).toEqual(["visible"]);
   });
 
-  it("truncates workspace skill descriptions without splitting surrogate pairs", () => {
+  it("preserves workspace skill descriptions for provider-specific limits", () => {
     const prefix = "a".repeat(98);
     const entry = createFixtureSkillEntry("emoji-skill");
     entry.skill.description = `${prefix}😀 extra text beyond the limit`;
@@ -60,16 +60,17 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       entries: [entry],
     });
 
-    expect(specs[0]?.description).toBe(`${prefix}…`);
+    expect(specs[0]?.description).toBe(entry.skill.description);
   });
 
-  it("truncates bundle command descriptions without splitting surrogate pairs", () => {
+  it("preserves bundle command descriptions for provider-specific limits", () => {
     const prefix = "a".repeat(98);
+    const description = `${prefix}😀 extra text beyond the limit`;
     bundleCommandState.entries = [
       {
         pluginId: "bundle-plugin",
         rawName: "bundle-emoji",
-        description: `${prefix}😀 extra text beyond the limit`,
+        description,
         promptTemplate: "Run the bundled command.",
         sourceFilePath: "/plugins/bundle-plugin/commands/bundle-emoji.md",
       },
@@ -81,7 +82,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
 
     expect(specs[0]).toMatchObject({
       skillName: "bundle-emoji",
-      description: `${prefix}…`,
+      description,
       promptTemplate: "Run the bundled command.",
     });
   });
