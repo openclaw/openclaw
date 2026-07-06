@@ -1,9 +1,14 @@
 // Tests path boundary enforcement for safe file access.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { resolveRootPath, resolveRootPathSync } from "./boundary-path.js";
+import {
+  resolvePathViaExistingAncestorSync,
+  resolveRootPath,
+  resolveRootPathSync,
+} from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
 
 function createSeededRandom(seed: number): () => number {
@@ -184,6 +189,53 @@ describe("resolveRootPath", () => {
           }),
         ).rejects.toThrow(/Symlink escapes sandbox root/i);
       }
+    });
+  });
+});
+
+describe("ancestor path cache", () => {
+  function linkDirectory(target: string, linkPath: string): void {
+    fsSync.symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+  }
+
+  function removeDirectoryLink(linkPath: string): void {
+    fsSync.rmSync(linkPath, { recursive: true, force: true });
+  }
+
+  it("resolvePathViaExistingAncestorSync returns consistent results", async () => {
+    await withTempDir({ prefix: "openclaw-ancestor-cache-" }, async (base) => {
+      const existing = path.join(base, "dir");
+      fsSync.mkdirSync(existing);
+      const target = path.join(existing, "missing", "deep.txt");
+
+      const ancestorPathCache = new Map<string, string>();
+      const first = resolvePathViaExistingAncestorSync(target, ancestorPathCache);
+      const second = resolvePathViaExistingAncestorSync(target, ancestorPathCache);
+      expect(first).toBe(second);
+    });
+  });
+
+  it("does not keep process-wide stale ancestors after directory changes", async () => {
+    await withTempDir({ prefix: "openclaw-ancestor-cache-" }, async (base) => {
+      const realTarget = path.join(base, "real");
+      const altTarget = path.join(base, "alt");
+      const link = path.join(base, "link");
+
+      fsSync.mkdirSync(realTarget);
+      fsSync.mkdirSync(altTarget);
+      linkDirectory(realTarget, link);
+
+      const target = path.join(link, "file.txt");
+
+      const before = resolvePathViaExistingAncestorSync(target);
+      expect(before).toContain("real");
+
+      removeDirectoryLink(link);
+      linkDirectory(altTarget, link);
+
+      const after = resolvePathViaExistingAncestorSync(target);
+      expect(after).toContain("alt");
+      expect(after).not.toBe(before);
     });
   });
 });
