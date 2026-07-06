@@ -92,7 +92,6 @@ describe("agents.workspace RPC handlers", () => {
       await invokeWorkspaceHandler("agents.workspace.list", { agentId: "main" }),
     );
 
-    expect(payload.workspace).toBe(workspaceRoot);
     expect(payload.path).toBe("");
     expect(payload.parentPath).toBeUndefined();
     expect(payload.totalEntries).toBe(3);
@@ -191,6 +190,19 @@ describe("agents.workspace RPC handlers", () => {
     );
     expect(nestedTraversal.details).toMatchObject({ type: "workspace_path_invalid" });
   });
+
+  it.each(["/etc/passwd", "C:\\Windows\\System32\\drivers\\etc\\hosts"])(
+    "rejects absolute workspace paths: %s",
+    async (filePath) => {
+      const error = expectError(
+        await invokeWorkspaceHandler("agents.workspace.get", {
+          agentId: "main",
+          path: filePath,
+        }),
+      );
+      expect(error.details).toMatchObject({ path: filePath, type: "workspace_path_invalid" });
+    },
+  );
 
   it("does not follow symlinked files out of the workspace", async () => {
     const outsidePath = path.join(os.tmpdir(), `openclaw-workspace-linked-${process.pid}.txt`);
@@ -296,7 +308,7 @@ describe("agents.workspace RPC handlers", () => {
     writeWorkspaceFile(
       workspaceRoot,
       "disguised.png",
-      Buffer.concat([Buffer.from("SQLite format 3 "), Buffer.alloc(64, 7)]),
+      Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]),
     );
 
     const error = expectError(
@@ -323,6 +335,21 @@ describe("agents.workspace RPC handlers", () => {
     });
   });
 
+  it("refuses invalid UTF-8 without relying on a NUL byte", async () => {
+    writeWorkspaceFile(workspaceRoot, "invalid.txt", Buffer.from([0xc3, 0x28]));
+
+    const error = expectError(
+      await invokeWorkspaceHandler("agents.workspace.get", {
+        agentId: "main",
+        path: "invalid.txt",
+      }),
+    );
+    expect(error.details).toMatchObject({
+      path: "invalid.txt",
+      type: "workspace_file_unsupported",
+    });
+  });
+
   it("reports oversized text files with the preview cap", async () => {
     writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
 
@@ -333,6 +360,23 @@ describe("agents.workspace RPC handlers", () => {
       maxBytes: 256 * 1024,
       path: "large.log",
       size: 260 * 1024,
+      type: "workspace_file_too_large",
+    });
+  });
+
+  it("reports oversized images with the image preview cap", async () => {
+    writeWorkspaceFile(workspaceRoot, "large.png", Buffer.alloc(5 * 1024 * 1024 + 1));
+
+    const error = expectError(
+      await invokeWorkspaceHandler("agents.workspace.get", {
+        agentId: "main",
+        path: "large.png",
+      }),
+    );
+    expect(error.details).toMatchObject({
+      maxBytes: 5 * 1024 * 1024,
+      path: "large.png",
+      size: 5 * 1024 * 1024 + 1,
       type: "workspace_file_too_large",
     });
   });

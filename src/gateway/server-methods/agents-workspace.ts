@@ -75,6 +75,18 @@ function resolveWorkspaceScopeOrRespond(
     return null;
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const rawPath = params.path ?? "";
+  const portablePath = rawPath.replaceAll("\\", "/");
+  if (path.posix.isAbsolute(portablePath) || path.win32.isAbsolute(rawPath)) {
+    respond(
+      false,
+      undefined,
+      workspaceError("workspace_path_invalid", "path must be workspace-relative", {
+        path: rawPath,
+      }),
+    );
+    return null;
+  }
   const browserPath = normalizeRelativePath(params.path);
   if (!resolveWorkspacePath(workspaceDir, browserPath || ".")) {
     respond(
@@ -157,7 +169,6 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     const parent = path.dirname(browserPath);
     respond(true, {
       agentId,
-      workspace: workspaceDir,
       path: browserPath,
       ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
       entries: entries.slice(offset, offset + limit),
@@ -238,7 +249,6 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       }
       respond(true, {
         agentId,
-        workspace: workspaceDir,
         file: {
           path: browserPath,
           name: path.basename(browserPath),
@@ -258,7 +268,6 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
     respond(true, {
       agentId,
-      workspace: workspaceDir,
       file: {
         path: browserPath,
         name: path.basename(browserPath),

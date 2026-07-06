@@ -5435,7 +5435,6 @@ public struct AgentsWorkspaceListParams: Codable, Sendable {
 
 public struct AgentsWorkspaceListResult: Codable, Sendable {
     public let agentid: String
-    public let workspace: String
     public let path: String
     public let parentpath: String?
     public let entries: [AgentsWorkspaceEntry]
@@ -5444,7 +5443,6 @@ public struct AgentsWorkspaceListResult: Codable, Sendable {
 
     public init(
         agentid: String,
-        workspace: String,
         path: String,
         parentpath: String?,
         entries: [AgentsWorkspaceEntry],
@@ -5452,7 +5450,6 @@ public struct AgentsWorkspaceListResult: Codable, Sendable {
         offset: Int)
     {
         self.agentid = agentid
-        self.workspace = workspace
         self.path = path
         self.parentpath = parentpath
         self.entries = entries
@@ -5462,7 +5459,6 @@ public struct AgentsWorkspaceListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
-        case workspace
         case path
         case parentpath = "parentPath"
         case entries
@@ -5491,22 +5487,18 @@ public struct AgentsWorkspaceGetParams: Codable, Sendable {
 
 public struct AgentsWorkspaceGetResult: Codable, Sendable {
     public let agentid: String
-    public let workspace: String
     public let file: AgentsWorkspaceFile
 
     public init(
         agentid: String,
-        workspace: String,
         file: AgentsWorkspaceFile)
     {
         self.agentid = agentid
-        self.workspace = workspace
         self.file = file
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
-        case workspace
         case file
     }
 }

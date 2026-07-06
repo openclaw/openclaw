@@ -38,7 +38,6 @@ export const AgentsWorkspaceListParamsSchema = Type.Object(
 export const AgentsWorkspaceListResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
-    workspace: NonEmptyString,
     path: Type.String(),
     parentPath: Type.Optional(Type.String()),
     entries: Type.Array(AgentsWorkspaceEntrySchema),
@@ -75,7 +74,6 @@ export const AgentsWorkspaceGetParamsSchema = Type.Object(
 export const AgentsWorkspaceGetResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
-    workspace: NonEmptyString,
     file: AgentsWorkspaceFileSchema,
   },
   { additionalProperties: false },
