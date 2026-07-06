@@ -48,10 +48,10 @@ export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
 
 /** Handles Clack cancellation by exiting through the runtime. */
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(0);
+    runtime.exit(exitCode);
     throw new Error("unreachable");
   }
   return value;

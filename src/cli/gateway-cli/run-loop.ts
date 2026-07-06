@@ -11,6 +11,7 @@ import {
 } from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -106,7 +107,14 @@ export async function runGatewayLoop(params: {
   lockPort?: number;
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
+  beginBoot?: (startedAtMs: number) => void | Promise<void>;
+  completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
 }) {
+  // macOS/BSD process inspection reports process.title instead of the original
+  // argv. Give the long-running Gateway a verifiable identity for lock readers.
+  if (process.title === "openclaw") {
+    process.title = "openclaw-gateway";
+  }
   let startupStartedAt = Date.now();
   // Eagerly resolve the lifecycle runtime module before installing signal
   // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
@@ -144,6 +152,9 @@ export async function runGatewayLoop(params: {
     cleanupSignals();
     params.runtime.exit(code);
   };
+  const completeForcedStop = (reason: string) => {
+    params.completeBoot?.({ outcome: "forced_stop", reason });
+  };
   const writeStabilityBundle = async (reason: string, error?: unknown) => {
     const { writeDiagnosticStabilityBundleForFailureSync } =
       await loadGatewayLifecycleRuntimeModule();
@@ -172,6 +183,10 @@ export async function runGatewayLoop(params: {
     }
   };
   const handleRestartAfterServerClose = async (restartReason?: string) => {
+    params.completeBoot?.({
+      outcome: "planned_restart",
+      reason: restartReason ?? "gateway.restart",
+    });
     const hadLock = await releaseLockIfHeld();
     const isUpdateRestart = restartReason === "update.run";
     const {
@@ -318,6 +333,7 @@ export async function runGatewayLoop(params: {
     restartResolver?.();
   };
   const handleStopAfterServerClose = async () => {
+    params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
     await releaseLockIfHeld();
     exitProcess(0);
   };
@@ -344,6 +360,7 @@ export async function runGatewayLoop(params: {
         try {
           await writeStabilityBundle("gateway.restart_startup_request_timeout");
         } finally {
+          completeForcedStop("gateway.restart_startup_request_timeout");
           exitProcess(1);
         }
       })();
@@ -403,6 +420,9 @@ export async function runGatewayLoop(params: {
             // Keep the in-process watchdog below the supervisor stop budget so this
             // path wins before launchd/systemd escalates to a hard kill. Exit
             // non-zero on any timeout so supervised installs restart cleanly.
+            completeForcedStop(
+              isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
+            );
             exitProcess(1);
           }
         })();
@@ -841,12 +861,18 @@ export async function runGatewayLoop(params: {
     for (;;) {
       await onIteration();
       restartDrainingMarkPromise = null;
+      startupStartedAt = Date.now();
       let startupFailedBeforeServerHandle = false;
       try {
+        await params.beginBoot?.(startupStartedAt);
         server = await params.start({ startupStartedAt });
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;
       } catch (err) {
+        params.completeBoot?.({
+          outcome: "startup_failed",
+          reason: formatErrorMessage(err).slice(0, 500),
+        });
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only
         // swallow errors on subsequent in-process restarts to keep the

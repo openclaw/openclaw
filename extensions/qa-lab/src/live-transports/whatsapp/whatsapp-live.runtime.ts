@@ -18,6 +18,7 @@ import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { startQaGatewayRpcClient } from "../../gateway-rpc-client.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
@@ -93,6 +94,7 @@ type WhatsAppQaScenarioId =
   | "whatsapp-outbound-document-preserves-filename"
   | "whatsapp-outbound-media-matrix"
   | "whatsapp-outbound-poll"
+  | "whatsapp-outbound-send-serialization"
   | "whatsapp-pairing-block"
   | "whatsapp-mention-gating"
   | "whatsapp-reply-delivery-shape"
@@ -158,6 +160,7 @@ const WHATSAPP_QA_SCENARIO_POSTURES = {
   "whatsapp-outbound-document-preserves-filename": "direct-gateway",
   "whatsapp-outbound-media-matrix": "direct-gateway",
   "whatsapp-outbound-poll": "direct-gateway",
+  "whatsapp-outbound-send-serialization": "direct-gateway",
   "whatsapp-pairing-block": "user-path",
   "whatsapp-reply-context-isolation": "direct-gateway",
   "whatsapp-reply-delivery-shape": "direct-gateway",
@@ -186,7 +189,8 @@ type WhatsAppQaMessageSendMode =
     };
 
 type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
-type WhatsAppQaGatewayRuntime = Pick<WhatsAppQaGateway, "call" | "restart" | "workspaceDir">;
+type WhatsAppQaGatewayRuntime = Pick<WhatsAppQaGateway, "call" | "restart" | "workspaceDir"> &
+  Partial<Pick<WhatsAppQaGateway, "logs" | "token" | "wsUrl">>;
 type WhatsAppQaGatewayCallContext = {
   gateway: Pick<WhatsAppQaGatewayRuntime, "call">;
   gatewayTarget: string;
@@ -1525,6 +1529,43 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
         configMode: "allowlist",
         expectReply: true,
         input: `Reply with only this exact marker before document filename check: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-outbound-send-serialization",
+    title: "WhatsApp parallel Gateway sends deliver every outbound message",
+    defaultEnabled: false,
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 90_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_SERIAL_SEND_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const markers = Array.from({ length: 5 }, (_, index) => `${token}_${index + 1}`);
+      return {
+        afterReply: async (_reply, context) => {
+          const sendsStartedAt = new Date();
+          await callWhatsAppGatewaySendConcurrently(
+            context,
+            markers.map((marker, index) => ({
+              label: `parallel-${index + 1}`,
+              message: marker,
+            })),
+          );
+          await Promise.all(
+            markers.map((marker) =>
+              waitForScenarioObservedMessage(context, {
+                observedAfter: sendsStartedAt,
+                match: (message) => message.kind === "text" && message.text.includes(marker),
+              }),
+            ),
+          );
+          return `gateway parallel send delivered ${markers.length}/${markers.length} messages`;
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before parallel send checks: ${token}`,
         matchText: token,
         target: "dm",
       };
@@ -2878,6 +2919,16 @@ function buildWhatsAppQaIdempotencyKey(scenarioId: WhatsAppQaScenarioId, label: 
   return `${scenarioId}:${label}:${randomUUID()}`;
 }
 
+type WhatsAppQaGatewaySendParams = {
+  asVoice?: boolean;
+  forceDocument?: boolean;
+  label: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  message?: string;
+  replyToId?: string;
+};
+
 async function writeWhatsAppQaWorkspaceFixture(
   context: WhatsAppQaMessageScenarioContext,
   params: {
@@ -2894,33 +2945,70 @@ async function writeWhatsAppQaWorkspaceFixture(
 
 async function callWhatsAppGatewaySend(
   context: WhatsAppQaGatewayCallContext,
-  params: {
-    asVoice?: boolean;
-    forceDocument?: boolean;
-    label: string;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-    message?: string;
-    replyToId?: string;
-  },
+  params: WhatsAppQaGatewaySendParams,
 ) {
-  return await context.gateway.call(
-    "send",
-    {
-      accountId: context.sutAccountId,
-      agentId: "main",
-      channel: "whatsapp",
-      idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
-      to: context.gatewayTarget,
-      ...(params.message !== undefined ? { message: params.message } : {}),
-      ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
-      ...(params.mediaUrls ? { mediaUrls: params.mediaUrls } : {}),
-      ...(params.asVoice !== undefined ? { asVoice: params.asVoice } : {}),
-      ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
-      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    },
-    { timeoutMs: 60_000 },
+  return await context.gateway.call("send", buildWhatsAppGatewaySendRequest(context, params), {
+    timeoutMs: 60_000,
+  });
+}
+
+function buildWhatsAppGatewaySendRequest(
+  context: WhatsAppQaGatewayCallContext,
+  params: WhatsAppQaGatewaySendParams,
+) {
+  return {
+    accountId: context.sutAccountId,
+    agentId: "main",
+    channel: "whatsapp",
+    idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
+    to: context.gatewayTarget,
+    ...(params.message !== undefined ? { message: params.message } : {}),
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaUrls ? { mediaUrls: params.mediaUrls } : {}),
+    ...(params.asVoice !== undefined ? { asVoice: params.asVoice } : {}),
+    ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+  };
+}
+
+async function callWhatsAppGatewaySendConcurrently(
+  context: WhatsAppQaMessageScenarioContext,
+  sends: WhatsAppQaGatewaySendParams[],
+) {
+  // Each QA RPC client serializes its own requests. Separate clients preserve
+  // real Gateway overlap so this probe reaches the shared WhatsApp socket concurrently.
+  const connection = resolveWhatsAppGatewayRpcConnection(context.gateway);
+  const clients = await Promise.all(
+    sends.map(() =>
+      startQaGatewayRpcClient({
+        logs: connection.logs,
+        token: connection.token,
+        wsUrl: connection.wsUrl,
+      }),
+    ),
   );
+  try {
+    await Promise.all(
+      clients.map((client, index) =>
+        client.request("send", buildWhatsAppGatewaySendRequest(context, sends[index]), {
+          timeoutMs: 60_000,
+        }),
+      ),
+    );
+  } finally {
+    await Promise.all(clients.map((client) => client.stop()));
+  }
+}
+
+function resolveWhatsAppGatewayRpcConnection(gateway: WhatsAppQaGatewayRuntime) {
+  if (!gateway.logs || !gateway.token || !gateway.wsUrl) {
+    throw new Error("WhatsApp concurrent Gateway probe requires a live RPC connection.");
+  }
+  return {
+    logs: gateway.logs,
+    token: gateway.token,
+    wsUrl: gateway.wsUrl,
+  };
 }
 
 async function callWhatsAppGatewayPoll(

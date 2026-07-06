@@ -1,9 +1,9 @@
+import { registerApiProvider, unregisterApiProviders } from "@openclaw/ai/internal/runtime";
 // Simple completion transport tests cover provider-specific stream alias
 // selection before the generic completion helper invokes the LLM layer.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerApiProvider, unregisterApiProviders } from "../llm/api-registry.js";
 import { createMoonshotThinkingWrapper } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 
 const createAnthropicVertexStreamFnForModel = vi.fn();

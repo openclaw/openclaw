@@ -11,6 +11,7 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -44,6 +45,13 @@ export type MockGatewayRequest = {
 export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
+  controlUiTabs?: Array<{
+    group?: string;
+    icon?: string;
+    id: string;
+    label: string;
+    pluginId: string;
+  }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
   historyMessages?: unknown[];
@@ -143,6 +151,7 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],
@@ -198,6 +207,7 @@ function normalizeScenario(
   return {
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
+    controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     historyMessages: scenario.historyMessages ?? [],
@@ -385,6 +395,7 @@ function installControlUiMockGateway(input: {
             ],
           },
           features: { events: [], methods: ["chat.metadata", "chat.startup"] },
+          controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {

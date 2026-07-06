@@ -25,6 +25,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -77,6 +78,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -97,7 +99,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,6 +122,10 @@ private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Setting
 
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+
+private val overviewMetricTileMinHeight = 96.dp
+private val overviewTalkPanelMinHeight = 72.dp
+private val overviewListRowMinHeight = 54.dp
 
 internal fun shellBottomNavVisible(
   keyboardVisible: Boolean,
@@ -394,7 +399,7 @@ private fun OverviewScreen(
     contentWindowInsets = shellContentInsets,
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
+      LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
         item {
           OverviewHeader(status = headerState, onOpenStatus = { onOpenSettingsRoute(headerRoute) }, onOpenCommand = onOpenCommand)
         }
@@ -501,12 +506,7 @@ private fun OverviewHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Icon(
-      painter = painterResource(id = R.drawable.openclaw_logo),
-      contentDescription = null,
-      modifier = Modifier.size(25.dp),
-      tint = ClawTheme.colors.text,
-    )
+    OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
     Text(
       text = "OpenClaw",
       style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -566,8 +566,8 @@ private fun OverviewPrimaryPanel(
   onOpenAgent: () -> Unit,
   onOpenGateway: () -> Unit,
 ) {
-  OverviewLayeredPanel(contentPadding = PaddingValues(14.dp), elevated = true) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  OverviewLayeredPanel(contentPadding = PaddingValues(ClawTheme.spacing.sm), elevated = true) {
+    Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       Text(text = "ACTIVE AGENT", style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OverviewAgentBadge(text = agentBadge, active = isConnected)
@@ -579,12 +579,12 @@ private fun OverviewPrimaryPanel(
         }
         ClawSecondaryButton(text = "View", onClick = onOpenAgent)
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         OverviewStateChip(label = "Runs", value = if (pendingRunCount > 0) "$pendingRunCount active" else "Idle", modifier = Modifier.weight(1f))
         OverviewStateChip(label = "Sessions", value = if (sessionCount == 0) "None" else "$sessionCount recent", modifier = Modifier.weight(1f))
         OverviewStateChip(label = "Cron", value = cronJobsSummary(cronJobCount), modifier = Modifier.weight(1f))
       }
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         OverviewActionPill(text = "Chat", icon = Icons.Outlined.ChatBubbleOutline, emphasized = true, onClick = onOpenChat, modifier = Modifier.weight(1f))
         OverviewActionPill(text = "Talk", icon = Icons.Outlined.MicNone, emphasized = false, onClick = onOpenVoice, modifier = Modifier.weight(1f))
       }
@@ -643,7 +643,7 @@ private fun OverviewLayeredPanel(
 ) {
   Surface(
     modifier = modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(7.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = if (elevated) ClawTheme.colors.surfaceRaised.copy(alpha = 0.98f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.86f),
     contentColor = ClawTheme.colors.text,
     tonalElevation = if (elevated) 4.dp else 1.dp,
@@ -685,11 +685,14 @@ private fun OverviewStateChip(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier,
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = ClawTheme.colors.surfacePressed.copy(alpha = 0.58f),
   ) {
-    Column(modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+    Column(
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+      verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
       Text(text = label.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
       Text(text = value, style = ClawTheme.type.caption.copy(fontSize = 14.sp, lineHeight = 17.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -701,9 +704,9 @@ private fun OverviewMetricGrid(
   cards: List<OverviewMetricCard>,
   onOpen: (OverviewMetricCard) -> Unit,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     cards.chunked(2).forEach { row ->
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         row.forEach { card ->
           OverviewMetricTile(card = card, onClick = { onOpen(card) }, modifier = Modifier.weight(1f))
         }
@@ -723,14 +726,14 @@ private fun OverviewMetricTile(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 88.dp),
-    shape = RoundedCornerShape(7.dp),
+    modifier = modifier.heightIn(min = overviewMetricTileMinHeight),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
     contentColor = ClawTheme.colors.text,
     tonalElevation = 2.dp,
     shadowElevation = 3.dp,
   ) {
-    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier = Modifier.padding(ClawTheme.spacing.xs), verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = card.tint)
         Text(text = card.title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -782,16 +785,16 @@ private fun TalkEntryPanel(
 ) {
   Surface(
     onClick = onOpenVoice,
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(7.dp),
+    modifier = Modifier.fillMaxWidth().heightIn(min = overviewTalkPanelMinHeight),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.9f),
     contentColor = ClawTheme.colors.text,
     tonalElevation = 2.dp,
     shadowElevation = 3.dp,
   ) {
-    Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
       Surface(
-        modifier = Modifier.size(48.dp),
+        modifier = Modifier.size(44.dp),
         shape = CircleShape,
         color = Color(0xFF1976D2),
         tonalElevation = 2.dp,
@@ -1231,7 +1234,7 @@ private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
   onOpen: (String) -> Unit,
 ) {
-  OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 3.dp)) {
+  OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         RecentSessionRowContent(
@@ -1260,7 +1263,7 @@ private fun RecentSessionRowContent(
       modifier =
         Modifier
           .fillMaxWidth()
-          .heightIn(min = 50.dp)
+          .heightIn(min = overviewListRowMinHeight)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
           .padding(horizontal = 0.dp, vertical = 5.dp),
@@ -1268,7 +1271,7 @@ private fun RecentSessionRowContent(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Surface(
-        modifier = Modifier.size(28.dp),
+        modifier = Modifier.size(30.dp),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
@@ -1436,6 +1439,7 @@ private fun SettingsShellScreen(
           SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
           SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
           SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+          SettingsRow("Terminal", "Shell in the agent workspace", Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
           SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
           SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
           SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
@@ -1642,6 +1646,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     SettingsRoute.Usage,
     SettingsRoute.Skills,
     SettingsRoute.Dreaming,
+    SettingsRoute.Terminal,
     -> "Agents & automation"
 
     SettingsRoute.Voice,

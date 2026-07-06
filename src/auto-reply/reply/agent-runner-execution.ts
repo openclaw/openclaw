@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -90,7 +91,6 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -117,6 +117,7 @@ import {
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -426,6 +427,8 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
       /** Payloads successfully sent directly during tool flush. */
       directlySentBlockPayloads?: ReplyPayload[];
+      /** Prepared terminal failure, appended only after delivery evidence settles. */
+      terminalFailurePayload?: ReplyPayload;
     }
   | { kind: "final"; payload: ReplyPayload };
 
@@ -803,7 +806,12 @@ type ExternalRunFailureReply = {
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
-function isNonDirectConversationContext(ctx: TemplateContext): boolean {
+type ExternalFailureConversationContext = Pick<
+  TemplateContext,
+  "ChatType" | "Provider" | "SessionKey" | "Surface"
+>;
+
+function isNonDirectConversationContext(ctx: ExternalFailureConversationContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   return chatType === "group" || chatType === "channel";
 }
@@ -814,7 +822,7 @@ function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean
 
 function resolveExternalRunFailureTextForConversation(params: {
   text: string;
-  sessionCtx: TemplateContext;
+  sessionCtx: ExternalFailureConversationContext;
   isGenericRunnerFailure: boolean;
   cfg?: OpenClawConfig;
 }): string {
@@ -1042,6 +1050,57 @@ function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T 
     marked.isError = true;
   }
   return marked;
+}
+
+export function buildTerminalAgentRunFailureReplyPayload(params: {
+  isHeartbeat?: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload {
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: params.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
+}
+
+export function buildEmptyInteractiveReplyPayload(params: {
+  isInteractive: boolean;
+  isHeartbeat?: boolean;
+  silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  isMessageToolOnly: boolean;
+  hasPendingContinuation: boolean;
+  hasExplicitSilentReply: boolean;
+  hasCommittedDelivery: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload | undefined {
+  if (
+    !params.isInteractive ||
+    params.isHeartbeat === true ||
+    params.silentExpected === true ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
+    params.isMessageToolOnly ||
+    params.hasPendingContinuation ||
+    params.hasExplicitSilentReply ||
+    params.hasCommittedDelivery
+  ) {
+    return undefined;
+  }
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
 }
 
 /** Converts known agent-run failures into user-facing reply payloads. */
@@ -1798,12 +1857,12 @@ async function runAgentTurnWithFallbackInternal(
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
+    const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
+    if (!deliver) {
+      return;
+    }
     try {
-      if (params.opts?.onBlockReply) {
-        await params.opts.onBlockReply(noticePayload);
-        return;
-      }
-      await params.onCompactionNoticePayload?.(noticePayload);
+      await deliver(noticePayload);
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -1838,6 +1897,7 @@ async function runAgentTurnWithFallbackInternal(
   let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
+  let terminalRunFailed = false;
   let pendingLifecycleTerminal:
     | {
         provider: string;
@@ -2133,6 +2193,8 @@ async function runAgentTurnWithFallbackInternal(
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
+            reasoningPayloadsEnabled: params.opts?.reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled: params.opts?.commentaryPayloadsEnabled,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
@@ -2368,11 +2430,9 @@ async function runAgentTurnWithFallbackInternal(
                     }
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
-                  onReasoningText: async (text) => {
-                    await params.opts?.onReasoningStream?.({
-                      text,
-                      requiresReasoningProgressOptIn: true,
-                    });
+                  onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
+                  onReasoningProgress: async (payload) => {
+                    await params.opts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
@@ -2697,7 +2757,7 @@ async function runAgentTurnWithFallbackInternal(
                         }
                         // Trigger typing when tools start executing.
                         // Must await to ensure typing indicator starts before tool summaries are emitted.
-                        if (evt.stream === "tool") {
+                        if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
                           const phase = readStringValue(evt.data.phase) ?? "";
                           const name = readStringValue(evt.data.name);
                           const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
@@ -2741,6 +2801,8 @@ async function runAgentTurnWithFallbackInternal(
                           evt.stream === "item" &&
                           evt.data.suppressChannelProgress === true &&
                           Boolean(params.opts?.onToolStart);
+                        const hideItemFromChannelProgress =
+                          evt.stream === "item" && evt.data.hideFromChannelProgress === true;
                         const itemPhase =
                           evt.stream === "item" ? readStringValue(evt.data.phase) : "";
                         const itemName =
@@ -2793,6 +2855,7 @@ async function runAgentTurnWithFallbackInternal(
                         }
                         if (
                           evt.stream === "item" &&
+                          !hideItemFromChannelProgress &&
                           !suppressItemChannelProgress &&
                           (!suppressProgressAfterMessageToolDelivery ||
                             completedMessageToolDelivery)
@@ -3163,6 +3226,7 @@ async function runAgentTurnWithFallbackInternal(
         const exhaustionError = new Error(
           terminalErrorMessage ?? "All model fallback candidates failed",
         );
+        terminalRunFailed = true;
         emitSettledLifecycleError(exhaustionError, {
           ...terminalMetadata,
           fallbackExhaustedFailure: true,
@@ -3171,6 +3235,7 @@ async function runAgentTurnWithFallbackInternal(
         params.replyOperation?.fail("run_failed", exhaustionError);
       } else if (deferredLifecycleError || embeddedError) {
         const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
+        terminalRunFailed = true;
         emitSettledLifecycleError(terminalError, terminalMetadata);
         params.replyOperation?.retainFailureUntilComplete();
         params.replyOperation?.fail("run_failed", terminalError);
@@ -3522,6 +3587,13 @@ async function runAgentTurnWithFallbackInternal(
       }
     }
   }
+  const terminalFailurePayload = terminalRunFailed
+    ? buildTerminalAgentRunFailureReplyPayload({
+        isHeartbeat: params.isHeartbeat,
+        sessionCtx: params.sessionCtx,
+        cfg: params.followupRun.run.config,
+      })
+    : undefined;
 
   return {
     kind: "success",
@@ -3537,6 +3609,7 @@ async function runAgentTurnWithFallbackInternal(
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
+    ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
   };
 }
 

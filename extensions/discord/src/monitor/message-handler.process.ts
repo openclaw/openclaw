@@ -260,10 +260,10 @@ async function processDiscordMessageInner(
   const isRoomEvent = ctx.inboundEventKind === "room_event";
   const shouldAckReaction = () =>
     Boolean(
-      !isRoomEvent &&
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
+        inboundEventKind: ctx.inboundEventKind,
         isDirect: isDirectMessage,
         isGroup: isGuildMessage || isGroupDm,
         isMentionableGroup: isGuildMessage,

@@ -238,7 +238,6 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
     OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-    OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: "2000",
@@ -413,11 +412,11 @@ function isQaGatewayChildProcessTreeAlive(child: ChildProcess) {
     process.kill(-child.pid, 0);
     return true;
   } catch (error) {
-    if (isProcessAlreadyExitedError(error)) {
-      return false;
+    if (!isProcessAlreadyExitedError(error) && !hasChildExited(child)) {
+      return true;
     }
-    return !hasChildExited(child);
   }
+  return false;
 }
 
 type QaGatewayTaskkillRunner = typeof spawnSync;
@@ -498,7 +497,10 @@ async function stopQaGatewayChildProcessTree(
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  if (!stopped) {
+    throw new Error("qa gateway process tree remained alive after forced shutdown");
+  }
 }
 
 function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {

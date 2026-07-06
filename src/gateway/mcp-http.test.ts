@@ -9,7 +9,7 @@ type MockGatewayTool = {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }> }>;
+  execute: (...args: unknown[]) => Promise<{ content: unknown[] }>;
 };
 
 type MockGatewayScopedTools = {
@@ -54,7 +54,7 @@ type BeforeToolCallHookInput = {
 type McpToolResultPayload = {
   result?: {
     tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
-    content?: Array<{ text?: string }>;
+    content?: Array<Record<string, unknown>>;
     isError?: boolean;
   };
 };
@@ -1049,6 +1049,62 @@ describe("mcp loopback server", () => {
 
     expect(cronExecute).toHaveBeenCalledTimes(1);
     expectMcpResultText(payload, "CRON_EXECUTED");
+  });
+
+  it("preserves valid MCP content blocks returned by loopback tools", async () => {
+    const content = [
+      { type: "text", text: "caption", annotations: { audience: ["user"] } },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      {
+        type: "resource",
+        resource: { uri: "memo://one", text: "memo body", mimeType: "text/plain" },
+      },
+    ];
+    mockScopedTools([
+      makeMockTool({
+        name: "content_probe",
+        execute: async () => ({ content }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const payload = await callMainSessionTool({
+      token: runtime?.ownerToken,
+      name: "content_probe",
+    });
+
+    expect(payload.result?.content).toEqual(content);
+  });
+
+  it("converts malformed, unknown, and unsupported MCP content blocks to text", async () => {
+    const malformed = [
+      { type: "image", mimeType: "image/png" },
+      { type: "audio", data: "not base64!", mimeType: "audio/mpeg" },
+      { type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" },
+      {
+        type: "resource_link",
+        name: "report",
+        uri: "https://example.test/report.pdf",
+        mimeType: "application/pdf",
+      },
+      { type: "tool_use", id: "unexpected" },
+    ];
+    mockScopedTools([
+      makeMockTool({
+        name: "malformed_content_probe",
+        execute: async () => ({ content: malformed }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+
+    const payload = await callMainSessionTool({
+      token: runtime?.ownerToken,
+      name: "malformed_content_probe",
+    });
+
+    expect(payload.result?.content).toEqual(
+      malformed.map((block) => ({ type: "text", text: JSON.stringify(block) })),
+    );
   });
 
   it("captures only successful calls with an explicit CLI capture key", async () => {

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   clearFollowupQueue,
@@ -22,6 +23,25 @@ import { getExistingFollowupQueue } from "./queue/state.js";
 installQueueRuntimeErrorSilencer();
 
 describe("followup queue collect routing", () => {
+  it("does not enqueue when the external lifecycle rejects the run identity", () => {
+    const key = `test-rejected-lifecycle-${Date.now()}`;
+    const onEnqueued = vi.fn(() => false);
+    const run = createRun({ prompt: "duplicate owner" });
+    run.queuedLifecycle = { onEnqueued };
+
+    const enqueued = enqueueFollowupRun(key, run, {
+      mode: "followup",
+      debounceMs: 10_000,
+      cap: 50,
+      dropPolicy: "summarize",
+    });
+
+    expect(enqueued).toBe(false);
+    expect(onEnqueued).toHaveBeenCalledTimes(1);
+    expect(getExistingFollowupQueue(key)?.items).toEqual([]);
+    clearFollowupQueue(key);
+  });
+
   it("does not collect when destinations differ", async () => {
     const key = `test-collect-diff-to-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -509,7 +529,7 @@ describe("followup queue collect routing", () => {
     const queue = getExistingFollowupQueue(key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
     expect(queue?.summaryElisions).toHaveLength(2);
-    expect(queue?.summaryElisions.map((entry) => entry.source.originatingTo)).toEqual([
+    expect(queue?.summaryElisions.map((entry) => entry.sources.at(-1)?.originatingTo)).toEqual([
       "channel:B",
       "channel:A",
     ]);
@@ -518,6 +538,73 @@ describe("followup queue collect routing", () => {
       "channel:B",
       "channel:survivor",
     ]);
+    clearFollowupQueue(key);
+  });
+
+  it("bounds retained overflow cancellation identities by the item cap", () => {
+    const key = `test-collect-overflow-source-bound-${Date.now()}`;
+    const completions = Array.from({ length: 8 }, () => vi.fn());
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    for (const [index, onComplete] of completions.entries()) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({
+            prompt: `message ${index}`,
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+            originatingChatType: "channel",
+          }),
+          queuedLifecycle: { onComplete },
+        },
+        settings,
+      );
+    }
+
+    const queue = getExistingFollowupQueue(key);
+    expect(queue?.summaryElisions.flatMap((entry) => entry.sources)).toHaveLength(2);
+    expect(
+      queue?.summaryElisions.flatMap((entry) => entry.sources.map((source) => source.prompt)),
+    ).toEqual(["message 2", "message 3"]);
+    expect(queue?.evictedSummaryCount).toBe(2);
+    expect(completions.map((onComplete) => onComplete.mock.calls.length)).toEqual([
+      1, 1, 0, 0, 0, 0, 0, 0,
+    ]);
+    clearFollowupQueue(key);
+  });
+
+  it("does not register a drop:new source that the full queue rejects", () => {
+    const key = `test-drop-new-lifecycle-${Date.now()}`;
+    const onEnqueued = vi.fn();
+    const onComplete = vi.fn();
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "new",
+    };
+
+    expect(enqueueFollowupRun(key, createRun({ prompt: "existing" }), settings)).toBe(true);
+    expect(
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt: "rejected" }),
+          queuedLifecycle: { onEnqueued, onComplete },
+        },
+        settings,
+      ),
+    ).toBe(false);
+
+    expect(onEnqueued).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(["existing"]);
     clearFollowupQueue(key);
   });
 
@@ -875,7 +962,7 @@ describe("followup queue collect routing", () => {
     });
     await done.promise;
 
-    expect(calls[0]?.prompt).toContain("Dropped 2 messages");
+    expect(calls[0]?.prompt).toContain("Dropped 1 message");
     expect(calls[0]?.run.model).toBe("model-b");
     expect(calls[0]?.run.authProfileId).toBe("auth-b");
     expect(calls[1]?.prompt).toContain("- retained");
@@ -1100,7 +1187,7 @@ describe("followup queue collect routing", () => {
     },
   );
 
-  it("uses current run settings without dropped runtime context for split summaries", async () => {
+  it("drops an aborted split summary before running the surviving item", async () => {
     const key = `test-collect-overflow-current-run-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
@@ -1160,18 +1247,15 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
+      done.resolve();
     });
     await done.promise;
 
+    expect(calls).toHaveLength(1);
     expect(calls[0]?.run.model).toBe("current-model");
-    expect(calls[0]?.abortSignal).toBeUndefined();
-    expect(calls[0]?.currentInboundContext).toBeUndefined();
-    expect(calls[0]?.originatingChatType).toBe("direct");
-    expect(calls[0]?.run.senderId).toBe("guest");
-    expect(calls[0]?.run.senderIsOwner).toBe(false);
+    expect(calls[0]?.originatingChatType).toBe("channel");
+    expect(calls[0]?.run.senderId).toBe("owner");
+    expect(calls[0]?.run.senderIsOwner).toBe(true);
   });
 
   it("removes a delivered split summary by source identity after concurrent enqueue", async () => {
@@ -1755,6 +1839,45 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toContain("(from Owner)");
   });
 
+  it("splits collect batches when queued cancellation owners differ", async () => {
+    const key = `test-collect-cancel-owner-split-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    for (const [prompt, ownerKey] of [
+      ["first", "connection:one"],
+      ["second", "connection:two"],
+    ] as const) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({
+            prompt,
+            originatingChannel: "webchat",
+            originatingTo: "session:main",
+          }),
+          queuedLifecycle: { ownerKey },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 2) {
+        done.resolve();
+      }
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).not.toContain("second");
+    expect(calls[1]?.prompt).toContain("second");
+    expect(calls[1]?.prompt).not.toContain("first");
+  });
+
   it("keeps one collect batch when authorization context matches", async () => {
     const key = `test-collect-auth-match-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1816,6 +1939,7 @@ describe("followup queue collect routing", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("first");
     expect(calls[0]?.prompt).toContain("second");
+    expect(calls[0]?.abortSignal).toBeUndefined();
     expect(calls[0]?.prompt).toContain("(from Guest)");
   });
 
@@ -2211,6 +2335,25 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("two");
   });
 
+  it("collects matching local webchat routes without an external destination", async () => {
+    const key = `test-collect-local-webchat-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    enqueueFollowupRun(key, createRun({ prompt: "one", originatingChannel: "webchat" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "two", originatingChannel: "webchat" }), settings);
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("one");
+    expect(calls[0]?.prompt).toContain("two");
+  });
+
   it("does not collect Slack messages when thread ids differ", async () => {
     const key = `test-collect-slack-thread-diff-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -2451,7 +2594,7 @@ describe("followup queue collect routing", () => {
     }
   });
 
-  it("clears overflow summaries when aborts empty the queue", async () => {
+  it("keeps overflow summaries when aborts remove only the live item", async () => {
     const key = `test-overflow-summary-aborted-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const cleaned: FollowupRun[] = [];
@@ -2487,7 +2630,8 @@ describe("followup queue collect routing", () => {
       setTimeout(resolve, 10);
     });
 
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("- dropped");
     expect(cleaned.map((run) => run.prompt)).toEqual(["aborted"]);
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)).toBeUndefined();
@@ -2824,7 +2968,7 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("live followup");
   });
 
-  it("keeps summarized room-event lifecycle until the overflow summary drains", async () => {
+  it("drops an aborted summarized room event before overflow delivery", async () => {
     const key = `test-overflow-summary-lifecycle-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
@@ -2832,9 +2976,7 @@ describe("followup queue collect routing", () => {
     const onComplete = vi.fn();
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
-      if (calls.length >= 2) {
-        done.resolve();
-      }
+      done.resolve();
     };
     const settings: QueueSettings = {
       mode: "followup",
@@ -2862,13 +3004,60 @@ describe("followup queue collect routing", () => {
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.currentInboundEventKind).toBe("room_event");
-    expect(calls[0]?.currentInboundContext).toBeUndefined();
-    expect(calls[0]?.abortSignal).toBeUndefined();
-    expect(calls[1]?.prompt).toBe("live followup");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("live followup");
     expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains summarized source identities through admitted overflow delivery", async () => {
+    const key = `test-overflow-summary-admitted-lifecycle-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const sourceCompletions = [vi.fn(), vi.fn()];
+    const sourceCancellationRetirements = [vi.fn(), vi.fn()];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    for (const [index, prompt] of ["first dropped", "second dropped"].entries()) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt }),
+          abortSignal: new AbortController().signal,
+          queuedLifecycle: {
+            onCancellationRetired: sourceCancellationRetirements[index],
+            onComplete: sourceCompletions[index],
+          },
+        },
+        settings,
+      );
+    }
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        expect(run.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
+        run.queuedLifecycle?.onAdmitted?.();
+        expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
+        expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();
+        expect(sourceCompletions[0]).not.toHaveBeenCalled();
+        expect(sourceCompletions[1]).not.toHaveBeenCalled();
+        run.queuedLifecycle?.onComplete?.();
+        expect(sourceCompletions[0]).toHaveBeenCalledTimes(1);
+        expect(sourceCompletions[1]).toHaveBeenCalledTimes(1);
+        return;
+      }
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt).toBe("live followup");
   });
 
   it("completes summarized room-event lifecycle when overflow summary delivery fails", async () => {
@@ -2914,14 +3103,15 @@ describe("followup queue collect routing", () => {
       setTimeout(resolve, 10);
     });
 
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(1);
     expect(getExistingFollowupQueue(key)?.summarySources[0]?.currentInboundEventKind).toBe(
       "room_event",
     );
-    expect(getExistingFollowupQueue(key)?.summarySources[0]?.queuedLifecycle).toBeUndefined();
+    expect(getExistingFollowupQueue(key)?.summarySources[0]?.queuedLifecycle).toBeDefined();
     expect(getExistingFollowupQueue(key)?.summarySources[0]?.currentInboundContext).toBeUndefined();
 
+    scheduleFollowupDrain(key, runFollowup);
     releaseRetry.resolve();
     await done.promise;
 
@@ -2929,7 +3119,435 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[1]?.prompt).toContain("- dropped ambient");
     expect(calls[1]?.currentInboundEventKind).toBe("room_event");
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("collects compatible cancelable turns and completes each source lifecycle", async () => {
+    const key = `test-collect-cancelable-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const firstComplete = vi.fn();
+    const secondComplete = vi.fn();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "first" }),
+        abortSignal: new AbortController().signal,
+        queuedLifecycle: { onComplete: firstComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "second" }),
+        abortSignal: new AbortController().signal,
+        queuedLifecycle: { onComplete: secondComplete },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).toContain("second");
+    await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
+    expect(firstComplete).toHaveBeenCalledTimes(1);
+    expect(secondComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("collects transcript-owned turns under one aggregate recorder", async () => {
+    const key = `test-collect-transcript-owner-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const firstComplete = vi.fn();
+    const secondComplete = vi.fn();
+    const firstCorrelation = { begin: vi.fn() };
+    const secondCorrelation = { begin: vi.fn() };
+    const createRecorder = (text: string, mediaPath: string) =>
+      createUserTurnTranscriptRecorder({
+        input: { text, media: [{ path: mediaPath, contentType: "image/png" }] },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+        updateMode: "none",
+      });
+    const firstRecorder = createRecorder("first transcript", "/tmp/first.png");
+    const secondRecorder = createRecorder("second transcript", "/tmp/second.png");
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    for (const [prompt, recorder, onComplete, deliveryCorrelation] of [
+      ["first", firstRecorder, firstComplete, firstCorrelation],
+      ["second", secondRecorder, secondComplete, secondCorrelation],
+    ] as const) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt }),
+          transcriptPrompt: `${prompt} transcript`,
+          userTurnTranscriptRecorder: recorder,
+          currentInboundContext: { text: "shared gateway context", promptJoiner: " " },
+          deliveryCorrelations: [deliveryCorrelation],
+          abortSignal: new AbortController().signal,
+          queuedLifecycle: { onComplete },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).toContain("second");
+    expect(calls[0]?.transcriptPrompt).toContain("first transcript");
+    expect(calls[0]?.transcriptPrompt).toContain("second transcript");
+    expect(calls[0]?.currentInboundContext?.text).toContain(
+      "Queued #1 context:\nshared gateway context",
+    );
+    expect(calls[0]?.currentInboundContext?.text).toContain(
+      "Queued #2 context:\nshared gateway context",
+    );
+    expect(calls[0]?.currentInboundContext?.promptJoiner).toBe("\n\n");
+    expect(calls[0]?.deliveryCorrelations).toEqual([firstCorrelation, secondCorrelation]);
+    expect(calls[0]?.userTurnTranscriptRecorder).not.toBe(firstRecorder);
+    expect(calls[0]?.userTurnTranscriptRecorder).not.toBe(secondRecorder);
+    const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
+    expect(message?.content).toContain("first transcript");
+    expect(message?.content).toContain("second transcript");
+    expect((message as unknown as { MediaPaths?: string[] } | undefined)?.MediaPaths).toEqual([
+      "/tmp/first.png",
+      "/tmp/second.png",
+    ]);
+    await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
+    expect(secondComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("pairs differing inbound runtime contexts inside one collected turn", async () => {
+    const key = `test-collect-runtime-context-split-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    for (const [prompt, contextText] of [
+      ["first", "context one"],
+      ["second", "context two"],
+    ] as const) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt }),
+          currentInboundContext: { text: contextText },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).toContain("second");
+    expect(calls[0]?.currentInboundContext?.text).toContain("Queued #1 context:\ncontext one");
+    expect(calls[0]?.currentInboundContext?.text).toContain("Queued #2 context:\ncontext two");
+  });
+
+  it("does not let one source cancel an admitted collected run", async () => {
+    const key = `test-collect-transcript-cancel-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const canceled = new AbortController();
+    const survivor = new AbortController();
+    const sourceCompletions = [vi.fn(), vi.fn()];
+    const sourceCancellationRetirements = [vi.fn(), vi.fn()];
+    let firstResolvedContent = "";
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const createRecorder = (text: string) =>
+      createUserTurnTranscriptRecorder({
+        input: { text },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+        updateMode: "none",
+      });
+
+    for (const [index, [prompt, abortSignal]] of (
+      [
+        ["canceled", canceled.signal],
+        ["survivor", survivor.signal],
+      ] as const
+    ).entries()) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...createRun({ prompt }),
+          transcriptPrompt: `${prompt} transcript`,
+          userTurnTranscriptRecorder: createRecorder(`${prompt} transcript`),
+          abortSignal,
+          queuedLifecycle: {
+            onCancellationRetired: sourceCancellationRetirements[index],
+            onComplete: sourceCompletions[index],
+          },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        expect(run.abortSignal).toBeDefined();
+        expect(run.abortSignal).not.toBe(survivor.signal);
+        run.queuedLifecycle?.onAdmitted?.();
+        expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
+        expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();
+        expect(sourceCompletions[0]).not.toHaveBeenCalled();
+        expect(sourceCompletions[1]).not.toHaveBeenCalled();
+        canceled.abort();
+        expect(run.abortSignal?.aborted).toBe(false);
+        const resolved = await run.userTurnTranscriptRecorder?.resolveMessage();
+        firstResolvedContent = typeof resolved?.content === "string" ? resolved.content : "";
+        done.resolve();
+      }
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(firstResolvedContent).toContain("survivor transcript");
+    expect(firstResolvedContent).toContain("canceled transcript");
+    await vi.waitFor(() => expect(sourceCompletions[1]).toHaveBeenCalledTimes(1));
+    expect(sourceCompletions[0]).toHaveBeenCalledTimes(1);
+    expect(sourceCompletions[1]).toHaveBeenCalledTimes(1);
+    expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
+  });
+
+  it("keeps queue cancellation connected after collect admission", async () => {
+    const key = `test-collect-queue-cancel-${Date.now()}`;
+    const done = createDeferred<void>();
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      expect(run.abortSignal).toBeUndefined();
+      expect(run.queueAbortSignal?.aborted).toBe(false);
+      run.queuedLifecycle?.onAdmitted?.();
+      clearFollowupQueue(key);
+      expect(run.queueAbortSignal?.aborted).toBe(true);
+      done.resolve();
+    });
+    await done.promise;
+  });
+
+  it.each(["first", "last"] as const)(
+    "retries survivors when the %s source owns the sole pre-admission cancel signal",
+    async (canceledPosition) => {
+      const key = `test-collect-pre-admission-cancel-${canceledPosition}-${Date.now()}`;
+      const canceled = new AbortController();
+      const canceledComplete = vi.fn();
+      const survivorComplete = vi.fn();
+      const calls: FollowupRun[] = [];
+      const done = createDeferred<void>();
+      const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+      const enqueueSource = (prompt: string, onComplete: () => void, abortSignal?: AbortSignal) => {
+        const source: FollowupRun = {
+          ...createRun({ prompt }),
+          queuedLifecycle: { onComplete },
+        };
+        if (abortSignal) {
+          source.abortSignal = abortSignal;
+        }
+        enqueueFollowupRun(key, source, settings);
+      };
+      if (canceledPosition === "first") {
+        enqueueSource("canceled", canceledComplete, canceled.signal);
+        enqueueSource("survivor", survivorComplete);
+      } else {
+        enqueueSource("survivor", survivorComplete);
+        enqueueSource("canceled", canceledComplete, canceled.signal);
+      }
+
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        if (calls.length === 1) {
+          canceled.abort();
+          expect(run.abortSignal?.aborted).toBe(true);
+          return;
+        }
+        done.resolve();
+      });
+      await done.promise;
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("canceled");
+      expect(calls[0]?.prompt).toContain("survivor");
+      expect(calls[1]?.prompt).toContain("survivor");
+      expect(calls[1]?.prompt).not.toContain("canceled");
+      await vi.waitFor(() => expect(survivorComplete).toHaveBeenCalledTimes(1));
+      expect(canceledComplete).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps summarized work when a different cancelable live item is aborted", async () => {
+    const key = `test-summary-owner-isolation-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const summarizedComplete = vi.fn();
+    const abortedComplete = vi.fn();
+    const aborted = new AbortController();
+    const runFollowup = async (run: FollowupRun) => {
+      if (run.abortSignal?.aborted) {
+        return;
+      }
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "owner A summary" }),
+        abortSignal: new AbortController().signal,
+        queuedLifecycle: { onComplete: summarizedComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "owner B live" }),
+        abortSignal: aborted.signal,
+        queuedLifecycle: { onComplete: abortedComplete },
+      },
+      settings,
+    );
+    aborted.abort();
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("owner A summary");
+    expect(calls[0]?.prompt).not.toContain("owner B live");
+    await vi.waitFor(() => expect(summarizedComplete).toHaveBeenCalledTimes(1));
+    expect(summarizedComplete).toHaveBeenCalledTimes(1);
+    expect(abortedComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes an aborted elided source without leaking it into the summary", async () => {
+    const key = `test-elided-summary-cancel-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const elidedComplete = vi.fn();
+    const elided = new AbortController();
+    const runFollowup = async (run: FollowupRun) => {
+      if (run.abortSignal?.aborted) {
+        return;
+      }
+      calls.push(run);
+      if (calls.length === 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "elided and cancelled" }),
+        abortSignal: elided.signal,
+        queuedLifecycle: { onComplete: elidedComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "retained summary" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
+    elided.abort();
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.map((call) => call.prompt).join("\n")).not.toContain("elided and cancelled");
+    expect(calls[0]?.prompt).toContain("retained summary");
+    expect(calls[1]?.prompt).toBe("live item");
+    expect(elidedComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay elided sources after an admitted summary failure", async () => {
+    const key = `test-elided-summary-admitted-failure-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const elidedComplete = vi.fn();
+    const retainedComplete = vi.fn();
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "elided source" }),
+        queuedLifecycle: { onComplete: elidedComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "retained source" }),
+        queuedLifecycle: { onComplete: retainedComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        expect(run.prompt).toContain("Dropped 2 messages");
+        expect(run.prompt).toContain("retained source");
+        run.queuedLifecycle?.onAdmitted?.();
+        expect(getExistingFollowupQueue(key)?.summaryElisions).toEqual([]);
+        expect(getExistingFollowupQueue(key)?.droppedCount).toBe(0);
+        throw new Error("admitted summary failure");
+      }
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt).toBe("live item");
+    expect(elidedComplete).toHaveBeenCalledOnce();
+    expect(retainedComplete).toHaveBeenCalledOnce();
   });
 });
 
@@ -2965,6 +3583,21 @@ describe("resolveFollowupAuthorizationKey", () => {
         senderId: "user-1",
         bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
         execOverrides: { ask: "always" },
+      }),
+    );
+  });
+
+  it("changes when the approval reviewer device changes", () => {
+    const run = createRun({ prompt: "one" }).run;
+    expect(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        approvalReviewerDeviceId: "device-a",
+      }),
+    ).not.toBe(
+      resolveFollowupAuthorizationKey({
+        ...run,
+        approvalReviewerDeviceId: "device-b",
       }),
     );
   });

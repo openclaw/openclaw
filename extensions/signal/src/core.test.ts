@@ -16,6 +16,7 @@ import * as clientModule from "./client-adapter.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
   looksLikeUuid,
+  normalizeSignalAllowRecipient,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
@@ -71,6 +72,22 @@ describe("signal sender identity", () => {
       kind: "uuid",
       raw: "123e4567-e89b-12d3-a456-426614174000",
     });
+  });
+
+  it("falls back to sourceUuid when sourceNumber has no digits", () => {
+    const sender = resolveSignalSender({
+      sourceNumber: "not a phone number",
+      sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
+    });
+    expect(sender).toEqual({
+      kind: "uuid",
+      raw: "123e4567-e89b-12d3-a456-426614174000",
+    });
+  });
+
+  it("normalizes noisy allowlist numbers and rejects digit-free entries", () => {
+    expect(normalizeSignalAllowRecipient("signal:++1 (555) 000-1111")).toBe("+15550001111");
+    expect(normalizeSignalAllowRecipient("signal:not a phone number")).toBeUndefined();
   });
 
   it("maps uuid senders to recipient and peer ids", () => {
@@ -339,6 +356,30 @@ describe("signal outbound", () => {
       expect.objectContaining({
         cfg: expect.any(Object),
       }),
+    );
+  });
+
+  it("reports a formatted Signal chunk before a later chunk fails", async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "signal-1" })
+      .mockRejectedValueOnce(new Error("second Signal chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      signalPlugin.outbound?.sendFormattedText?.({
+        cfg: {} as OpenClawConfig,
+        to: "+15551234567",
+        text: "a".repeat(5000),
+        deps: { signal: send },
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second Signal chunk failed");
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "signal", messageId: "signal-1" }),
     );
   });
 
@@ -819,7 +860,9 @@ describe("signal setup parsing", () => {
 
   it("parses e164, uuid and wildcard entries", () => {
     expect(
-      parseSignalAllowFromEntries("+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000, *"),
+      parseSignalAllowFromEntries(
+        "signal:+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000, *",
+      ),
     ).toEqual({
       entries: ["+15555550123", "uuid:123e4567-e89b-12d3-a456-426614174000", "*"],
     });

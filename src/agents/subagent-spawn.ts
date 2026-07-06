@@ -263,7 +263,7 @@ async function callSubagentGateway(
       {
         expectFinal: request.expectFinal,
         ...(scopes != null ? { forceSyntheticClient: true } : {}),
-        timeoutMs: request.timeoutMs,
+        ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
     );

@@ -1785,6 +1785,114 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
   });
 
+  it("marks failed attachment downloads unavailable without a phantom media placeholder", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async () => {
+          throw new Error("expired attachment");
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "please inspect this",
+          attachments: [{ id: "a1", contentType: "image/jpeg" }],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.BodyForAgent).toContain(
+      "please inspect this\n\n[signal attachment unavailable]",
+    );
+    expect(context.RawBody).toBe("please inspect this");
+    expect(context.CommandBody).toBe("please inspect this");
+    expect(context.BodyForAgent).not.toContain("<media:image>");
+    expect(context.MediaPath).toBeUndefined();
+  });
+
+  it("combines raw and command text across failed-media debounce batches", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 10 } },
+            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+          },
+          ignoreAttachments: false,
+          fetchAttachment: async () => {
+            throw new Error("expired attachment");
+          },
+          historyLimit: 0,
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          dataMessage: {
+            message: "first request",
+            attachments: [{ id: "a1", contentType: "image/jpeg" }],
+          },
+        }),
+      );
+      await handler(
+        createSignalReceiveEvent({
+          dataMessage: {
+            message: "second request",
+            attachments: [],
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(10);
+
+      const context = requireCapturedContext();
+      expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
+      expect(context.RawBody).toBe("first request\\nsecond request");
+      expect(context.CommandBody).toBe("first request\\nsecond request");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dispatches failed-media commands without text debounce", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 60_000 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async () => {
+          throw new Error("expired attachment");
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "/stop",
+          attachments: [{ id: "a1", contentType: "image/jpeg" }],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.CommandBody).toBe("/stop");
+    expect(context.RawBody).toBe("/stop");
+    expect(context.BodyForAgent).toBe("/stop\n\n[signal attachment unavailable]");
+  });
+
   it("threads resolved audio contentType for Signal voice attachments", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

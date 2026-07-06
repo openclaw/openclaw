@@ -481,12 +481,12 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  // Direct chats are now reply-eligible; send the first typing cue before
-  // expensive context/session construction without showing typing for dropped turns.
-  if (!isGroup) {
+  // Send the first typing cue before expensive context/session construction,
+  // but only after intake has accepted the message as a non-room-event turn.
+  if (bodyResult.inboundEventKind !== "room_event") {
     initialTypingCueSent = true;
     void sendTyping().catch((err: unknown) => {
-      logVerbose(`telegram early direct typing cue failed for chat ${chatId}: ${String(err)}`);
+      logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
     });
   }
 
@@ -515,6 +515,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    inboundEventKind: bodyResult.inboundEventKind,
     groupRequireMention: Boolean(groupRequireMention),
     mentionFacts: bodyResult.mentionFacts,
     hasControlCommand: bodyResult.hasControlCommand,
@@ -530,7 +531,8 @@ export const buildTelegramMessageContext = async ({
     topicName,
     sessionRuntime,
   });
-  const canShowStatusReaction = ctxPayload.InboundEventKind !== "room_event";
+  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
+  const canShowStatusReaction = !isRoomEvent;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -539,10 +541,10 @@ export const buildTelegramMessageContext = async ({
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
-    canShowStatusReaction &&
     ackReaction &&
     shouldAckReactionGate({
       scope: ackReactionScope,
+      inboundEventKind: ctxPayload.InboundEventKind,
       isDirect: !isGroup,
       isGroup,
       isMentionableGroup: isGroup,
@@ -554,7 +556,10 @@ export const buildTelegramMessageContext = async ({
   );
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
-    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldSendAckReaction;
+    canShowStatusReaction &&
+    statusReactionsConfig?.enabled === true &&
+    Boolean(reactionApi) &&
+    shouldSendAckReaction;
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,

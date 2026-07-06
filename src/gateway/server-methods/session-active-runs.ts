@@ -11,7 +11,9 @@ import type { GatewayRequestContext } from "./types.js";
  * do not make a session look busy to user-facing session operations.
  */
 type TrackedActiveSessionRun = {
-  sessionKey: string;
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
 };
 
@@ -22,15 +24,17 @@ function collectTrackedActiveSessionRuns(
   if (!(context.chatAbortControllers instanceof Map)) {
     return runs;
   }
-  for (const active of context.chatAbortControllers.values()) {
-    if (
-      active.projectSessionActive !== false &&
-      active.controlUiVisible !== false &&
-      typeof active.sessionKey === "string" &&
-      active.sessionKey.trim()
-    ) {
+  for (const [runId, active] of context.chatAbortControllers) {
+    if (active.projectSessionActive !== false && active.controlUiVisible !== false) {
+      const sessionKey = active.sessionKey?.trim();
+      const sessionId = active.sessionId?.trim();
+      if (!sessionKey && !sessionId) {
+        continue;
+      }
       runs.push({
-        sessionKey: active.sessionKey,
+        runId,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(sessionId ? { sessionId } : {}),
         agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
       });
     }
@@ -44,7 +48,7 @@ function isTrackedActiveSessionRunForKey(
   agentId?: string,
   defaultAgentId?: string,
 ): boolean {
-  if (active.sessionKey !== key) {
+  if (!active.sessionKey || active.sessionKey !== key) {
     return false;
   }
   if (key !== "global") {
@@ -86,6 +90,40 @@ export function hasTrackedActiveSessionRun(params: {
   );
 }
 
+export function resolveVisibleActiveSessionRunState(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): { active: boolean; runIds: string[] } {
+  const sessionId = params.sessionId?.trim();
+  const runIds = collectTrackedActiveSessionRuns(params.context)
+    .filter(
+      (active) =>
+        isTrackedActiveSessionRunForKey(
+          active,
+          params.canonicalKey,
+          params.agentId,
+          params.defaultAgentId,
+        ) ||
+        isTrackedActiveSessionRunForKey(
+          active,
+          params.requestedKey,
+          params.agentId,
+          params.defaultAgentId,
+        ) ||
+        (sessionId !== undefined && active.sessionId === sessionId),
+    )
+    .map((active) => active.runId)
+    .toSorted();
+  return {
+    active: runIds.length > 0 || (sessionId !== undefined && isEmbeddedAgentRunActive(sessionId)),
+    runIds,
+  };
+}
+
 export function hasVisibleActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
@@ -94,9 +132,5 @@ export function hasVisibleActiveSessionRun(params: {
   agentId?: string;
   defaultAgentId?: string;
 }): boolean {
-  if (hasTrackedActiveSessionRun(params)) {
-    return true;
-  }
-  const sessionId = params.sessionId?.trim();
-  return sessionId ? isEmbeddedAgentRunActive(sessionId) : false;
+  return resolveVisibleActiveSessionRunState(params).active;
 }

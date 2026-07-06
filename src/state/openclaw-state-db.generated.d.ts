@@ -243,6 +243,7 @@ export interface CronJobs {
   consecutive_errors: number | null;
   consecutive_skipped: number | null;
   created_at_ms: number;
+  declaration_key: string | null;
   delete_after_run: number | null;
   delivery_account_id: string | null;
   delivery_best_effort: number | null;
@@ -251,8 +252,10 @@ export interface CronJobs {
   delivery_completion_to: string | null;
   delivery_mode: string | null;
   delivery_thread_id: string | null;
+  delivery_thread_id_type: string | null;
   delivery_to: string | null;
   description: string | null;
+  display_name: string | null;
   enabled: number;
   every_ms: number | null;
   failure_alert_account_id: string | null;
@@ -279,6 +282,8 @@ export interface CronJobs {
   last_run_status: string | null;
   name: string;
   next_run_at_ms: number | null;
+  owner_agent_id: string | null;
+  owner_session_key: string | null;
   payload_allow_unsafe_external_content: number | null;
   payload_external_content_source_json: string | null;
   payload_fallbacks_json: string | null;
@@ -489,6 +494,16 @@ export interface FlowRuns {
   sync_mode: Generated<string>;
   updated_at: number;
   wait_json: string | null;
+}
+
+export interface GatewayBootLifecycle {
+  boot_id: string;
+  completed_at_ms: number | null;
+  outcome: "clean_stop" | "forced_stop" | "planned_restart" | "startup_failed" | null;
+  pid: number;
+  reason: string | null;
+  started_at_ms: number;
+  startup_reason: string | null;
 }
 
 export interface GatewayRestartHandoff {
@@ -953,6 +968,21 @@ export interface WorkspaceSetupState {
   workspace_path: string;
 }
 
+export interface Worktrees {
+  base_ref: string;
+  branch: string;
+  created_at: number;
+  id: string;
+  last_active_at: number;
+  owner_id: string | null;
+  owner_kind: string;
+  path: string;
+  removed_at: number | null;
+  repo_fingerprint: string;
+  repo_root: string;
+  snapshot_ref: string | null;
+}
+
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
@@ -986,6 +1016,7 @@ export interface DB {
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
+  gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
@@ -1019,4 +1050,5 @@ export interface DB {
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
   workspace_setup_state: WorkspaceSetupState;
+  worktrees: Worktrees;
 }

@@ -507,6 +507,7 @@ async function resolveTalkResponseFromConfig(params: {
     realtime: {
       ...(effectiveProvider ? { provider: effectiveProvider } : {}),
       ...(runtimeRealtime.model ? { model: runtimeRealtime.model } : {}),
+      ...(runtimeRealtime.transport ? { transport: runtimeRealtime.transport } : {}),
       ...(Object.keys(sourceProviders).length > 0 ? { providers: sourceProviders } : {}),
     },
   })?.realtime;

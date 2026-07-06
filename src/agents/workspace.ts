@@ -12,6 +12,7 @@ import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { retryAsync } from "../infra/retry.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -50,6 +51,9 @@ const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
 ] as const;
+const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
+const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
+const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
@@ -245,18 +249,34 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
   }
 }
 
+function isTransientWorkspaceReadError(error: unknown): boolean {
+  const fsError = error as NodeJS.ErrnoException | undefined;
+  if (fsError?.code && TRANSIENT_WORKSPACE_READ_CODES.has(fsError.code)) {
+    return true;
+  }
+  if (typeof fsError?.errno === "number" && TRANSIENT_WORKSPACE_READ_ERRNOS.has(fsError.errno)) {
+    return true;
+  }
+  return error instanceof Error && TRANSIENT_WORKSPACE_READ_MESSAGE.test(error.message);
+}
+
 async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
 ): Promise<boolean> {
   try {
-    return (await fs.readFile(filePath, "utf-8")) !== template;
+    return await retryAsync(async () => (await fs.readFile(filePath, "utf-8")) !== template, {
+      attempts: 3,
+      minDelayMs: 50,
+      maxDelayMs: 50,
+      shouldRetry: (err) => isTransientWorkspaceReadError(err),
+    });
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
+    if (anyErr.code === "ENOENT") {
+      return false;
     }
-    return false;
+    throw err;
   }
 }
 

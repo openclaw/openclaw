@@ -118,6 +118,55 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
+  it("reapproves and then preserves Windows exec approval commands", async () => {
+    const commands = [
+      "system.run.prepare",
+      "system.run",
+      "system.which",
+      "system.execApprovals.get",
+      "system.execApprovals.set",
+    ];
+    const previouslyApprovedCommands = ["system.run.prepare", "system.run", "system.which"];
+    const connectParams = makeNodeConnectParams({
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "test",
+        platform: "windows",
+        deviceFamily: "Windows",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+      caps: ["system"],
+      commands,
+    });
+    const requestPairing = makePendingPairingRequest("req-windows");
+
+    const upgrade = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams,
+      pairedNode: makePairedNode({ caps: ["system"], commands: previouslyApprovedCommands }),
+      requestPairing,
+    });
+
+    expect(upgrade.declaredCommands).toEqual(commands);
+    expect(upgrade.effectiveCommands).toEqual(previouslyApprovedCommands);
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands,
+      }),
+    );
+
+    const approvedPairingRequest = vi.fn();
+    const approvedReconnect = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams,
+      pairedNode: makePairedNode({ caps: ["system"], commands }),
+      requestPairing: approvedPairingRequest,
+    });
+
+    expect(approvedReconnect.effectiveCommands).toEqual(commands);
+    expect(approvedPairingRequest).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["conflicts with device family", { deviceFamily: "iPhone" }],
     ["omits device family", {}],
