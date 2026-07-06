@@ -381,6 +381,7 @@ function renderChatGoalActionButton(options: {
 }
 
 function renderChatGoal(
+  state: ChatComposerState,
   goal: SessionGoal | undefined,
   actions: ChatGoalActions,
 ): TemplateResult | typeof nothing {
@@ -389,7 +390,7 @@ function renderChatGoal(
   }
   const elapsed = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
   const usage = formatGoalUsage(goal);
-  const expanded = composerState.goalExpandedId === goal.id;
+  const expanded = state.goalExpandedId === goal.id;
   const showActions = actions.canAct && Boolean(actions.onGoalCommand);
   const canResume =
     goal.status === "paused" ||
@@ -397,7 +398,7 @@ function renderChatGoal(
     goal.status === "usage_limited" ||
     goal.status === "budget_limited";
   const toggleExpanded = () => {
-    composerState.goalExpandedId = expanded ? null : goal.id;
+    state.goalExpandedId = expanded ? null : goal.id;
     actions.requestUpdate();
   };
   return html`
@@ -2061,7 +2062,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
         ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderChatGoal(activeSession?.goal, {
+        ${renderChatGoal(getChatComposerState(props.paneId), activeSession?.goal, {
           canAct: canCompose,
           onGoalCommand: props.onGoalCommand,
           onGoalEdit: (goal) => {
