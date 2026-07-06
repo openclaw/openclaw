@@ -93,7 +93,10 @@ export function resolveCopilotForwardCompatModel(
   // model isn't available on the user's plan. This lets new models be used
   // by simply adding them to agents.defaults.models in openclaw.json — no
   // code change required.
-  const reasoning = /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+  const reasoning =
+    /^o[13](\b|$)/.test(lowerModelId) ||
+    isCopilotCodexModelId(lowerModelId) ||
+    resolveCopilotTransportApi(trimmedModelId) === "anthropic-messages";
   const compat = resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
