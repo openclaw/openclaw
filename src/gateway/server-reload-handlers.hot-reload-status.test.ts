@@ -74,6 +74,8 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       })) as never,
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
       clients: [],
     });
 
