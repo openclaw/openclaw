@@ -1,5 +1,6 @@
-// Thread Ownership plugin entrypoint registers its OpenClaw integration.
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+// Thread Ownership plugin entrypoint registers its OpenClaw integration.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -22,6 +23,9 @@ type ThreadOwnershipMessageSendingResult = { cancel: true } | undefined;
 // Entries expire after 5 minutes.
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
+
+/** Max bytes to read from the thread-ownership conflict JSON response. */
+const OWNERSHIP_RESPONSE_MAX_BYTES = 16 * 1024;
 
 function isThreadOwnershipConfig(value: unknown): value is ThreadOwnershipConfig {
   return value !== null && typeof value === "object";
@@ -189,7 +193,11 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = (await resp.json()) as { owner?: string };
+            const body = await readProviderJsonResponse<{ owner?: string }>(
+              resp,
+              "thread-ownership conflict",
+              { maxBytes: OWNERSHIP_RESPONSE_MAX_BYTES },
+            );
             api.logger.info?.(
               `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
             );

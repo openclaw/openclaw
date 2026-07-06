@@ -269,6 +269,26 @@ describe("thread-ownership plugin", () => {
       expect(infoMessage).toContain("cancelled send");
     });
 
+    it("fails open when a 409 conflict response body exceeds the safe read bound", async () => {
+      const oversizedBody = JSON.stringify({
+        owner: "other-agent",
+        padding: "x".repeat(32 * 1024),
+      });
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(oversizedBody, {
+          status: 409,
+          headers: { "Content-Length": String(oversizedBody.length) },
+        }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toBeUndefined();
+      const warningMessage = requireFirstLogMessage(api.logger.warn, "ownership check warning log");
+      expect(warningMessage).toContain("ownership check failed");
+      expect(warningMessage).toContain("thread-ownership conflict");
+    });
+
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
