@@ -124,22 +124,11 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
   if (element.tag === "hr") {
     return [{ tag: "hr" }];
   }
-  if (
-    (element.tag === "markdown" || element.tag === "lark_md") &&
-    typeof element.content === "string"
-  ) {
+  if (element.tag === "markdown" && typeof element.content === "string") {
     return [
       {
         tag: "markdown",
         content: escapeFeishuCardMarkdownText(element.content),
-      },
-    ];
-  }
-  if (element.tag === "plain_text" && typeof element.content === "string") {
-    return [
-      {
-        tag: "markdown",
-        content: escapeFeishuCardPlainText(element.content),
       },
     ];
   }

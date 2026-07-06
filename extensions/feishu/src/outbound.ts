@@ -396,8 +396,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           const interactive = normalizeInteractiveReply(ctx.payload.interactive);
           return interactive ? interactiveReplyToPresentation(interactive) : undefined;
         })();
+      // Structured content replaces raw card JSON; document comments should
+      // render only the usable text fallback instead of exposing both forms.
+      const fallbackSourceText =
+        normalizedPresentation && readNativeFeishuCardJson(ctx.payload.text)
+          ? undefined
+          : ctx.payload.text;
       const presentationFallbackText = renderMessagePresentationFallbackText({
-        text: ctx.payload.text,
+        text: fallbackSourceText,
         presentation: normalizedPresentation,
       });
       // Direct delivery retains blocks; core-rendered delivery carries the fact.
