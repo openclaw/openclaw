@@ -75,4 +75,36 @@ describe("mergeUsageSummaries", () => {
       error: undefined,
     });
   });
+
+  it("preserves provider endpoint errors over synthetic fallback errors", () => {
+    const merged = mergeUsageSummaries(
+      {
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [],
+            error: "Admin API key required",
+          },
+        ],
+      },
+      {
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "Codex",
+            windows: [],
+            error: "Codex account authentication required",
+          },
+        ],
+      },
+    );
+
+    expect(merged.providers[0]).toMatchObject({
+      displayName: "OpenAI",
+      error: "Admin API key required",
+    });
+  });
 });

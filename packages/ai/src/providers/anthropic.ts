@@ -109,6 +109,7 @@ function getCacheControl(
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
 const claudeCodeVersion = "2.1.75";
+const claudeCodeBillingSystemBlock = `x-anthropic-billing-header: cc_version=${claudeCodeVersion}; cc_entrypoint=sdk-cli;`;
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -1564,6 +1565,11 @@ function buildAnthropicSystemBlocks(
 ): TextBlockParam[] | undefined {
   const blocks: TextBlockParam[] = [];
   if (isOAuthTokenResult) {
+    // Anthropic uses this first system block to route Claude subscription OAuth billing.
+    blocks.push({
+      type: "text",
+      text: claudeCodeBillingSystemBlock,
+    });
     blocks.push({
       type: "text",
       text: "You are Claude Code, Anthropic's official CLI for Claude.",

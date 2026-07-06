@@ -174,6 +174,9 @@ struct OpenClawChatComposer: View {
                     }
                     if self.viewModel.showsModelPicker {
                         self.modelPicker
+                        if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
+                            self.modelPinButton
+                        }
                     }
                 }
             }
@@ -208,7 +211,9 @@ struct OpenClawChatComposer: View {
     }
 
     private var modelPicker: some View {
-        Picker(
+        // Sections come from an O(n) recompute over the catalog; bind once per body eval.
+        let sections = self.viewModel.modelPickerSections
+        return Picker(
             "Model",
             selection: Binding(
                 get: { self.viewModel.modelSelectionID },
@@ -217,10 +222,34 @@ struct OpenClawChatComposer: View {
             Text(self.viewModel.defaultModelLabel)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag(OpenClawChatViewModel.defaultModelSelectionID)
-            ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel)
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .tag(model.selectionID)
+            if sections.pinned.isEmpty, sections.recent.isEmpty {
+                // No pins/recents yet: keep the pre-feature flat list without section chrome.
+                self.modelOptions(sections.remaining)
+            } else {
+                if !sections.pinned.isEmpty {
+                    Section {
+                        self.modelOptions(sections.pinned)
+                    } header: {
+                        Text("Pinned")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                if !sections.recent.isEmpty {
+                    Section {
+                        self.modelOptions(sections.recent)
+                    } header: {
+                        Text("Recent")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                if !sections.remaining.isEmpty {
+                    Section {
+                        self.modelOptions(sections.remaining)
+                    } header: {
+                        Text("Models")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
             }
         }
         .labelsHidden()
@@ -228,6 +257,25 @@ struct OpenClawChatComposer: View {
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
         .help("Model")
+    }
+
+    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
+        ForEach(models) { model in
+            Text(model.displayLabel)
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(model.selectionID)
+        }
+    }
+
+    private var modelPinButton: some View {
+        Button {
+            self.viewModel.toggleSelectedModelPinned()
+        } label: {
+            Image(systemName: self.viewModel.isSelectedModelPinned ? "star.fill" : "star")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model")
     }
 
     private var sessionPicker: some View {

@@ -259,11 +259,6 @@ export type PluginSessionAttachmentResult =
     }
   | { ok: false; error: string };
 
-export type PluginSessionTurnSchedule =
-  | { at: string | number | Date }
-  | { delayMs: number }
-  | { cron: string; tz?: string };
-
 type PluginSessionTurnScheduleCommonParams = {
   sessionKey: string;
   message: string;

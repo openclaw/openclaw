@@ -8,6 +8,7 @@ import {
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
@@ -554,17 +555,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText =
       "1. Verdict: the answer completed cleanly. 2. Evidence: the runner captured final text.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         timedOut: true,
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [{ type: "text", text: finalText }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
       }),
     );
 
@@ -617,16 +620,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: rateLimitAssistant,
       }),
     );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered after a short rate-limit wait."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
       }),
     );
 
@@ -969,16 +974,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: undefined,
       }),
     );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "end_turn",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered answer."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "end_turn",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [{ type: "text", text: "Recovered answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
       }),
     );
 
@@ -1381,6 +1388,62 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(true);
   });
 
+  it("does not flag stale lastAssistant=toolUse when currentAttemptAssistant=stop exists (#80918)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Analysis...", "Here is the final answer after update_plan."],
+        toolMetas: [{ toolName: "update_plan" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [
+            { type: "text", text: "Analysis..." },
+            { type: "tool_use", id: "tool_1", name: "update_plan", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Here is the final answer after update_plan." }],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("still flags incomplete-turn when currentAttemptAssistant is absent and lastAssistant=toolUse (#76477 regression)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Let me update the file..."],
+        toolMetas: [{ toolName: "write" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Let me update the file..." },
+            { type: "tool_use", id: "tool_1", name: "write", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: undefined,
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
   it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
     const interruptedToolOnlyAttempt = makeAttemptResult({
       assistantTexts: [],
@@ -1673,6 +1736,60 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
     expectWarnMessageWith("incomplete turn detected");
+  });
+
+  it("delivers the current final answer when the session assistant is stale (#80918)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "The requested update is complete.";
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([{ text: finalText }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [finalText],
+        toolMetas: [{ toolName: "update_plan", replaySafe: true }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
+          usage: { input: 100, output: 5, total: 105 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+          usage: { input: 200, output: 20, total: 220 },
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-current-assistant-after-tool-use",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentAssistant: expect.objectContaining({
+          stopReason: "stop",
+          content: [{ type: "text", text: finalText }],
+        }),
+        lastAssistant: expect.objectContaining({ stopReason: "toolUse" }),
+      }),
+    );
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+    expect(result.meta.stopReason).toBe("stop");
+    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
+      input: 200,
+      output: 20,
+      total: 220,
+    });
+    expectNoWarnMessageWith("incomplete turn detected");
   });
 
   it("treats missing replay metadata as replay-invalid", () => {

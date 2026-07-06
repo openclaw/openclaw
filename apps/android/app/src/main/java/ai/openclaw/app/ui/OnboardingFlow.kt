@@ -1097,17 +1097,6 @@ private fun GatewayPrerequisiteRow(
 }
 
 @Composable
-private fun GatewayCommand(
-  label: String,
-  command: String,
-) {
-  Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-    Text(text = command, style = ClawTheme.type.mono.copy(fontSize = 16.sp, lineHeight = 22.sp), color = ClawTheme.colors.text)
-  }
-}
-
-@Composable
 private fun SetupCodeInstructionsScreen(
   scannerActive: Boolean,
   cameraPermissionGranted: Boolean,

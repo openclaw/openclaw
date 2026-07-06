@@ -698,7 +698,7 @@ describe("runCliAgent reliability", () => {
             mediaUrl: "https://example.com/done.png",
           },
           result: { status: "sent" },
-          isError: false,
+          outcome: "completed",
         });
         markMcpLoopbackToolCallFinished(captureHandle);
       }, 10);
@@ -763,8 +763,8 @@ describe("runCliAgent reliability", () => {
           target: "chat123",
           message: "sent before failure",
         },
+        outcome: "completed",
         result: { status: "sent" },
-        isError: false,
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -829,7 +829,7 @@ describe("runCliAgent reliability", () => {
           message: "sent before overflow",
         },
         result: { status: "sent" },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -892,7 +892,7 @@ describe("runCliAgent reliability", () => {
             sourceReply: { text: "sent before failure" },
           },
         },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -1003,7 +1003,7 @@ describe("runCliAgent reliability", () => {
             sourceReply: { text: "sent through source reply" },
           },
         },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -1077,7 +1077,7 @@ describe("runCliAgent reliability", () => {
             sourceReply: { text: "visible source reply" },
           },
         },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       return createManagedRun({
@@ -1153,7 +1153,7 @@ describe("runCliAgent reliability", () => {
           message: "sent without a terminal reply",
         },
         result: { status: "sent" },
-        isError: false,
+        outcome: "completed",
       });
       markMcpLoopbackToolCallFinished(captureHandle);
       input.onStdout?.(

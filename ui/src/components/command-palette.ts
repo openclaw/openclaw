@@ -23,7 +23,6 @@ type PaletteItem = {
 
 const SESSION_ACTION_PREFIX = "session:";
 const SESSION_SEARCH_DEBOUNCE_MS = 250;
-/** Rows shown in the palette; the request over-fetches so hidden rows cannot starve visible matches. */
 const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
@@ -93,15 +92,10 @@ function getPaletteItemsInternal(): PaletteItem[] {
   return getPaletteBaseItems();
 }
 
-export function getPaletteItems(): readonly PaletteItem[] {
-  return getPaletteItemsInternal();
-}
-
 type CommandPaletteProps = {
   open: boolean;
   query: string;
   activeIndex: number;
-  /** Server-side session search results for the current query. */
   sessionItems: readonly PaletteItem[];
   onToggle: () => void;
   onQueryChange: (query: string) => void;
@@ -128,16 +122,9 @@ function filteredItems(
       normalizeLowercaseStringOrEmpty(item.label).includes(q) ||
       normalizeLowercaseStringOrEmpty(item.description).includes(q),
   );
-  // Session rows are already filtered by the gateway search; a query usually
-  // targets a chat, so they lead the results.
+  // Gateway search already matched the chat rows, so lead with those before
+  // local navigation and slash-command matches.
   return [...sessionItems, ...matches];
-}
-
-export function getFilteredPaletteItems(
-  query: string,
-  sessionItems: readonly PaletteItem[] = [],
-): readonly PaletteItem[] {
-  return filteredItems(query, true, sessionItems);
 }
 
 function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
@@ -287,7 +274,7 @@ function getCategoryLabel(category: string): string {
     case "skills":
       return t("overview.palette.categories.skills");
     case "chats":
-      return t("overview.palette.categories.chats");
+      return t("sessionsView.title");
     default:
       return category;
   }
@@ -497,9 +484,8 @@ export class CommandPalette extends LitElement {
       globalThis.clearTimeout(this.sessionSearchTimer);
       this.sessionSearchTimer = null;
     }
-    // Invalidate any in-flight search and drop the previous query's rows
-    // immediately; otherwise a late-resolving request repopulates the list
-    // and its stale rows stay selectable during the debounce window.
+    // Invalidate the previous query immediately so late responses cannot
+    // repopulate selectable stale rows during the debounce window.
     this.sessionSearchId += 1;
     this.sessionItems = [];
     const search = normalizeOptionalString(query);
@@ -518,29 +504,50 @@ export class CommandPalette extends LitElement {
       return;
     }
     const requestId = ++this.sessionSearchId;
+    const visibleRows: ReturnType<typeof getVisibleSessionRows> = [];
+    const visibleKeys = new Set<string>();
+    const seenOffsets = new Set<number>([0]);
+    let offset: number | undefined;
     try {
-      // No agentId: the palette searches chats across every agent. Global and
-      // unknown rows are excluded server-side and a full page is fetched so
-      // cron/subagent rows filtered below cannot starve visible matches; the
-      // All Sessions page stays the exhaustive search surface.
-      const result = await sessions.list({
-        search,
-        limit: SESSION_SEARCH_PAGE_SIZE,
-        includeGlobal: false,
-        includeUnknown: false,
-      });
-      if (requestId !== this.sessionSearchId || !this.open) {
-        return;
+      while (visibleRows.length < SESSION_SEARCH_LIMIT) {
+        const result = await sessions.list({
+          search,
+          limit: SESSION_SEARCH_PAGE_SIZE,
+          ...(offset === undefined ? {} : { offset }),
+          includeGlobal: false,
+          includeUnknown: false,
+        });
+        if (requestId !== this.sessionSearchId || !this.open || !result) {
+          return;
+        }
+        const pageRows = getVisibleSessionRows(result, {
+          agentId: "",
+          defaultAgentId: "",
+          filterByAgent: false,
+        });
+        for (const row of pageRows) {
+          if (!visibleKeys.has(row.key)) {
+            visibleKeys.add(row.key);
+            visibleRows.push(row);
+          }
+        }
+        if (visibleRows.length >= SESSION_SEARCH_LIMIT || !result.hasMore) {
+          break;
+        }
+        const nextOffset =
+          typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)
+            ? Math.max(0, Math.floor(result.nextOffset))
+            : result.sessions.length > 0
+              ? (offset ?? 0) + result.sessions.length
+              : null;
+        // Malformed pagination must not turn a palette query into an RPC loop.
+        if (nextOffset === null || seenOffsets.has(nextOffset)) {
+          break;
+        }
+        seenOffsets.add(nextOffset);
+        offset = nextOffset;
       }
-      // Same hidden-row rules as the sidebar list (archived/cron/subagent
-      // rows stay hidden); the agent-tie filter stays off, so the scope ids
-      // are unused.
-      const rows = getVisibleSessionRows(result ?? null, {
-        agentId: "",
-        defaultAgentId: "",
-        filterByAgent: false,
-      });
-      this.sessionItems = rows.slice(0, SESSION_SEARCH_LIMIT).map((row) => ({
+      this.sessionItems = visibleRows.slice(0, SESSION_SEARCH_LIMIT).map((row) => ({
         id: `session-${row.key}`,
         label: resolveSessionDisplayName(row.key, row),
         icon: "messageSquare" as const,
@@ -550,7 +557,7 @@ export class CommandPalette extends LitElement {
       }));
       this.activeIndex = 0;
     } catch {
-      // Session search is best-effort; nav commands stay usable on failure.
+      // Session search is best-effort; navigation commands stay usable.
     }
   }
 

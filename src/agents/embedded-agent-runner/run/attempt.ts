@@ -918,6 +918,7 @@ export async function runEmbeddedAttempt(
   let idleTimedOut = false;
   let timedOutDuringCompaction = false;
   let timedOutDuringToolExecution = false;
+  let timedOutByRunBudget = false;
   let promptError: unknown = null;
   let emitDiagnosticRunCompleted:
     | ((
@@ -1533,6 +1534,7 @@ export async function runEmbeddedAttempt(
           diagnostics,
           tools: sourceTools,
           runId: params.runId,
+          agentId: sessionAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
         }),
@@ -1615,6 +1617,7 @@ export async function runEmbeddedAttempt(
                 diagnostics,
                 tools: sourceTools,
                 runId: params.runId,
+                agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
               }),
@@ -1642,6 +1645,7 @@ export async function runEmbeddedAttempt(
       diagnostics: uncompactedToolSchemaProjection.diagnostics,
       tools: projectedUncompactedEffectiveTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -1748,6 +1752,7 @@ export async function runEmbeddedAttempt(
       diagnostics: toolSearchSchemaProjection.diagnostics,
       tools: projectedToolSearchTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -3815,6 +3820,7 @@ export async function runEmbeddedAttempt(
             ) {
               timedOutDuringCompaction = true;
             }
+            timedOutByRunBudget = true;
             abortRun(true);
             if (!abortWarnTimer) {
               abortWarnTimer = setTimeout(() => {
@@ -5664,6 +5670,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         promptErrorSource,
         terminalError: attemptTrajectoryTerminal.terminalError,
@@ -5684,6 +5691,7 @@ export async function runEmbeddedAttempt(
           idleTimedOut,
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
+          timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
           promptErrorSource,
           terminalError: attemptTrajectoryTerminal.terminalError,
@@ -5710,6 +5718,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         terminalError: attemptTrajectoryTerminal.terminalError,
       });
@@ -5725,6 +5734,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError,
         promptErrorSource,
         preflightRecovery,
@@ -5781,6 +5791,7 @@ export async function runEmbeddedAttempt(
           idleTimedOut,
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
+          timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }

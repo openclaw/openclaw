@@ -14,7 +14,7 @@ function repoName(repoRoot: string): string {
   return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
 }
 
-export class WorktreesPage extends LitElement {
+class WorktreesPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

@@ -31,6 +31,7 @@ function sessionRow(
     pinnedAt?: number;
     hasActiveRun?: boolean;
     status?: string;
+    spawnedBy?: string;
   } = {},
 ) {
   return {
@@ -49,7 +50,15 @@ function sessionRow(
   };
 }
 
-function sessionsListResponse(sessions: unknown[]) {
+function sessionsListResponse(
+  sessions: unknown[],
+  options: {
+    hasMore?: boolean;
+    nextOffset?: number | null;
+    offset?: number;
+    totalCount?: number;
+  } = {},
+) {
   return {
     count: sessions.length,
     defaults: {
@@ -57,13 +66,13 @@ function sessionsListResponse(sessions: unknown[]) {
       model: "gpt-5.5",
       modelProvider: "openai",
     },
-    hasMore: false,
+    hasMore: options.hasMore ?? false,
     limitApplied: 50,
-    nextOffset: null,
-    offset: 0,
+    nextOffset: options.nextOffset ?? null,
+    offset: options.offset ?? 0,
     path: "",
     sessions,
-    totalCount: sessions.length,
+    totalCount: options.totalCount ?? sessions.length,
     ts: Date.now(),
   };
 }
@@ -94,7 +103,6 @@ async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-
 function trimmedTextContents(locator: Locator): Promise<string[]> {
   return locator.evaluateAll((elements) =>
     elements.map((element) => element.textContent?.trim() ?? ""),
@@ -103,6 +111,10 @@ function trimmedTextContents(locator: Locator): Promise<string[]> {
 
 function actionOpacity(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
+}
+
+function actionPointerEvents(button: Locator): Promise<string> {
+  return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
 }
 
 async function captureUiProof(page: Page, fileName: string) {
@@ -140,24 +152,46 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", baseTime),
-          sessionRow("agent:main:release", "Release planning", baseTime - 60_000, {
-            pinned: true,
-            pinnedAt: baseTime - 30_000,
-          }),
-          sessionRow("agent:main:migration", "Data migration", baseTime - 90_000, {
-            hasActiveRun: true,
-            status: "running",
-          }),
-          sessionRow("agent:main:research", "Research notes", baseTime - 120_000),
-          // Hidden row classes: the static mock returns them for every
-          // sessions.list call, so the palette must filter them client-side.
-          sessionRow("subagent:release-helper", "Release subagent", baseTime - 200_000),
-          sessionRow("agent:main:old-release", "Release archive", baseTime - 300_000, {
-            archived: true,
-          }),
-        ]),
+        "sessions.list": {
+          cases: [
+            {
+              match: { offset: 50, search: "release" },
+              response: sessionsListResponse(
+                [sessionRow("agent:main:release", "Release planning", baseTime - 60_000)],
+                { offset: 50, totalCount: 51 },
+              ),
+            },
+            {
+              match: { search: "release" },
+              response: sessionsListResponse(
+                Array.from({ length: 50 }, (_, index) =>
+                  sessionRow(
+                    `agent:main:release-helper-${index}`,
+                    `Release helper ${index}`,
+                    baseTime - index,
+                    { spawnedBy: "agent:main:main" },
+                  ),
+                ),
+                { hasMore: true, nextOffset: 50, totalCount: 51 },
+              ),
+            },
+            {
+              match: {},
+              response: sessionsListResponse([
+                sessionRow("agent:main:main", "Main", baseTime),
+                sessionRow("agent:main:release", "Release planning", baseTime - 60_000, {
+                  pinned: true,
+                  pinnedAt: baseTime - 30_000,
+                }),
+                sessionRow("agent:main:migration", "Data migration", baseTime - 90_000, {
+                  hasActiveRun: true,
+                  status: "running",
+                }),
+                sessionRow("agent:main:research", "Research notes", baseTime - 120_000),
+              ]),
+            },
+          ],
+        },
         "sessions.patch": {},
       },
       sessionKey: "agent:main:main",
@@ -166,7 +200,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
 
-      // Sidebar: pinned rows form their own group ahead of the Chats group.
+      // Sidebar: pinned rows form their own group ahead of the Sessions group.
       const sidebarRows = page.locator(".sidebar-recent-sessions__list .sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
@@ -213,16 +247,17 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         pinned: false,
       });
 
-      // Archive stays disabled for rows with an active run; the idle row archives.
-      const sidebarMigrationArchive = sidebarMigration.getByRole("button", {
-        name: "Archive session",
-      });
-      await expect.poll(() => sidebarMigrationArchive.isDisabled()).toBe(true);
-      const sidebarResearchArchive = sidebarResearch.getByRole("button", {
-        name: "Archive session",
-      });
+      // The current-main full context menu remains intact: active rows cannot
+      // archive, while an idle row can.
+      await sidebarMigration.hover();
+      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
+      await expect
+        .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
+        .toBe(true);
+      await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearchArchive.click();
+      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
+      await page.getByRole("menuitem", { name: "Archive session" }).click();
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -258,16 +293,19 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         .locator(".cmd-palette__item")
         .filter({ hasText: "Release planning" });
       await paletteOption.waitFor({ state: "visible", timeout: 10_000 });
-      // Subagent and archived rows never surface as palette chats.
+      // The first result page contains 50 hidden child sessions; search must
+      // follow nextOffset before exposing the visible chat on page two.
       await expect
-        .poll(() => page.locator(".cmd-palette__item").filter({ hasText: "Release subagent" }).count())
-        .toBe(0);
-      await expect
-        .poll(() => page.locator(".cmd-palette__item").filter({ hasText: "Release archive" }).count())
+        .poll(() =>
+          page.locator(".cmd-palette__item").filter({ hasText: "Release helper" }).count(),
+        )
         .toBe(0);
       const searchRequests = await gateway.getRequests("sessions.list");
       expect(
-        searchRequests.some((request) => requireRecord(request.params).search === "release"),
+        searchRequests.some((request) => {
+          const params = requireRecord(request.params);
+          return params.search === "release" && params.offset === 50;
+        }),
       ).toBe(true);
       await captureUiProof(page, "command-palette-session-search.png");
       await paletteOption.click();
@@ -299,12 +337,53 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       const sessionGroups = page.locator(".sidebar-recent-sessions__group");
       const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
-      const chatsGroup = sessionGroups.filter({ hasText: "Chats" });
+      const chatsGroup = sessionGroups.filter({ hasText: "Sessions" });
       await expect
         .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
         .toEqual(["Pinned only"]);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps sidebar session controls reachable on touch pointers", async () => {
+    const context = await browser.newContext({
+      hasTouch: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const row = page
+        .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
+        .filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      const pin = row.getByRole("button", { name: "Pin session" });
+      const menu = row.getByRole("button", { name: "Open session menu" });
+      await expect.poll(() => actionOpacity(pin)).toBe("1");
+      await expect.poll(() => actionPointerEvents(pin)).toBe("auto");
+      await expect.poll(() => actionOpacity(menu)).toBe("1");
+      await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
+      await menu.click();
+      await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

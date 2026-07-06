@@ -5,7 +5,7 @@ type WebView2Bridge = {
   removeEventListener(type: "message", listener: (event: MessageEvent) => void): void;
 };
 
-export type NativeBridgeMessage =
+type NativeBridgeMessage =
   | { type: "draft-text"; payload: { text: string } }
   | { type: "ready"; payload?: Record<string, unknown> };
 

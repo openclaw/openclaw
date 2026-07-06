@@ -35,6 +35,10 @@ const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
 const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
+const DISCORD_UPLOAD_TOO_LARGE = 40005;
+const DISCORD_UPLOAD_TOO_LARGE_STATUS = 413;
+const DISCORD_UPLOAD_TOO_LARGE_NOTICE =
+  "Attachment skipped: Discord rejected the file as too large.";
 
 type DiscordRequest = RetryRunner;
 
@@ -153,6 +157,19 @@ function getDiscordErrorStatus(err: unknown) {
     return Number(candidate);
   }
   return undefined;
+}
+
+function isDiscordUploadTooLargeError(err: unknown) {
+  return (
+    getDiscordErrorCode(err) === DISCORD_UPLOAD_TOO_LARGE ||
+    getDiscordErrorStatus(err) === DISCORD_UPLOAD_TOO_LARGE_STATUS
+  );
+}
+
+function buildDiscordUploadTooLargeFallbackText(text: string) {
+  return text.trim()
+    ? `${text}\n\n[${DISCORD_UPLOAD_TOO_LARGE_NOTICE}]`
+    : DISCORD_UPLOAD_TOO_LARGE_NOTICE;
 }
 
 async function buildDiscordSendError(
@@ -420,10 +437,34 @@ async function sendDiscordMedia(
       },
     ],
   });
-  const res = (await request(
-    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
-    "media",
-  )) as { id: string; channel_id: string };
+  let res: { id: string; channel_id: string };
+  try {
+    res = (await request(
+      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      "media",
+    )) as { id: string; channel_id: string };
+  } catch (err) {
+    if (!isDiscordUploadTooLargeError(err)) {
+      throw err;
+    }
+    // The multipart request is all-or-nothing. Retry the portable text only;
+    // attachment-coupled embeds/components may be invalid or misleading without it.
+    return sendDiscordText(
+      rest,
+      channelId,
+      buildDiscordUploadTooLargeFallbackText(text),
+      replyTo,
+      request,
+      maxLinesPerMessage,
+      undefined,
+      undefined,
+      chunkMode,
+      silent,
+      suppressEmbeds,
+      maxChars,
+      onResult,
+    );
+  }
   await onResult?.(res, "media");
   const platformMessageIds = res.id ? [res.id] : [];
   for (const chunk of chunks.slice(1)) {

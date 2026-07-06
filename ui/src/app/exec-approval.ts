@@ -214,10 +214,7 @@ export function addExecApproval(
   return next;
 }
 
-export function removeExecApproval(
-  queue: ExecApprovalRequest[],
-  id: string,
-): ExecApprovalRequest[] {
+function removeExecApproval(queue: ExecApprovalRequest[], id: string): ExecApprovalRequest[] {
   return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
 }
 

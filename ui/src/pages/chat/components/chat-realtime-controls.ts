@@ -30,7 +30,7 @@ export type RealtimeTalkOptions = {
   vadThreshold: string;
 };
 
-export type ChatRealtimeTalkOptionsProps = {
+type ChatRealtimeTalkOptionsProps = {
   realtimeTalkOptionsOpen?: boolean;
   realtimeTalkOptions?: RealtimeTalkOptions;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
@@ -38,7 +38,7 @@ export type ChatRealtimeTalkOptionsProps = {
   onOpenRealtimeTalkSettings?: () => void;
 };
 
-export type ChatRealtimeTalkConversationProps = {
+type ChatRealtimeTalkConversationProps = {
   assistantName: string;
   userName?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];

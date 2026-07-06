@@ -79,6 +79,10 @@ export async function captureScreenshot(opts: {
     async (send) => {
       await send("Page.enable");
 
+      // Background surface captures can stall until CDP times out; activate to force a frame.
+      // Ignore protocol rejection so browsers that already capture correctly still proceed.
+      await send("Page.bringToFront").catch(() => {});
+
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the
       // current viewport state and restore it after capture so pre-existing

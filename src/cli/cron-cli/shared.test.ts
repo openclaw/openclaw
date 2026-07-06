@@ -174,6 +174,79 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "schedule: on-exit pnpm build @ /repo");
   });
 
+  it("shows the consecutive failure count for chronically failing jobs", () => {
+    const failing = createBaseJob({
+      id: "failing-job",
+      name: "Failing",
+      state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
+    });
+    const singleFailure = createBaseJob({
+      id: "single-failure-job",
+      name: "Failed Once",
+      state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: "boom" },
+    });
+
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList([failing, singleFailure], runtime);
+
+    expectLogsToInclude(logs, "error (12x)");
+    // A single failure keeps the bare status token; the count only marks repeats.
+    const singleLine = logs.find((line) => line.includes("single-failure-job")) ?? "";
+    expect(singleLine).toContain("error");
+    expect(singleLine).not.toContain("(1x)");
+  });
+
+  it("caps the failure count so the status column never overflows", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList(
+      [
+        createBaseJob({
+          id: "minute-cron-job",
+          state: { lastRunStatus: "error", consecutiveErrors: 1440, lastError: "boom" },
+        }),
+      ],
+      runtime,
+    );
+    expectLogsToInclude(logs, "error (99+x)");
+    expect(logs.join("\n")).not.toContain("1440");
+  });
+
+  it("keeps the --json status field free of the failure-count decoration", () => {
+    const job = createBaseJob({
+      id: "json-job",
+      state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
+    });
+    const enriched = enrichCronJsonWithStatus({
+      jobs: [job],
+    }) as { jobs: Array<{ status?: string }> };
+    expect(enriched.jobs[0]?.status).toBe("error");
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({
+      status: "error",
+      state: { consecutiveErrors: 12, lastError: "boom" },
+    });
+  });
+
+  it("shows last error and failure count in cron show output", () => {
+    const failing = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({
+        id: "show-failing-job",
+        state: { lastRunStatus: "error", consecutiveErrors: 3, lastError: "provider exploded" },
+      }),
+      failing.runtime,
+    );
+    expectLogsToInclude(failing.logs, "status: error (3x)");
+    expectLogsToInclude(failing.logs, "last error: provider exploded");
+
+    const healthy = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({ id: "healthy-job", state: { lastRunStatus: "ok" } }),
+      healthy.runtime,
+    );
+    expectLogsToInclude(healthy.logs, "status: ok");
+    expectLogsToInclude(healthy.logs, "last error: -");
+  });
+
   it("shows dash for unset agentId instead of default", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({

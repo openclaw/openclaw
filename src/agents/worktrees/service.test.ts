@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
@@ -366,6 +366,33 @@ describe("ManagedWorktreeService", () => {
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(manual.path)).toBeTruthy();
+  });
+
+  it("uses owner activity to protect only active idle session worktrees", async () => {
+    const active = await service.create({
+      repoRoot: repo,
+      name: "active-session",
+      ownerKind: "session",
+      ownerId: "agent:main:active",
+    });
+    const inactive = await service.create({
+      repoRoot: repo,
+      name: "inactive-session",
+      ownerKind: "session",
+      ownerId: "agent:main:inactive",
+    });
+    now += IDLE_GC_MS + 1;
+    const isOwnerActive = vi.fn(
+      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
+    );
+
+    const result = await service.gc({ isOwnerActive });
+
+    expect(result.removed).toEqual([inactive.id]);
+    expect(isOwnerActive).toHaveBeenCalledWith("session", "agent:main:active");
+    expect(isOwnerActive).toHaveBeenCalledWith("session", "agent:main:inactive");
+    expect(getRegistryWorktree(env, active.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
   });
 
   it("protects foreign locks during idle garbage collection", async () => {

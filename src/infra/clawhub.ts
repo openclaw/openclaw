@@ -139,13 +139,6 @@ export type ClawHubPackageSecurityResponse = {
   } | null;
   trust: ClawHubPackageSecurityTrust;
 };
-export type ClawHubPackageReadiness = {
-  ok?: boolean;
-  ready?: boolean;
-  status?: string | null;
-  reasons?: string[];
-  checks?: Record<string, unknown>;
-} & Record<string, unknown>;
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
@@ -1114,22 +1107,6 @@ export async function fetchClawHubPackageSecurity(params: {
     fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);
-}
-
-export async function fetchClawHubPackageReadiness(params: {
-  name: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-}): Promise<ClawHubPackageReadiness> {
-  return await fetchJson<ClawHubPackageReadiness>({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/packages/${encodeURIComponent(params.name)}/readiness`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
 }
 
 export async function searchClawHubPackages(params: {

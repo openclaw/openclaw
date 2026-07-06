@@ -49,18 +49,23 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     deinit {
-        Self.cleanupStderr(self.stderrHandle)
-        let pid = self.process.processIdentifier
-        self.process.terminate()
-        Task { await PortGuardian.shared.removeRecord(pid: pid) }
+        self.teardown(waitUntilExit: false)
     }
 
     func terminate() {
+        self.teardown(waitUntilExit: true)
+    }
+
+    /// deinit cannot block on waitUntilExit; explicit terminate() must, so callers
+    /// can rebind the tunnel's local port immediately after it returns.
+    private func teardown(waitUntilExit: Bool) {
         Self.cleanupStderr(self.stderrHandle)
         let pid = self.process.processIdentifier
         if self.process.isRunning {
             self.process.terminate()
-            self.process.waitUntilExit()
+            if waitUntilExit {
+                self.process.waitUntilExit()
+            }
         }
         Task { await PortGuardian.shared.removeRecord(pid: pid) }
     }
@@ -147,14 +152,13 @@ final class RemotePortTunnel: @unchecked Sendable {
             stderrHandle: stderrHandle,
             stderrCapture: stderrCapture)
 
-        // Track tunnel so we can clean up stale listeners on restart.
-        Task {
-            await PortGuardian.shared.record(
-                port: Int(localPort),
-                pid: process.processIdentifier,
-                command: process.executableURL?.path ?? "ssh",
-                mode: CommandResolver.connectionSettings().mode)
-        }
+        // Record before returning: a crash inside this window would otherwise leave
+        // an untracked (unreapable) orphan.
+        await PortGuardian.shared.record(
+            port: Int(localPort),
+            pid: process.processIdentifier,
+            command: process.executableURL?.path ?? "ssh",
+            mode: CommandResolver.connectionSettings().mode)
 
         return RemotePortTunnel(process: process, localPort: localPort, stderrHandle: stderrHandle)
     }
@@ -367,10 +371,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         try? handle.close()
     }
 
-    private static func drainStderr(_ handle: FileHandle) -> String {
-        self.drainStderr(handle, captured: "")
-    }
-
     private static func drainStderr(_ handle: FileHandle, captured: String) -> String {
         handle.readabilityHandler = nil
         defer { try? handle.close() }
@@ -410,7 +410,7 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     static func _testDrainStderr(_ handle: FileHandle) -> String {
-        self.drainStderr(handle)
+        self.drainStderr(handle, captured: "")
     }
 
     #endif

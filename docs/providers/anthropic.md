@@ -10,6 +10,16 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 - **API key** - direct Anthropic API access with usage-based billing (`anthropic/*` models)
 - **Claude CLI** - reuse an existing Claude Code login on the same host
 
+## Usage and cost tracking
+
+OpenClaw detects the available Anthropic credential and selects the matching usage surface:
+
+- Claude subscription/setup credentials show quota windows and optional extra-usage budget.
+- `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` shows 30 days of provider-reported organization cost and Messages API usage in Control UI **Usage**, including daily spend, token/cache totals, top models, and cost categories.
+- An `sk-ant-admin...` credential stored in the Anthropic provider profile is detected as an Admin API key automatically.
+
+Admin API cost history comes from Anthropic's [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api). It is actual provider billing, separate from OpenClaw's session-derived estimated cost.
+
 <Warning>
 OpenClaw's Claude CLI backend runs the installed Claude Code CLI in
 non-interactive print mode (`claude -p`). Anthropic's current Claude Code docs
