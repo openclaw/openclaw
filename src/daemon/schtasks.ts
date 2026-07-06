@@ -764,24 +764,24 @@ async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): P
   return pids;
 }
 
-function isProcessAlive(pid: number): boolean {
+function probeProcessState(pid: number): "alive" | "missing" | "unknown" {
   try {
     process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+    return "alive";
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH" ? "missing" : "unknown";
   }
 }
 
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
+    if (probeProcessState(pid) === "missing") {
       return true;
     }
     await sleep(100);
   }
-  return !isProcessAlive(pid);
+  return probeProcessState(pid) === "missing";
 }
 
 async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
@@ -790,20 +790,30 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
     return;
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-  spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
+  const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
     windowsHide: true,
   });
-  if (await waitForProcessExit(pid, graceMs)) {
+  // A failed taskkill can race with natural exit. Only ESRCH proves absence;
+  // an unavailable PID probe must still force the verified owner.
+  if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
-  spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
+  const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
     windowsHide: true,
   });
-  await waitForProcessExit(pid, 5_000);
+  if (forced.error || forced.status !== 0) {
+    if (probeProcessState(pid) === "missing") {
+      return;
+    }
+    throw new Error(`taskkill could not terminate gateway process ${pid}`);
+  }
+  if (!(await waitForProcessExit(pid, 5_000)) && probeProcessState(pid) === "alive") {
+    throw new Error(`gateway process ${pid} is still running after taskkill`);
+  }
 }
 
 async function waitForGatewayPortRelease(port: number, timeoutMs = 5_000): Promise<boolean> {

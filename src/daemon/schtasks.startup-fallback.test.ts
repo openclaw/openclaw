@@ -435,6 +435,74 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("forces takeover when graceful taskkill fails and the PID probe is unavailable", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("pid probe unavailable"), { code: "EPERM" });
+      });
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      spawnSync.mockImplementation((command, args) =>
+        makeSpawnSyncResult({
+          status:
+            command.endsWith("taskkill.exe") && Array.isArray(args) && !args.includes("/F") ? 1 : 0,
+        }),
+      );
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      ]);
+      addSuccessfulScheduledTaskRestartResponses();
+
+      await installGatewayScheduledTask(env);
+
+      const taskkillCalls = spawnSync.mock.calls.filter(([command]) =>
+        command.endsWith("taskkill.exe"),
+      );
+      expect(taskkillCalls.length).toBeGreaterThanOrEqual(2);
+      expect(taskkillCalls[0]?.[1]).not.toContain("/F");
+      expect(taskkillCalls[1]?.[1]).toContain("/F");
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("accepts a process-exit race without forcing a stale PID", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("process not found"), { code: "ESRCH" });
+      });
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      spawnSync.mockImplementation((command) =>
+        makeSpawnSyncResult({ status: command.endsWith("taskkill.exe") ? 128 : 0 }),
+      );
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      ]);
+      addSuccessfulScheduledTaskRestartResponses();
+
+      await installGatewayScheduledTask(env);
+
+      const forcedCalls = spawnSync.mock.calls.filter(
+        ([command, args]) =>
+          command.endsWith("taskkill.exe") && Array.isArray(args) && args.includes("/F"),
+      );
+      expect(forcedCalls).toHaveLength(0);
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
   it("keeps a Startup-folder launcher when the busy port owner is not a verified gateway", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
