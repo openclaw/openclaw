@@ -138,8 +138,9 @@ Those are orchestrator tasks because they need tools or side effects.
 Use [Sub-agents](/tools/subagents) when the worker needs its own agent run,
 status tracking, and announce-back behavior. Native sub-agents are not
 text-only by default: they inherit model and tool policy, then OpenClaw applies
-the sub-agent restriction layer. Prefer `llm-task` when you only need a
-strict text or JSON worker response.
+the sub-agent restriction layer. Treat them as local text workers only after
+you have narrowed their tools to the text-safe surface they actually need.
+Prefer `llm-task` when you only need a strict text or JSON worker response.
 
 Set a cheaper or local model for sub-agents and keep the task prompt explicit:
 
