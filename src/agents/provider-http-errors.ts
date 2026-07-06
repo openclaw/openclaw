@@ -285,11 +285,25 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
 }
 
 /** Parses a provider JSON response and wraps malformed JSON with the caller's label. */
-export async function readProviderJsonResponse<T>(response: Response, label: string): Promise<T> {
+export async function readProviderJsonResponse<T>(
+  response: Response,
+  label: string,
+  opts?: { maxBytes?: number },
+): Promise<T> {
   try {
+    if (opts?.maxBytes !== undefined) {
+      const buf = await readResponseWithLimit(response, opts.maxBytes, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
+      });
+      return JSON.parse(new TextDecoder().decode(buf)) as T;
+    }
     return (await response.json()) as T;
   } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
+    if (cause instanceof SyntaxError) {
+      throw new Error(`${label}: malformed JSON response`, { cause });
+    }
+    throw cause;
   }
 }
 
