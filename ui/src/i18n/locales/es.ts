@@ -1649,8 +1649,25 @@ export const es: TranslationMap = {
         estimatedCost: "Costo est.",
       },
       dismissTalkError: "Descartar error de Talk",
+      loadingMicrophones: "Cargando micrófonos…",
+      microphoneAccessFailed: "No se puede acceder a las entradas de micrófono.",
+      microphoneBusy:
+        "Las entradas de micrófono están ocupadas o no están disponibles para el navegador.",
+      microphoneFallback: "Micrófono {number}",
+      microphoneInput: "Entrada de micrófono",
+      microphoneListUnsupported: "Este navegador no puede listar las entradas de micrófono.",
+      noMicrophones: "No se encontraron micrófonos adicionales",
+      microphoneNoneFound: "No se encontraron entradas de micrófono.",
+      microphonePageInactive:
+        "Las entradas de micrófono no están disponibles mientras esta página está inactiva.",
+      microphonePermissionBlocked:
+        "El acceso al micrófono está bloqueado. Permítelo en la configuración del sitio del navegador para listar las entradas.",
+      realtimeTalkRequiresMicrophone: "Realtime Talk requiere acceso al micrófono del navegador.",
+      selectedMicrophoneUnavailable:
+        "El micrófono seleccionado no está disponible. Elige otra entrada o la opción predeterminada del sistema.",
       startTalk: "Start Talk",
       stillListening: "Sigo escuchando",
+      systemDefaultMicrophone: "Predeterminado del sistema",
       talkTranscript: "Transcripción de voz",
       stopTalk: "Stop Talk",
     },

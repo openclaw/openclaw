@@ -1658,8 +1658,25 @@ export const fr: TranslationMap = {
         estimatedCost: "Coût estimé",
       },
       dismissTalkError: "Ignorer l'erreur Talk",
+      loadingMicrophones: "Chargement des microphones…",
+      microphoneAccessFailed: "Impossible d’accéder aux entrées microphone.",
+      microphoneBusy: "Les entrées microphone sont occupées ou indisponibles pour le navigateur.",
+      microphoneFallback: "Microphone {number}",
+      microphoneInput: "Entrée microphone",
+      microphoneListUnsupported: "Ce navigateur ne peut pas lister les entrées microphone.",
+      noMicrophones: "Aucun microphone supplémentaire trouvé",
+      microphoneNoneFound: "Aucune entrée microphone n’a été trouvée.",
+      microphonePageInactive:
+        "Les entrées microphone sont indisponibles lorsque cette page est inactive.",
+      microphonePermissionBlocked:
+        "L’accès au microphone est bloqué. Autorisez-le dans les paramètres de site du navigateur pour lister les entrées.",
+      realtimeTalkRequiresMicrophone:
+        "Realtime Talk nécessite l’accès au microphone du navigateur.",
+      selectedMicrophoneUnavailable:
+        "Le microphone sélectionné est indisponible. Choisissez une autre entrée ou l’option par défaut du système.",
       startTalk: "Start Talk",
       stillListening: "Toujours à l’écoute",
+      systemDefaultMicrophone: "Par défaut du système",
       talkTranscript: "Transcription vocale",
       stopTalk: "Stop Talk",
     },

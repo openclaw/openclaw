@@ -8,7 +8,6 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -86,7 +85,7 @@ type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open]";
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -358,10 +357,13 @@ export class ChatPane extends LitElement {
       });
       return;
     }
-    if (state.realtimeTalkOptionsOpen) {
+    if (state.realtimeTalkInputOpen) {
       event.preventDefault();
-      state.realtimeTalkOptionsOpen = false;
+      state.realtimeTalkInputOpen = false;
       state.requestUpdate();
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLButtonElement>(".agent-chat__talk-caret")?.focus();
+      });
       return;
     }
     if (!state.chatMobileControlsOpen) {
@@ -384,14 +386,10 @@ export class ChatPane extends LitElement {
         changed = true;
       }
     });
-    if (state.realtimeTalkOptionsOpen) {
-      const insideTalkOptions = Array.from(
-        this.querySelectorAll(
-          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
-        ),
-      ).some((node) => path.includes(node));
-      if (!insideTalkOptions) {
-        state.realtimeTalkOptionsOpen = false;
+    if (state.realtimeTalkInputOpen) {
+      const inputPicker = this.querySelector(".agent-chat__talk-input-picker");
+      if (!inputPicker || !path.includes(inputPicker)) {
+        state.realtimeTalkInputOpen = false;
         changed = true;
       }
     }
@@ -443,6 +441,14 @@ export class ChatPane extends LitElement {
     };
     this.state = pageState;
     chatState.attach(pageState);
+    const mediaDevices = globalThis.navigator?.mediaDevices;
+    if (mediaDevices?.addEventListener) {
+      const handleDeviceChange = () => void pageState.refreshRealtimeTalkInputs();
+      mediaDevices.addEventListener("devicechange", handleDeviceChange);
+      chatState.addCleanup(() =>
+        mediaDevices.removeEventListener("devicechange", handleDeviceChange),
+      );
+    }
     if (this.sessionKey) {
       this.setPaneSessionKey(this.sessionKey);
     }
@@ -787,9 +793,6 @@ export class ChatPane extends LitElement {
       : selectedSessionArchived
         ? t("chat.archivedSessionDisabled")
         : null;
-    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
-      this.context.gateway.snapshot.hello?.auth ?? null,
-    );
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -821,9 +824,11 @@ export class ChatPane extends LitElement {
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkTranscript: state.realtimeTalkTranscript,
       realtimeTalkConversation: state.realtimeTalkConversation,
-      realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
-      realtimeTalkOptions: state.realtimeTalkOptions,
-      canOpenRealtimeTalkSettings,
+      realtimeTalkInputOpen: state.realtimeTalkInputOpen,
+      realtimeTalkInputDevices: state.realtimeTalkInputDevices,
+      realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
+      realtimeTalkInputLoading: state.realtimeTalkInputLoading,
+      realtimeTalkInputError: state.realtimeTalkInputError,
       connected: state.connected,
       canSend: state.connected && !selectedSessionArchived,
       disabledReason,
@@ -906,17 +911,18 @@ export class ChatPane extends LitElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
-      onToggleRealtimeTalkOptions: () => {
-        state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
+      onToggleRealtimeTalkInput: () => {
+        state.realtimeTalkInputOpen = !state.realtimeTalkInputOpen;
         state.requestUpdate?.();
-      },
-      onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-      onOpenRealtimeTalkSettings: () => {
-        if (!canOpenRealtimeTalkSettings) {
-          return;
+        if (state.realtimeTalkInputOpen) {
+          void state.refreshRealtimeTalkInputs(true);
         }
-        state.realtimeTalkOptionsOpen = false;
-        this.context.navigate("communications", { search: "?section=talk" });
+      },
+      onRealtimeTalkInputSelect: (deviceId) => {
+        state.selectRealtimeTalkInput(deviceId);
+        void this.updateComplete.then(() => {
+          this.querySelector<HTMLButtonElement>(".agent-chat__talk-caret")?.focus();
+        });
       },
       onDismissError: () => {
         dismissChatError(state as never);

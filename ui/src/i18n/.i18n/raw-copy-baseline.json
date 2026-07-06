@@ -1845,13 +1845,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Cancel reply"
@@ -1953,13 +1946,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Tab"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
     },
     {
       "count": 1,
@@ -2079,139 +2065,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
       "text": "Speed"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Talk options"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Model"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Alloy"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Ash"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Ballad"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Cedar"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Coral"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Echo"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "High"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Low"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Marin"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Medium"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Sage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Sensitivity"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Shimmer"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Verse"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Voice"
     },
     {
       "count": 1,

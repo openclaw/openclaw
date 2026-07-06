@@ -1199,7 +1199,7 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent);
 }
 
-/* Split talk control: mic toggles Talk, the narrow caret opens Talk settings
+/* Split talk control: mic toggles Talk, the narrow caret opens microphone inputs
    (mirrors a mic-with-dropdown control; negative margin keeps the pair reading
    as one unit without a wrapper border). */
 .agent-chat__talk-group {
@@ -1294,184 +1294,42 @@ openclaw-chat-page {
   opacity: 0.7;
 }
 
-.agent-chat__talk-options {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-}
-
-.agent-chat__talk-options-primary {
-  display: grid;
-  grid-template-columns: minmax(132px, 0.8fr) minmax(160px, 1fr) minmax(132px, 0.8fr);
-  gap: 8px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.agent-chat__talk-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  font-size: 0.68rem;
-  color: var(--muted);
-}
-
-.agent-chat__talk-options input,
-.agent-chat__talk-options select {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
-  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.78rem;
-  line-height: 1;
-  padding: 0 10px;
-  box-sizing: border-box;
-}
-
-.agent-chat__talk-options select {
-  appearance: none;
-  padding-right: 26px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-position: right 8px center;
-  background-repeat: no-repeat;
-}
-
-.agent-chat__talk-options input:focus-visible,
-.agent-chat__talk-options select:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.agent-chat__talk-settings-link {
-  height: 34px;
-  flex: 0 0 auto;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.agent-chat__talk-settings-link:hover,
-.agent-chat__talk-settings-link:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.agent-chat__talk-settings-link:disabled {
-  background: transparent;
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.75;
-}
-
-.agent-chat__talk-select {
-  position: relative;
-  min-width: 0;
-}
-
-.agent-chat__talk-select summary {
-  list-style: none;
-}
-
-.agent-chat__talk-select summary::-webkit-details-marker {
-  display: none;
-}
-
-.agent-chat__talk-select-trigger {
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  height: 34px;
-  min-height: 34px;
-  padding: 0 9px 0 10px;
-  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  color: var(--text);
-  font-size: 0.78rem;
-  line-height: 1.35;
-  cursor: pointer;
-  overflow: hidden;
-  user-select: none;
-}
-
-.agent-chat__talk-select-trigger:hover {
-  border-color: color-mix(in srgb, var(--text) 18%, var(--input));
-  background: color-mix(in srgb, var(--card) 84%, var(--bg-elevated) 16%);
-}
-
-.agent-chat__talk-select-trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.agent-chat__talk-select-label {
-  min-width: 0;
-  overflow: hidden;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-chat__talk-select-icon,
-.agent-chat__talk-select-check {
+.agent-chat__talk-input-picker {
   display: inline-flex;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-  flex: 0 0 auto;
 }
 
-.agent-chat__talk-select-check {
-  color: var(--accent);
-}
-
-.agent-chat__talk-select-icon svg,
-.agent-chat__talk-select-check svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
-.agent-chat__talk-select[open] .agent-chat__talk-select-icon {
-  transform: rotate(180deg);
-}
-
-.agent-chat__talk-select-menu {
+.agent-chat__talk-input-menu {
   position: absolute;
-  left: 0;
-  top: calc(100% + 6px);
+  inset-inline-start: 8px;
+  bottom: 52px;
   z-index: 95;
-  display: grid;
-  gap: 2px;
-  width: max(100%, min(240px, calc(100vw - 32px)));
-  max-height: min(260px, calc(100vh - 140px));
+  width: min(320px, calc(100% - 16px));
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3);
+}
+
+.agent-chat__talk-input-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.agent-chat__talk-input-options {
+  display: grid;
+  gap: 2px;
+  max-height: min(260px, calc(100vh - 180px));
   overflow-y: auto;
 }
 
-.agent-chat__talk-select-option {
+.agent-chat__talk-input-option {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1490,16 +1348,50 @@ openclaw-chat-page {
   cursor: pointer;
 }
 
-.agent-chat__talk-select-option:hover,
-.agent-chat__talk-select-option:focus-visible {
+.agent-chat__talk-input-option:hover,
+.agent-chat__talk-input-option:focus-visible {
   border-color: color-mix(in srgb, var(--border) 76%, transparent);
   background: var(--bg-hover);
   outline: none;
 }
 
-.agent-chat__talk-select-option--selected {
+.agent-chat__talk-input-option--selected {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.agent-chat__talk-input-check,
+.agent-chat__talk-input-spinner {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.agent-chat__talk-input-check {
+  color: var(--accent);
+}
+
+.agent-chat__talk-input-spinner {
+  color: var(--muted);
+  animation: chat-run-status-spin 0.9s linear infinite;
+}
+
+.agent-chat__talk-input-check svg,
+.agent-chat__talk-input-spinner svg {
+  width: 100%;
+  height: 100%;
+}
+
+.agent-chat__talk-input-message {
+  padding: 7px 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.agent-chat__talk-input-message--error {
+  color: var(--danger);
 }
 
 .agent-chat__input-divider {
@@ -1600,19 +1492,6 @@ openclaw-chat-page {
 }
 
 @media (max-width: 860px) {
-  .agent-chat__talk-options {
-    flex-direction: column;
-  }
-
-  .agent-chat__talk-options-primary {
-    width: 100%;
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  }
-
-  .agent-chat__talk-settings-link {
-    align-self: flex-end;
-  }
-
   .agent-chat__input-btn,
   .agent-chat__toolbar .btn--ghost,
   .chat-send-btn {
@@ -2222,6 +2101,10 @@ openclaw-chat-page {
     animation: none;
     border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
     box-shadow: var(--focus-ring);
+  }
+
+  .agent-chat__talk-input-spinner {
+    animation: none;
   }
 }
 
