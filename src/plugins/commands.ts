@@ -73,10 +73,13 @@ export function matchPluginCommand(
     return null;
   }
 
-  // Extract command name and args
-  const spaceIndex = trimmed.indexOf(" ");
-  const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
-  const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
+  // Accept whitespace after the slash so `/ pair qr` keeps `/pair` ownership.
+  const commandMatch = trimmed.match(/^\/\s*([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!commandMatch) {
+    return null;
+  }
+  const commandName = `/${commandMatch[1]}`;
+  const args = commandMatch[2]?.trim();
 
   const key = normalizeLowercaseStringOrEmpty(commandName);
   const alternateKeys = [key];
