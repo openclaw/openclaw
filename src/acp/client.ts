@@ -72,7 +72,7 @@ function resolveSelfEntryPath(): string | null {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) {
+  if (!Object.hasOwn(update, "sessionUpdate")) {
     return;
   }
 

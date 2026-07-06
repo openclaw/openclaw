@@ -914,3 +914,33 @@ describe("acp event mapper", () => {
     );
   });
 });
+
+describe("printSessionUpdate discriminator check", () => {
+  it("Object.hasOwn correctly identifies sessionUpdate own-property on ACP SessionNotification updates", () => {
+    const validUpdates = [
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } },
+      { sessionUpdate: "tool_call", toolCallId: "t1", title: "read", status: "in_progress" },
+      { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" },
+      { sessionUpdate: "available_commands_update", availableCommands: [] },
+    ] as const;
+
+    for (const update of validUpdates) {
+      expect(Object.hasOwn(update, "sessionUpdate")).toBe(true);
+    }
+  });
+
+  it("Object.hasOwn correctly rejects non-sessionUpdate notifications", () => {
+    const nonSessionUpdate = {
+      toolCall: { toolCallId: "t1", title: "exec", status: "pending" },
+    };
+    expect(Object.hasOwn(nonSessionUpdate, "sessionUpdate")).toBe(false);
+  });
+
+  it("Object.hasOwn rejects prototype-injected sessionUpdate (unlike 'in' operator)", () => {
+    const protoInjected = Object.create({
+      sessionUpdate: "agent_message_chunk",
+    });
+    expect(Object.hasOwn(protoInjected, "sessionUpdate")).toBe(false);
+    expect("sessionUpdate" in protoInjected).toBe(true);
+  });
+});
