@@ -15,6 +15,7 @@ enum ChatSessionSidebarModel {
         return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
+    @MainActor
     static func sections(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,
@@ -61,6 +62,7 @@ enum ChatSessionSidebarModel {
         return normalized != "main" && normalized != "global" && normalized != normalizedMain
     }
 
+    @MainActor
     static func selectedSessionKey(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,
@@ -93,6 +95,7 @@ enum ChatSessionSidebarModel {
         return agent == "main" || agent.isEmpty ? session : "\(session) (\(agent))"
     }
 
+    @MainActor
     private static func visibleSessions(
         sessions: [OpenClawChatSessionEntry],
         currentSessionKey: String,

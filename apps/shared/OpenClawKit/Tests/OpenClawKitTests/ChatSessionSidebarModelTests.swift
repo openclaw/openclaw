@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import OpenClawChatUI
 
+@MainActor
 struct ChatSessionSidebarModelTests {
     private func entry(
         key: String,
