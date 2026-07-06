@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Command output truncation:** return an empty string for non-positive shortening limits instead of emitting an over-budget ellipsis. (#99917) Thanks @Super-Cabbage.
 - **Agent helper downloads:** bound fd and ripgrep archive downloads and extraction with declared and streamed byte caps, extraction limits, timeouts, traversal-safe unpacking, and partial-file cleanup. (#98988) Thanks @LeonidasLux.
 - **Control UI cron actions:** localize the overflow-menu label and due-only run action across all supported locales.
 - **OpenAI Realtime Codex auth:** reuse external Codex OAuth profiles for Realtime voice sessions when no explicit OpenAI API key is configured.
