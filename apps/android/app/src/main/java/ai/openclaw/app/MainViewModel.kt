@@ -719,6 +719,11 @@ class MainViewModel(
     ensureRuntime().switchChatSession(sessionKey)
   }
 
+  suspend fun fetchChatSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> = ensureRuntime().fetchChatSessionList(search = search, archived = archived)
+
   fun abortChat() {
     ensureRuntime().abortChat()
   }

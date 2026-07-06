@@ -31,6 +31,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+// Bounds one-shot search list fetches like the primary session list.
+internal const val SESSION_LIST_FETCH_LIMIT = 200
+
 // Capture before suspend points; both fields must still match before gateway data reaches UI state.
 internal data class ChatCacheScope(
   val gatewayId: String,
@@ -394,6 +397,39 @@ class ChatController internal constructor(
     } catch (err: Throwable) {
       updateErrorText(err.message)
       null
+    }
+  }
+
+  /**
+   * One-shot session list for the search UI; does not touch the live list
+   * state. Falls back to locally filtering the cached active list when the
+   * gateway is unreachable; archived rows exist only server-side, so archived
+   * search is empty offline.
+   */
+  suspend fun fetchSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> {
+    val query = search?.trim()?.takeIf { it.isNotEmpty() }
+    return try {
+      val params =
+        buildJsonObject {
+          put("includeGlobal", JsonPrimitive(true))
+          put("includeUnknown", JsonPrimitive(false))
+          put("limit", JsonPrimitive(SESSION_LIST_FETCH_LIMIT))
+          if (query != null) put("search", JsonPrimitive(query))
+          if (archived) put("archived", JsonPrimitive(true))
+        }
+      parseSessions(requestGateway("sessions.list", params.toString())).sessions
+    } catch (err: CancellationException) {
+      // A superseded search owns the results now; never repaint stale fallback rows.
+      throw err
+    } catch (_: Throwable) {
+      when {
+        archived -> emptyList()
+        query == null -> _sessions.value
+        else -> filterSessionEntries(_sessions.value, query)
+      }
     }
   }
 

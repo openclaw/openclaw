@@ -2730,6 +2730,11 @@ class NodeRuntime private constructor(
     chat.switchSession(sessionKey)
   }
 
+  suspend fun fetchChatSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> = chat.fetchSessionList(search = search, archived = archived)
+
   fun abortChat() {
     chat.abort()
   }
