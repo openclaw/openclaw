@@ -58,6 +58,7 @@ type ClaudeLiveTurn = {
   rawChars: number;
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
+  semanticProgressTimer: NodeJS.Timeout | null;
   timeoutTimer: NodeJS.Timeout | null;
   activeToolTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
@@ -365,6 +366,10 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
     clearTimeout(turn.noOutputTimer);
     turn.noOutputTimer = null;
   }
+  if (turn.semanticProgressTimer) {
+    clearTimeout(turn.semanticProgressTimer);
+    turn.semanticProgressTimer = null;
+  }
   if (turn.timeoutTimer) {
     clearTimeout(turn.timeoutTimer);
     turn.timeoutTimer = null;
@@ -598,6 +603,66 @@ function stopClaudeLiveActiveToolHeartbeatIfIdle(turn: ClaudeLiveTurn): void {
   turn.activeToolTimer = null;
 }
 
+function isClaudeLiveToolUseBlockType(type: unknown): boolean {
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+function isClaudeLiveAssistantToolResultBlockType(type: unknown): boolean {
+  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+}
+
+function hasClaudeLiveTextBlock(content: unknown): boolean {
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      isRecord(block) &&
+      block.type === "text" &&
+      typeof block.text === "string" &&
+      block.text.length > 0,
+  );
+}
+
+function hasClaudeLiveToolUseOrResultBlock(content: unknown): boolean {
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      isRecord(block) &&
+      (isClaudeLiveToolUseBlockType(block.type) ||
+        isClaudeLiveAssistantToolResultBlockType(block.type) ||
+        block.type === "tool_result"),
+  );
+}
+
+function isClaudeLiveSemanticProgressEvent(parsed: Record<string, unknown>): boolean {
+  if (parsed.type === "stream_event" && isRecord(parsed.event)) {
+    const event = parsed.event;
+    if (event.type === "content_block_start" && isRecord(event.content_block)) {
+      return isClaudeLiveToolUseBlockType(event.content_block.type);
+    }
+    if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+      return false;
+    }
+    const delta = event.delta;
+    if (delta.type === "text_delta") {
+      return typeof delta.text === "string" && delta.text.length > 0;
+    }
+    return (
+      delta.type === "input_json_delta" &&
+      typeof delta.partial_json === "string" &&
+      delta.partial_json.length > 0
+    );
+  }
+  if ((parsed.type === "assistant" || parsed.type === "user") && isRecord(parsed.message)) {
+    const content = parsed.message.content;
+    return hasClaudeLiveTextBlock(content) || hasClaudeLiveToolUseOrResultBlock(content);
+  }
+  return false;
+}
+
 function markClaudeLiveToolStarted(turn: ClaudeLiveTurn, tool: ClaudeLiveToolUse): void {
   const now = Date.now();
   turn.activeTools.set(tool.toolCallId, {
@@ -705,6 +770,39 @@ function resetNoOutputTimer(session: ClaudeLiveSession): void {
       ),
     );
   }, session.noOutputTimeoutMs);
+}
+
+function armSemanticProgressTimer(params: {
+  session: ClaudeLiveSession;
+  turn: ClaudeLiveTurn | null;
+  timeoutMs: number;
+}): void {
+  const { session, turn, timeoutMs } = params;
+  if (!turn) {
+    return;
+  }
+  if (turn.semanticProgressTimer) {
+    clearTimeout(turn.semanticProgressTimer);
+  }
+  turn.semanticProgressTimer = setTimeout(() => {
+    closeLiveSession(
+      session,
+      "abort",
+      createTimeoutError(
+        session,
+        `CLI made no assistant or tool progress for ${Math.round(timeoutMs / 1000)}s and was terminated.`,
+        "cli_semantic_progress_timeout",
+      ),
+    );
+  }, timeoutMs);
+}
+
+function resetSemanticProgressTimer(session: ClaudeLiveSession): void {
+  armSemanticProgressTimer({
+    session,
+    turn: session.currentTurn,
+    timeoutMs: session.noOutputTimeoutMs,
+  });
 }
 
 function parseSessionId(parsed: Record<string, unknown>): string | undefined {
@@ -868,6 +966,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   turn.rawLines.push(trimmed);
+  if (isClaudeLiveSemanticProgressEvent(parsed)) {
+    resetSemanticProgressTimer(session);
+  }
   turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parseSessionId(parsed) ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed);
@@ -1121,6 +1222,7 @@ function createTurn(params: {
     rawLines: [],
     rawChars: 0,
     noOutputTimer: null,
+    semanticProgressTimer: null,
     timeoutTimer: null,
     activeToolTimer: null,
     activeTools: new Map(),
@@ -1128,12 +1230,26 @@ function createTurn(params: {
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
-      onAssistantDelta: params.onAssistantDelta,
+      onAssistantDelta: (delta) => {
+        resetSemanticProgressTimer(params.session);
+        params.onAssistantDelta(delta);
+      },
       onThinkingDelta: params.onThinkingDelta,
       onThinkingProgress: params.onThinkingProgress,
-      onToolUseStart: params.onToolUseStart,
-      onToolResult: params.onToolResult,
-      onCommentaryText: params.onCommentaryText,
+      onToolUseStart: (delta) => {
+        resetSemanticProgressTimer(params.session);
+        params.onToolUseStart?.(delta);
+      },
+      onToolResult: (delta) => {
+        resetSemanticProgressTimer(params.session);
+        params.onToolResult?.(delta);
+      },
+      onCommentaryText: params.onCommentaryText
+        ? (text) => {
+            resetSemanticProgressTimer(params.session);
+            params.onCommentaryText?.(text);
+          }
+        : undefined,
     }),
     execPermission: params.execPermission,
     resolve: params.resolve,
@@ -1150,6 +1266,11 @@ function createTurn(params: {
       ),
     );
   }, params.noOutputTimeoutMs);
+  armSemanticProgressTimer({
+    session: params.session,
+    turn,
+    timeoutMs: params.noOutputTimeoutMs,
+  });
   turn.timeoutTimer = setTimeout(() => {
     closeLiveSession(
       params.session,
