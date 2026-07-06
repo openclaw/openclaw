@@ -489,6 +489,19 @@ async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<
   return normalizedResult !== null && RUNNING_RESULT_CODES.has(normalizedResult);
 }
 
+async function waitForScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
+  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  while (true) {
+    if (await hasScheduledTaskRunningEvidence(env)) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
+  }
+}
+
 async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
   const taskName = resolveTaskName(env);
   const res = await execSchtasks(["/Query", "/TN", taskName]).catch(() => ({
@@ -1421,7 +1434,7 @@ export async function installScheduledTask(
     }
   } else if (
     startupRuntime?.status === "stopped" &&
-    (await hasScheduledTaskRunningEvidence(activationEnv))
+    (await waitForScheduledTaskRunningEvidence(activationEnv))
   ) {
     await removeStartupEntries(activationEnv, args.stdout);
   }
@@ -1655,7 +1668,11 @@ export async function restartScheduledTask({
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),
   });
-  if (await hasScheduledTaskRunningEvidence(effectiveEnv)) {
+  const startupEntryInstalled = await isStartupEntryInstalled(effectiveEnv);
+  const hasRunningEvidence = startupEntryInstalled
+    ? await waitForScheduledTaskRunningEvidence(effectiveEnv)
+    : await hasScheduledTaskRunningEvidence(effectiveEnv);
+  if (startupEntryInstalled && hasRunningEvidence) {
     await removeStartupEntries(effectiveEnv, stdout);
   }
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);

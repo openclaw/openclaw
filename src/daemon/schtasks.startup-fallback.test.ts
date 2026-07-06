@@ -252,7 +252,9 @@ function addAcceptedRunNeverStartsResponses(): void {
   ]);
 }
 
-function addSuccessfulScheduledTaskRestartResponses(): void {
+function addSuccessfulScheduledTaskRestartResponses(
+  cleanupEvidence: string[] = [runningTaskQueryOutput()],
+): void {
   schtasksResponses.push(
     { code: 0, stdout: "", stderr: "" },
     { code: 0, stdout: "", stderr: "" },
@@ -260,9 +262,13 @@ function addSuccessfulScheduledTaskRestartResponses(): void {
     { code: 0, stdout: "", stderr: "" },
     { code: 0, stdout: "", stderr: "" },
     { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
-    { code: 0, stdout: "", stderr: "" },
-    { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
   );
+  for (const output of cleanupEvidence) {
+    schtasksResponses.push(
+      { code: 0, stdout: "", stderr: "" },
+      { code: 0, stdout: output, stderr: "" },
+    );
+  }
 }
 
 function notYetRunTaskQueryOutput() {
@@ -527,6 +533,22 @@ describe("Windows startup fallback", () => {
 
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
       await expect(fs.access(hiddenStartupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("waits for running evidence before removing a Startup-folder launcher", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      await writeGatewayScript(env);
+      addSuccessfulScheduledTaskRestartResponses([
+        notYetRunTaskQueryOutput(),
+        runningTaskQueryOutput(),
+      ]);
+
+      await restartScheduledTask({ env, stdout: new PassThrough() });
+
+      expect(sleepMock).toHaveBeenCalledWith(250);
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
 
