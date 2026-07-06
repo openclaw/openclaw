@@ -214,7 +214,9 @@ class TalkModeManager internal constructor(
   private var realtimeCapturePause: RealtimeCapturePause? = null
 
   private val finishingPttLock = Any()
+
   @Volatile private var finishingPttCaptureId: String? = null
+
   @Volatile private var finishingPttJob: Job? = null
 
   // Realtime tool calls can complete before their chat final arrives; cache by call/run id until both sides meet.
@@ -422,9 +424,9 @@ class TalkModeManager internal constructor(
           }
           if (
             activePttCaptureId != captureId ||
-              captureGeneration != startGeneration.get() ||
-              !canStartCapture() ||
-              stopRequested
+            captureGeneration != startGeneration.get() ||
+            !canStartCapture() ||
+            stopRequested
           ) {
             throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
           }
