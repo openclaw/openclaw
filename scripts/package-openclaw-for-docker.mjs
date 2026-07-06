@@ -343,7 +343,7 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
     command: "node",
-    args: ["scripts/build-all.mjs"],
+    args: ["scripts/build-all.mjs", "ciArtifacts"],
   },
 ];
 
@@ -435,6 +435,7 @@ export async function prepareBundledAiRuntimePackage(
   options = {},
 ) {
   const packageJsonPath = path.join(sourceDir, "package.json");
+  const aiRuntimePackageJsonPath = path.join(sourceDir, "packages", "ai", "package.json");
   const aiRuntimePath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
   const aiRuntimeBackupPath = path.join(
     sourceDir,
@@ -453,7 +454,24 @@ export async function prepareBundledAiRuntimePackage(
   } catch (error) {
     throw new Error(`failed to parse ${packageJsonPath}`, { cause: error });
   }
-  if (typeof packageJson.dependencies?.[AI_RUNTIME_PACKAGE] !== "string") {
+  const aiRuntimeDependency = packageJson.dependencies?.[AI_RUNTIME_PACKAGE];
+  let hasAiRuntimeWorkspace = false;
+  try {
+    await fs.access(aiRuntimePackageJsonPath);
+    hasAiRuntimeWorkspace = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  // Release checks can package refs from before the AI runtime was split into a workspace package.
+  if (!hasAiRuntimeWorkspace && aiRuntimeDependency === undefined) {
+    return async () => {};
+  }
+  if (!hasAiRuntimeWorkspace) {
+    throw new Error("@openclaw/ai dependency requires the packages/ai workspace");
+  }
+  if (typeof aiRuntimeDependency !== "string") {
     throw new Error("root package.json must declare @openclaw/ai as a dependency");
   }
 
@@ -648,7 +666,11 @@ async function main() {
   const checkStartedAt = Date.now();
   await run(
     "node",
-    [path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"), tarball],
+    [
+      path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"),
+      "--require-bundled-workspace-deps",
+      tarball,
+    ],
     sourceDir,
     {
       timeoutMs: resolveTimeoutMs(

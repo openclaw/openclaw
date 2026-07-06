@@ -5,14 +5,14 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite struct IOSGatewayChatTransportTests {
+struct IOSGatewayChatTransportTests {
     private func object(from json: String) throws -> [String: Any] {
         let data = try #require(json.data(using: .utf8))
         let value = try JSONSerialization.jsonObject(with: data)
         return try #require(value as? [String: Any])
     }
 
-    @Test func agentWaitTreatsSuccessAsCompletion() {
+    @Test func `agent wait treats success as completion`() {
         #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("success"))
         #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus(" ok "))
         #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("completed"))
@@ -21,17 +21,17 @@ import Testing
         #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("failed"))
     }
 
-    @Test func agentWaitTimeoutAddsGatewayMargin() {
+    @Test func `agent wait timeout adds gateway margin`() {
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1) == 6)
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1000) == 6)
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 30000) == 35)
     }
 
-    @Test func compactionLeavesTerminalTimeoutToGateway() {
+    @Test func `compaction leaves terminal timeout to gateway`() {
         #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
     }
 
-    @Test func agentWaitCompletionDecodesFallbackRunId() throws {
+    @Test func `agent wait completion decodes fallback run id`() throws {
         let data = Data(#"{"status":"completed"}"#.utf8)
         let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")
         #expect(completion.runId == "run-local")
@@ -39,21 +39,21 @@ import Testing
         #expect(completion.completed)
     }
 
-    @Test func listSessionsParamsIncludeGlobalSessionsButNotUnknown() throws {
+    @Test func `list sessions params include global sessions but not unknown`() throws {
         let params = try self.object(from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12))
         #expect(params["includeGlobal"] as? Bool == true)
         #expect(params["includeUnknown"] as? Bool == false)
         #expect(params["limit"] as? Int == 12)
     }
 
-    @Test func commandsListParamsRequestTextScopeWithArgs() throws {
+    @Test func `commands list params request text scope with args`() throws {
         let params = try self.object(from: IOSGatewayChatTransport.makeCommandsListParamsJSON())
         #expect(params["scope"] as? String == "text")
         #expect(params["includeArgs"] as? Bool == true)
         #expect(params["agentId"] == nil)
     }
 
-    @Test func commandsListParamsIncludeAgentForAgentScopedSession() throws {
+    @Test func `commands list params include agent for agent scoped session`() throws {
         let params = try self.object(
             from: IOSGatewayChatTransport.makeCommandsListParamsJSON(sessionKey: "agent:reviewer:ios-main"))
         #expect(params["scope"] as? String == "text")
@@ -61,7 +61,27 @@ import Testing
         #expect(params["agentId"] as? String == "reviewer")
     }
 
-    @Test func chatSendParamsOmitEmptyAttachmentsAndKeepSessionFields() throws {
+    @Test func `commands list params use explicit agent for selected global session`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(
+                sessionKey: "global",
+                agentId: "reviewer"))
+        #expect(params["agentId"] as? String == "reviewer")
+    }
+
+    @Test func `create session params include selected global agent`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeCreateSessionParamsJSON(
+                key: "agent:reviewer:ios-new",
+                agentId: "reviewer",
+                label: nil,
+                parentSessionKey: "global"))
+        #expect(params["key"] as? String == "agent:reviewer:ios-new")
+        #expect(params["agentId"] as? String == "reviewer")
+        #expect(params["parentSessionKey"] as? String == "global")
+    }
+
+    @Test func `chat send params omit empty attachments and keep session fields`() throws {
         let params = try self.object(
             from: IOSGatewayChatTransport.makeChatSendParamsJSON(
                 sessionKey: "agent:main",
@@ -77,7 +97,20 @@ import Testing
         #expect(params["attachments"] == nil)
     }
 
-    @Test func requestsFailFastWhenGatewayNotConnected() async {
+    @Test func `chat send params include selected global agent`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeChatSendParamsJSON(
+                sessionKey: "global",
+                agentId: "reviewer",
+                message: "hello",
+                thinking: "low",
+                idempotencyKey: "send-1",
+                attachments: []))
+        #expect(params["sessionKey"] as? String == "global")
+        #expect(params["agentId"] as? String == "reviewer")
+    }
+
+    @Test func `requests fail fast when gateway not connected`() async {
         let gateway = GatewayNodeSession()
         let transport = IOSGatewayChatTransport(gateway: gateway)
 
@@ -112,7 +145,7 @@ import Testing
         } catch {}
     }
 
-    @Test func mapsSessionMessageEventToSessionMessage() {
+    @Test func `maps session message event to session message`() {
         let payload = AnyCodable([
             "sessionKey": AnyCodable("agent:main:main"),
             "agentId": AnyCodable("main"),
@@ -150,7 +183,7 @@ import Testing
         }
     }
 
-    @Test func mapsChatEventToChat() {
+    @Test func `maps chat event to chat`() {
         let payload = AnyCodable([
             "runId": AnyCodable("run-1"),
             "sessionKey": AnyCodable("main"),
@@ -169,7 +202,7 @@ import Testing
         }
     }
 
-    @Test func mapsUnknownEventToNil() {
+    @Test func `maps unknown event to nil`() {
         let frame = EventFrame(
             type: "event",
             event: "unknown",
@@ -181,8 +214,8 @@ import Testing
     }
 }
 
-@Suite struct LocalFixtureChatTransportTests {
-    @Test func sentUserTurnCarriesGatewayIdempotencyMetadata() async throws {
+struct LocalFixtureChatTransportTests {
+    @Test func `sent user turn carries gateway idempotency metadata`() async throws {
         let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
 
         _ = try await transport.sendMessage(

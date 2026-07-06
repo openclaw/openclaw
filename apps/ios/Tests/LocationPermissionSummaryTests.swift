@@ -88,6 +88,25 @@ import Testing
         #expect(summary.detailText == "Location Services are off in iOS Settings.")
     }
 
+    @Test func `initial authorization wait ignores undetermined callbacks`() {
+        #expect(!LocationService.shouldCompleteAuthorizationWait(
+            status: .notDetermined,
+            requiresDeterminedStatus: true))
+        #expect(LocationService.shouldCompleteAuthorizationWait(
+            status: .authorizedWhenInUse,
+            requiresDeterminedStatus: true))
+        #expect(LocationService.shouldCompleteAuthorizationWait(
+            status: .denied,
+            requiresDeterminedStatus: true))
+        #expect(LocationService.shouldCompleteAuthorizationWait(
+            status: .notDetermined,
+            requiresDeterminedStatus: false))
+        #expect(LocationService.shouldCompleteAuthorizationWait(
+            status: .notDetermined,
+            requiresDeterminedStatus: true,
+            allowUndeterminedFallback: true))
+    }
+
     @MainActor @Test func `off mode stops significant location monitoring`() async {
         let locationService = MockLocationService(authorizationStatus: .authorizedAlways)
         let appModel = NodeAppModel(locationService: locationService)

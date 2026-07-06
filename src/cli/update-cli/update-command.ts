@@ -1467,10 +1467,11 @@ async function tryInstallShellCompletion(opts: {
   }
 
   const status = await checkShellCompletionStatus(CLI_NAME);
+  const generationOptions = { generationMode: "core-only" } as const;
 
   if (status.usesSlowPattern) {
     defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, generationOptions);
     if (cacheGenerated) {
       await installShellCompletionForUpdate(status.shell, true);
     }
@@ -1479,7 +1480,7 @@ async function tryInstallShellCompletion(opts: {
 
   if (status.profileInstalled && !status.cacheExists) {
     defaultRuntime.log(theme.muted("Regenerating shell completion cache..."));
-    await ensureCompletionCacheExists(CLI_NAME);
+    await ensureCompletionCacheExists(CLI_NAME, generationOptions);
     return;
   }
 
@@ -1503,7 +1504,7 @@ async function tryInstallShellCompletion(opts: {
       return;
     }
 
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, generationOptions);
     if (!cacheGenerated) {
       defaultRuntime.log(theme.warn("Failed to generate completion cache."));
       return;
@@ -1954,8 +1955,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  const pluginUpdateChannel: UpdateChannel =
-    params.channel === "extended-stable" ? "stable" : params.channel;
+  const pluginUpdateChannel = params.channel;
+  const coreVersion = await readPackageVersion(params.root);
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
@@ -1963,6 +1964,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const syncResult = await syncPluginsForUpdateChannel({
     config: syncConfig,
     channel: pluginUpdateChannel,
+    coreVersion: coreVersion ?? undefined,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
@@ -2036,6 +2038,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       pluginIds: missingIds,
       timeoutMs: params.timeoutMs,
       updateChannel: pluginUpdateChannel,
+      coreVersion: coreVersion ?? undefined,
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
       disableOnFailure: true,
@@ -2056,6 +2059,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: pluginUpdateChannel,
+    coreVersion: coreVersion ?? undefined,
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,

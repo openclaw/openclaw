@@ -104,6 +104,26 @@ describe("tool-card extraction", () => {
 }`);
   });
 
+  it("preserves legacy callId tool block identities", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            callId: "legacy-call-id",
+            name: "bash",
+            input: { command: "pwd" },
+          },
+        ],
+      },
+      "legacy-call",
+    );
+
+    expect(cards[0]?.callId).toBe("legacy-call-id");
+    expect(cards[0]?.id).toBe("legacy-call:legacy-call-id");
+  });
+
   it("pairs interleaved nameless tool results in content order", () => {
     const cards = extractToolCards(
       {

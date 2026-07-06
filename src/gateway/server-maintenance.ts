@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { managedWorktrees, WORKTREE_GC_INTERVAL_MS } from "../agents/worktrees/service.js";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
@@ -66,11 +67,13 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
+  runWorktreeGc?: () => Promise<unknown>;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  worktreeCleanup: ReturnType<typeof setInterval>;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -101,6 +104,14 @@ export function startGatewayMaintenanceTimers(params: {
   void params
     .refreshGatewayHealthSnapshot({ probe: false })
     .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+
+  const runWorktreeGc = params.runWorktreeGc ?? (() => managedWorktrees.gc());
+  const performWorktreeGc = () =>
+    runWorktreeGc().catch((err: unknown) => {
+      params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
+    });
+  const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
+  void performWorktreeGc();
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -289,7 +300,7 @@ export function startGatewayMaintenanceTimers(params: {
   }, 60_000);
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null, worktreeCleanup };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;
@@ -316,5 +327,5 @@ export function startGatewayMaintenanceTimers(params: {
 
   void runMediaCleanup();
 
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup, worktreeCleanup };
 }

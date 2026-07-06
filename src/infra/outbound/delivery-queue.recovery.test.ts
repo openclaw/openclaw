@@ -9,6 +9,7 @@ import {
   enqueueDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
   MAX_RETRIES,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
@@ -62,7 +63,13 @@ describe("delivery-queue recovery", () => {
       tmpDir(),
     );
     await enqueueDelivery(
-      { channel: "demo-channel-b", to: "2", payloads: [{ text: "b" }] },
+      {
+        channel: "demo-channel-b",
+        to: "2",
+        payloads: [{ text: "b" }],
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+      },
       tmpDir(),
     );
   };
@@ -92,6 +99,14 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver });
 
     expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver.mock.calls.map(([params]) => params.queuePolicy)).toEqual([
+      undefined,
+      "required",
+    ]);
+    expect(deliver.mock.calls.map(([params]) => params.requireUnknownSendReconciliation)).toEqual([
+      undefined,
+      true,
+    ]);
     expect(result).toEqual({
       recovered: 2,
       failed: 0,
@@ -352,11 +367,10 @@ describe("delivery-queue recovery", () => {
       },
       tmpDir(),
     );
-    setQueuedEntryState(tmpDir(), id, {
-      retryCount: 0,
-      platformSendStartedAt: Date.now(),
-      recoveryState: "unknown_after_send",
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
+      replyToId: "hooked-root-message",
     });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
     const order: string[] = [];
     const afterCommit = vi.fn(() => {
       order.push("afterCommit");
@@ -401,6 +415,7 @@ describe("delivery-queue recovery", () => {
       accountId?: string;
       payloads?: unknown;
       replyToId?: string;
+      effectiveReplyToId?: string;
       threadId?: string;
       silent?: boolean;
       retryCount?: number;
@@ -412,6 +427,7 @@ describe("delivery-queue recovery", () => {
     expect(reconcileInput.accountId).toBe("acct-1");
     expect(reconcileInput.payloads).toEqual([{ text: "maybe sent" }]);
     expect(reconcileInput.replyToId).toBe("root-message");
+    expect(reconcileInput.effectiveReplyToId).toBe("hooked-root-message");
     expect(reconcileInput.threadId).toBe("thread-1");
     expect(reconcileInput.silent).toBe(true);
     expect(reconcileInput.retryCount).toBe(0);
@@ -428,7 +444,7 @@ describe("delivery-queue recovery", () => {
     expect(afterCommitInput.kind).toBe("text");
     expect(afterCommitInput.to).toBe("+1");
     expect(afterCommitInput.accountId).toBe("acct-1");
-    expect(afterCommitInput.replyToId).toBe("root-message");
+    expect(afterCommitInput.replyToId).toBe("hooked-root-message");
     expect(afterCommitInput.threadId).toBe("thread-1");
     expect(afterCommitInput.silent).toBe(true);
     expect(afterCommitInput.result?.messageId).toBe("platform-1");

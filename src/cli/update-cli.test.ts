@@ -68,6 +68,9 @@ const legacyConfigRepairMocks = vi.hoisted(() => ({
 const launchdUpdateCleanupMocks = vi.hoisted(() => ({
   disableCurrentOpenClawUpdateLaunchdJob: vi.fn(async () => false),
 }));
+const restartHealthTestControl = vi.hoisted(() => ({
+  snapshot: undefined as unknown,
+}));
 const nodeVersionSatisfiesEngine = vi.fn();
 const execFile = vi.fn((...args: unknown[]) => {
   const callback = args.at(-1);
@@ -339,6 +342,23 @@ vi.mock("./update-cli/restart-helper.js", () => ({
   prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
   runRestartScript: (...args: unknown[]) => runRestartScript(...args),
 }));
+
+vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./daemon-cli/restart-health.js")>();
+  return {
+    ...actual,
+    waitForGatewayHealthyRestart: (
+      ...args: Parameters<typeof actual.waitForGatewayHealthyRestart>
+    ) =>
+      restartHealthTestControl.snapshot === undefined
+        ? actual.waitForGatewayHealthyRestart(...args)
+        : Promise.resolve(
+            restartHealthTestControl.snapshot as Awaited<
+              ReturnType<typeof actual.waitForGatewayHealthyRestart>
+            >,
+          ),
+  };
+});
 
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
@@ -781,6 +801,7 @@ describe("update-cli", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    restartHealthTestControl.snapshot = undefined;
     vi.clearAllMocks();
     resetRuntimeCapture();
     spawn.mockImplementation(() => {
@@ -2543,6 +2564,7 @@ describe("update-cli", () => {
   it("installs the verified exact package and persists an explicit extended-stable channel", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.6.33");
 
     await updateCommand({ channel: "extended-stable", yes: true, restart: false });
 
@@ -2553,13 +2575,16 @@ describe("update-cli", () => {
     });
     expectPackageInstallSpec("openclaw@2026.6.33");
     expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
-    expect(syncPluginCall()?.channel).toBe("stable");
-    expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("stable");
+    expect(syncPluginCall()?.channel).toBe("extended-stable");
+    expect(syncPluginCall()?.coreVersion).toBe("2026.6.33");
+    expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("extended-stable");
+    expect(lastNpmPluginUpdateCall()?.coreVersion).toBe("2026.6.33");
   });
 
   it("uses the same exact resolver for a bare update with stored extended-stable", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.6.33");
     const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
@@ -2578,7 +2603,8 @@ describe("update-cli", () => {
       packageName: "openclaw",
     });
     expectPackageInstallSpec("openclaw@2026.6.33");
-    expect(syncPluginCall()?.channel).toBe("stable");
+    expect(syncPluginCall()?.channel).toBe("extended-stable");
+    expect(syncPluginCall()?.coreVersion).toBe("2026.6.33");
   });
 
   it("fails closed without config or package mutation when extended-stable resolution fails", async () => {
@@ -3722,6 +3748,20 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    restartHealthTestControl.snapshot = {
+      runtime: { status: "stopped", pid: null, state: "stopped" },
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        hints: [],
+      },
+      healthy: true,
+      staleGatewayPids: [],
+      gatewayVersion: "1.0.0",
+      waitOutcome: "timeout",
+      elapsedMs: 60_000,
+    };
     mockGitUpdateAfterMutation();
 
     await updateCommand({ yes: true });

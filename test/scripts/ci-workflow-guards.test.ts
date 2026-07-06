@@ -623,6 +623,22 @@ describe("ci workflow guards", () => {
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
+  it("runs mobile protocol coverage for Node and native-only changes", () => {
+    const workflow = readCiWorkflow();
+    const coverageStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Check mobile protocol event coverage",
+    );
+    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+      (step) => step.name === "Run check shard",
+    ).run;
+
+    expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_ios_build == 'true'");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_android_job == 'true'");
+    expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
   it("does not rebuild Control UI after build:ci-artifacts", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;

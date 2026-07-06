@@ -2913,6 +2913,7 @@ export const testing = {
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
+  compareShortTermRecallRetention,
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,

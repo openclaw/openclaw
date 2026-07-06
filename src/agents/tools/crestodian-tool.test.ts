@@ -1,6 +1,10 @@
 // Crestodian ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCrestodianTool } from "./crestodian-tool.js";
+import {
+  createCrestodianTool,
+  hashCrestodianOperation,
+  resolveCrestodianProposalTransition,
+} from "./crestodian-tool.js";
 
 const mocks = vi.hoisted(() => ({
   executeCrestodianOperation: vi.fn(async (_op: unknown, runtime: { log: (m: string) => void }) => {
@@ -219,5 +223,36 @@ describe("crestodian tool", () => {
   it("rejects unknown or underspecified actions as input errors", async () => {
     const tool = createCrestodianTool({ surface: "cli" });
     await expect(tool.execute("t5", { action: "config_get" })).rejects.toThrow(/path/);
+  });
+
+  it("mirrors proposal transitions for out-of-process (CLI MCP) hosts", () => {
+    const args = { action: "set_default_model", model: "openai/gpt-5.5" };
+    const hash = hashCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" });
+
+    // Denial registers the exact-operation hash on the host.
+    expect(
+      resolveCrestodianProposalTransition({
+        args,
+        resultText: "needs-approval: this action changes state.",
+      }),
+    ).toEqual({ proposal: hash });
+    // A voided approval clears it.
+    expect(
+      resolveCrestodianProposalTransition({
+        args,
+        resultText: "approval-mismatch: this call is not the operation the user approved.",
+      }),
+    ).toEqual({ proposal: undefined });
+    // An executed mutation consumes it.
+    expect(
+      resolveCrestodianProposalTransition({ args, resultText: "Default model updated." }),
+    ).toEqual({ proposal: undefined });
+    // Read actions and unparsable calls never touch the proposal.
+    expect(
+      resolveCrestodianProposalTransition({ args: { action: "status" }, resultText: "ok" }),
+    ).toBeNull();
+    expect(
+      resolveCrestodianProposalTransition({ args: { action: "bogus" }, resultText: "ok" }),
+    ).toBeNull();
   });
 });

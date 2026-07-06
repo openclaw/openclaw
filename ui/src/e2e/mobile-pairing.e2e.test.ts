@@ -75,6 +75,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const sidebarPairingButton = page.locator(".sidebar-pair-mobile");
       await sidebarPairingButton.waitFor();
       await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);
+      await gateway.deferNext("device.pair.list");
       await sidebarPairingButton.click();
 
       const dialog = page.getByRole("dialog", { name: "OpenClaw mobile" });
@@ -88,8 +89,15 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       );
       expect(
         await page.getByText("Official OpenClaw mobile apps connect automatically").isVisible(),
-      ).toBe(false);
+      ).toBe(true);
+      await gateway.resolveDeferred("device.pair.list", {
+        paired: [],
+        pending: [{ deviceId: "mobile-1", requestId: "request-1" }],
+      });
       expect(await page.getByText("Device requests waiting for review: 1").isVisible()).toBe(true);
+      expect(
+        await page.getByText("Official OpenClaw mobile apps connect automatically").isVisible(),
+      ).toBe(false);
 
       const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
       expect(firstRequest.params).toEqual({});

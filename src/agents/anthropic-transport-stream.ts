@@ -13,12 +13,16 @@ import {
   resolveClaudeNativeThinkingLevelMap,
   resolveOriginalAnthropicToolName,
   readAnthropicFallbackBoundary,
+  readAnthropicPromptUsageSnapshot,
+  readAnthropicUsageTokenCount,
+  readLastAnthropicIterationUsage,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
   usesFoundryBearerAuth,
   type AnthropicOptions,
+  type AnthropicPromptUsageSnapshot,
   type AnthropicProjectedToolChoice,
   type AnthropicThinkingDisplay,
   type AnthropicToolProjection,
@@ -75,6 +79,7 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+import type { ContextUsage } from "./usage.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -156,6 +161,7 @@ type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    contextUsage?: ContextUsage;
     totalTokens: number;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   };
@@ -1150,6 +1156,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // Fallback-served turns bill at the serving model's rates; a boundary
       // swaps this to the fallback model's cost table.
       let costModel = model;
+      let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1307,19 +1314,45 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
             output.responseModel = typeof message?.model === "string" ? message.model : undefined;
-            output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-            output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-            output.usage.cacheRead =
-              typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0;
-            output.usage.cacheWrite =
-              typeof usage.cache_creation_input_tokens === "number"
-                ? usage.cache_creation_input_tokens
-                : 0;
+            const promptUsage = readAnthropicPromptUsageSnapshot(usage);
+            const messageStartPromptTokens = promptUsage
+              ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
+              : 0;
+            messageStartPromptUsage = messageStartPromptTokens > 0 ? promptUsage : undefined;
+            const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
+            if (inputTokens !== undefined) {
+              output.usage.input = inputTokens;
+            }
+            const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
+            if (outputTokens !== undefined) {
+              output.usage.output = outputTokens;
+            }
+            const cacheReadTokens =
+              usage.cache_read_input_tokens == null
+                ? 0
+                : readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
+            if (cacheReadTokens !== undefined) {
+              output.usage.cacheRead = cacheReadTokens;
+            }
+            const cacheWriteTokens =
+              usage.cache_creation_input_tokens == null
+                ? 0
+                : readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
+            if (cacheWriteTokens !== undefined) {
+              output.usage.cacheWrite = cacheWriteTokens;
+            }
             output.usage.totalTokens =
               output.usage.input +
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
+            if (messageStartPromptUsage && outputTokens !== undefined) {
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens: messageStartPromptTokens,
+                totalTokens: messageStartPromptTokens + output.usage.output,
+              };
+            }
             calculateCost(costModel, output.usage);
             // Defer start until after message_start so that pre-stream SSE errors
             // (e.g. invalid thinking signatures) arrive before any non-error event
@@ -1653,23 +1686,56 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 output.stopReason = mapStopReason(delta.stop_reason);
               }
             }
-            if (typeof usage?.input_tokens === "number") {
-              output.usage.input = usage.input_tokens;
+            const inputTokens = readAnthropicUsageTokenCount(usage?.input_tokens);
+            if (inputTokens !== undefined) {
+              output.usage.input = inputTokens;
             }
-            if (typeof usage?.output_tokens === "number") {
-              output.usage.output = usage.output_tokens;
+            const outputTokens = readAnthropicUsageTokenCount(usage?.output_tokens);
+            if (outputTokens !== undefined) {
+              output.usage.output = outputTokens;
             }
-            if (typeof usage?.cache_read_input_tokens === "number") {
-              output.usage.cacheRead = usage.cache_read_input_tokens;
+            // Match the SDK stream accumulator: null means no update, not a zero counter.
+            const cacheReadTokens = readAnthropicUsageTokenCount(usage?.cache_read_input_tokens);
+            if (cacheReadTokens !== undefined) {
+              output.usage.cacheRead = cacheReadTokens;
             }
-            if (typeof usage?.cache_creation_input_tokens === "number") {
-              output.usage.cacheWrite = usage.cache_creation_input_tokens;
+            const cacheWriteTokens = readAnthropicUsageTokenCount(
+              usage?.cache_creation_input_tokens,
+            );
+            if (cacheWriteTokens !== undefined) {
+              output.usage.cacheWrite = cacheWriteTokens;
             }
             output.usage.totalTokens =
               output.usage.input +
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
+            const iterationUsage = readLastAnthropicIterationUsage(usage ?? {});
+            if (iterationUsage.state === "valid") {
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens: iterationUsage.usage.contextPromptTokens,
+                totalTokens: iterationUsage.usage.totalTokens,
+              };
+            } else if (iterationUsage.state === "invalid") {
+              output.usage.contextUsage = { state: "unavailable" };
+            } else if (
+              outputTokens !== undefined &&
+              (messageStartPromptUsage !== undefined ||
+                (inputTokens !== undefined &&
+                  cacheReadTokens !== undefined &&
+                  cacheWriteTokens !== undefined))
+            ) {
+              const promptTokens =
+                output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens,
+                totalTokens: promptTokens + output.usage.output,
+              };
+            } else {
+              output.usage.contextUsage = { state: "unavailable" };
+            }
             calculateCost(costModel, output.usage);
             // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
             // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on

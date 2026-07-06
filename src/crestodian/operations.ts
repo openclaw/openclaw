@@ -150,6 +150,7 @@ const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
   "anthropic-api-key": "ANTHROPIC_API_KEY",
   "claude-cli": "Claude Code CLI",
   "codex-cli": "Codex app-server",
+  "gemini-cli": "Gemini CLI",
 };
 
 /**

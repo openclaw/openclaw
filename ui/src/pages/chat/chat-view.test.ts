@@ -422,7 +422,8 @@ function createChatHeaderState(
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,
-      navGroupsCollapsed: {},
+      sidebarPinnedRoutes: ["overview"],
+      sidebarMoreExpanded: false,
       borderRadius: 50,
       chatShowThinking: false,
       chatShowToolCalls: true,
@@ -1544,21 +1545,18 @@ describe("chat voice controls", () => {
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
-  it("renders editable Talk launch options", () => {
+  it("keeps everyday Talk options compact and sends advanced setup to Settings", () => {
     const onRealtimeTalkOptionsChange = vi.fn();
+    const onOpenRealtimeTalkSettings = vi.fn();
     const container = renderChatView({
       realtimeTalkOptionsOpen: true,
       realtimeTalkOptions: {
-        provider: "openai",
         model: "gpt-realtime-2",
         voice: "marin",
-        transport: "webrtc",
-        vadThreshold: "0.45",
-        silenceDurationMs: "650",
-        prefixPaddingMs: "250",
-        reasoningEffort: "low",
+        vadThreshold: "0.5",
       },
       onRealtimeTalkOptionsChange,
+      onOpenRealtimeTalkSettings,
     });
 
     const model = container.querySelector<HTMLInputElement>(
@@ -1584,27 +1582,26 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(sensitivitySelect.value).toBe("__custom");
+    expect(sensitivitySelect.value).toBe("0.5");
     expect(getTalkSelectOptionValues(container, "sensitivity")).toEqual([
       "",
       "0.65",
       "0.5",
       "0.35",
-      "__custom",
     ]);
-    expect(getTalkSelectOptionValues(container, "reasoning")).toEqual([
-      "",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-    ]);
-    expect(getTalkSelectOptionValues(container, "provider")).toEqual(["", "openai", "google"]);
     expect(container.textContent).toContain("Sensitivity");
-    expect(container.textContent).toContain("Advanced");
-    expect(container.textContent).toContain("Pause before send");
-    expect(container.textContent).not.toContain("Silence ms");
-    expect(container.textContent).not.toContain("Prefix ms");
+    expect(container.textContent).toContain("More in Settings");
+    for (const advancedLabel of [
+      "Advanced",
+      "Provider",
+      "Transport",
+      "Reasoning",
+      "Exact VAD",
+      "Pause before send",
+      "Lead-in",
+    ]) {
+      expect(container.textContent).not.toContain(advancedLabel);
+    }
     if (model === null) {
       throw new Error("expected Talk model input");
     }
@@ -1617,137 +1614,32 @@ describe("chat voice controls", () => {
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "0.35" });
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "" });
 
-    const defaultContainer = renderChatView({
-      realtimeTalkOptionsOpen: true,
-      realtimeTalkOptions: {
-        provider: "",
-        model: "",
-        voice: "",
-        transport: "",
-        vadThreshold: "",
-        silenceDurationMs: "",
-        prefixPaddingMs: "",
-        reasoningEffort: "",
-      },
-      onRealtimeTalkOptionsChange,
-    });
-    const defaultSensitivitySelect = defaultContainer.querySelector<HTMLSelectElement>(
-      '[data-talk-select="sensitivity"] select',
+    requireElement(container, ".agent-chat__talk-settings-link", "Settings link").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
     );
-    if (defaultSensitivitySelect === null) {
-      throw new Error("expected default Talk sensitivity select");
-    }
-    expect(defaultSensitivitySelect.value).toBe("");
-    expect(getTalkSelectOptionValues(defaultContainer, "sensitivity")).toEqual([
-      "",
-      "0.65",
-      "0.5",
-      "0.35",
-    ]);
+    expect(onOpenRealtimeTalkSettings).toHaveBeenCalledOnce();
   });
 
-  it("renders compatible catalog providers and limits transports to the selected provider", () => {
-    const onRealtimeTalkOptionsChange = vi.fn();
+  it("explains why advanced Talk settings are unavailable without admin scope", () => {
+    const onOpenRealtimeTalkSettings = vi.fn();
     const container = renderChatView({
       realtimeTalkOptionsOpen: true,
-      realtimeTalkCatalogProviders: [
-        {
-          id: "openai",
-          label: "OpenAI",
-          configured: true,
-          transports: ["webrtc", "provider-websocket"],
-          supportsBrowserSession: true,
-        },
-        {
-          id: "plugin-realtime",
-          label: "Plugin realtime",
-          configured: true,
-          transports: ["gateway-relay"],
-        },
-        {
-          id: "plugin-default-relay",
-          label: "Plugin default relay",
-          configured: true,
-        },
-        {
-          id: "plugin-websocket",
-          label: "Unsupported plugin WebSocket",
-          configured: true,
-          transports: ["provider-websocket"],
-          supportsBrowserSession: true,
-        },
-        {
-          id: "relay-only",
-          label: "No browser session",
-          configured: true,
-          transports: ["webrtc"],
-        },
-        {
-          id: "unconfigured",
-          label: "Unconfigured provider",
-          configured: false,
-          transports: ["gateway-relay"],
-        },
-      ],
-      realtimeTalkOptions: {
-        provider: "openai",
-        model: "",
-        voice: "",
-        transport: "webrtc",
-        vadThreshold: "",
-        silenceDurationMs: "",
-        prefixPaddingMs: "",
-        reasoningEffort: "",
-      },
-      onRealtimeTalkOptionsChange,
-    });
-
-    expect(getTalkSelectOptionValues(container, "provider")).toEqual([
-      "",
-      "openai",
-      "plugin-realtime",
-      "plugin-default-relay",
-    ]);
-    expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "webrtc"]);
-
-    clickTalkSelectOption(container, "provider", "plugin-realtime");
-
-    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({
-      provider: "plugin-realtime",
-      transport: "",
-    });
-  });
-
-  it("keeps the Google provider WebSocket transport available", () => {
-    const container = renderChatView({
-      realtimeTalkOptionsOpen: true,
-      realtimeTalkCatalogProviders: [
-        {
-          id: "google",
-          label: "Google",
-          configured: true,
-          transports: ["provider-websocket", "gateway-relay"],
-          supportsBrowserSession: true,
-        },
-      ],
-      realtimeTalkOptions: {
-        provider: "google",
-        model: "",
-        voice: "",
-        transport: "provider-websocket",
-        vadThreshold: "",
-        silenceDurationMs: "",
-        prefixPaddingMs: "",
-        reasoningEffort: "",
-      },
+      realtimeTalkOptions: { model: "", voice: "", vadThreshold: "" },
+      canOpenRealtimeTalkSettings: false,
       onRealtimeTalkOptionsChange: () => undefined,
+      onOpenRealtimeTalkSettings,
     });
 
-    expect(getTalkSelectOptionValues(container, "transport")).toEqual([
-      "",
-      "gateway-relay",
-      "provider-websocket",
-    ]);
+    const settings = requireElement(
+      container,
+      ".agent-chat__talk-settings-link",
+      "disabled advanced Settings link",
+    ) as HTMLButtonElement;
+    expect(settings.disabled).toBe(true);
+    expect(settings.textContent?.trim()).toBe("Advanced settings require admin");
+    expect(settings.title).toContain("operator.admin");
+    settings.click();
+    expect(onOpenRealtimeTalkSettings).not.toHaveBeenCalled();
   });
 
   it("renders composer and Talk labels from the active locale", async () => {
@@ -1958,6 +1850,92 @@ describe("chat composer IME composition", () => {
 
     // After composition ends, adjustTextareaHeight runs via syncComposerValue
     expect(textarea.style.height).not.toBe("42px");
+  });
+});
+
+describe("chat composer sizing", () => {
+  it("sizes restored drafts after the rendered value is committed", async () => {
+    const container = renderChatView({ draft: "A restored long draft" });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    Object.defineProperties(textarea, {
+      scrollHeight: { configurable: true, value: 180 },
+      clientHeight: { configurable: true, value: 150 },
+    });
+    document.body.append(container);
+
+    await Promise.resolve();
+
+    expect(textarea.style.height).toBe("150px");
+    expect(textarea.style.overflowY).toBe("auto");
+    container.remove();
+  });
+
+  it("shows the textarea scrollbar only when the draft overflows", () => {
+    const container = renderChatView({});
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    Object.defineProperties(textarea, {
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, get: () => clientHeight },
+    });
+
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(textarea.style.height).toBe("42px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    scrollHeight = 180;
+    clientHeight = 150;
+    textarea.value = "A long draft";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(textarea.style.height).toBe("150px");
+    expect(textarea.style.overflowY).toBe("auto");
+  });
+
+  it("rechecks overflow when responsive layout changes the textarea height", () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords(): ResizeObserverEntry[] {
+        return [];
+      }
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const container = renderChatView({});
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    Object.defineProperties(textarea, {
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      clientHeight: { configurable: true, get: () => clientHeight },
+    });
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    scrollHeight = 120;
+    clientHeight = 56;
+    resizeCallback?.([], {} as ResizeObserver);
+
+    expect(textarea.style.overflowY).toBe("auto");
   });
 });
 

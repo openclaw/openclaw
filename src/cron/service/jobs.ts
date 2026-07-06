@@ -38,6 +38,7 @@ import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
+const CRON_DECLARATIVE_LABEL_MAX_LENGTH = 200;
 const staggerOffsetCache = new Map<string, number>();
 
 type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
@@ -806,7 +807,7 @@ export function nextWakeAtMs(state: CronServiceState) {
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
-  const id = crypto.randomUUID();
+  const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
   const schedule =
     input.schedule.kind === "every"
       ? {
@@ -835,8 +836,38 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
         ? true
         : undefined;
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
+  const declarationKey = normalizeOptionalString(input.declarationKey);
+  if (input.declarationKey !== undefined && !declarationKey) {
+    throw new Error("cron declarationKey must not be blank");
+  }
+  if (declarationKey && declarationKey.length > CRON_DECLARATIVE_LABEL_MAX_LENGTH) {
+    throw new Error(
+      `cron declarationKey must be at most ${CRON_DECLARATIVE_LABEL_MAX_LENGTH} characters`,
+    );
+  }
+  const displayName = normalizeOptionalString(input.displayName);
+  if (input.displayName !== undefined && !displayName) {
+    throw new Error("cron displayName must not be blank");
+  }
+  if (displayName && displayName.length > CRON_DECLARATIVE_LABEL_MAX_LENGTH) {
+    throw new Error(
+      `cron displayName must be at most ${CRON_DECLARATIVE_LABEL_MAX_LENGTH} characters`,
+    );
+  }
+  const ownerAgentId = normalizeOptionalAgentId(input.owner?.agentId);
+  const ownerSessionKey = normalizeOptionalString(input.owner?.sessionKey);
   const job: CronJob = {
     id,
+    ...(declarationKey ? { declarationKey } : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(ownerAgentId || ownerSessionKey
+      ? {
+          owner: {
+            ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
+            ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
+          },
+        }
+      : {}),
     agentId: normalizeOptionalAgentId(input.agentId),
     sessionKey: normalizeOptionalString((input as { sessionKey?: unknown }).sessionKey),
     name: normalizeRequiredName(input.name),
@@ -875,6 +906,22 @@ export function applyJobPatch(
   }
   if ("description" in patch) {
     job.description = normalizeOptionalString(patch.description);
+  }
+  if ("displayName" in patch) {
+    const displayName = normalizeOptionalString(patch.displayName);
+    if (patch.displayName !== null && patch.displayName !== undefined && !displayName) {
+      throw new Error("cron displayName must not be blank");
+    }
+    if (displayName && displayName.length > CRON_DECLARATIVE_LABEL_MAX_LENGTH) {
+      throw new Error(
+        `cron displayName must be at most ${CRON_DECLARATIVE_LABEL_MAX_LENGTH} characters`,
+      );
+    }
+    if (displayName) {
+      job.displayName = displayName;
+    } else {
+      delete job.displayName;
+    }
   }
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
@@ -954,6 +1001,70 @@ export function applyJobPatch(
   ) {
     assertCronExpressionSatisfiable(job, opts.scheduleValidationNowMs);
   }
+}
+
+/** Converges the declared schedule, payload, delivery, and display label only. */
+export function applyDeclarativeJobSpec(
+  job: CronJob,
+  input: CronJobCreate,
+  opts: { defaultAgentId?: string; enabledExplicit: boolean; nowMs: number },
+) {
+  // Name, target, routing, owner, and run policy remain outside declaration
+  // convergence; changing those uses cron.update and cannot retarget an identity.
+  const displayName = normalizeOptionalString(input.displayName);
+  if (input.displayName !== undefined && !displayName) {
+    throw new Error("cron displayName must not be blank");
+  }
+  if (displayName && displayName.length > CRON_DECLARATIVE_LABEL_MAX_LENGTH) {
+    throw new Error(
+      `cron displayName must be at most ${CRON_DECLARATIVE_LABEL_MAX_LENGTH} characters`,
+    );
+  }
+  if (displayName) {
+    job.displayName = displayName;
+  } else {
+    delete job.displayName;
+  }
+
+  if (
+    input.schedule.kind === "every" &&
+    input.schedule.anchorMs === undefined &&
+    job.schedule.kind === "every" &&
+    job.schedule.everyMs === input.schedule.everyMs
+  ) {
+    job.schedule = { ...input.schedule, anchorMs: job.schedule.anchorMs };
+  } else if (input.schedule.kind === "every" && input.schedule.anchorMs === undefined) {
+    job.schedule = { ...input.schedule, anchorMs: opts.nowMs };
+  } else if (input.schedule.kind === "cron") {
+    const explicitStaggerMs = normalizeCronStaggerMs(input.schedule.staggerMs);
+    const defaultStaggerMs = resolveDefaultCronStaggerMs(input.schedule.expr);
+    job.schedule = {
+      ...input.schedule,
+      ...(explicitStaggerMs !== undefined
+        ? { staggerMs: explicitStaggerMs }
+        : defaultStaggerMs !== undefined
+          ? { staggerMs: defaultStaggerMs }
+          : {}),
+    };
+  } else {
+    job.schedule = structuredClone(input.schedule);
+  }
+  job.payload = structuredClone(input.payload);
+  const delivery = resolveInitialCronDelivery(input);
+  if (delivery) {
+    job.delivery = structuredClone(delivery);
+  } else {
+    delete job.delivery;
+  }
+  if (opts.enabledExplicit) {
+    job.enabled = input.enabled;
+  }
+
+  assertSupportedJobSpec(job);
+  assertMainSessionAgentId(job, opts.defaultAgentId);
+  assertDeliverySupport(job);
+  assertFailureDestinationSupport(job);
+  assertCronExpressionSatisfiable(job, opts.nowMs);
 }
 
 function applyAgentTurnToolsAllowPatch(

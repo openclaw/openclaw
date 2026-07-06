@@ -15,6 +15,7 @@ export const APP_ROUTE_DEFINITIONS = {
   infrastructure: { path: "/infrastructure" },
   "ai-agents": { path: "/ai-agents" },
   workboard: { path: "/workboard" },
+  worktrees: { path: "/worktrees" },
   instances: { path: "/instances" },
   sessions: { path: "/sessions" },
   usage: { path: "/usage" },
@@ -24,6 +25,7 @@ export const APP_ROUTE_DEFINITIONS = {
   skills: { path: "/skills" },
   cron: { path: "/cron" },
   nodes: { path: "/nodes" },
+  plugin: { path: "/plugin" },
   dreams: { path: "/dreaming", aliases: ["/dreams"] },
 } as const;
 

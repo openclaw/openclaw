@@ -143,6 +143,7 @@ export type GatewayRequestContext = {
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
+    opts?: import("../server-channels.js").StartChannelOptions,
   ) => Promise<void>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,

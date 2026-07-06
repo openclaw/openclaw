@@ -100,6 +100,20 @@ async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
   return { ...result, config, remainingFindings };
 }
 
+async function runPolicyRepairCheck(checkId: string, repairCheckCtx: HealthRepairContext) {
+  resetPolicyDoctorChecksForTest();
+  const check = registerChecks().find((entry) => entry.id === checkId);
+  if (check?.detect === undefined || check.repair === undefined) {
+    throw new Error(`${checkId} repair check was not registered`);
+  }
+  const findings = await check.detect(repairCheckCtx);
+  const result = await check.repair(repairCheckCtx, findings);
+  const config = result.config ?? repairCheckCtx.cfg;
+  const remainingFindings =
+    repairCheckCtx.dryRun === true ? [] : await check.detect({ ...repairCheckCtx, cfg: config });
+  return { ...result, findings, config, remainingFindings };
+}
+
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
     clearHealthChecksForTest();
@@ -1505,6 +1519,278 @@ describe("registerPolicyDoctorChecks", () => {
       "Skipped channel config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.",
     );
     expect(result.config.channels?.telegram).toEqual({ enabled: true });
+  });
+
+  it("dry-runs automatic policy narrowing repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { elevated: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { elevated: { allow: false } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck("policy/tools-elevated-enabled", {
+      ...repairCtx(configPath, cfg),
+      dryRun: true,
+    });
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual(["Set tools.elevated.enabled=false for policy conformance."]);
+    expect(result.config.tools?.elevated?.enabled).toBe(false);
+    expect(cfg.tools?.elevated?.enabled).toBe(true);
+  });
+
+  it("does not repair automatic policy narrowing config without workspace repair opt-in", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: { elevated: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { elevated: { allow: false } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("workspace repairs are disabled");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped policy config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace policy config.",
+    ]);
+    expect(result.config.tools?.elevated?.enabled).toBe(true);
+  });
+
+  it("does not over-apply scoped elevated policy findings globally", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            tools: { elevated: { enabled: true } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            tools: { elevated: { allow: false } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.config).not.toHaveProperty("tools.elevated.enabled");
+    expect(result.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      tools: { elevated: { enabled: true } },
+    });
+  });
+
+  it("skips scoped elevated repairs that inherit shared global tools config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { elevated: { enabled: true } },
+      agents: {
+        list: [{ id: "reviewer" }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            tools: { elevated: { allow: false } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped tools repair. Scoped elevated-tools policy findings are detect-only because automatic repair cannot safely choose between shared and agent-local config targets.",
+    ]);
+    expect(result.config.tools?.elevated?.enabled).toBe(true);
+  });
+
+  it("repairs automatic policy narrowing config findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { elevated: { enabled: true } },
+      gateway: {
+        mode: "remote",
+        remote: { enabled: true, url: "wss://remote.example.test:18789" },
+        controlUi: {
+          allowInsecureAuth: true,
+          dangerouslyDisableDeviceAuth: true,
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+      logging: { redactSensitive: "off" },
+      diagnostics: { otel: { enabled: true, captureContent: { enabled: true, toolInputs: true } } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: { elevated: { allow: false } },
+        gateway: {
+          controlUi: { allowInsecure: false },
+          remote: { allow: false },
+        },
+        dataHandling: {
+          sensitiveLogging: { requireRedaction: true },
+          telemetry: { denyContentCapture: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    const elevated = await runPolicyRepairCheck(
+      "policy/tools-elevated-enabled",
+      repairCtx(configPath, cfg),
+    );
+    const controlUi = await runPolicyRepairCheck(
+      "policy/gateway-control-ui-insecure",
+      repairCtx(configPath, elevated.config),
+    );
+    const remote = await runPolicyRepairCheck(
+      "policy/gateway-remote-enabled",
+      repairCtx(configPath, controlUi.config),
+    );
+    const redaction = await runPolicyRepairCheck(
+      "policy/data-handling-redaction-disabled",
+      repairCtx(configPath, remote.config),
+    );
+    const telemetry = await runPolicyRepairCheck(
+      "policy/data-handling-telemetry-content-capture",
+      repairCtx(configPath, redaction.config),
+    );
+
+    expect([
+      ...elevated.changes,
+      ...controlUi.changes,
+      ...remote.changes,
+      ...redaction.changes,
+      ...telemetry.changes,
+    ]).toEqual([
+      "Set tools.elevated.enabled=false for policy conformance.",
+      "Set gateway.controlUi.allowInsecureAuth=false for policy conformance.",
+      "Set gateway.controlUi.dangerouslyDisableDeviceAuth=false for policy conformance.",
+      "Set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=false for policy conformance.",
+      "Set gateway.mode=local for policy conformance.",
+      "Set logging.redactSensitive=tools for policy conformance.",
+      "Set diagnostics.otel.captureContent=false for policy conformance.",
+    ]);
+    expect(telemetry.remainingFindings).toEqual([]);
+    expect(telemetry.config).toMatchObject({
+      tools: { elevated: { enabled: false } },
+      gateway: {
+        mode: "local",
+        remote: {
+          enabled: true,
+        },
+        controlUi: {
+          allowInsecureAuth: false,
+          dangerouslyDisableDeviceAuth: false,
+          dangerouslyAllowHostHeaderOriginFallback: false,
+        },
+      },
+      logging: { redactSensitive: "tools" },
+      diagnostics: { otel: { captureContent: false } },
+    });
+  });
+
+  it("skips scoped data-handling repairs that would mutate shared config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      logging: { redactSensitive: "off" },
+      agents: {
+        list: [{ id: "reviewer" }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          reviewer: {
+            agentIds: ["reviewer"],
+            dataHandling: {
+              sensitiveLogging: { requireRedaction: true },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/data-handling-redaction-disabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy automatic repair had no config changes to apply");
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
+    ]);
+    expect(result.config.logging?.redactSensitive).toBe("off");
+    expect(result.remainingFindings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/data-handling-redaction-disabled",
+        requirement:
+          "oc://policy.jsonc/scopes/reviewer/dataHandling/sensitiveLogging/requireRedaction",
+      }),
+    ]);
+  });
+
+  it("does not register repair for review-required policy findings", () => {
+    const check = registerChecks().find(
+      (entry) => entry.id === "policy/gateway-http-url-fetch-unrestricted",
+    );
+
+    expect("repair" in (check ?? {})).toBe(false);
   });
 
   it("does not report denied providers for disabled channels", async () => {

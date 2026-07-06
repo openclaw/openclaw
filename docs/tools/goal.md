@@ -143,6 +143,18 @@ actually achieved. It should mark a goal `blocked` only after the same
 blocking condition recurs for at least three consecutive goal turns, not for
 ordinary difficulty or missing polish.
 
+## Goal context on every turn
+
+Every user/chat turn with an active goal includes this user-role context line:
+
+```text
+Active goal: <objective> — advance it or update its status (get_goal/update_goal).
+```
+
+OpenClaw keeps the line compact by truncating long objectives. Paused,
+blocked, budget-limited, usage-limited, and complete goals are not injected,
+so an operator stop remains in effect until the goal is resumed.
+
 ## TUI
 
 The TUI footer keeps the active session's goal visible next to the agent,

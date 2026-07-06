@@ -38,7 +38,6 @@ import {
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import type { RealtimeTalkCatalogProvider } from "./realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
@@ -72,8 +71,8 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
+  canOpenRealtimeTalkSettings?: boolean;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -117,6 +116,7 @@ export type ChatProps = {
   onRealtimeTalkOptionsChange?: (
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
+  onOpenRealtimeTalkSettings?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -227,8 +227,8 @@ export function renderChat(props: ChatProps) {
     realtimeTalkTranscript: props.realtimeTalkTranscript,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkOptionsOpen: props.realtimeTalkOptionsOpen,
-    realtimeTalkCatalogProviders: props.realtimeTalkCatalogProviders,
     realtimeTalkOptions: props.realtimeTalkOptions,
+    canOpenRealtimeTalkSettings: props.canOpenRealtimeTalkSettings,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -240,6 +240,7 @@ export function renderChat(props: ChatProps) {
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
     onToggleRealtimeTalkOptions: props.onToggleRealtimeTalkOptions,
     onRealtimeTalkOptionsChange: props.onRealtimeTalkOptionsChange,
+    onOpenRealtimeTalkSettings: props.onOpenRealtimeTalkSettings,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,

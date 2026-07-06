@@ -12,6 +12,7 @@ import {
 // Control UI chat module implements composer persistence behavior.
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import type { RealtimeTalkOptions } from "./components/chat-realtime-controls.ts";
 
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;
@@ -30,6 +31,7 @@ type ChatComposerPersistenceState = {
   sessionKey: string;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
+  realtimeTalkOptions?: RealtimeTalkOptions;
 };
 
 export type ChatComposerScope = Pick<
@@ -40,6 +42,7 @@ export type ChatComposerScope = Pick<
 type StoredComposerSession = {
   draft?: string;
   queue?: ChatQueueItem[];
+  realtimeTalkOptions?: RealtimeTalkOptions;
   updatedAt: number;
 };
 
@@ -142,6 +145,20 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 function normalizeOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function normalizeRealtimeTalkOptions(value: unknown): RealtimeTalkOptions | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const entry = value as Record<string, unknown>;
+  const model = typeof entry.model === "string" ? entry.model : "";
+  const voice = typeof entry.voice === "string" ? entry.voice : "";
+  const vadThreshold = typeof entry.vadThreshold === "string" ? entry.vadThreshold : "";
+  if (!model && !voice && !vadThreshold) {
+    return undefined;
+  }
+  return { model, voice, vadThreshold };
 }
 
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
@@ -330,12 +347,14 @@ function normalizeStoredSession(value: unknown): StoredComposerSession | null {
         .map(normalizeQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
-  if (!draft && (!queue || queue.length === 0)) {
+  const realtimeTalkOptions = normalizeRealtimeTalkOptions(entry.realtimeTalkOptions);
+  if (!draft && (!queue || queue.length === 0) && !realtimeTalkOptions) {
     return null;
   }
   return {
     ...(draft ? { draft } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
+    ...(realtimeTalkOptions ? { realtimeTalkOptions } : {}),
     updatedAt:
       typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
         ? entry.updatedAt
@@ -349,7 +368,7 @@ export function loadChatComposerSnapshot(
     "settings" | "assistantAgentId" | "agentsList" | "hello"
   >,
   sessionKey: string,
-): { draft: string; queue: ChatQueueItem[] } | null {
+): { draft: string; queue: ChatQueueItem[]; realtimeTalkOptions?: RealtimeTalkOptions } | null {
   const storage = getSafeSessionStorage();
   if (!storage) {
     return null;
@@ -364,6 +383,7 @@ export function loadChatComposerSnapshot(
     return {
       draft: session.draft ?? "",
       queue: session.queue ?? [],
+      ...(session.realtimeTalkOptions ? { realtimeTalkOptions: session.realtimeTalkOptions } : {}),
     };
   } catch {
     return null;
@@ -387,12 +407,14 @@ export function persistChatComposerState(
       .slice(0, MAX_STORED_QUEUE_ITEMS)
       .map(serializeQueueItem)
       .filter((item): item is ChatQueueItem => item !== null);
-    if (!draft && queue.length === 0) {
+    const realtimeTalkOptions = normalizeRealtimeTalkOptions(state.realtimeTalkOptions);
+    if (!draft && queue.length === 0 && !realtimeTalkOptions) {
       delete store.sessions[storeSessionKey];
     } else {
       store.sessions[storeSessionKey] = {
         ...(draft ? { draft } : {}),
         ...(queue.length > 0 ? { queue } : {}),
+        ...(realtimeTalkOptions ? { realtimeTalkOptions } : {}),
         updatedAt: Date.now(),
       };
     }
@@ -423,12 +445,15 @@ export function removeStoredChatComposerQueueItem(
       return;
     }
     const queue = session.queue.filter((item) => item.id !== id);
-    if (!session.draft && queue.length === 0) {
+    if (!session.draft && queue.length === 0 && !session.realtimeTalkOptions) {
       delete store.sessions[storeSessionKey];
     } else {
       store.sessions[storeSessionKey] = {
         ...(session.draft ? { draft: session.draft } : {}),
         ...(queue.length ? { queue } : {}),
+        ...(session.realtimeTalkOptions
+          ? { realtimeTalkOptions: session.realtimeTalkOptions }
+          : {}),
         updatedAt: Date.now(),
       };
     }
@@ -456,12 +481,15 @@ export function persistStoredChatComposerQueue(
       .slice(0, MAX_STORED_QUEUE_ITEMS)
       .map(serializeQueueItem)
       .filter((item): item is ChatQueueItem => item !== null);
-    if (!session?.draft && serializedQueue.length === 0) {
+    if (!session?.draft && serializedQueue.length === 0 && !session?.realtimeTalkOptions) {
       delete store.sessions[storeSessionKey];
     } else {
       store.sessions[storeSessionKey] = {
         ...(session?.draft ? { draft: session.draft } : {}),
         ...(serializedQueue.length ? { queue: serializedQueue } : {}),
+        ...(session?.realtimeTalkOptions
+          ? { realtimeTalkOptions: session.realtimeTalkOptions }
+          : {}),
         updatedAt: Date.now(),
       };
     }
@@ -486,6 +514,9 @@ export function restoreChatComposerState(
   if ((!options.preserveCurrent && snapshot.queue.length > 0) || state.chatQueue.length === 0) {
     state.chatQueue = snapshot.queue;
   }
+  if (snapshot.realtimeTalkOptions) {
+    state.realtimeTalkOptions = snapshot.realtimeTalkOptions;
+  }
   return true;
 }
 
@@ -496,6 +527,7 @@ export class ChatComposerPersistenceController implements ReactiveController {
     sessionKey: string;
     chatMessage: string;
     chatQueue: ChatQueueItem[];
+    realtimeTalkOptions?: RealtimeTalkOptions;
   } | null = null;
 
   constructor(
@@ -542,9 +574,12 @@ export class ChatComposerPersistenceController implements ReactiveController {
     this.persist(true);
   }
 
-  persistQueueIfChanged() {
+  persistChangedState() {
     const state = this.getState();
-    if (this.lastPersisted?.chatQueue !== state?.chatQueue) {
+    if (
+      this.lastPersisted?.chatQueue !== state?.chatQueue ||
+      this.lastPersisted?.realtimeTalkOptions !== state?.realtimeTalkOptions
+    ) {
       this.persistNow();
     }
   }
@@ -580,7 +615,8 @@ export class ChatComposerPersistenceController implements ReactiveController {
       last &&
       last.sessionKey === state.sessionKey &&
       last.chatMessage === state.chatMessage &&
-      last.chatQueue === state.chatQueue,
+      last.chatQueue === state.chatQueue &&
+      last.realtimeTalkOptions === state.realtimeTalkOptions,
     );
   }
 
@@ -589,6 +625,7 @@ export class ChatComposerPersistenceController implements ReactiveController {
       sessionKey: state.sessionKey,
       chatMessage: state.chatMessage,
       chatQueue: state.chatQueue,
+      realtimeTalkOptions: state.realtimeTalkOptions,
     };
   }
 }

@@ -639,7 +639,7 @@ export function createOpenClawCodingTools(options?: {
     return normalized === "*" || normalized === "message";
   });
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-    toolNames: options?.runtimeToolAllowlist,
+    toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
   });
@@ -1161,6 +1161,7 @@ export function createOpenClawCodingTools(options?: {
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
+    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),

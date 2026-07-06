@@ -1099,7 +1099,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   scriptPath: string;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
-    state: "running" | "not-yet-run" | "other";
+    state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
@@ -1115,6 +1115,14 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
       return {
         state: "not-yet-run",
+        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    if (normalizedResult === "0x0") {
+      return {
+        state: "stopped-success",
         signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
           .filter(Boolean)
           .join("|"),
@@ -1186,8 +1194,8 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     });
   };
 
-  const initial = await readLaunchObservation();
-  if (initial.state !== "not-yet-run") {
+  let previous = await readLaunchObservation();
+  if (previous.state !== "not-yet-run" && previous.state !== "stopped-success") {
     return false;
   }
 
@@ -1195,14 +1203,27 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   while (Date.now() < deadline) {
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
     const current = await readLaunchObservation();
-    if (current.state !== "not-yet-run") {
+    if (current.state !== "not-yet-run" && current.state !== "stopped-success") {
       return false;
     }
-    if (current.signature !== initial.signature) {
+    if (
+      current.state === "not-yet-run" &&
+      previous.state === "not-yet-run" &&
+      current.signature !== previous.signature
+    ) {
+      return false;
+    }
+    // A queued task may finish cleanly before its process/listener becomes observable.
+    // Keep that transition inside this bounded poll; the reverse means a new run is starting.
+    if (previous.state === "stopped-success" && current.state === "not-yet-run") {
+      return false;
+    }
+    previous = current;
+    if (await hasLaunchEvidence()) {
       return false;
     }
   }
-  return !(await hasLaunchEvidence());
+  return true;
 }
 
 async function runScheduledTaskOrThrow(params: {
