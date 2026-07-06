@@ -125,7 +125,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => voice.isVisible()).toBe(true);
       await expect
         .poll(() => model.locator(".chat-controls__inline-select-label").textContent())
-        .toBe("GPT-5.5 · High");
+        .toBe("GPT-5.5");
+      await expect
+        .poll(() => model.locator(".chat-controls__effort-chip").textContent())
+        .toBe("High");
       await expect
         .poll(async () => (await usage.textContent())?.replace(/\s+/g, " ").trim())
         .toBe("Usage Remaining 28%");

@@ -2942,7 +2942,10 @@ describe("chat model controls", () => {
 
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5 · High");
+    ).toBe("GPT-5.5");
+    expect(container.querySelector(".chat-controls__effort-chip")?.textContent?.trim()).toBe(
+      "High",
+    );
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
     ).toContain("GPT-5.5");
@@ -2981,7 +2984,10 @@ describe("chat model controls", () => {
 
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5 · High");
+    ).toBe("GPT-5.5");
+    expect(container.querySelector(".chat-controls__effort-chip")?.textContent?.trim()).toBe(
+      "High",
+    );
     expect(container.querySelector('[data-chat-model-option=""]')?.textContent).toContain(
       "GPT-5.5",
     );
@@ -3012,7 +3018,10 @@ describe("chat model controls", () => {
 
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5 · High");
+    ).toBe("GPT-5.5");
+    expect(container.querySelector(".chat-controls__effort-chip")?.textContent?.trim()).toBe(
+      "High",
+    );
   });
 
   it("uses the session provider for slash-containing raw model ids without metadata", () => {
@@ -3320,10 +3329,12 @@ describe("chat model controls", () => {
 
     const thinkingSelect = getThinkingSelect(container);
     const triggerLabel = container.querySelector(".chat-controls__inline-select-label");
+    const effortChip = container.querySelector(".chat-controls__effort-chip");
 
     expect(container.querySelector('[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(triggerLabel?.textContent?.trim()).toBe("GPT-5.5 · High");
+    expect(triggerLabel?.textContent?.trim()).toBe("GPT-5.5");
+    expect(effortChip?.textContent?.trim()).toBe("High");
     expect(getThinkingOptionValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
     expect(getSelectedThinkingOption(container)?.dataset.chatThinkingOption).toBe("high");
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");

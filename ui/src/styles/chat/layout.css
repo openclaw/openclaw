@@ -2071,6 +2071,7 @@ openclaw-chat-page {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 7px;
   padding-block-start: 10px;
   padding-inline-start: 10px;
   margin-bottom: 8px;
