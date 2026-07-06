@@ -11,6 +11,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -358,11 +359,7 @@ function rewriteStagedMediaPaths(params: {
   }
 }
 
-export async function scpFile(
-  remoteHost: string,
-  remotePath: string,
-  localPath: string,
-): Promise<void> {
+async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
   const safeRemoteHost = normalizeScpRemoteHost(remoteHost);
   if (!safeRemoteHost) {
     throw new Error("invalid remote host for SCP");
@@ -388,13 +385,13 @@ export async function scpFile(
 
     let stderr = "";
     let settled = false;
-    const finish = (err?: Error) => {
+    const finish = (error?: Error) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (err) {
-        reject(err);
+      if (error) {
+        reject(error);
       } else {
         resolve();
       }
@@ -404,10 +401,14 @@ export async function scpFile(
     child.stderr?.on("data", (chunk) => {
       stderr = appendScpStderrTail(stderr, chunk);
     });
-    child.stderr?.on("error", finish);
+    child.stderr?.on("error", (error) => {
+      // stderr is diagnostic; child close remains transfer authority so the
+      // caller cannot remove the staging directory while scp is still alive.
+      stderr = appendScpStderrTail(stderr, formatErrorMessage(error));
+    });
 
     child.once("error", finish);
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       if (code === 0) {
         finish();
       } else {
@@ -428,3 +429,5 @@ export function appendScpStderrTail(
   }
   return combined.slice(-maxChars);
 }
+
+export const testing = { scpFile } as const;

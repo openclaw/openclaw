@@ -1,35 +1,60 @@
-/** Tests for scpFile stream error handling. */
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
-import { scpFile } from "./stage-sandbox-media.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testing } from "./stage-sandbox-media.js";
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    spawn: vi.fn(),
+    spawn: spawnMock,
   };
 });
 
-const { spawn } = await import("node:child_process");
-
 describe("scpFile", () => {
-  it("rejects when stderr emits an error", async () => {
-    const mockSpawn = vi.mocked(spawn);
-    const child = new EventEmitter() as EventEmitter & {
-      stderr: EventEmitter & { setEncoding: (enc: string) => void };
-    };
-    const stderr = new EventEmitter() as EventEmitter & {
-      setEncoding: (enc: string) => void;
-    };
-    stderr.setEncoding = () => {};
-    child.stderr = stderr;
-    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
 
-    const resultPromise = scpFile("host", "/remote/path", "/local/path");
+  function createChild() {
+    const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    const kill = vi.fn(() => true);
+    const child = Object.assign(new EventEmitter(), { kill, stderr });
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    return { child, kill, stderr };
+  }
 
+  it("keeps child close authoritative when stderr emits an error", async () => {
+    const { child, kill, stderr } = createChild();
+
+    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
+
+    expect(() => stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
+    expect(kill).not.toHaveBeenCalled();
+    child.emit("close", 0);
+
+    await expect(resultPromise).resolves.toBeUndefined();
+  });
+
+  it("includes the stderr stream error when scp exits unsuccessfully", async () => {
+    const { child, stderr } = createChild();
+
+    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
     stderr.emit("error", new Error("stderr EPIPE"));
+    child.emit("close", 1);
 
-    await expect(resultPromise).rejects.toThrow("stderr EPIPE");
+    await expect(resultPromise).rejects.toThrow("scp failed (1): stderr EPIPE");
+  });
+
+  it("does not terminate scp again when spawning fails", async () => {
+    const { child, kill } = createChild();
+
+    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
+    child.emit("error", new Error("spawn failed"));
+
+    await expect(resultPromise).rejects.toThrow("spawn failed");
+    expect(kill).not.toHaveBeenCalled();
   });
 });
