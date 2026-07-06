@@ -62,45 +62,6 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-type SidebarSectionRouteId = (typeof SIDEBAR_SECTIONS)[number]["routes"][number];
-
-export type SidebarNavRoute = Exclude<SidebarSectionRouteId, "chat" | "config">;
-
-export const SIDEBAR_NAV_ROUTES = SIDEBAR_SECTIONS.flatMap((section) =>
-  section.label === "control" || section.label === "agent" ? section.routes : [],
-) as readonly SidebarNavRoute[];
-
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "overview",
-] as const satisfies readonly SidebarNavRoute[];
-
-const SIDEBAR_NAV_ROUTE_SET = new Set<NavigationRouteId>(SIDEBAR_NAV_ROUTES);
-
-function isSidebarNavRoute(value: unknown): value is SidebarNavRoute {
-  return typeof value === "string" && SIDEBAR_NAV_ROUTE_SET.has(value as NavigationRouteId);
-}
-
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const seen = new Set<SidebarNavRoute>();
-  const routes: SidebarNavRoute[] = [];
-  for (const routeId of value) {
-    if (!isSidebarNavRoute(routeId) || seen.has(routeId)) {
-      continue;
-    }
-    seen.add(routeId);
-    routes.push(routeId);
-  }
-  return routes;
-}
-
-export function sidebarMoreRoutes(pinnedRoutes: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  const pinned = new Set(pinnedRoutes);
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.has(routeId));
-}
-
 export const SETTINGS_NAVIGATION_ROUTES = [
   "config",
   "channels",
