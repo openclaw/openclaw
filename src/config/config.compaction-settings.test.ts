@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { applyCompactionDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 function materializeCompactionConfig(
   compaction: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"],
@@ -55,6 +56,73 @@ describe("config compaction settings", () => {
     expect(compaction?.memoryFlush?.prompt).toBe("Write notes.");
     expect(compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
     expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it("warns when maxActiveTranscriptBytes is inactive without transcript rotation", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "20mb",
+            },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      warnings: [
+        {
+          path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+          message:
+            "maxActiveTranscriptBytes is set, but truncateAfterCompaction is not true; the active transcript byte guard is inactive.",
+        },
+      ],
+    });
+  });
+
+  it("does not warn when the active transcript byte guard can rotate transcripts", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "20mb",
+            },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      warnings: [],
+    });
+  });
+
+  it("does not warn when the active transcript byte guard is disabled", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: 0,
+            },
+          },
+        },
+      },
+      { pluginValidation: "skip" },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      warnings: [],
+    });
   });
 
   it("preserves legacy compaction override values", () => {

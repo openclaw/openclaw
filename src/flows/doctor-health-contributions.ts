@@ -7,6 +7,11 @@ import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import {
+  collectInactiveMaxActiveTranscriptBytesWarnings,
+  INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_CHECK_ID,
+  INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_FIX_HINT,
+} from "../config/compaction-byte-guard-warning.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -846,6 +851,19 @@ async function collectToolResultCapFindings(
       collectToolResultCapDoctorIssues(entry).map(toolResultCapDoctorIssueToHealthFinding),
     ),
   );
+}
+
+function collectInactiveMaxActiveTranscriptBytesFindings(
+  cfg: OpenClawConfig,
+): readonly HealthFinding[] {
+  return collectInactiveMaxActiveTranscriptBytesWarnings(cfg).map((warning) => ({
+    checkId: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_CHECK_ID,
+    severity: "warning" as const,
+    message: warning.message,
+    path: warning.path,
+    requirement: "truncate-after-compaction-enabled",
+    fixHint: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_FIX_HINT,
+  }));
 }
 
 async function collectToolResultCapTargetAdvice(params: {
@@ -1972,13 +1990,21 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:tool-result-cap",
       label: "Tool result cap",
-      healthChecks: {
-        id: "core/doctor/tool-result-cap",
-        description:
-          "Detect explicit toolResultMaxChars settings that fight model-window defaults.",
-        defaultEnabled: false,
-        detect: async (ctx) => collectToolResultCapFindings(ctx.cfg),
-      },
+      healthChecks: [
+        {
+          id: "core/doctor/tool-result-cap",
+          description:
+            "Detect explicit toolResultMaxChars settings that fight model-window defaults.",
+          defaultEnabled: false,
+          detect: async (ctx) => collectToolResultCapFindings(ctx.cfg),
+        },
+        {
+          id: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_CHECK_ID,
+          description:
+            "Detect maxActiveTranscriptBytes settings that are inactive without transcript rotation.",
+          detect: async (ctx) => collectInactiveMaxActiveTranscriptBytesFindings(ctx.cfg),
+        },
+      ],
       run: runToolResultCapHealth,
     }),
     createDoctorHealthContribution({

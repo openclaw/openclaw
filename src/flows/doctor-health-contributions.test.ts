@@ -1474,6 +1474,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
+    expect(contributionIds).toContain("core/doctor/compaction-byte-guard");
     expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
@@ -1595,6 +1596,44 @@ describe("doctor health contributions", () => {
       checksSkipped: 0,
     });
     expect(detect).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports inactive maxActiveTranscriptBytes in default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const compactionByteGuardCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/compaction-byte-guard",
+    );
+    expect(compactionByteGuardCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks: [compactionByteGuardCheck!] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/compaction-byte-guard",
+          path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+          requirement: "truncate-after-compaction-enabled",
+          fixHint:
+            "Enable agents.defaults.compaction.truncateAfterCompaction or unset agents.defaults.compaction.maxActiveTranscriptBytes.",
+        }),
+      ],
+    });
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
