@@ -130,6 +130,7 @@ describe("createDiscordOpusPlaybackStream child stream errors", () => {
 
       await expect(errorSeen).resolves.toBe(streamError);
       expect(ffmpeg.kill).toHaveBeenCalledOnce();
+      expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
     },
   );
 });
