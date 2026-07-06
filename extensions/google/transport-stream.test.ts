@@ -1371,6 +1371,55 @@ describe("google transport stream", () => {
     });
   });
 
+  it("rejects oversized authorized_user ADC token responses", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-large-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "large-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("x".repeat(1024 * 1024 + 1), { status: 200 }));
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+      "Google OAuth token response exceeds 1048576 bytes",
+    );
+  });
+
+  it("rejects authorized_user ADC gzip responses that expand past the limit", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-bomb-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "bomb-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(gzipSync("x".repeat(1024 * 1024 + 1)), {
+        status: 200,
+        headers: { "content-encoding": "gzip" },
+      }),
+    );
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+      "Google OAuth token response exceeds 1048576 decompressed bytes",
+    );
+  });
+
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-unsafe-adc-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
@@ -1943,6 +1992,35 @@ describe("google transport stream", () => {
       functionCall: { name: "string_transform", args: { text: "claw", mode: "reverse" } },
     });
   });
+
+  it.each([
+    ["gemini-pro-latest", "Gemini Pro Latest"],
+    ["gemini-flash-latest", "Gemini Flash Latest"],
+    ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+  ])(
+    "adds skip-validator fallback to first-turn unsigned Gemini 3 tool calls for %s",
+    (modelId, modelName) => {
+      const model = buildGeminiModel({ id: modelId, name: modelName });
+      const params = buildGoogleGenerativeAiParams(model, {
+        messages: [
+          googleToolCallAssistantTurn({ model: modelId }),
+          toolResultTurn(),
+          googleToolCallAssistantTurn({ timestamp: 2, model: modelId }),
+        ],
+      } as never);
+
+      const modelTurns = params.contents.filter(isModelTurnWithParts);
+      expect(modelTurns).toHaveLength(2);
+      expect(modelTurns[0]).toMatchObject({
+        parts: [
+          {
+            thoughtSignature: "skip_thought_signature_validator",
+            functionCall: { name: "lookup", args: { q: "hello" } },
+          },
+        ],
+      });
+    },
+  );
 
   it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
     const model = buildGeminiModel({

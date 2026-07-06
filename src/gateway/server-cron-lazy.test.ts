@@ -178,6 +178,7 @@ function createCronService(): CronServiceContract {
     listPage: vi.fn(async () => ({ items: [], total: 0 }) as never),
     add: vi.fn(async () => ({ ok: true }) as never),
     update: vi.fn(async () => ({ ok: true }) as never),
+    updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
     remove: vi.fn(async () => ({ ok: true }) as never),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),

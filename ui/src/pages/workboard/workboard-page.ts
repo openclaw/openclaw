@@ -14,7 +14,7 @@ import {
 } from "../../lib/workboard/index.ts";
 import { renderWorkboard } from "./view.ts";
 
-export class WorkboardPage extends LitElement {
+class WorkboardPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

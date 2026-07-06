@@ -92,8 +92,7 @@ export function buildAgentHarnessUserInputAnswers(
   const keyed = parseKeyedAnswers(inputText);
   const fallbackLines = inputText
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .map((line) => line.trim());
   questions.forEach((question, index) => {
     const key =
       keyed.get(question.id.toLowerCase()) ??

@@ -1,0 +1,60 @@
+title: WhatsApp non-allowlisted DM gets pairing gate
+
+scenario:
+  id: whatsapp-pairing-block
+  surface: channels
+  coverage:
+    primary:
+      - channels.pairing-gate
+  objective: Verify an unpaired WhatsApp DM receives the pairing gate instead of reaching the agent.
+  successCriteria:
+    - The inbound DM receives access-not-configured or pairing-code guidance.
+    - The agent marker is not emitted.
+  docsRefs:
+    - docs/channels/whatsapp.md
+  codeRefs:
+    - extensions/whatsapp/src/monitor.ts
+  execution:
+    kind: flow
+    channel: whatsapp
+    suiteIsolation: isolated
+    summary: Verify pairing gate output through the canonical WhatsApp adapter.
+    config:
+      accountId: sut
+      conversationId: 15550000001@s.whatsapp.net
+      senderId: 15550000002@s.whatsapp.net
+
+flow:
+  steps:
+    - name: blocks the agent behind pairing
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - call: patchConfig
+          args:
+            - env: { ref: env }
+              patch:
+                expr: "({ channels: { whatsapp: { dmPolicy: 'pairing', allowFrom: ['+15550000000'], ...(env.transport.accountId === 'default' ? {} : { accounts: { [env.transport.accountId]: { dmPolicy: 'pairing', allowFrom: ['+15550000000'] } } }) } } })"
+              replacePaths:
+                - channels.whatsapp.allowFrom
+                - channels.whatsapp.accounts.sut.allowFrom
+        - resetTransport: true
+        - set: marker
+          value:
+            expr: "`WHATSAPP_QA_PAIRING_${randomUUID().slice(0, 8).toUpperCase()}`"
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: { ref: config.senderId }
+            senderName: QA Driver
+            text:
+              expr: "`Do not run the agent for this pairing QA marker ${marker}`"
+        - waitForOutbound:
+            timeoutMs: 20000
+          saveAs: pairingReply
+        - assert:
+            expr: "/OpenClaw: access not configured|Pairing code:/iu.test(pairingReply.text) && !pairingReply.text.includes(marker)"
+            message:
+              expr: "`expected pairing guidance without agent marker, got ${pairingReply.text}`"
+      detailsExpr: pairingReply.text

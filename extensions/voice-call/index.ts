@@ -372,10 +372,7 @@ export default definePluginEntry({
     };
 
     const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
-      const history = await rt.manager.getCallHistory(100);
-      const call = history
-        .toReversed()
-        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      const call = await rt.manager.getCallFromMemoryOrStore(callId);
       if (!call) {
         return undefined;
       }
@@ -658,7 +655,7 @@ export default definePluginEntry({
             });
             return;
           }
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          const call = await rt.manager.getCallFromMemoryOrStore(raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -790,8 +787,7 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                const call = await rt.manager.getCallFromMemoryOrStore(callId);
                 return json(
                   call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
                 );
@@ -805,7 +801,7 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            const call = await rt.manager.getCallFromMemoryOrStore(sid);
             return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 

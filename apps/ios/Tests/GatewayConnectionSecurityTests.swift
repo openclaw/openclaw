@@ -210,6 +210,29 @@ import Testing
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
     }
 
+    @Test @MainActor func staleTrustAcceptanceReleasesAutoConnectSuppression() async {
+        let host = "gateway-\(UUID().uuidString).example.com"
+        let port = 18789
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("abc123") })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+        _ = appModel.beginGatewayConnectAttempt()
+        await controller.acceptPendingTrustPrompt()
+
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(!controller._test_isAutoConnectSuppressed())
+    }
+
     @Test @MainActor func `manual first use TLS probe skips TLS when TCP is unreachable`() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
@@ -284,13 +307,21 @@ import Testing
             GatewayTLSFingerprintProbeResult.fingerprint("abc123"),
             .failure(.tlsHandshakeTimeout),
         ])
+        let resolverStarted = AsyncStream<Void>.makeStream()
+        let resolverResults = AsyncStream<(host: String, port: Int)>.makeStream()
         let appModel = NodeAppModel()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in true },
             tlsFingerprintProbe: { _ in tlsResults.withLock { $0.removeFirst() } },
-            serviceEndpointResolver: { _ in (host: discoveredHost, port: discoveredPort) })
+            serviceEndpointResolver: { _ in
+                resolverStarted.continuation.yield()
+                for await result in resolverResults.stream {
+                    return result
+                }
+                return nil
+            })
 
         await controller.connectManual(host: staleHost, port: stalePort, useTLS: true)
         #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
@@ -301,12 +332,65 @@ import Testing
             tailnetDns: discoveredHost,
             gatewayPort: discoveredPort,
             fingerprint: nil)
-        let message = await controller.connectWithDiagnostics(gateway)
+        var startedIterator = resolverStarted.stream.makeAsyncIterator()
+        let connectTask = Task { await controller.connectWithDiagnostics(gateway) }
+        _ = await startedIterator.next()
 
         #expect(controller.pendingTrustPrompt == nil)
+        resolverResults.continuation.yield((host: discoveredHost, port: discoveredPort))
+        resolverResults.continuation.finish()
+        let message = await connectTask.value
+
         #expect(message?.contains("TLS fingerprint verification timed out") == true)
         #expect(message?.contains("\(discoveredHost):\(discoveredPort)") == true)
         #expect(appModel.gatewayStatusText == message)
+    }
+
+    @Test @MainActor func targetSwitchCancelsSuspendedDiscoveryResolution() async {
+        let defaults = UserDefaults.standard
+        let previousInstanceID = defaults.string(forKey: "node.instanceId")
+        defer {
+            if let previousInstanceID {
+                defaults.set(previousInstanceID, forKey: "node.instanceId")
+            } else {
+                defaults.removeObject(forKey: "node.instanceId")
+            }
+        }
+        defaults.set("ios-test", forKey: "node.instanceId")
+        let resolverStarted = AsyncStream<Void>.makeStream()
+        let resolverResults = AsyncStream<(host: String, port: Int)>.makeStream()
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            serviceEndpointResolver: { _ in
+                resolverStarted.continuation.yield()
+                for await result in resolverResults.stream {
+                    return result
+                }
+                return nil
+            })
+        let stableID = "discovered|\(UUID().uuidString)"
+        defer { self.clearTLSFingerprint(stableID: stableID) }
+        let gateway = self.makeDiscoveredGateway(
+            stableID: stableID,
+            lanHost: nil,
+            tailnetDns: nil,
+            gatewayPort: nil,
+            fingerprint: nil)
+        var startedIterator = resolverStarted.stream.makeAsyncIterator()
+
+        let connectTask = Task { await controller.connectWithDiagnostics(gateway) }
+        _ = await startedIterator.next()
+        controller.cancelPendingConnectionAttempts()
+        resolverResults.continuation.yield((host: "stale.gateway.invalid", port: 443))
+        resolverResults.continuation.finish()
+        let message = await connectTask.value
+
+        #expect(message == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(controller.pendingTrustPrompt == nil)
     }
 
     @Test @MainActor func `clear all TLS fingerprints removes stored pins`() {

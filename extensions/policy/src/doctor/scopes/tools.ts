@@ -27,6 +27,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsToolNotDenied);
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyAgentsToolNotDenied);
+    },
   };
   const policyToolsProfileUnapprovedCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsProfileUnapproved,
@@ -116,6 +119,9 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsRequiredDenyMissing);
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsRequiredDenyMissing);
     },
   };
 

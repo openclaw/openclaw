@@ -39,6 +39,7 @@ internal data class GatewayConnectConfig(
 /** How a connection attempt may update credentials already owned by the runtime. */
 internal enum class GatewaySavedAuthAction {
   PRESERVE,
+  REPLACE_CREDENTIALS,
   REPLACE_ENDPOINT,
   REPLACE_SETUP,
 }
@@ -180,10 +181,10 @@ internal fun resolveGatewayConnectPlan(
     composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
       ?.let { parseGatewayEndpointResult(it).config }
   val action =
-    if (savedManualEndpoint?.sameEndpoint(config) == true) {
-      GatewaySavedAuthAction.PRESERVE
-    } else {
-      GatewaySavedAuthAction.REPLACE_ENDPOINT
+    when {
+      savedManualEndpoint?.sameEndpoint(config) != true -> GatewaySavedAuthAction.REPLACE_ENDPOINT
+      config.token.isNotEmpty() || config.password.isNotEmpty() -> GatewaySavedAuthAction.REPLACE_CREDENTIALS
+      else -> GatewaySavedAuthAction.PRESERVE
     }
   return GatewayConnectPlan(config, action)
 }
@@ -200,9 +201,14 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri =
-    runCatching { URI(normalized) }.getOrNull()
+    runCatching { URI(normalized) }
+      .getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
+  val host =
+    uri.host
+      ?.trim()
+      ?.trim('[', ']')
+      .orEmpty()
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   // OkHttp rejects scoped IPv6 hosts after URI decoding, so fail before saving an endpoint that can never dial.
   if (host.contains(':') && host.contains('%')) {
@@ -332,7 +338,12 @@ internal fun resolveDefaultManualGatewayPort(
   hostInput: String,
   tls: Boolean,
 ): Int {
-  val host = hostInput.trim().trimEnd('/').removeSuffix(".").lowercase(Locale.US)
+  val host =
+    hostInput
+      .trim()
+      .trimEnd('/')
+      .removeSuffix(".")
+      .lowercase(Locale.US)
   return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
 }
 

@@ -275,11 +275,12 @@ async function writeForkHeaderOnly(params: {
 async function writeBranchedSession(params: {
   parentSessionFile: string;
   source: ForkSourceTranscript;
+  sessionDir: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.source.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
   const pathEntries = params.source.branchEntries;
   const pathEntryIds = new Set(
     pathEntries.flatMap((entry) =>
@@ -328,6 +329,7 @@ export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
   sessionsDir: string;
+  targetSessionsDir?: string;
 }): Promise<{ sessionId: string; sessionFile: string } | null> {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
@@ -344,11 +346,12 @@ export async function forkSessionFromParentRuntime(params: {
     }
     const shouldPersistBranch =
       source.preserveLeafControl || hasAssistantEntry(source.branchEntries);
+    const targetSessionsDir = params.targetSessionsDir ?? source.sessionDir;
     return shouldPersistBranch
-      ? await writeBranchedSession({ parentSessionFile, source })
+      ? await writeBranchedSession({ parentSessionFile, source, sessionDir: targetSessionsDir })
       : await writeForkHeaderOnly({
           parentSessionFile,
-          sessionDir: source.sessionDir,
+          sessionDir: targetSessionsDir,
           cwd: source.cwd,
         });
   } catch {

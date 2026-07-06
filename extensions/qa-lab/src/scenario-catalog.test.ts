@@ -196,7 +196,12 @@ describe("qa scenario catalog", () => {
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
+      "matrix-post-restart-room-continue",
+      "matrix-restart-replay-dedupe",
+      "matrix-restart-resume",
+      "slack-restart-resume",
       "subagent-stale-child-links",
+      "whatsapp-restart-resume",
     ]);
     expect(
       scenarios
@@ -627,16 +632,20 @@ describe("qa scenario catalog", () => {
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
-      | { requiredProviderMode?: string }
+      | { requiredChannelDriver?: string; requiredProviderMode?: string }
       | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
+    const strandedFlow = JSON.stringify(stranded.execution.flow);
     const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
     const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
-    expect(JSON.stringify(stranded.execution.flow)).toContain(
-      "this seeded scenario is mock-openai only",
-    );
+    expect(strandedConfig?.requiredChannelDriver).toBe("qa-channel");
+    expect(strandedFlow).toContain("this seeded scenario is mock-openai only");
+    expect(strandedFlow).toContain("state.getSnapshot().events.slice(eventStartIndex)");
+    expect(strandedFlow).toContain("message.deleted !== true");
+    expect(strandedFlow).toContain("config.expectedMarker");
+    expect(strandedFlow).not.toContain("waitForNoOutbound");
     expect(heartbeatFlow).toContain("sessionKey");
     expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
     expect(heartbeatFlow).not.toContain("waitForNoOutbound");

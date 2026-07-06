@@ -10,6 +10,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
 let capturedPayload: RestartSentinelPayload | undefined;
+let restartSentinelWriteError: Error | null = null;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
 const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
@@ -97,12 +98,21 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
+      if (restartSentinelWriteError) {
+        throw restartSentinelWriteError;
+      }
       capturedPayload = payload;
     },
   };
 });
 
 vi.mock("../../infra/restart.js", () => ({
+  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return 300_000;
+    }
+    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
+  },
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
@@ -180,6 +190,7 @@ vi.mock("./validation.js", () => ({
 
 beforeEach(() => {
   capturedPayload = undefined;
+  restartSentinelWriteError = null;
   isRestartEnabledMock.mockReset();
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
@@ -235,23 +246,29 @@ beforeEach(() => {
 async function invokeUpdateRun(
   params: Record<string, unknown>,
   respond?: (ok: boolean, response?: unknown) => void,
+  runtimeConfig: OpenClawConfig = { update: {} },
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
   await updateHandlers["update.run"]({
     params,
     respond: onRespond as never,
-    context: { getRuntimeConfig: () => ({ update: {} }) },
+    context: { getRuntimeConfig: () => runtimeConfig },
   } as never);
 }
 
 async function captureUpdateRunPayload(
   params: Record<string, unknown> = {},
+  runtimeConfig?: OpenClawConfig,
 ): Promise<UpdateRunPayload | undefined> {
   let payload: UpdateRunPayload | undefined;
-  await invokeUpdateRun(params, (_ok: boolean, response: unknown) => {
-    payload = response as UpdateRunPayload;
-  });
+  await invokeUpdateRun(
+    params,
+    (_ok: boolean, response: unknown) => {
+      payload = response as UpdateRunPayload;
+    },
+    runtimeConfig,
+  );
   return payload;
 }
 
@@ -427,7 +444,7 @@ describe("update.run restart scheduling", () => {
     mockGlobalInstallSurface();
 
     const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload(),
+      captureUpdateRunPayload({}, { gateway: { reload: { deferralTimeoutMs: 60_000 } } }),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
@@ -435,6 +452,8 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/tmp/openclaw",
+        restartDrainTimeoutMs: 60_000,
+        restartDelayMs: 2000,
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
@@ -486,6 +505,34 @@ describe("update.run restart scheduling", () => {
     );
   });
 
+  it("preserves an indefinite restart drain for managed updates", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+
+    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload({}, { gateway: { reload: { deferralTimeoutMs: 0 } } }),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ restartDrainTimeoutMs: undefined }),
+    );
+  });
+
+  it("arms the managed restart before optional sentinel persistence", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+    restartSentinelWriteError = new Error("state database unavailable");
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(payload?.sentinel?.persisted).toBe(false);
+    expect(payload?.ok).toBe(true);
+  });
+
   it("keeps a startup grace before restarting after systemd handoff spawn", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGlobalInstallSurface();
@@ -497,7 +544,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         supervisor: "systemd",
-        restartDelayMs: 0,
+        restartDelayMs: 2000,
       }),
     );
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(

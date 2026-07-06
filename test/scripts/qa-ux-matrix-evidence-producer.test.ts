@@ -124,9 +124,21 @@ describe("QA UX Matrix evidence producer CLI", () => {
         path.join(artifactBase, "surfaces", "cli", "stages", "entrypoint-help", "logs.txt"),
         "utf8",
       );
+      const visualLog = fs.readFileSync(
+        path.join(
+          artifactBase,
+          "surfaces",
+          "control-ui",
+          "stages",
+          "screenshot-artifact",
+          "logs.txt",
+        ),
+        "utf8",
+      );
       expect(evidence).not.toContain(fakeRepoRoot);
       expect(cliLog).not.toContain(fakeRepoRoot);
       expect(`${evidence}\n${cliLog}`).toContain("<repo-root>");
+      expect(visualLog).toBe("blocked: --skip-visual-proof was set\n");
     } finally {
       fs.rmSync(artifactBase, { recursive: true, force: true });
       fs.rmSync(fakeRepoRoot, { recursive: true, force: true });

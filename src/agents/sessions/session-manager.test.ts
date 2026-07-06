@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -13,6 +14,7 @@ import {
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
   loadEntriesFromFile,
+  parseSessionEntries,
   SessionManager,
   type SessionEntry,
 } from "./session-manager.js";
@@ -1968,6 +1970,157 @@ describe("SessionManager.open", () => {
     expect(JSON.stringify(reopened.buildSessionContext())).not.toContain("side delivery");
   });
 
+  it("accepts an unowned side leaf only when it preserves the active branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const sideEntry = {
+      type: "message" as const,
+      id: "unowned-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      sideEntry,
+      {
+        type: "prompt_released_opaque",
+        preserveActiveLeaf: true,
+        record: {
+          type: "leaf",
+          id: "unowned-side-leaf",
+          parentId: sideEntry.id,
+          timestamp: "2026-07-05T00:00:02.000Z",
+          targetId: activeLeafId,
+          appendParentId: sideEntry.id,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(JSON.stringify(sessionManager.buildSessionContext())).not.toContain("side delivery");
+  });
+
+  it("rejects an unowned side leaf that moves the active branch before mutating state", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const olderLeafId = sessionManager.appendMessage({
+      role: "user",
+      content: "question",
+      timestamp: 1,
+    });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "hostile-side-delivery",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("hostile side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "hostile-side-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: olderLeafId,
+            appendParentId: sideEntry.id,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("rejects an unowned side leaf that resets a non-root side cursor", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+    const entryCount = sessionManager.getEntries().length;
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery-before-root-reset",
+      parentId: activeLeafId,
+      timestamp: "2026-07-05T00:00:01.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        sideEntry,
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-reset-leaf",
+            parentId: sideEntry.id,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).toThrow("prompt-released side leaf changed the active branch");
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+    expect(sessionManager.getEntries()).toHaveLength(entryCount);
+  });
+
+  it("accepts an explicit root side cursor when it matches the current side branch", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: 1 });
+    const activeLeafId = sessionManager.appendMessage(buildAssistantMessage("base answer"));
+
+    sessionManager.mergePromptReleasedSessionEntries([
+      {
+        type: "prompt_released_opaque",
+        record: {
+          type: "leaf",
+          id: "owned-root-side-leaf",
+          parentId: activeLeafId,
+          timestamp: "2026-07-05T00:00:01.000Z",
+          targetId: activeLeafId,
+          appendParentId: null,
+          appendMode: "side",
+        },
+      },
+    ]);
+
+    expect(() =>
+      sessionManager.mergePromptReleasedSessionEntries([
+        {
+          type: "prompt_released_opaque",
+          preserveActiveLeaf: true,
+          record: {
+            type: "leaf",
+            id: "unowned-root-side-leaf",
+            parentId: null,
+            timestamp: "2026-07-05T00:00:02.000Z",
+            targetId: activeLeafId,
+            appendParentId: null,
+            appendMode: "side",
+          },
+        },
+      ]),
+    ).not.toThrow();
+    expect(sessionManager.getLeafId()).toBe(activeLeafId);
+  });
+
   it("applies merged leaf controls across separate callbacks", async () => {
     const dir = await makeTempDir();
     const sessionManager = SessionManager.create(dir, dir);
@@ -2493,6 +2646,140 @@ describe("SessionManager.open", () => {
 
     const after = await fs.stat(sessionFile);
     expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+});
+
+describe("parseSessionEntries", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses valid JSONL lines without logging warnings", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", id: "m1" }),
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning and skips malformed JSONL lines while preserving valid entries", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      "not valid json {{{",
+      JSON.stringify({ type: "message", id: "m1" }),
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("parseJsonlEntries: skipped 1 malformed JSONL line"),
+    );
+  });
+
+  it("reports the correct skip count for multiple malformed lines", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      "bad line 1",
+      JSON.stringify({ type: "session", id: "s1" }),
+      "bad line 2",
+      "bad line 3",
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("parseJsonlEntries: skipped 3 malformed JSONL line"),
+    );
+  });
+
+  it("skips empty lines without counting them as malformed", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      "",
+      JSON.stringify({ type: "session", id: "s1" }),
+      "",
+      JSON.stringify({ type: "message", id: "m1" }),
+      "",
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("parseJsonlEntries logs warning for malformed lines via loadEntriesFromFile", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const entries = loadEntriesFromFile(sessionFile);
+
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo logs warning for malformed lines via SessionManager.list", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("buildSessionInfo: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo does not log warning for clean session listing", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [JSON.stringify(header), JSON.stringify(buildMessageEntry(1, null))].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    // buildSessionInfo must not log any warning for a clean listing.
+    const buildSessionInfoCalls = warnSpy.mock.calls.filter((call) =>
+      call[0].includes("buildSessionInfo"),
+    );
+    expect(buildSessionInfoCalls).toHaveLength(0);
   });
 });
 

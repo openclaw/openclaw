@@ -1293,6 +1293,34 @@ describe("handleMessageEnd", () => {
     expect(emitBlockReply).not.toHaveBeenCalled();
   });
 
+  it("tags message-end safety replies with the current assistant message", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onBlockReply: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn((text: string) => (text ? { text } : null)),
+      state: {
+        assistantMessageIndex: 7,
+        blockReplyBreak: "text_end",
+        lastBlockReplyText: null,
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      { text: "Final answer" },
+      { assistantMessageIndex: 7 },
+    );
+  });
+
   it("does not duplicate block reply for text_end channels even when stripping differs", () => {
     const onBlockReply = vi.fn();
     const emitBlockReply = vi.fn();

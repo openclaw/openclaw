@@ -1,8 +1,10 @@
 // Control UI tests cover the responsive disconnected login gate.
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   canRunPlaywrightChromium,
+  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -76,6 +78,32 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("shows a protocol mismatch without reconnecting", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      });
+
+      const failure = page.locator(".login-gate__failure-summary");
+      await failure.waitFor({ timeout: 10_000 });
+      expect((await failure.textContent())?.toLowerCase()).toContain(
+        "supported connection protocol",
+      );
+      await page.waitForTimeout(1_600);
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+    } finally {
+      await closeContext(context);
+    }
   });
 
   it("keeps mobile controls compact, touchable, and keyboard-friendly", async () => {

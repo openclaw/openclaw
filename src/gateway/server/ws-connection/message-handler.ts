@@ -27,6 +27,7 @@ import {
   type ErrorShape,
   errorShape,
   formatValidationErrors,
+  GATEWAY_SERVER_CAPS,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
@@ -1443,6 +1444,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     allowSetupCodeMobileBootstrapPairing,
             });
             const context = buildRequestContext();
+            // A replacement request obsoletes older pending requestIds; tell approval
+            // UIs so they drop the stale prompts instead of stacking alerts forever.
+            const supersededResolvedAt = Date.now();
+            for (const superseded of pairing.superseded ?? []) {
+              context.broadcast(
+                "device.pair.resolved",
+                {
+                  requestId: superseded.requestId,
+                  deviceId: superseded.deviceId,
+                  decision: "rejected",
+                  ts: supersededResolvedAt,
+                },
+                { dropIfSlow: true },
+              );
+            }
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
             let recoveryRequestId: string | undefined;
@@ -2106,7 +2122,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             version: resolveRuntimeServiceVersion(process.env),
             connId,
           },
-          features: { methods: gatewayMethods, events },
+          features: {
+            methods: gatewayMethods,
+            events,
+            capabilities: [GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT],
+          },
           snapshot,
           ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),

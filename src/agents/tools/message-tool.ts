@@ -689,7 +689,12 @@ function buildChannelTargetSchema() {
     memberId: Type.Optional(Type.String()),
     memberIdType: Type.Optional(Type.String()),
     guildId: Type.Optional(Type.String()),
-    userId: Type.Optional(Type.String()),
+    userId: Type.Optional(
+      Type.String({
+        description:
+          "User id for member-info and channel-specific moderation or participant actions. For member-info, pass userId directly; the action does not accept target.",
+      }),
+    ),
     openId: Type.Optional(Type.String()),
     unionId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),

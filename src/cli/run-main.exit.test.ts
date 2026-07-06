@@ -11,6 +11,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
+import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -115,6 +116,7 @@ const startProxyMock = vi.hoisted(() =>
   vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
 );
 const stopProxyMock = vi.hoisted(() => vi.fn<(handle: unknown) => Promise<void>>(async () => {}));
+const flushExitAfterOneShotOutputMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -198,6 +200,10 @@ vi.mock("./container-target.js", () => ({
 
 vi.mock("./dotenv.js", () => ({
   loadCliDotEnv: loadDotEnvMock,
+}));
+
+vi.mock("./one-shot-exit.js", () => ({
+  flushExitAfterOneShotOutput: flushExitAfterOneShotOutputMock,
 }));
 
 vi.mock("../infra/env.js", async (importOriginal) => ({
@@ -457,6 +463,26 @@ describe("runCli exit behavior", () => {
 
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes requested one-shot exits after asynchronous teardown", async () => {
+    const order: string[] = [];
+    listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "copilot" } }]);
+    disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
+      order.push("harnesses");
+    });
+    hasMemoryRuntimeMock.mockReturnValueOnce(true);
+    closeActiveMemorySearchManagersMock.mockImplementationOnce(async () => {
+      order.push("memory");
+    });
+    flushExitAfterOneShotOutputMock.mockImplementationOnce(() => {
+      order.push("exit");
+    });
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "models", "status", "--probe"]);
+
+    expect(order).toEqual(["harnesses", "memory", "exit"]);
   });
 
   it("shows the standard spinner while loading the full CLI", async () => {
@@ -2455,6 +2481,13 @@ describe("runCli exit behavior", () => {
       void code;
       return undefined as never;
     }) as typeof process.exit);
+    let finishCompanionCleanup: (() => void) | undefined;
+    const unregisterCompanionCleanup = registerSignalExitBarrier(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCompanionCleanup = resolve;
+        }),
+    );
 
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
@@ -2475,6 +2508,11 @@ describe("runCli exit behavior", () => {
       await vi.waitFor(() => {
         expect(stopProxyMock).toHaveBeenCalledWith(handle);
       });
+      expect(exitSpy).not.toHaveBeenCalled();
+      if (!finishCompanionCleanup) {
+        throw new Error("companion signal cleanup did not start");
+      }
+      finishCompanionCleanup();
       await vi.waitFor(() => {
         expect(exitSpy).toHaveBeenCalledWith(130);
       });
@@ -2483,6 +2521,7 @@ describe("runCli exit behavior", () => {
       await runPromise;
       expect(stopProxyMock).toHaveBeenCalledTimes(1);
     } finally {
+      unregisterCompanionCleanup();
       exitSpy.mockRestore();
       processOnceSpy.mockRestore();
     }
