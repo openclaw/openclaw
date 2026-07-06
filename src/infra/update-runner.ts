@@ -161,6 +161,7 @@ type UpdateRunnerOptions = {
   channel?: UpdateChannel;
   devTargetRef?: string;
   deferConfiguredPluginInstallRepair?: boolean;
+  allowGatewayActivation?: boolean;
   beforeGitMutation?: () => Promise<void>;
   timeoutMs?: number;
   runCommand?: CommandRunner;
@@ -210,6 +211,8 @@ const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART";
+const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
@@ -1587,6 +1590,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             : {}),
           [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
           [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+          [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: opts.allowGatewayActivation ? "1" : "0",
         }),
       );
       steps.push(doctorStep);
@@ -1764,6 +1768,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: opts.allowGatewayActivation ? "1" : "0",
             ...(candidateHostVersion === null
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),

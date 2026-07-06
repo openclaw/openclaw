@@ -35,6 +35,7 @@ import {
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -49,6 +50,7 @@ import {
 } from "./doctor-service-repair-policy.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
+  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
 } from "./doctor/shared/update-phase.js";
@@ -65,6 +67,31 @@ function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolea
   return (
     isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]) &&
     !isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+  );
+}
+
+function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
+  const activationPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV];
+  if (activationPolicy !== undefined) {
+    return isTruthyEnvValue(activationPolicy);
+  }
+  // Shipped parents predate the marker. Recover their explicit CLI policy from
+  // the direct parent; unreadable ancestry stays staged rather than disrupting it.
+  const parentArgs = readWindowsProcessArgsSync(process.ppid, 1_500);
+  if (parentArgs === null) {
+    return false;
+  }
+  const normalizedParentArgs = parentArgs.map(normalizeLowercaseStringOrEmpty);
+  const updateIndex = Math.max(
+    normalizedParentArgs.lastIndexOf("update"),
+    normalizedParentArgs.lastIndexOf("--update"),
+  );
+  const legacyDoctorUpdateParent = normalizedParentArgs.lastIndexOf("doctor") >= 0;
+  const legacyWizardParent = updateIndex >= 0 && normalizedParentArgs[updateIndex + 1] === "wizard";
+  return (
+    (updateIndex >= 0 || legacyDoctorUpdateParent) &&
+    !legacyWizardParent &&
+    !normalizedParentArgs.includes("--no-restart")
   );
 }
 
@@ -738,12 +765,13 @@ export async function maybeRepairGatewayServiceConfig(
   };
   const updateRepairShouldInstall =
     updateRepairMode &&
+    updateParentAllowsGatewayActivation(process.env) &&
     (await isWindowsGatewayRunningForUpdateRepair({
       service,
       env: serviceRuntimeEnv,
     }));
-  // Windows `install` activates the task/login item. In update mode, only take
-  // that path when the gateway was already running; stopped installs stay staged.
+  // Windows `install` activates the task/login item. Require both a running
+  // gateway and parent authorization so `update --no-restart` stays non-disruptive.
   const repairService =
     updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
   try {

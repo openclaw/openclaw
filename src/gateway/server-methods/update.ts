@@ -334,11 +334,16 @@ export const updateHandlers: GatewayRequestHandlers = {
                 return undefined;
               })
             : undefined;
+        // Supervised Windows gateways, including Startup-folder fallbacks, take
+        // the detached handoff above. This direct path is unsupervised, so keep
+        // doctor activation disabled: it could terminate the RPC server before
+        // the response and restart sentinel become durable.
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          allowGatewayActivation: false,
         });
         // The CLI `openclaw update` resumes post-core plugin convergence after a
         // git/source core update; the RPC path did not, leaving official managed

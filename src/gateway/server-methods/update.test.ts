@@ -381,9 +381,10 @@ describe("update.run timeout normalization", () => {
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
     const [updateParams] = firstMockCall(runGatewayUpdateMock, "gateway update") as [
-      { timeoutMs?: number },
+      { timeoutMs?: number; allowGatewayActivation?: boolean },
     ];
     expect(updateParams?.timeoutMs).toBe(1000);
+    expect(updateParams?.allowGatewayActivation).toBe(false);
   });
 });
 
@@ -609,6 +610,29 @@ describe("update.run restart scheduling", () => {
       command: "openclaw update --yes --timeout 1800",
     });
     expect(readCapturedPayload().status).toBe("skipped");
+  });
+
+  it("hands Windows fallback gateways to the CLI path before doctor activation", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("schtasks");
+    mockGitInstallSurface("C:\\openclaw");
+
+    const payload = await withProcessEnv(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      () => captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supervisor: "schtasks",
+        handoffId: expect.any(String),
+      }),
+    );
+    expect(payload?.ok).toBe(true);
+    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
   });
 
   it("does not pass the stored stable channel to supervised git handoff CLI", async () => {

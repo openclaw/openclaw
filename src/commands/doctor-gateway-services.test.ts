@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
+  readWindowsProcessArgsSync: vi.fn(),
   note: vi.fn(),
 }));
 
@@ -101,6 +102,10 @@ vi.mock("../daemon/systemd.js", () => ({
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
 }));
 
+vi.mock("../infra/windows-port-pids.js", () => ({
+  readWindowsProcessArgsSync: mocks.readWindowsProcessArgsSync,
+}));
+
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
@@ -129,6 +134,8 @@ const originalParentSupportsConfigWrite =
   process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
 const originalParentSupportsGatewayRestart =
   process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART;
+const originalParentAllowsGatewayActivation =
+  process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION;
 
 function makeDoctorIo() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -343,6 +350,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
+    mocks.readWindowsProcessArgsSync.mockReturnValue(["node", "openclaw.mjs", "update"]);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -373,6 +381,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
     } else {
       process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART =
         originalParentSupportsGatewayRestart;
+    }
+    if (originalParentAllowsGatewayActivation === undefined) {
+      delete process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION;
+    } else {
+      process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION =
+        originalParentAllowsGatewayActivation;
     }
   });
 
@@ -970,13 +984,18 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
-  it("installs and restarts running Windows repairs for a legacy update parent", async () => {
+  it.each([
+    ["update command", ["node", "openclaw.mjs", "update"]],
+    ["--update shorthand", ["node", "openclaw.mjs", "--update"]],
+    ["doctor update prompt", ["node", "openclaw.mjs", "doctor"]],
+  ])("installs and restarts running Windows repairs for a legacy %s parent", async (_, args) => {
     mockProcessPlatform("win32");
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
     });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    mocks.readWindowsProcessArgsSync.mockReturnValue(args);
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       environment: {
@@ -1021,6 +1040,106 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
+  it("stages running Windows repairs when the update parent forbids activation", async () => {
+    mockProcessPlatform("win32");
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "0";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: {
+        OPENCLAW_SERVICE_VERSION: "2026.5.25",
+      },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-service-version-mismatch",
+          message: "Gateway service was installed by an older OpenClaw version.",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {
+        OPENCLAW_SERVICE_VERSION: "2026.5.26",
+      },
+    });
+    mocks.readRuntime.mockResolvedValue({ status: "running" });
+
+    await runNonInteractiveRepair({ updateInProgress: true });
+
+    expect(mocks.readRuntime).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.stage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      parent: "direct --no-restart update",
+      args: ["node", "openclaw.mjs", "update", "--no-restart"],
+    },
+    {
+      parent: "--update shorthand with --no-restart",
+      args: ["node", "openclaw.mjs", "--update", "--no-restart"],
+    },
+    {
+      parent: "interactive update wizard",
+      args: ["node", "openclaw.mjs", "update", "wizard"],
+    },
+    {
+      parent: "unrecognized shell",
+      args: ["powershell.exe"],
+    },
+    {
+      parent: "gateway RPC process",
+      args: ["node", "openclaw.mjs", "gateway"],
+    },
+  ])("stages repairs for a $parent parent without an activation marker", async ({ args }) => {
+    mockProcessPlatform("win32");
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    mocks.readWindowsProcessArgsSync.mockReturnValue(args);
+    mocks.readCommand.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.25" },
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-service-version-mismatch",
+          message: "Gateway service was installed by an older OpenClaw version.",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.26" },
+    });
+    mocks.readRuntime.mockResolvedValue({ status: "running" });
+
+    await runNonInteractiveRepair({ updateInProgress: true });
+
+    expect(mocks.readWindowsProcessArgsSync).toHaveBeenCalledWith(process.ppid, 1_500);
+    expect(mocks.readRuntime).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.stage).toHaveBeenCalledTimes(1);
+  });
+
   it("persists embedded service tokens before Windows update repairs rewrite the task", async () => {
     mockProcessPlatform("win32");
     Object.defineProperty(process.stdin, "isTTY", {
@@ -1030,6 +1149,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
     process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "1";
 
     await withEnvAsync(
       {
@@ -1148,6 +1268,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "1";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       environment: {

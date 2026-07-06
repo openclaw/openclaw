@@ -107,6 +107,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         cwd: params.root,
         argv1: process.argv[1],
         progress,
+        allowGatewayActivation: true,
       });
     } finally {
       stop();

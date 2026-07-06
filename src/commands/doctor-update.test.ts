@@ -169,7 +169,9 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     const confirm = vi.fn().mockResolvedValue(true);
     await expect(runOffer({ root: "/repo/link", confirm })).rejects.toThrow("update exploded");
 
-    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ progress }));
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ progress, allowGatewayActivation: true }),
+    );
     expect(mocks.createUpdateProgress).toHaveBeenCalledWith(true);
     expect(stop).toHaveBeenCalledTimes(1);
   });
