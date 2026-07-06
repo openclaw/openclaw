@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
 
@@ -16,36 +17,47 @@ installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
 
-const SESSION_ID = "sess-inline-media-redaction-proof";
-const MESSAGE_ID = "msg-inline-media-proof";
 const INLINE_PAYLOAD = "cG5n";
 const DATA_URL = `data:image/png;base64,${INLINE_PAYLOAD}`;
 
-async function seedInlineMediaTranscript(dir: string) {
+type SeededInlineMediaTranscript = {
+  messageId: string;
+};
+
+async function seedInlineMediaTranscript(dir: string): Promise<SeededInlineMediaTranscript> {
   testState.sessionStorePath = path.join(dir, "sessions.json");
-  const transcriptPath = path.join(dir, `${SESSION_ID}.jsonl`);
+  const session = SessionManager.create(dir, dir);
+  const sessionId = session.getSessionId();
+  const transcriptPath = session.getSessionFile();
+  if (!sessionId || !transcriptPath) {
+    throw new Error("expected SessionManager to expose session id and transcript path");
+  }
+
+  session.appendMessage({
+    role: "user",
+    content: "inline media redaction proof",
+    timestamp: Date.now(),
+  });
+  const messageId = session.appendMessage({
+    role: "assistant",
+    content: [{ type: "input_image", image_url: DATA_URL }],
+    timestamp: Date.now(),
+    api: "responses",
+    provider: "openai",
+    model: "gpt-test",
+  } as Parameters<SessionManager["appendMessage"]>[0]);
+
   await writeSessionStore({
     entries: {
       main: {
-        sessionId: SESSION_ID,
+        sessionId,
         sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
   });
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: MESSAGE_ID,
-      message: {
-        role: "assistant",
-        content: [{ type: "input_image", image_url: DATA_URL }],
-        timestamp: 1,
-      },
-    })}\n`,
-    "utf-8",
-  );
+
+  return { messageId };
 }
 
 function expectRedactedInlineMediaBlock(content: unknown) {
@@ -71,13 +83,14 @@ describe("chat history inline media redaction (real WS gateway)", () => {
 
       expect(res.ok).toBe(true);
       const messages = res.payload?.messages ?? [];
-      expect(messages).toHaveLength(1);
-      expectRedactedInlineMediaBlock(messages[0]?.content);
+      const assistantMessage = messages.find((message) => message.role === "assistant");
+      expect(assistantMessage).toBeDefined();
+      expectRedactedInlineMediaBlock(assistantMessage?.content);
       expect(JSON.stringify(messages)).not.toContain(DATA_URL);
       expect(JSON.stringify(messages)).not.toContain(INLINE_PAYLOAD);
 
       console.log(
-        `chat.history real-request redaction: ${JSON.stringify(messages[0]?.content ?? null)}`,
+        `chat.history real-request redaction: ${JSON.stringify(assistantMessage?.content ?? null)}`,
       );
     } finally {
       testState.sessionStorePath = undefined;
@@ -88,14 +101,14 @@ describe("chat history inline media redaction (real WS gateway)", () => {
   test("chat.message.get redacts input_image data URLs from a real transcript read", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-message-get-redact-"));
     try {
-      await seedInlineMediaTranscript(dir);
+      const { messageId } = await seedInlineMediaTranscript(dir);
 
       const res = await rpcReq<{ ok?: boolean; message?: Record<string, unknown> }>(
         ws,
         "chat.message.get",
         {
           sessionKey: "main",
-          messageId: MESSAGE_ID,
+          messageId,
         },
       );
 
