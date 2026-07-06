@@ -1532,6 +1532,9 @@ describe("grouped chat rendering", () => {
     });
 
     expect(container.querySelector(".chat-tool-msg-summary__label")?.textContent?.trim()).toBe(
+      "presentation_create",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent?.trim()).toBe(
       "Example Deck",
     );
     expect(container.querySelector(".chat-tool-msg-summary")?.textContent).not.toContain(
@@ -1542,6 +1545,9 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => true,
     });
 
+    expect(container.querySelector(".chat-tool-msg-body")?.textContent).not.toContain(
+      "presentation_create",
+    );
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       "with Example Deck",
     );
