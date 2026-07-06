@@ -56,7 +56,7 @@ function hyReasoningModel(params: {
 }
 
 function captureTencentPayload(params: {
-  provider: Awaited<ReturnType<typeof getTokenHubProvider>>;
+  provider: Pick<Awaited<ReturnType<typeof getTokenHubProvider>>, "wrapStreamFn">;
   model: OpenAICompletionsModel;
   reasoning: string;
 }) {
@@ -263,6 +263,35 @@ describe("tencent provider plugin", () => {
 
     expect(highPayload?.reasoning_effort).toBe("high");
     expect(nonePayload?.reasoning_effort).toBe("none");
+  });
+
+  it("keeps minimal reasoning enabled for TokenHub and TokenPlan hy3", async () => {
+    const tokenHubProvider = await getTokenHubProvider();
+    const tokenPlanProvider = await getTokenPlanProvider();
+    const tokenHubModel = hyReasoningModel({
+      provider: "tencent-tokenhub",
+      id: "hy3",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+    });
+    const tokenPlanModel = hyReasoningModel({
+      provider: "tencent-tokenplan",
+      id: "hy3",
+      baseUrl: "https://api.lkeap.cloud.tencent.com/plan/v3",
+    });
+
+    const tokenHubPayload = captureTencentPayload({
+      provider: tokenHubProvider,
+      model: tokenHubModel,
+      reasoning: "minimal",
+    });
+    const tokenPlanPayload = captureTencentPayload({
+      provider: tokenPlanProvider,
+      model: tokenPlanModel,
+      reasoning: "minimal",
+    });
+
+    expect(tokenHubPayload?.reasoning_effort).toBe("high");
+    expect(tokenPlanPayload?.reasoning_effort).toBe("high");
   });
 
   it("keeps TokenHub hy3-preview unsupported efforts on the model fallback path", async () => {

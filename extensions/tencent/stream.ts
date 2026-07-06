@@ -17,7 +17,7 @@ type StreamOptions = Parameters<StreamFn>[2];
 const TENCENT_REASONING_EFFORT_MAP: Readonly<Record<string, string>> = Object.freeze({
   off: "none",
   none: "none",
-  minimal: "none",
+  minimal: "high",
   low: "high",
   medium: "high",
   high: "high",
