@@ -150,17 +150,12 @@ describe("describeImageWithModel", () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: vi.fn(() => null) },
-      json: vi.fn(async () => ({
+    fetchMock.mockImplementation(async () =>
+      Response.json({
         base_resp: { status_code: 0 },
         content: "portal ok",
-      })),
-      text: vi.fn(async () => ""),
-    });
+      }),
+    );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",

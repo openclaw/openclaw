@@ -642,6 +642,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    audit: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     logging: z
       .object({
         level: LoggingLevelSchema.optional(),

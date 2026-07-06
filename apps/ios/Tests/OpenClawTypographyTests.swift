@@ -5,6 +5,24 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawTypographyTests {
+    @Test func `session controls use branded typography`() throws {
+        let support = try String(
+            contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
+            encoding: .utf8)
+        let commandCenter = try String(
+            contentsOf: Self.sourceURL("Design/CommandCenterTab.swift"),
+            encoding: .utf8)
+
+        #expect(support.contains("TextField(self.editorPlaceholder"))
+        #expect(support.contains("Label(\"Move to Group\""))
+        #expect(support.contains("Label(\"Delete…\""))
+        #expect(support.contains(".font(OpenClawType.subhead)"))
+        #expect(support.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(commandCenter.contains("Toggle(isOn: self.$showArchived)"))
+        #expect(commandCenter.contains("Text(\"Show Archived\")"))
+        #expect(commandCenter.contains(".font(OpenClawType.captionMedium)"))
+    }
+
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")

@@ -252,6 +252,62 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+
+      await composer.fill("default enter send");
+      await composer.press("Enter");
+      const defaultRequest = await gateway.waitForRequest("chat.send");
+      const defaultParams = requireRecord(defaultRequest.params);
+      expect(defaultParams.message).toBe("default enter send");
+      await gateway.emitChatFinal({
+        runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
+        text: "Default shortcut received.",
+      });
+      await page.getByText("Default shortcut received.").waitFor({ timeout: 10_000 });
+
+      await page.getByRole("button", { name: "Chat settings" }).click();
+      const shortcutSelect = page.getByLabel("Send shortcut");
+      await shortcutSelect.selectOption("modifier-enter");
+      expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
+
+      await page.reload();
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await page.getByRole("button", { name: "Chat settings" }).click();
+      expect(await page.getByLabel("Send shortcut").inputValue()).toBe("modifier-enter");
+      expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
+
+      await composer.fill("plain enter stays in the draft");
+      await composer.press("Enter");
+      expect(await composer.inputValue()).toContain("\n");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("composition must not send");
+      await composer.dispatchEvent("compositionstart");
+      await composer.press("Control+Enter");
+      await composer.dispatchEvent("compositionend");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("modifier send");
+      await composer.press("Meta+Enter");
+      const modifierRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(modifierRequest.params).message).toBe("modifier send");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("downloads an assistant document with the server-provided Unicode filename", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

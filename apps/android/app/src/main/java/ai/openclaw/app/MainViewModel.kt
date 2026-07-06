@@ -28,6 +28,16 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+enum class ChatDraftPlacement {
+  Replace,
+  BeforeExisting,
+}
+
+data class ChatDraft(
+  val text: String,
+  val placement: ChatDraftPlacement,
+)
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -47,8 +57,8 @@ class MainViewModel(
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
-  private val _chatDraft = MutableStateFlow<String?>(null)
-  val chatDraft: StateFlow<String?> = _chatDraft
+  private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
+  val chatDraft: StateFlow<ChatDraft?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
@@ -167,7 +177,6 @@ class MainViewModel(
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 
   val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
-  val cameraFlashToken: StateFlow<Long> = runtimeState(initial = 0L) { it.cameraFlashToken }
 
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
@@ -416,7 +425,7 @@ class MainViewModel(
       return
     }
     _pendingAssistantAutoSend.value = null
-    _chatDraft.value = request.prompt
+    _chatDraft.value = request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace) }
   }
 
   fun clearRequestedHomeDestination() {
@@ -429,6 +438,11 @@ class MainViewModel(
 
   fun clearChatDraft() {
     _chatDraft.value = null
+  }
+
+  fun setChatReplyDraft(value: String) {
+    _pendingAssistantAutoSend.value = null
+    _chatDraft.value = ChatDraft(text = value, placement = ChatDraftPlacement.BeforeExisting)
   }
 
   /** Claims an assistant prompt before sending so Compose effect restarts cannot dispatch it twice. */
@@ -613,9 +627,40 @@ class MainViewModel(
     ensureRuntime().refreshChat()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    ensureRuntime().refreshChatSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    ensureRuntime().refreshChatSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    ensureRuntime().patchChatSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    ensureRuntime().deleteChatSession(key)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
 
   fun setChatThinkingLevel(level: String) {
     ensureRuntime().setChatThinkingLevel(level)

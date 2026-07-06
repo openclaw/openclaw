@@ -1424,6 +1424,43 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it("preserves a deferred native approval failure for lifecycle projection", async () => {
+    const params = createParams();
+    const onNativeToolFailureDisposition = vi.fn();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockResolveNativeHookRelayDeferredToolApproval.mockResolvedValueOnce({
+      handled: true,
+      outcome: "denied",
+      reason: "Approval cancelled because the run stopped",
+      failureDisposition: "cancelled",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-deferred-failure",
+        command: "pnpm test extensions/codex/src/app-server",
+        cwd: "/workspace",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      nativeHookRelay: {
+        relayId: "relay-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+      onNativeToolFailureDisposition,
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith(
+      "cmd-native-relay-deferred-failure",
+      "cancelled",
+    );
+  });
+
   it("fails closed when the native hook relay returns unreadable approval output", async () => {
     const params = createParams();
     mockInvokeNativeHookRelay.mockResolvedValueOnce({
@@ -1704,6 +1741,7 @@ describe("Codex app-server approval bridge", () => {
     mockRunBeforeToolCallHook.mockResolvedValueOnce({
       blocked: true,
       kind: "failure",
+      disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: "Plugin approval required",
     });
@@ -1727,6 +1765,83 @@ describe("Codex app-server approval bridge", () => {
       message: "Plugin approval required",
     });
   });
+
+  it.each(["failed", "cancelled", "timed_out"] as const)(
+    "preserves a %s pre-execution failure for native lifecycle projection",
+    async (disposition) => {
+      const params = createParams();
+      const onNativeToolFailureDisposition = vi.fn();
+      mockRunBeforeToolCallHook.mockResolvedValueOnce({
+        blocked: true,
+        kind: "failure",
+        disposition,
+        deniedReason: "plugin-before-tool-call",
+        reason: "Tool call blocked because before_tool_call hook failed",
+      });
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-policy-failure",
+          command: "pnpm test",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        onNativeToolFailureDisposition,
+      });
+
+      expect(result).toEqual({ decision: "decline" });
+      expect(onNativeToolFailureDisposition).toHaveBeenCalledWith(
+        "cmd-policy-failure",
+        disposition,
+      );
+    },
+  );
+
+  it.each([
+    { reason: "turn_progress_idle_timeout", disposition: "timed_out" },
+    { reason: "turn_completion_idle_timeout", disposition: "timed_out" },
+    { reason: "turn_terminal_idle_timeout", disposition: "timed_out" },
+    { reason: "client_closed", disposition: "failed" },
+  ] as const)(
+    "normalizes aborted approval reason $reason as $disposition",
+    async ({ reason, disposition }) => {
+      const params = createParams();
+      const controller = new AbortController();
+      controller.abort(reason);
+      const onNativeToolFailureDisposition = vi.fn();
+      mockRunBeforeToolCallHook.mockResolvedValueOnce({
+        blocked: true,
+        kind: "failure",
+        disposition: "cancelled",
+        deniedReason: "plugin-before-tool-call",
+        reason: "Approval cancelled because the run stopped",
+      });
+
+      await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-aborted-policy",
+          command: "pnpm test",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        signal: controller.signal,
+        onNativeToolFailureDisposition,
+      });
+
+      expect(onNativeToolFailureDisposition).toHaveBeenCalledWith(
+        "cmd-aborted-policy",
+        disposition,
+      );
+    },
+  );
 
   it("describes command approvals from parsed command actions when available", async () => {
     const params = createParams();
@@ -2126,6 +2241,7 @@ describe("Codex app-server approval bridge", () => {
 
   it("fails closed when no approval route is available", async () => {
     const params = createParams();
+    const onNativeToolFailureDisposition = vi.fn();
     mockCallGatewayTool.mockResolvedValueOnce({
       id: "plugin:approval-2",
       decision: null,
@@ -2142,11 +2258,42 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
+      onNativeToolFailureDisposition,
     });
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
+    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("patch-1", "failed");
     findApprovalEvent(params, { status: "unavailable", reason: "needs write access" });
+  });
+
+  it("preserves an accepted approval expiry as timed out", async () => {
+    const params = createParams();
+    const onNativeToolFailureDisposition = vi.fn();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-expired", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-expired", decision: null });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-expired",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      onNativeToolFailureDisposition,
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("cmd-expired", "timed_out");
+    findApprovalEvent(params, {
+      status: "unavailable",
+      approvalId: "plugin:approval-expired",
+    });
   });
 
   it("sanitizes reason previews before forwarding approval text and events", async () => {

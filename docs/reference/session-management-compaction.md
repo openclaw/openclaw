@@ -103,6 +103,7 @@ Each `sessionKey` points at a current `sessionId` (the transcript file continuin
 - **Control UI reconnect resume** preserves the currently visible session for one reconnect send when the Gateway receives the matching `sessionId` from an operator UI client. This is a one-shot signal; ordinary stale sends still create a new `sessionId`.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
+- **Operator forks**: `sessions.create { parentSessionKey, fork: true }` creates a new session whose transcript branches from the parent's current state (same fork machinery as subagent spawns, including the size cap above). The fork is refused while the parent has an active run, inherits the parent's model selection unless one is passed explicitly, and marks the child `forkedFromParent` with fresh token counters.
 
 ## Session store schema (`sessions.json`)
 
@@ -115,6 +116,8 @@ The value type is `SessionEntry` in `src/config/sessions.ts`. Key fields (not ex
 - `archivedAt`: optional archive timestamp. Archived sessions stay in the store with their transcript intact and are excluded from normal active listings.
 - `pinnedAt`: optional pin timestamp. Active pinned sessions sort ahead of unpinned sessions; archiving a session clears its pin.
 - Codex thread interop: both fields follow the Codex thread-management shape - the `archived`/`pinned` booleans on the wire are always derived from the timestamp and stamped server-side, matching Codex `threads.archived_at` semantics and camelCase serialization. OpenClaw timestamps are epoch milliseconds while Codex uses epoch seconds, so bridges convert at the codex plugin seam. Codex has no pin API yet (`thread/archive`/`thread/unarchive` only); pinned state stays OpenClaw-side until one exists, at which point the matching shape lets bound sessions round-trip pin state mechanically.
+- `lastReadAt` / `markedUnreadAt`: read-state timestamps stamped server-side by `sessions.patch { unread }` - `unread: false` records a read (sets `lastReadAt`, clears `markedUnreadAt`); `unread: true` marks the session unread until the next read. Session rows expose a derived `unread` boolean: explicitly marked unread, or read before the latest activity. Sessions never marked read stay `unread: false`, so existing installs do not light up on upgrade.
+- `lastActivityAt`: timestamp of the last completed agent run that counts as unread-worthy activity (user, channel, and cron runs). Heartbeat and internal-event turns, plus metadata patches, do not update it; `updatedAt` is not an activity signal.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room`
 - `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata

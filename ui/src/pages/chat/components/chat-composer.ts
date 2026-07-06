@@ -4,6 +4,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
@@ -58,7 +59,7 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
 ].join(",");
 const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
 const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
-export const CHAT_ATTACHMENT_ACCEPT =
+const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
@@ -80,6 +81,7 @@ export type ChatComposerProps = {
   draft: string;
   sessions: SessionsListResult | null;
   assistantName: string;
+  sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
   showNewMessages?: boolean;
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
@@ -868,7 +870,7 @@ export type ChatAttachmentControlsProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
 };
 
-export type ChatQueueProps = {
+type ChatQueueProps = {
   queue: ChatQueueItem[];
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
@@ -1012,7 +1014,7 @@ function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boole
   return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
-export function clickComposerFileInput(event: MouseEvent) {
+function clickComposerFileInput(event: MouseEvent) {
   const target = event.currentTarget;
   if (!(target instanceof HTMLElement)) {
     return;
@@ -1067,7 +1069,7 @@ function isImageAttachment(att: ChatAttachment): boolean {
   return att.mimeType.startsWith("image/");
 }
 
-export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
+function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
     return;
@@ -1108,7 +1110,7 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
   }
 }
 
-export function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
+function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
   const input = e.target as HTMLInputElement;
   if (!input.files || !props.onAttachmentsChange) {
     return;
@@ -1160,7 +1162,7 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
   }
 }
 
-export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
+function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
     return nothing;
@@ -1210,7 +1212,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
   `;
 }
 
-export type ComposerRunStatus =
+type ComposerRunStatus =
   | ChatRunUiStatus
   | {
       phase: "in-progress";
@@ -1319,7 +1321,7 @@ export function renderFallbackIndicator(status: FallbackStatus | null | undefine
   `;
 }
 
-export type ContextNoticeOptions = {
+type ContextNoticeOptions = {
   compactBusy?: boolean;
   compactDisabled?: boolean;
   messages?: unknown[];
@@ -1784,6 +1786,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const tokens = tokenEstimate(visibleDraft);
   const composerControls = props.composerControls;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
   const placeholder = !props.connected
     ? t("chat.composer.placeholderDisconnected")
@@ -1930,7 +1933,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       }
     }
 
-    if (event.key === "Enter" && !event.shiftKey) {
+    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
+    if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
       if (!canCompose) {
         return;
       }
@@ -2122,6 +2126,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+          aria-keyshortcuts=${sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
           @keydown=${handleKeyDown}
           @beforeinput=${handleBeforeInput}
           @input=${handleInput}

@@ -79,11 +79,18 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public let key: String
     public let kind: String?
     public let displayName: String?
+    public let label: String?
+    public let category: String?
+    public let pinned: Bool?
+    public let archived: Bool?
+    public let unread: Bool?
     public let surface: String?
     public let subject: String?
     public let room: String?
     public let space: String?
     public let updatedAt: Double?
+    public let lastReadAt: Double?
+    public let lastActivityAt: Double?
     public let sessionId: String?
 
     public let systemSent: Bool?
@@ -124,16 +131,30 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         contextTokens: Int?,
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingOptions: [String]? = nil,
-        thinkingDefault: String? = nil)
+        thinkingDefault: String? = nil,
+        label: String? = nil,
+        category: String? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        unread: Bool? = nil,
+        lastReadAt: Double? = nil,
+        lastActivityAt: Double? = nil)
     {
         self.key = key
         self.kind = kind
         self.displayName = displayName
+        self.label = label
+        self.category = category
+        self.pinned = pinned
+        self.archived = archived
+        self.unread = unread
         self.surface = surface
         self.subject = subject
         self.room = room
         self.space = space
         self.updatedAt = updatedAt
+        self.lastReadAt = lastReadAt
+        self.lastActivityAt = lastActivityAt
         self.sessionId = sessionId
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun

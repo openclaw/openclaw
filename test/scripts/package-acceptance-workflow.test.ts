@@ -1421,6 +1421,27 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("prefers fresh Claude OAuth credentials for direct Anthropic live provider lanes", () => {
+    const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
+
+    expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
+    expect(hydrateScript).toContain("access_token=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain('export ANTHROPIC_OAUTH_TOKEN="$access_token"');
+    expect(hydrateScript).toContain('local min_remaining_ms="$(( 90 * 60 * 1000 ))"');
+    expect(hydrateScript).toContain(
+      'printf \'ANTHROPIC_OAUTH_TOKEN=%s\\n\' "$access_token" >>"$GITHUB_ENV"',
+    );
+    for (const jobName of [
+      "validate_live_models_docker",
+      "validate_live_models_docker_targeted",
+      "validate_live_provider_suites",
+    ]) {
+      expect(workflowJob(LIVE_E2E_WORKFLOW, jobName).env?.ANTHROPIC_OAUTH_TOKEN).toBe(
+        "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+      );
+    }
+  });
+
   it("detects Matrix fail-fast support for older release refs", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(".github/workflows/qa-live-transports-convex.yml", "utf8");

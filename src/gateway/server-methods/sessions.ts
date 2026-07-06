@@ -1288,7 +1288,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       // silently change tool/file scope for subdirectory-configured agents.
       sessionCwd = sessionWorktree.path;
       try {
-        const relative = path.relative(fs.realpathSync(sessionWorktree.repoRoot), fs.realpathSync(workspace));
+        const relative = path.relative(
+          fs.realpathSync(sessionWorktree.repoRoot),
+          fs.realpathSync(workspace),
+        );
         if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
           sessionCwd = path.join(sessionWorktree.path, relative);
           fs.mkdirSync(sessionCwd, { recursive: true });
@@ -1311,6 +1314,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       spawnedCwd: sessionCwd,
       // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
       clearSpawnedCwd: p.worktree !== true,
+      fork: p.fork,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !initialMessage,
       commandSource: "webchat",

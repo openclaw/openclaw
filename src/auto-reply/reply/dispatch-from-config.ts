@@ -206,6 +206,45 @@ type InternalReplyResolverOptions = {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
+function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(payload);
+  return JSON.stringify({
+    payload: {
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaUrls: payload.mediaUrls,
+      trustedLocalMedia: payload.trustedLocalMedia,
+      sensitiveMedia: payload.sensitiveMedia,
+      presentation: payload.presentation,
+      delivery: payload.delivery,
+      interactive: payload.interactive,
+      btw: payload.btw,
+      replyToId: payload.replyToId,
+      replyToTag: payload.replyToTag,
+      replyToCurrent: payload.replyToCurrent,
+      audioAsVoice: payload.audioAsVoice,
+      spokenText: payload.spokenText,
+      ttsSupplement: payload.ttsSupplement,
+      isError: payload.isError,
+      isReasoning: payload.isReasoning,
+      isCommentary: payload.isCommentary,
+      isReasoningSnapshot: payload.isReasoningSnapshot,
+      isCompactionNotice: payload.isCompactionNotice,
+      isFallbackNotice: payload.isFallbackNotice,
+      isStatusNotice: payload.isStatusNotice,
+      channelData: payload.channelData,
+    },
+    identity: {
+      assistantMessageIndex: metadata?.assistantMessageIndex,
+      assistantTranscriptOwned: metadata?.assistantTranscriptOwned,
+      replyToIdExplicit: metadata?.replyToIdExplicit,
+      replyDelivery: metadata?.replyDelivery,
+      replyDeliverySource: metadata?.replyDeliverySource,
+      sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror,
+    },
+  });
+}
+
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
     super("Dispatch reply operation aborted");
@@ -3865,6 +3904,7 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    const sentFinalPayloadDedupeKeys = new Set<string>();
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
@@ -3892,6 +3932,11 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
+      if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
+        continue;
+      }
+      sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;

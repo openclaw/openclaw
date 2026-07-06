@@ -9,7 +9,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 @Observable
 // swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
-    public static let defaultModelSelectionID = "__default__"
+    public nonisolated static let defaultModelSelectionID = "__default__"
     static let maxAttachmentBytes = 5_000_000
 
     public internal(set) var messages: [OpenClawChatMessage] = []
@@ -20,6 +20,8 @@ public final class OpenClawChatViewModel {
     public internal(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
+    private var modelPickerFavorites: [String]
+    private var modelPickerRecents: [String]
     public private(set) var slashCommands: [OpenClawChatCommandChoice] = []
     public private(set) var isLoadingSlashCommands = false
     public private(set) var slashCommandsErrorText: String?
@@ -63,6 +65,8 @@ public final class OpenClawChatViewModel {
     let haptics: OpenClawChatHaptics
     let transcriptCache: (any OpenClawChatTranscriptCache)?
     let outbox: (any OpenClawChatCommandOutbox)?
+    @ObservationIgnored
+    private let modelPickerStore: ChatModelPickerStore
     /// Per-message outbox display state; rows without an entry are normal
     /// transcript rows. Observable so bubbles update when flush progresses.
     public internal(set) var outboxStatesByMessageID: [UUID: OpenClawChatOutboxMessageState] = [:]
@@ -238,6 +242,7 @@ public final class OpenClawChatViewModel {
         haptics: OpenClawChatHaptics = OpenClawChatHaptics(),
         transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
         outbox: (any OpenClawChatCommandOutbox)? = nil,
+        modelPickerStore: ChatModelPickerStore = ChatModelPickerStore(),
         initialThinkingLevel: String? = nil,
         onSessionChanged: (@MainActor (String) -> Void)? = nil,
         onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
@@ -247,6 +252,9 @@ public final class OpenClawChatViewModel {
         self.transport = transport
         self.haptics = haptics
         self.transcriptCache = transcriptCache
+        self.modelPickerStore = modelPickerStore
+        self.modelPickerFavorites = modelPickerStore.favorites
+        self.modelPickerRecents = modelPickerStore.recents
         let normalizedAgentId = activeAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.activeAgentId = normalizedAgentId?.isEmpty == false ? normalizedAgentId : nil
         self.outbox = outbox
@@ -288,6 +296,24 @@ public final class OpenClawChatViewModel {
 
     public func refresh() {
         self.startBootstrap()
+    }
+
+    public var modelPickerSections: ChatModelPickerSections {
+        ChatModelPickerStore.sections(
+            choices: self.modelChoices,
+            favorites: self.modelPickerFavorites,
+            recents: self.modelPickerRecents)
+    }
+
+    public var isSelectedModelPinned: Bool {
+        self.modelSelectionID != Self.defaultModelSelectionID &&
+            self.modelPickerFavorites.contains(self.modelSelectionID)
+    }
+
+    public func toggleSelectedModelPinned() {
+        guard self.modelSelectionID != Self.defaultModelSelectionID else { return }
+        self.modelPickerStore.toggleFavorite(self.modelSelectionID)
+        self.modelPickerFavorites = self.modelPickerStore.favorites
     }
 
     public func resumeFromForeground() {
@@ -1458,6 +1484,8 @@ public final class OpenClawChatViewModel {
                 self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = next
                 return
             }
+            self.modelPickerStore.recordRecent(next)
+            self.modelPickerRecents = self.modelPickerStore.recents
             self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: true)
         } catch {
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else { return }
@@ -1671,7 +1699,14 @@ public final class OpenClawChatViewModel {
             contextTokens: current.contextTokens,
             thinkingLevels: current.thinkingLevels,
             thinkingOptions: current.thinkingOptions,
-            thinkingDefault: current.thinkingDefault)
+            thinkingDefault: current.thinkingDefault,
+            label: current.label,
+            category: current.category,
+            pinned: current.pinned,
+            archived: current.archived,
+            unread: current.unread,
+            lastReadAt: current.lastReadAt,
+            lastActivityAt: current.lastActivityAt)
     }
 
     private func updateCurrentSessionModel(
@@ -1701,7 +1736,14 @@ public final class OpenClawChatViewModel {
                 totalTokens: current.totalTokens,
                 modelProvider: modelProvider,
                 model: modelID,
-                contextTokens: current.contextTokens)
+                contextTokens: current.contextTokens,
+                label: current.label,
+                category: current.category,
+                pinned: current.pinned,
+                archived: current.archived,
+                unread: current.unread,
+                lastReadAt: current.lastReadAt,
+                lastActivityAt: current.lastActivityAt)
         } else {
             let placeholder = self.placeholderSession(key: sessionKey)
             self.sessions.append(

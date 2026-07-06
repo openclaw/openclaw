@@ -237,12 +237,6 @@ export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
   );
 }
 
-export function isTelegramSpooledUpdateClaimOwnedByCurrentProcess(
-  claim: ClaimedTelegramSpooledUpdate,
-): boolean {
-  return claim.claim?.processId === TELEGRAM_SPOOLED_UPDATE_PROCESS_ID;
-}
-
 export async function writeTelegramSpooledUpdate(params: {
   spoolDir: string;
   update: unknown;

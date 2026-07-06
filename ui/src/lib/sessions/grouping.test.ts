@@ -1,11 +1,41 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
+  groupSidebarSessionRows,
   groupSessionRows,
   normalizeSessionsGroupBy,
   resolveSessionGroupId,
   UNGROUPED_ID,
 } from "./grouping.ts";
+
+describe("groupSidebarSessionRows", () => {
+  it("orders pinned, alphabetical categories, and ungrouped while preserving row order", () => {
+    const rows = [
+      row({ key: "z-1", category: "Zulu" }),
+      row({ key: "p-1", pinned: true, category: "Alpha" }),
+      row({ key: "a-1", category: "Alpha" }),
+      row({ key: "u-1" }),
+      row({ key: "a-2", category: "Alpha" }),
+    ];
+
+    const sections = groupSidebarSessionRows(rows);
+
+    expect(sections.map((section) => section.id)).toEqual([
+      "pinned",
+      "category:Alpha",
+      "category:Zulu",
+      "ungrouped",
+    ]);
+    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "a-2"]);
+    expect(sections[3]?.rows.map((item) => item.key)).toEqual(["u-1"]);
+  });
+
+  it("keeps the ungrouped section when no categories exist", () => {
+    expect(groupSidebarSessionRows([row({ key: "a" })]).map((section) => section.id)).toEqual([
+      "ungrouped",
+    ]);
+  });
+});
 
 function row(overrides: Partial<GatewaySessionRow> & { key: string }): GatewaySessionRow {
   return {

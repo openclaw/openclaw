@@ -2593,6 +2593,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let model: String?
     public let parentsessionkey: String?
+    public let fork: Bool?
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
@@ -2604,6 +2605,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String?,
         model: String?,
         parentsessionkey: String?,
+        fork: Bool?,
         emitcommandhooks: Bool?,
         task: String?,
         message: String?,
@@ -2614,6 +2616,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.model = model
         self.parentsessionkey = parentsessionkey
+        self.fork = fork
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
@@ -2626,6 +2629,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case model
         case parentsessionkey = "parentSessionKey"
+        case fork
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
@@ -2770,6 +2774,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let category: AnyCodable?
     public let archived: Bool?
     public let pinned: Bool?
+    public let unread: Bool?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
@@ -2800,6 +2805,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         category: AnyCodable? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
+        unread: Bool?,
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
@@ -2829,6 +2835,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.category = category
         self.archived = archived
         self.pinned = pinned
+        self.unread = unread
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.verboselevel = verboselevel
@@ -2860,6 +2867,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case category
         case archived
         case pinned
+        case unread
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
@@ -3074,6 +3082,144 @@ public struct SessionsUsageParams: Codable, Sendable {
         case utcoffset = "utcOffset"
         case limit
         case includecontextweight = "includeContextWeight"
+    }
+}
+
+public struct AuditEvent: Codable, Sendable {
+    public let eventid: String
+    public let sequence: Int
+    public let sourcesequence: Int
+    public let occurredat: Int
+    public let kind: AnyCodable
+    public let action: AnyCodable
+    public let status: AnyCodable
+    public let errorcode: AnyCodable?
+    public let actor: [String: AnyCodable]
+    public let agentid: String
+    public let sessionkey: String?
+    public let sessionid: String?
+    public let runid: String
+    public let toolcallid: String?
+    public let toolname: String?
+    public let redaction: String
+
+    public init(
+        eventid: String,
+        sequence: Int,
+        sourcesequence: Int,
+        occurredat: Int,
+        kind: AnyCodable,
+        action: AnyCodable,
+        status: AnyCodable,
+        errorcode: AnyCodable?,
+        actor: [String: AnyCodable],
+        agentid: String,
+        sessionkey: String?,
+        sessionid: String?,
+        runid: String,
+        toolcallid: String?,
+        toolname: String?,
+        redaction: String)
+    {
+        self.eventid = eventid
+        self.sequence = sequence
+        self.sourcesequence = sourcesequence
+        self.occurredat = occurredat
+        self.kind = kind
+        self.action = action
+        self.status = status
+        self.errorcode = errorcode
+        self.actor = actor
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.runid = runid
+        self.toolcallid = toolcallid
+        self.toolname = toolname
+        self.redaction = redaction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case eventid = "eventId"
+        case sequence
+        case sourcesequence = "sourceSequence"
+        case occurredat = "occurredAt"
+        case kind
+        case action
+        case status
+        case errorcode = "errorCode"
+        case actor
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case runid = "runId"
+        case toolcallid = "toolCallId"
+        case toolname = "toolName"
+        case redaction
+    }
+}
+
+public struct AuditListParams: Codable, Sendable {
+    public let agentid: String?
+    public let sessionkey: String?
+    public let runid: String?
+    public let kind: AnyCodable?
+    public let status: AnyCodable?
+    public let after: Int?
+    public let before: Int?
+    public let limit: Int?
+    public let cursor: String?
+
+    public init(
+        agentid: String? = nil,
+        sessionkey: String?,
+        runid: String?,
+        kind: AnyCodable?,
+        status: AnyCodable?,
+        after: Int?,
+        before: Int?,
+        limit: Int?,
+        cursor: String?)
+    {
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.kind = kind
+        self.status = status
+        self.after = after
+        self.before = before
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case kind
+        case status
+        case after
+        case before
+        case limit
+        case cursor
+    }
+}
+
+public struct AuditListResult: Codable, Sendable {
+    public let events: [AuditEvent]
+    public let nextcursor: String?
+
+    public init(
+        events: [AuditEvent],
+        nextcursor: String?)
+    {
+        self.events = events
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case events
+        case nextcursor = "nextCursor"
     }
 }
 
