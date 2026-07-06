@@ -553,7 +553,9 @@ class ChatController internal constructor(
   ) {
     when (event) {
       "tick" -> {
-        if (!restoreRunStateOnReconnect) {
+        if (restoreRunStateOnReconnect) {
+          refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
+        } else {
           scope.launch { pollHealthIfNeeded(force = false) }
         }
       }

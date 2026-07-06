@@ -120,10 +120,12 @@ class ChatControllerReconnectRestoreTest {
 
       assertFalse(controller.healthOk.value)
       val healthCallsDuringRecovery = gateway.callCount("health")
+      val historyCallsDuringRecovery = gateway.callCount("chat.history")
       controller.handleGatewayEvent("tick", null)
       runCurrent()
       assertFalse(controller.healthOk.value)
       assertEquals(healthCallsDuringRecovery, gateway.callCount("health"))
+      assertEquals(historyCallsDuringRecovery + 1, gateway.callCount("chat.history"))
 
       recoveryHistory.complete(historyResponse("session-1", emptyList()))
       runCurrent()
