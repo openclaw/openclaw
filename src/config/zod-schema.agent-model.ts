@@ -7,7 +7,7 @@ export const AgentModelSchema = z.union([
   z
     .object({
       primary: z.string().optional(),
-      fallbacks: z.array(z.string()).optional(),
+      fallbacks: z.array(z.string()).nullable().optional(),
     })
     .strict(),
 ]);
@@ -17,7 +17,7 @@ export const AgentToolModelSchema = z.union([
   z
     .object({
       primary: z.string().optional(),
-      fallbacks: z.array(z.string()).optional(),
+      fallbacks: z.array(z.string()).nullable().optional(),
       timeoutMs: z.number().int().positive().optional(),
     })
     .strict(),

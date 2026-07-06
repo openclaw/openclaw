@@ -858,7 +858,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         backend: z.string().optional(),
-        fallbacks: z.array(z.string()).optional(),
+        fallbacks: z.array(z.string()).nullable().optional(),
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),
