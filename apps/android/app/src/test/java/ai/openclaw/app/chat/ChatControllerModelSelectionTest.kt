@@ -1,7 +1,9 @@
 package ai.openclaw.app.chat
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
@@ -126,5 +128,107 @@ class ChatControllerModelSelectionTest {
         listOf("sessions.patch", "chat.send"),
         requests.filter { it == "sessions.patch" || it == "chat.send" },
       )
+    }
+
+  @Test
+  fun immediateSendStopsWhenPendingModelSelectionFails() =
+    runTest {
+      val patchStarted = CompletableDeferred<Unit>()
+      val releasePatch = CompletableDeferred<Unit>()
+      val requests = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            requests += method
+            when (method) {
+              "sessions.patch" -> {
+                patchStarted.complete(Unit)
+                releasePatch.await()
+                error("patch failed")
+              }
+              "chat.send" -> """{"runId":"run-unexpected","status":"ok"}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+
+      controller.setSessionModel("main", "openai/gpt-5")
+      patchStarted.await()
+      val send =
+        async {
+          controller.sendMessageAwaitAcceptance(
+            message = "hello",
+            thinkingLevel = "off",
+            attachments = emptyList(),
+          )
+        }
+      yield()
+
+      releasePatch.complete(Unit)
+      assertFalse(send.await())
+      assertEquals("patch failed", controller.errorText.value)
+      assertFalse("chat.send" in requests)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun historyHydratesSelectedModelAndAgentScopedCatalog() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "chat.history" ->
+                """
+                {
+                  "sessionId": "session-ops",
+                  "messages": [],
+                  "sessionInfo": {
+                    "key": "agent:ops:main",
+                    "modelProvider": "anthropic",
+                    "model": "claude-opus-4"
+                  }
+                }
+                """.trimIndent()
+              "chat.metadata" ->
+                """
+                {
+                  "commands": [],
+                  "models": [
+                    {
+                      "id": "claude-opus-4",
+                      "name": "Claude Opus 4",
+                      "provider": "anthropic",
+                      "available": true,
+                      "input": ["text"]
+                    }
+                  ]
+                }
+                """.trimIndent()
+              "sessions.list" -> """{"sessions":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.load("agent:ops:main")
+      advanceUntilIdle()
+
+      assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
+      assertEquals(
+        "claude-opus-4",
+        controller.modelCatalog.value
+          .single()
+          .id,
+      )
+      val metadataRequest = requests.single { it.first == "chat.metadata" }
+      assertTrue(metadataRequest.second.orEmpty().contains("\"agentId\":\"ops\""))
     }
 }
