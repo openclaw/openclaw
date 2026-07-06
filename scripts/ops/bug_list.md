@@ -49,13 +49,19 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-07-05 06:00:12 UTC · hosts:eu us_
+_Last automated scan: 2026-07-06 06:00:12 UTC · hosts:eu us_
 
-| Pri | Host | Agent | Issue                          | Detail                                                                     |
-| --- | ---- | ----- | ------------------------------ | -------------------------------------------------------------------------- |
-| P1  | eu   | -     | Heavy swap usage               | 3174MiB swap in use; host is memory-pressured. Consider a RAM rescale.     |
-| P1  | eu   | -     | Low memory headroom            | Only 139MiB available (warn<500MiB); OOM risk under load.                  |
-| P1  | us   | -     | Heavy swap usage               | 2135MiB swap in use; host is memory-pressured. Consider a RAM rescale.     |
-| P3  | deps | -     | Undocumented env var candidate | NEXTAUTH_URL in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md |
+| Pri | Host | Agent | Issue                             | Detail                                                                              |
+| --- | ---- | ----- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| P1  | eu   | -     | Heavy swap usage                  | 2932MiB swap in use; host is memory-pressured. Consider a RAM rescale.              |
+| P1  | eu   | -     | Low memory headroom               | Only 139MiB available (warn<500MiB); OOM risk under load.                           |
+| P1  | us   | -     | Heavy swap usage                  | 2171MiB swap in use; host is memory-pressured. Consider a RAM rescale.              |
+| P1  | us   | -     | Low memory headroom               | Only 449MiB available (warn<500MiB); OOM risk under load.                           |
+| P3  | deps | -     | Undocumented dependency candidate | host api.resend.com in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md   |
+| P3  | deps | -     | Undocumented env var candidate    | AUTH_RESEND_KEY in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md       |
+| P3  | deps | -     | Undocumented env var candidate    | NEXTAUTH_URL in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md          |
+| P3  | deps | -     | Undocumented env var candidate    | NEXT_PUBLIC_APP_URL in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md   |
+| P3  | deps | -     | Undocumented env var candidate    | STRIPE_SECRET_KEY in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md     |
+| P3  | deps | -     | Undocumented env var candidate    | STRIPE_WEBHOOK_SECRET in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md |
 
 <!-- AUTOSCAN:END -->
