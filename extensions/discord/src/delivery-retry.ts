@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/retry-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { DiscordError } from "./internal/discord.js";
+import { getGateway } from "./monitor/gateway-registry.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS = {
@@ -16,9 +17,18 @@ const DISCORD_DELIVERY_RETRY_DEFAULTS = {
   jitter: 0,
 } satisfies Required<RetryConfig>;
 
-export function isRetryableDiscordDeliveryError(err: unknown): boolean {
+export function isRetryableDiscordDeliveryError(
+  err: unknown,
+  opts?: { gatewayDisconnected?: boolean },
+): boolean {
   if (err instanceof DiscordError) {
     return false;
+  }
+  // Sends that fail while the gateway websocket is reconnecting (close codes
+  // 1005/1006) surface as transport errors without an HTTP status. Retrying
+  // rides out the reconnect window instead of dropping the message (#56610).
+  if (opts?.gatewayDisconnected) {
+    return true;
   }
   const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
   return status === 429 || (status !== undefined && status >= 500);
@@ -48,9 +58,17 @@ export async function withDiscordDeliveryRetry<T>(params: {
 }): Promise<T> {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const retryConfig = resolveRetryConfig(DISCORD_DELIVERY_RETRY_DEFAULTS, account.config.retry);
+  // The lifecycle registers gateways under the resolved account id, so look up
+  // with account.accountId rather than the caller-provided raw id, and read
+  // isConnected per attempt: the reconnect can complete mid-retry.
+  const isGatewayDisconnected = () => {
+    const gateway = getGateway(account.accountId);
+    return gateway !== undefined && !gateway.isConnected;
+  };
   return await retryAsync(params.fn, {
     ...retryConfig,
-    shouldRetry: (err) => isRetryableDiscordDeliveryError(err),
+    shouldRetry: (err) =>
+      isRetryableDiscordDeliveryError(err, { gatewayDisconnected: isGatewayDisconnected() }),
     retryAfterMs: getDiscordDeliveryRetryAfterMs,
   });
 }

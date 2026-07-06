@@ -1,10 +1,14 @@
 // Discord tests cover retry plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getDiscordDeliveryRetryAfterMs,
   isRetryableDiscordDeliveryError,
+  withDiscordDeliveryRetry,
 } from "./delivery-retry.js";
 import { DiscordError, RateLimitError } from "./internal/discord.js";
+import type { GatewayPlugin } from "./internal/gateway.js";
+import { clearGateways, registerGateway } from "./monitor/gateway-registry.js";
 import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
@@ -88,6 +92,50 @@ describe("isRetryableDiscordDeliveryError", () => {
     });
 
     expect(isRetryableDiscordDeliveryError(err)).toBe(false);
+  });
+
+  it("retries statusless transport errors while the gateway is disconnected", () => {
+    expect(
+      isRetryableDiscordDeliveryError(new TypeError("fetch failed"), {
+        gatewayDisconnected: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps Discord client errors non-retryable while the gateway is disconnected", () => {
+    const err = new DiscordError(new Response("upstream", { status: 404 }), {
+      message: "Unknown Channel",
+    });
+
+    expect(isRetryableDiscordDeliveryError(err, { gatewayDisconnected: true })).toBe(false);
+  });
+});
+
+describe("withDiscordDeliveryRetry gateway reconnect window", () => {
+  const cfg = {
+    channels: {
+      discord: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 } },
+    },
+  } as OpenClawConfig;
+
+  afterEach(() => {
+    clearGateways();
+  });
+
+  it("retries transport errors while the registered gateway is disconnected", async () => {
+    registerGateway("default", { isConnected: false } as GatewayPlugin);
+    const fn = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue("ok");
+
+    await expect(withDiscordDeliveryRetry({ cfg, fn })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry statusless errors while the gateway is connected", async () => {
+    registerGateway("default", { isConnected: true } as GatewayPlugin);
+    const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+    await expect(withDiscordDeliveryRetry({ cfg, fn })).rejects.toThrow("fetch failed");
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });
 
