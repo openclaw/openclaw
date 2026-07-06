@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { qqbotTokenFailureMessage } from "../config/setup-guidance.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -290,7 +291,7 @@ export class TokenManager {
       }
 
       if (!data.access_token) {
-        throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+        throw new Error(qqbotTokenFailureMessage(JSON.stringify(data)));
       }
 
       const nowMs = asDateTimestampMs(Date.now());

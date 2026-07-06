@@ -86,6 +86,17 @@ describe("QQBot token manager", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("adds setup guidance when the token endpoint omits access_token", async () => {
+    mockGuardedTokenResponse('{"code":4001,"message":"invalid app secret"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(new TokenManager().getAccessToken("app-id", "secret")).rejects.toThrow(
+      'Failed to get QQBot access_token. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET, then see https://docs.openclaw.ai/channels/qqbot. Open platform response: {"code":4001,"message":"invalid app secret"}',
+    );
+  });
+
   it("bounds access token responses without using response.text()", async () => {
     const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
     const tracked = cancelTrackedResponse(`${"qqbot token unavailable ".repeat(1024)}tail`, {

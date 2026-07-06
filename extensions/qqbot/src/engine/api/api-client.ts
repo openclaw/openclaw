@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { qqbotSetupGuidance } from "../config/setup-guidance.js";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -151,7 +152,11 @@ export class ApiClient {
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
       this.logger?.error?.(`[qqbot:api] <<< Network error: ${formatErrorMessage(err)}`);
-      throw new ApiError(`Network error [${path}]: ${formatErrorMessage(err)}`, 0, path);
+      throw new ApiError(
+        `Network error [${path}]: ${formatErrorMessage(err)}. ${qqbotSetupGuidance()}`,
+        0,
+        path,
+      );
     } finally {
       clearTimeout(timeoutId);
     }
@@ -205,7 +210,7 @@ export class ApiClient {
           };
           const bizCode = error.code ?? error.err_code;
           throw new ApiError(
-            `API Error [${path}]: ${error.message ?? rawBody}`,
+            `API Error [${path}]: ${error.message ?? rawBody}. ${qqbotSetupGuidance()}`,
             res.status,
             path,
             bizCode,

@@ -89,6 +89,36 @@ describe("ApiClient", () => {
     });
   });
 
+  it("adds setup guidance to structured QQBot API errors", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":11241,"message":"invalid credentials"}', {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+
+    await expect(
+      client.request("token-1", "POST", "/v2/messages", { content: "hi" }),
+    ).rejects.toThrow(
+      "API Error [/v2/messages]: invalid credentials. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET, then see https://docs.openclaw.ai/channels/qqbot",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds setup guidance to QQBot network errors", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("getaddrinfo ENOTFOUND api.sgroup.qq.com"));
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+
+    await expect(client.request("token-1", "GET", "/v2/users/@me")).rejects.toThrow(
+      "Network error [/v2/users/@me]: getaddrinfo ENOTFOUND api.sgroup.qq.com. Set QQBOT_APP_ID and QQBOT_CLIENT_SECRET, then see https://docs.openclaw.ai/channels/qqbot",
+    );
+  });
+
   it("bounds successful response bodies without using response.text()", async () => {
     const release = vi.fn(async () => {});
     const streamed = createStreamingResponse({
