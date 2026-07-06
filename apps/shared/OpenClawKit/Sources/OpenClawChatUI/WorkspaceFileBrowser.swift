@@ -74,7 +74,7 @@ enum WorkspaceFileSupport {
 
     /// Writes the file to a unique temp path so share sheets export it under its real name.
     static func exportURL(for file: AgentsWorkspaceFile) throws -> URL {
-        let data: Data = if self.isBase64(file) {
+        let data = if self.isBase64(file) {
             Data(base64Encoded: file.content) ?? Data()
         } else {
             Data(file.content.utf8)

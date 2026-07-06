@@ -4854,6 +4854,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 8. Voice + expanded Android command surface
   - H2: Assistant entrypoints
   - H2: Notification forwarding
+  - H2: Workspace files
   - H2: Related
 
 ## platforms/digitalocean.md
