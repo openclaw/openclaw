@@ -1509,6 +1509,11 @@ export const ar: TranslationMap = {
       retrySend: "إعادة محاولة الإرسال",
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "انتهت صلاحية رمز الاقتران QR",
       reason: "شغّل ‎/pair qr‎ مرة أخرى لإنشاء رمز إعداد جديد.",

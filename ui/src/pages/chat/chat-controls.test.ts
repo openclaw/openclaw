@@ -50,7 +50,6 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
       stream: null,
     },
     onboarding: false,
-    quota: {},
     runId: null,
     sending: false,
     settings: createSettings(),
@@ -102,37 +101,14 @@ describe("chat composer settings", () => {
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ voice: "cedar" });
   });
 
-  it("places provider usage before Settings", () => {
+  it("keeps the composer control cluster limited to model and Settings controls", () => {
     const container = document.createElement("div");
-    render(
-      renderChatControls(
-        createProps({
-          quota: {
-            modelAuthStatusResult: {
-              ts: Date.now(),
-              providers: [
-                {
-                  provider: "openai",
-                  displayName: "Codex",
-                  status: "ok",
-                  profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-                  usage: { windows: [{ label: "Week", usedPercent: 72 }] },
-                },
-              ],
-            },
-          },
-        }),
-      ),
-      container,
-    );
+    render(renderChatControls(createProps()), container);
 
     expect(Array.from(container.children).map((node) => node.className)).toEqual([
-      "chat-composer-model-control",
-      "chat-controls__quota chat-controls__quota--ok",
       "chat-settings-popover-wrapper",
+      "chat-composer-model-control",
     ]);
-    expect(
-      container.querySelector(".chat-controls__quota")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("Usage Remaining 28%");
+    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
   });
 });

@@ -426,6 +426,45 @@ describe("context notice", () => {
     resetContextNoticeThemeCacheForTest();
   });
 
+  it("keeps provider usage available before context token metrics arrive", () => {
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(undefined, 200_000, {
+        providerQuota: {
+          basePath: "/rosita",
+          modelAuthStatusResult: {
+            ts: Date.now(),
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
+                usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+              },
+            ],
+          },
+        },
+      }),
+      container,
+    );
+
+    const context = container.querySelector<HTMLElement>(".context-ring");
+    expect(context).toBeInstanceOf(HTMLElement);
+    expect(context?.getAttribute("aria-label")).toBe("Usage Remaining");
+    expect(context?.querySelector(".context-ring__detail")).toBeNull();
+    expect(container.querySelector(".context-usage__bar")).toBeNull();
+    expect(container.querySelector(".context-usage__stats")).toBeNull();
+    const quota = container.querySelector<HTMLAnchorElement>(
+      ".context-usage__popover [data-chat-provider-usage='true']",
+    );
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage Remaining 28%");
+    expect(quota?.getAttribute("href")).toBe("/rosita/usage");
+
+    render(renderContextNotice(undefined, 200_000), container);
+    expect(container.querySelector(".context-usage")).toBeNull();
+  });
+
   it("renders persistent fresh context usage and keeps high-usage warning behavior", () => {
     const container = document.createElement("div");
     vi.spyOn(window, "getComputedStyle").mockReturnValue({
@@ -473,7 +512,8 @@ describe("context notice", () => {
     const lowNotice = container.querySelector<HTMLElement>(".context-ring");
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
-    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("46k / 200k");
+    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
+    expect(lowNotice!.querySelector(".context-ring__detail")).toBeNull();
     expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k of 200k (23%)");
     expect(lowNotice!.tagName.toLowerCase()).toBe("summary");
     const usageDetails = container.querySelector<HTMLDetailsElement>(".context-usage details");
@@ -519,7 +559,7 @@ describe("context notice", () => {
     expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
     const notice = container.querySelector<HTMLElement>(".context-ring");
     expect(notice).toBeInstanceOf(HTMLElement);
-    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("190k / 200k");
+    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95%");
     expect([...notice!.classList]).toEqual(["context-ring", "context-ring--warning"]);
     expect(notice!.getAttribute("aria-label")).toBe("Session context usage: 190k of 200k (95%)");
     const usage = container.querySelector<HTMLElement>(".context-usage");

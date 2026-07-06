@@ -25,11 +25,13 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     await server?.close();
   });
 
-  it("keeps model and settings in the header and switches the primary action with input state", async () => {
+  it("keeps model and settings in the bottom bar and switches the primary action with input state", async () => {
     const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      assistantName: "Rosita",
+      deferredMethods: ["chat.send"],
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
         {
@@ -117,45 +119,74 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const voice = page.getByRole("button", { name: "Start voice input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
-      await expect.poll(() => usage.isVisible()).toBe(true);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
+      await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
       await expect
+        .poll(() =>
+          attach.evaluate((node) => node.closest(".agent-chat__composer-input-row") != null),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          voice.evaluate((node) => node.closest(".agent-chat__composer-input-row") != null),
+        )
+        .toBe(true);
+      await expect
+        .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
+        .toBe(true);
+      await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
+      await expect
         .poll(() => model.locator(".chat-controls__inline-select-label").textContent())
-        .toBe("GPT-5.5");
+        .toBe("GPT-5.5 · High");
+      await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
-        .poll(() => model.locator(".chat-controls__effort-chip").textContent())
-        .toBe("High");
-      await expect
-        .poll(async () => (await usage.textContent())?.replace(/\s+/g, " ").trim())
-        .toBe("Usage Remaining 28%");
-      await expect
-        .poll(() => contextUsage.locator(".context-ring__detail").textContent())
-        .toBe("46k / 200k");
+        .poll(() => contextUsage.getAttribute("aria-label"))
+        .toBe("Session context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
           contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
         )
         .toBe(true);
+      await contextUsage.click();
+      await expect.poll(() => usage.isVisible()).toBe(true);
+      await expect
+        .poll(async () => (await usage.textContent())?.replace(/\s+/g, " ").trim())
+        .toBe("Usage Remaining 28%");
+      await contextUsage.click();
 
       await model.click();
-      const thinkingButtons = composer.locator(
-        '[data-chat-thinking-options="true"] [data-chat-thinking-option]',
-      );
+      const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedButtons = composer.locator("[data-chat-speed-option]");
       await expect
-        .poll(async () => (await thinkingButtons.allTextContents()).map((label) => label.trim()))
-        .toEqual(["Off", "Low", "Medium", "High"]);
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe("off,low,medium,high");
+      await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
       await expect
         .poll(async () => (await speedButtons.allTextContents()).map((label) => label.trim()))
         .toEqual(["Standard", "Fast"]);
       await expect
-        .poll(() => thinkingButtons.filter({ hasText: "High" }).getAttribute("aria-pressed"))
+        .poll(() => composer.locator(".chat-controls__model-option-icon").count())
+        .toBeGreaterThan(0);
+      const patchCountBeforeDraft = (await gateway.getRequests("sessions.patch")).length;
+      await thinkingSlider.press("Home");
+      await thinkingSlider.press("ArrowRight");
+      await expect
+        .poll(() => gateway.getRequests("sessions.patch"))
+        .toHaveLength(patchCountBeforeDraft);
+      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
+      await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
+      await composer.locator('[data-chat-speed-option="on"]').click();
+      await expect
+        .poll(() => gateway.getRequests("sessions.patch"))
+        .toHaveLength(patchCountBeforeDraft);
+      await expect
+        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
         .toBe("true");
-      await composer.locator('[data-chat-thinking-option="low"]').click();
+      await composer.getByRole("button", { name: "Save", exact: true }).click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -167,13 +198,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
-      await expect
-        .poll(() =>
-          composer.locator('[data-chat-thinking-option="low"]').getAttribute("aria-pressed"),
-        )
-        .toBe("true");
-      await composer.locator('[data-chat-speed-option="on"]').click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -185,13 +209,16 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
+      await expect
+        .poll(() => composer.locator(".chat-controls__inline-select-menu").isVisible())
+        .toBe(false);
       await model.click();
       await expect
         .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
         .toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
-        .toBe(0);
+        .toBe(1);
       const providerButtons = composer.locator("[data-chat-model-provider]");
       await expect
         .poll(async () => (await providerButtons.allTextContents()).map((label) => label.trim()))
@@ -240,19 +267,53 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       ) {
         throw new Error("expected composer controls to have layout boxes");
       }
-      expect(composerShellBox.width / chatMainBox.width).toBeGreaterThanOrEqual(0.49);
-      expect(composerShellBox.width / chatMainBox.width).toBeLessThanOrEqual(0.51);
+      expect(composerShellBox.width).toBeGreaterThanOrEqual(1439);
+      expect(composerShellBox.width).toBeLessThanOrEqual(1441);
       expect(
         Math.abs(
           composerShellBox.x + composerShellBox.width / 2 - (chatMainBox.x + chatMainBox.width / 2),
         ),
       ).toBeLessThanOrEqual(1);
-      expect(composerBox.height).toBeLessThanOrEqual(112);
-      expect(modelBox.y).toBeLessThan(textareaBox.y);
+      expect(composerBox.height).toBeLessThanOrEqual(120);
+      expect(modelBox.y).toBeGreaterThanOrEqual(textareaBox.y);
       expect(attachBox.x + attachBox.width).toBeLessThanOrEqual(
         composerBox.x + composerBox.width + 1,
       );
-      expect(voiceBox.x).toBeGreaterThan(composerBox.x + composerBox.width);
+      expect(voiceBox.x).toBeGreaterThanOrEqual(attachBox.x + attachBox.width - 1);
+      expect(voiceBox.x + voiceBox.width).toBeLessThanOrEqual(
+        composerBox.x + composerBox.width + 1,
+      );
+      await expect
+        .poll(() =>
+          voice.evaluate(
+            (node) =>
+              Number.parseFloat(getComputedStyle(node).borderRadius) ===
+              Number.parseFloat(
+                getComputedStyle(node.closest(".agent-chat__input") as HTMLElement).borderRadius,
+              ),
+          ),
+        )
+        .toBe(true);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
+        chatMain.boundingBox(),
+        composerShell.boundingBox(),
+      ]);
+      expect(compactChatMainBox).not.toBeNull();
+      expect(compactComposerShellBox).not.toBeNull();
+      if (!compactChatMainBox || !compactComposerShellBox) {
+        throw new Error("expected compact composer layout boxes");
+      }
+      expect(compactChatMainBox.width - compactComposerShellBox.width).toBeGreaterThanOrEqual(35);
+      expect(compactChatMainBox.width - compactComposerShellBox.width).toBeLessThanOrEqual(37);
+      expect(
+        Math.abs(
+          compactComposerShellBox.x +
+            compactComposerShellBox.width / 2 -
+            (compactChatMainBox.x + compactChatMainBox.width / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
 
       await settings.click();
       const settingsDialog = page.getByRole("dialog", { name: "Settings" });
@@ -281,42 +342,60 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
-      const progress = composer.locator(".agent-chat__composer-progress");
-      await expect.poll(() => progress.isVisible()).toBe(true);
-      await expect
-        .poll(() =>
-          progress.evaluate(
-            (node) =>
-              node.closest(".agent-chat__composer-meta") != null &&
-              node.previousElementSibling?.classList.contains("context-usage") === true,
-          ),
-        )
-        .toBe(true);
-      const [activeContextBox, activeProgressBox] = await Promise.all([
-        contextUsage.boundingBox(),
-        progress.boundingBox(),
-      ]);
-      expect(activeContextBox).not.toBeNull();
-      expect(activeProgressBox).not.toBeNull();
-      if (!activeContextBox || !activeProgressBox) {
-        throw new Error("expected context and progress indicators to have layout boxes");
-      }
-      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
-        activeContextBox.x + activeContextBox.width - 1,
-      );
-      expect(
-        Math.abs(
-          activeProgressBox.y +
-            activeProgressBox.height / 2 -
-            (activeContextBox.y + activeContextBox.height / 2),
-        ),
-      ).toBeLessThanOrEqual(2);
       const runId =
         typeof sendRequest.params === "object" &&
         sendRequest.params !== null &&
         "idempotencyKey" in sendRequest.params
           ? String(sendRequest.params.idempotencyKey)
           : "";
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "Working on it.",
+        message: {
+          content: [{ text: "Working on it.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      const progress = composer.locator(".agent-chat__composer-run-status .agent-chat__run-status");
+      await expect.poll(() => progress.isVisible()).toBe(true);
+      await expect.poll(() => progress.textContent()).toContain("Rosita is responding");
+      await expect
+        .poll(() =>
+          progress.evaluate((node) => node.closest(".agent-chat__composer-controls") != null),
+        )
+        .toBe(true);
+      const [activeSettingsBox, activeProgressBox, activeModelBox] = await Promise.all([
+        settings.boundingBox(),
+        progress.boundingBox(),
+        model.boundingBox(),
+      ]);
+      expect(activeSettingsBox).not.toBeNull();
+      expect(activeProgressBox).not.toBeNull();
+      expect(activeModelBox).not.toBeNull();
+      if (!activeSettingsBox || !activeProgressBox || !activeModelBox) {
+        throw new Error("expected settings, progress, and model controls to have layout boxes");
+      }
+      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
+        activeSettingsBox.x + activeSettingsBox.width - 1,
+      );
+      expect(
+        activeProgressBox.x - (activeSettingsBox.x + activeSettingsBox.width),
+      ).toBeLessThanOrEqual(8);
+      expect(activeModelBox.x).toBeGreaterThanOrEqual(
+        activeProgressBox.x + activeProgressBox.width - 1,
+      );
+      expect(
+        Math.abs(
+          activeProgressBox.y +
+            activeProgressBox.height / 2 -
+            (activeSettingsBox.y + activeSettingsBox.height / 2),
+        ),
+      ).toBeLessThanOrEqual(2);
+      await expect.poll(() => progress.textContent()).toContain("Rosita is responding");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
       await stop.click();
@@ -335,17 +414,74 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
       await page.setViewportSize({ width: 393, height: 852 });
       await expect.poll(() => camera.isVisible()).toBe(true);
-      const [mobileCameraBox, mobileVoiceBox] = await Promise.all([
+      const [
+        mobileAttachBox,
+        mobileModelBox,
+        mobileSettingsBox,
+        mobileContextBox,
+        mobileCameraBox,
+        mobileVoiceBox,
+      ] = await Promise.all([
+        attach.boundingBox(),
+        model.boundingBox(),
+        settings.boundingBox(),
+        contextUsage.boundingBox(),
         camera.boundingBox(),
         voice.boundingBox(),
       ]);
+      expect(mobileAttachBox).not.toBeNull();
+      expect(mobileModelBox).not.toBeNull();
+      expect(mobileSettingsBox).not.toBeNull();
+      expect(mobileContextBox).not.toBeNull();
       expect(mobileCameraBox).not.toBeNull();
       expect(mobileVoiceBox).not.toBeNull();
-      if (!mobileCameraBox || !mobileVoiceBox) {
-        throw new Error("expected mobile camera and voice controls to have layout boxes");
+      if (
+        !mobileAttachBox ||
+        !mobileModelBox ||
+        !mobileSettingsBox ||
+        !mobileContextBox ||
+        !mobileCameraBox ||
+        !mobileVoiceBox
+      ) {
+        throw new Error("expected mobile composer controls to have layout boxes");
       }
-      expect(Math.abs(mobileCameraBox.x - mobileVoiceBox.x)).toBeLessThanOrEqual(1);
-      expect(mobileCameraBox.y + mobileCameraBox.height).toBeLessThanOrEqual(mobileVoiceBox.y - 4);
+      for (const control of [mobileModelBox, mobileSettingsBox, mobileContextBox]) {
+        expect(
+          Math.abs(
+            control.y + control.height / 2 - (mobileSettingsBox.y + mobileSettingsBox.height / 2),
+          ),
+        ).toBeLessThanOrEqual(2);
+      }
+      expect(mobileModelBox.x).toBeGreaterThanOrEqual(
+        mobileSettingsBox.x + mobileSettingsBox.width - 1,
+      );
+      expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileCameraBox.x + 1);
+      expect(
+        Math.abs(
+          mobileCameraBox.x +
+            mobileCameraBox.width / 2 -
+            (mobileVoiceBox.x + mobileVoiceBox.width / 2),
+        ),
+      ).toBeLessThanOrEqual(2);
+      expect(mobileCameraBox.y + mobileCameraBox.height).toBeLessThanOrEqual(mobileVoiceBox.y + 1);
+      await textarea.fill("Keep the camera available");
+      await expect.poll(() => camera.isVisible()).toBe(true);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
+        .toBe(true);
+      await textarea.fill("");
+      await expect.poll(() => camera.isVisible()).toBe(true);
+      await model.click();
+      const mobilePickerBox = await composer
+        .locator(".chat-controls__inline-select-menu--combined")
+        .boundingBox();
+      expect(mobilePickerBox).not.toBeNull();
+      if (!mobilePickerBox) {
+        throw new Error("expected mobile model picker to have a layout box");
+      }
+      expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
+      expect(mobilePickerBox.x + mobilePickerBox.width).toBeLessThanOrEqual(393);
+      await model.click();
       await settings.click();
       await expect.poll(() => settingsDialog.isVisible()).toBe(true);
       await settings.click();

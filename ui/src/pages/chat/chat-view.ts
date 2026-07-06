@@ -4,6 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import type { ProviderQuotaPillProps } from "../../components/provider-quota-pill.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -67,13 +68,13 @@ export type ChatProps = {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
-  realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  providerQuota?: ProviderQuotaPillProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
     request: SidebarFullMessageRequest,
@@ -208,6 +209,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
+    providerQuota: props.providerQuota,
     assistantName: props.assistantName,
     attachments: props.attachments,
     showNewMessages: props.showNewMessages,
@@ -215,7 +217,6 @@ export function renderChat(props: ChatProps) {
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
     realtimeTalkDetail: props.realtimeTalkDetail,
-    realtimeTalkTranscript: props.realtimeTalkTranscript,
     realtimeTalkConversation: props.realtimeTalkConversation,
     composerControls: props.composerControls,
     getDraft: props.getDraft,

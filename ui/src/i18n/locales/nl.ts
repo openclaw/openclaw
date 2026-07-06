@@ -1531,6 +1531,11 @@ export const nl: TranslationMap = {
       retrySend: "Verzenden opnieuw proberen",
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "Koppelings-QR verlopen",
       reason: "Voer /pair qr opnieuw uit om een nieuwe installatiecode te genereren.",

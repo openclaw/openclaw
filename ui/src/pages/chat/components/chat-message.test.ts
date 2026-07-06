@@ -575,7 +575,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
-  it("reserves bubble space when assistant message actions render", () => {
+  it("renders assistant message actions in the footer row", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       role: "assistant",
@@ -583,13 +583,11 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    const assistantBubble = expectElement(
-      container,
-      ".chat-group.assistant .chat-bubble",
-      HTMLElement,
-    );
-    expect(assistantBubble.classList.contains("has-copy")).toBe(true);
-    expect(assistantBubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLElement);
+    const assistantGroup = expectElement(container, ".chat-group.assistant", HTMLElement);
+    expect(assistantGroup.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(
+      assistantGroup.querySelector(".chat-group-footer-actions .chat-copy-btn"),
+    ).toBeInstanceOf(HTMLElement);
 
     renderGroupedMessage(
       container,
@@ -2785,7 +2783,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
   });
 
-  it("reserves layout space for assistant message actions", () => {
+  it("keeps assistant message actions outside the bubble", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       id: "assistant-action-space",
@@ -2795,8 +2793,11 @@ describe("grouped chat rendering", () => {
     });
 
     const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
-    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(true);
-    expect(bubble?.querySelector(".chat-bubble-actions")).not.toBeNull();
+    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(false);
+    expect(bubble?.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(
+      container.querySelector(".chat-group.assistant .chat-group-footer-actions .chat-copy-btn"),
+    ).not.toBeNull();
   });
 
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {

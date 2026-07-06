@@ -14,7 +14,6 @@ import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
 } from "../../components/markdown.ts";
-import { renderProviderQuotaPill } from "../../components/provider-quota-pill.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
@@ -519,18 +518,13 @@ function getThinkingSelect(container: Element): HTMLElement {
   return select;
 }
 
-function getThinkingOptionValues(container: Element): string[] {
-  return Array.from(
-    container.querySelectorAll<HTMLElement>(
-      '[data-chat-thinking-options="true"] [data-chat-thinking-option]',
-    ),
-  ).map((option) => option.dataset.chatThinkingOption ?? "");
+function getThinkingSlider(container: Element): HTMLInputElement | null {
+  return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
 }
 
-function getSelectedThinkingOption(container: Element): HTMLButtonElement | null {
-  return container.querySelector<HTMLButtonElement>(
-    '[data-chat-thinking-option][aria-pressed="true"]',
-  );
+function getThinkingSliderValues(container: Element): string[] {
+  const values = getThinkingSlider(container)?.dataset.chatThinkingValues ?? "";
+  return values ? values.split(",") : [];
 }
 
 function getThinkingReasoningValueLabel(container: Element): string {
@@ -592,7 +586,6 @@ function createChatProps(
     realtimeTalkActive: false,
     realtimeTalkStatus: "idle",
     realtimeTalkDetail: null,
-    realtimeTalkTranscript: null,
     connected: true,
     canSend: true,
     disabledReason: null,
@@ -1075,9 +1068,12 @@ describe("chat composer workbench", () => {
       },
     });
 
-    expect(
-      container.querySelector(".agent-chat__composer-controls .test-composer-control"),
-    ).not.toBeNull();
+    const composerControl = container.querySelector(
+      ".agent-chat__composer-controls .test-composer-control",
+    );
+    expect(composerControl).not.toBeNull();
+    expect(composerControl?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__composer-header")).toBeNull();
     const workbench = container.querySelector(".chat-workbench");
     const main = container.querySelector(".chat-workbench__main");
     const rail = container.querySelector(".chat-workspace-rail");
@@ -1154,10 +1150,8 @@ describe("chat composer workbench", () => {
       messages: [{ role: "assistant", content: "ready" }],
     });
 
-    const toolbarRight = container.querySelector(".agent-chat__toolbar-right");
-    expect(toolbarRight).not.toBeNull();
-    const labels = Array.from(toolbarRight?.querySelectorAll("button") ?? []).map((button) =>
-      button.getAttribute("aria-label"),
+    const labels = Array.from(container.querySelectorAll(".agent-chat__composer-shell button")).map(
+      (button) => button.getAttribute("aria-label"),
     );
     expect(labels).not.toContain(t("chat.runControls.newSession"));
     expect(labels).not.toContain(t("chat.runControls.exportChat"));
@@ -1168,7 +1162,9 @@ describe("chat composer workbench", () => {
       onToggleRealtimeTalk: () => undefined,
     });
 
-    expect(container.querySelector('button[aria-label="Start voice input"]')).not.toBeNull();
+    const voiceButton = container.querySelector('button[aria-label="Start voice input"]');
+    expect(voiceButton).not.toBeNull();
+    expect(voiceButton?.closest(".agent-chat__composer-input-row")).not.toBeNull();
     expect(container.querySelector('button[aria-label="Talk settings"]')).toBeNull();
   });
 });
@@ -1351,6 +1347,7 @@ describe("chat loading skeleton", () => {
   it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
     const container = renderChatView({
       sending: true,
+      composerControls: html`<button class="chat-settings-chip" type="button">Settings</button>`,
       queue: [
         {
           id: "send-main",
@@ -1382,19 +1379,35 @@ describe("chat loading skeleton", () => {
       },
     });
 
-    const status = container.querySelector(".agent-chat__run-status--in-progress");
-    const progress = status?.closest(".agent-chat__composer-progress");
+    const status = container.querySelector(
+      ".agent-chat__composer-run-status .agent-chat__run-status--in-progress",
+    );
     const context = container.querySelector(".context-ring");
     const contextUsage = context?.closest(".context-usage");
     expect(status).toBeInstanceOf(HTMLElement);
-    expect(status?.textContent).toContain("In progress");
-    expect(progress?.closest(".agent-chat__composer-meta")).not.toBeNull();
-    expect(progress?.closest(".agent-chat__composer-header")).toBeNull();
-    expect(progress?.previousElementSibling).toBe(contextUsage);
+    expect(status?.textContent).toContain("Sending message");
+    expect(status?.closest(".agent-chat__composer-controls")).not.toBeNull();
+    expect(status?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(contextUsage?.closest(".agent-chat__composer-meta")).not.toBeNull();
   });
 
-  it("places context usage in the bottom-left composer metadata", () => {
+  it("places context usage after the composer controls in the bottom row", () => {
     const container = renderChatView({
+      providerQuota: {
+        basePath: "/rosita",
+        modelAuthStatusResult: {
+          ts: Date.now(),
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
+              usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+            },
+          ],
+        },
+      },
       messages: [
         {
           role: "assistant",
@@ -1427,11 +1440,17 @@ describe("chat loading skeleton", () => {
     const context = container.querySelector(".context-ring");
     expect(context).toBeInstanceOf(HTMLElement);
     expect(context?.closest(".agent-chat__composer-meta")).not.toBeNull();
-    expect(context?.closest(".agent-chat__composer-header")).toBeNull();
+    expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
     expect(container.querySelector(".context-usage__stats--cost")?.textContent).toContain(
       "$0.0010",
     );
     expect(container.querySelector(".context-usage__model")?.textContent).toContain("openai");
+    expect(container.querySelector(".agent-chat__composer-header")).toBeNull();
+    const quota = container.querySelector<HTMLAnchorElement>(
+      ".context-usage__popover [data-chat-provider-usage='true']",
+    );
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage Remaining 28%");
+    expect(quota?.getAttribute("href")).toBe("/rosita/usage");
   });
 
   it("does not show prompt-bar progress for another session send", () => {
@@ -1469,7 +1488,7 @@ describe("chat loading skeleton", () => {
 
     const status = container.querySelector(".agent-chat__run-status--in-progress");
     expect(status).toBeInstanceOf(HTMLElement);
-    expect(status?.textContent).toContain("In progress");
+    expect(status?.textContent).toContain("Preparing model");
   });
 
   it("shows active model-switch progress over the previous run's terminal status", () => {
@@ -2554,7 +2573,7 @@ describe("chat attachment picker", () => {
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton.closest(".agent-chat__toolbar-right")).not.toBeNull();
+    expect(cameraButton.closest(".agent-chat__composer-input-row")).not.toBeNull();
     expect(
       container.querySelector(".agent-chat__composer-footer .agent-chat__camera-btn"),
     ).toBeNull();
@@ -2574,6 +2593,15 @@ describe("chat attachment picker", () => {
       expect(attachments[0]?.fileName).toBe("camera.jpg");
       expect(attachments[0]?.mimeType).toBe("image/jpeg");
     });
+  });
+
+  it("keeps the mobile camera action available when the composer has text", () => {
+    const container = renderChatView({ draft: "Ready to send" });
+
+    expect(
+      container.querySelector('.agent-chat__camera-btn[aria-label="Take photo"]'),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 
   it("accepts and previews non-video file attachments", async () => {
@@ -2807,40 +2835,6 @@ describe("chat model controls", () => {
     await i18n.setLocale("en");
   });
 
-  it("shows provider quota in the chat header when usage data is loaded", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [
-              { label: "3h", usedPercent: 18 },
-              { label: "Week", usedPercent: 72 },
-            ],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderProviderQuotaPill({
-        basePath: state.basePath,
-        modelAuthStatusResult: state.modelAuthStatusResult,
-      }),
-      container,
-    );
-
-    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage Remaining 28%");
-    expect(quota?.getAttribute("href")).toBe("/usage");
-    expect(quota?.getAttribute("title")).toContain("Codex · Week");
-  });
-
   it("disables the chat header model picker while a run is active", () => {
     const { state } = createChatHeaderState();
     state.chatRunId = "run-123";
@@ -2979,10 +2973,7 @@ describe("chat model controls", () => {
 
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5");
-    expect(container.querySelector(".chat-controls__effort-chip")?.textContent?.trim()).toBe(
-      "High",
-    );
+    ).toBe("GPT-5.5 · High");
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
     ).toContain("GPT-5.5");
@@ -3021,10 +3012,7 @@ describe("chat model controls", () => {
 
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5");
-    expect(container.querySelector(".chat-controls__effort-chip")?.textContent?.trim()).toBe(
-      "High",
-    );
+    ).toBe("GPT-5.5 · High");
     expect(container.querySelector('[data-chat-model-option=""]')?.textContent).toContain(
       "GPT-5.5",
     );
@@ -3055,10 +3043,7 @@ describe("chat model controls", () => {
 
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5");
-    expect(container.querySelector(".chat-controls__effort-chip")?.textContent?.trim()).toBe(
-      "High",
-    );
+    ).toBe("GPT-5.5 · High");
   });
 
   it("uses the session provider for slash-containing raw model ids without metadata", () => {
@@ -3124,15 +3109,15 @@ describe("chat model controls", () => {
 
     const providers = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
-    ).map((button) => button.textContent?.trim());
-    expect(providers).toContain("Nvidia");
-    expect(providers).not.toContain("Zai");
+    ).map((button) => button.dataset.chatModelProvider);
+    expect(providers).toContain("nvidia");
+    expect(providers).not.toContain("zai");
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="nvidia"]')?.hidden,
     ).toBe(false);
   });
 
-  it("renders thinking and speed choices as segmented button rows", () => {
+  it("renders reasoning as a slider and speed as a segmented button row", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3153,30 +3138,18 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
-    const thinkingButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '[data-chat-thinking-options="true"] [data-chat-thinking-option]',
-      ),
-    );
+    const slider = getThinkingSlider(container);
     const speedButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
     );
 
-    expect(thinkingButtons.map((button) => button.textContent?.trim())).toEqual([
-      "Adaptive",
-      "Low",
-      "Medium",
-      "High",
-    ]);
-    expect(thinkingButtons.map((button) => button.dataset.chatThinkingOption)).toEqual([
-      "adaptive",
-      "low",
-      "medium",
-      "high",
-    ]);
-    expect(thinkingButtons[3]?.getAttribute("aria-pressed")).toBe("true");
+    expect(getThinkingSliderValues(container)).toEqual(["adaptive", "low", "medium", "high"]);
+    expect(slider?.value).toBe("3");
+    expect(slider?.getAttribute("aria-valuetext")).toBe("Default (High)");
     expect(speedButtons.map((button) => button.textContent?.trim())).toEqual(["Standard", "Fast"]);
-    expect(container.querySelector('[data-chat-thinking-slider="true"]')).toBeNull();
+    expect(
+      container.querySelector('.chat-controls__model-option-icon [data-provider-icon="codex"]'),
+    ).not.toBeNull();
   });
 
   it("keeps speed choices visible and disabled for unsupported providers", () => {
@@ -3216,12 +3189,13 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
-    expect(getThinkingOptionValues(container)).toEqual(["off", "adaptive", "xhigh", "max"]);
-    expect(getThinkingResetButton(container)).toBeNull();
+    expect(getThinkingSliderValues(container)).toEqual(["off", "adaptive", "xhigh", "max"]);
+    expect(getThinkingResetButton(container)).toBeInstanceOf(HTMLButtonElement);
+    expect(getThinkingResetButton(container)?.disabled).toBe(true);
   });
 
-  it("labels chat thinking default from the active session row", () => {
-    const { state } = createChatHeaderState({
+  it("lets an unanchored slider select its first stop directly", async () => {
+    const { state, request } = createChatHeaderState({
       model: "gemma4:hermes-e4b",
       modelProvider: "ollama",
       thinkingDefault: "adaptive",
@@ -3233,11 +3207,21 @@ describe("chat model controls", () => {
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
-    expect(getThinkingOptionValues(container)).not.toContain("adaptive");
-    expect(getSelectedThinkingOption(container)).toBeNull();
+    expect(getThinkingSliderValues(container)).not.toContain("adaptive");
+    const slider = getThinkingSlider(container);
+    expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(true);
+    slider?.click();
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.patch", {
+        key: "main",
+        thinkingLevel: "off",
+      });
+    });
   });
 
-  it("selects the inherited default when it is an offered button", () => {
+  it("anchors the slider thumb on the inherited default when it is a stop", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3246,10 +3230,12 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
-    expect(getSelectedThinkingOption(container)?.dataset.chatThinkingOption).toBe("medium");
+    const slider = getThinkingSlider(container);
+    expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(false);
+    expect(slider?.value).toBe(String(getThinkingSliderValues(container).indexOf("medium")));
   });
 
-  it("keeps a single available thinking level selectable", async () => {
+  it("keeps a single available thinking level selectable without a slider", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionsResult = createSessionsResultFromRows([
       {
@@ -3264,17 +3250,41 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
+    expect(getThinkingSlider(container)).toBeNull();
     const only = container.querySelector<HTMLButtonElement>(
       '[data-chat-thinking-option="adaptive"]',
     );
     expect(only).toBeInstanceOf(HTMLButtonElement);
     expect(only?.getAttribute("aria-pressed")).toBe("false");
     only?.click();
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
 
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      thinkingLevel: "adaptive",
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.patch", {
+        key: "main",
+        thinkingLevel: "adaptive",
+      });
     });
+  });
+
+  it("does not pin an inherited single thinking level as an override", () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionsResult = createSessionsListResult({
+      model: "gpt-5",
+      modelProvider: "openai",
+      defaultsThinkingDefault: "adaptive",
+      defaultsThinkingLevels: [{ id: "adaptive", label: "adaptive" }],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    const only = container.querySelector<HTMLButtonElement>(
+      '[data-chat-thinking-option="adaptive"]',
+    );
+    expect(only?.getAttribute("aria-pressed")).toBe("true");
+    only?.click();
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("disables thinking for known non-reasoning models without duplicate off options", () => {
@@ -3311,7 +3321,7 @@ describe("chat model controls", () => {
     const thinkingSelect = getThinkingSelect(container);
 
     expect(thinkingSelect.dataset.chatThinkingDisabled).toBe("true");
-    expect(getThinkingOptionValues(container)).toEqual([]);
+    expect(getThinkingSlider(container)).toBeNull();
     expect(getThinkingResetButton(container)).toBeNull();
   });
 
@@ -3366,14 +3376,12 @@ describe("chat model controls", () => {
 
     const thinkingSelect = getThinkingSelect(container);
     const triggerLabel = container.querySelector(".chat-controls__inline-select-label");
-    const effortChip = container.querySelector(".chat-controls__effort-chip");
 
     expect(container.querySelector('[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(triggerLabel?.textContent?.trim()).toBe("GPT-5.5");
-    expect(effortChip?.textContent?.trim()).toBe("High");
-    expect(getThinkingOptionValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
-    expect(getSelectedThinkingOption(container)?.dataset.chatThinkingOption).toBe("high");
+    expect(triggerLabel?.textContent?.trim()).toBe("GPT-5.5 · High");
+    expect(getThinkingSliderValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
+    expect(getThinkingSlider(container)?.value).toBe("3");
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");
   });
 

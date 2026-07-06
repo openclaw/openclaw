@@ -1526,6 +1526,11 @@ export const id: TranslationMap = {
       retrySend: "Coba kirim lagi",
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "QR pemasangan kedaluwarsa",
       reason: "Jalankan /pair qr lagi untuk membuat kode pengaturan baru.",

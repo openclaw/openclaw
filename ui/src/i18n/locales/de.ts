@@ -1537,6 +1537,11 @@ export const de: TranslationMap = {
       retrySend: "Senden wiederholen",
       retryQueuedMessage: "Nachricht in der Warteschlange erneut senden",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "Kopplungs-QR-Code abgelaufen",
       reason: "Führen Sie /pair qr erneut aus, um einen neuen Einrichtungscode zu generieren.",

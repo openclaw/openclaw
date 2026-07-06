@@ -347,7 +347,6 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
-  state.realtimeTalkTranscript = null;
   resetChatRealtimeConversation(state);
   state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
@@ -1179,6 +1178,13 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
   private scrollAfterUpdate = false;
   private forceScrollAfterUpdate = false;
+  private chatThreadResizeObserver: ResizeObserver | null = null;
+  private chatThreadResizeTargets:
+    | {
+        thread: Element;
+        content: Element;
+      }
+    | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
   private readonly cleanups: Array<() => void> = [];
 
@@ -1251,11 +1257,50 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
   }
 
+  private syncChatThreadResizeObserver(state: TState) {
+    if (typeof ResizeObserver !== "function") {
+      return;
+    }
+    const thread = state.querySelector(".chat-thread");
+    const content = state.querySelector(".chat-thread-inner");
+    if (
+      thread &&
+      content &&
+      this.chatThreadResizeTargets?.thread === thread &&
+      this.chatThreadResizeTargets.content === content
+    ) {
+      return;
+    }
+
+    this.chatThreadResizeObserver?.disconnect();
+    this.chatThreadResizeObserver = null;
+    this.chatThreadResizeTargets = undefined;
+    if (!thread || !content) {
+      return;
+    }
+
+    // Streamed markdown and mobile composer controls can finish sizing after
+    // Lit's update. Follow the rendered geometry so the viewport stays pinned.
+    this.chatThreadResizeObserver = new ResizeObserver(() => {
+      const currentState = this.stateValue;
+      if (!currentState || currentState.chatManualRefreshInFlight) {
+        return;
+      }
+      scheduleChatScroll(currentState);
+    });
+    this.chatThreadResizeObserver.observe(thread);
+    this.chatThreadResizeObserver.observe(content);
+    this.chatThreadResizeTargets = { thread, content };
+  }
+
   hostUpdated() {
+    const state = this.stateValue;
+    if (state) {
+      this.syncChatThreadResizeObserver(state);
+    }
     if (!this.scrollAfterUpdate) {
       return;
     }
-    const state = this.stateValue;
     const force = this.forceScrollAfterUpdate;
     this.scrollAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
@@ -1299,6 +1344,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private stopChatEffects() {
+    this.chatThreadResizeObserver?.disconnect();
+    this.chatThreadResizeObserver = null;
+    this.chatThreadResizeTargets = undefined;
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }

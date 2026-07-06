@@ -1,5 +1,5 @@
-// Real-browser proof + regression for #93041: the desktop chat composer renders the provider
-// usage pill from models.authStatus. Screenshots go to the ignored .artifacts/ tree.
+// Real-browser proof + regression for #93041: provider usage from models.authStatus remains
+// available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -75,7 +75,7 @@ async function closeChat(fixture: {
   await fixture.browser.close().catch(() => {});
 }
 
-describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", () => {
+describeE2e("Control UI #93041 desktop chat quota popover (mocked Gateway E2E)", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
   });
@@ -84,20 +84,23 @@ describeE2e("Control UI #93041 desktop chat quota pill (mocked Gateway E2E)", ()
     await server?.close();
   });
 
-  it("renders the provider usage pill in the desktop chat composer", async () => {
+  it("renders provider usage inside the desktop context popover", async () => {
     const fixture = await openChat(authStatusWithUsage);
     const { page } = fixture;
     try {
-      const composerControls = page.locator(".agent-chat__composer-controls").first();
-      const pill = composerControls.locator('[data-chat-provider-usage="true"]');
+      const contextRing = page.locator(".context-ring");
+      const pill = page.locator('[data-chat-provider-usage="true"]');
+      await contextRing.waitFor({ state: "visible" });
+      expect(await pill.isVisible()).toBe(false);
+      await contextRing.click();
       await pill.waitFor({ state: "visible" });
-      await page.screenshot({ path: path.join(artifactDir, "01-chat-with-pill.png") });
-      await composerControls.screenshot({
-        path: path.join(artifactDir, "02-composer-controls.png"),
+      await page.screenshot({ path: path.join(artifactDir, "01-chat-with-context-usage.png") });
+      await page.locator(".context-usage__popover").screenshot({
+        path: path.join(artifactDir, "02-context-usage-popover.png"),
       });
 
       const text = (await pill.textContent())?.replace(/\s+/g, " ").trim();
-      expect(text).toContain("Usage");
+      expect(text).toBe("Usage Remaining 29%");
       expect(await pill.getAttribute("href")).toBe("/usage");
       expect(await pill.getAttribute("title")).toContain("Codex");
     } finally {

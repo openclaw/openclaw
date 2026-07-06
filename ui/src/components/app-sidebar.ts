@@ -31,6 +31,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
@@ -213,7 +214,7 @@ export class AppSidebar extends LitElement {
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.currentSessionKey,
-      hasActiveRun: Boolean(row.hasActiveRun),
+      hasActiveRun: isSessionRunActive(row),
       kind: row.kind,
       pinned: row.pinned === true,
     });
@@ -223,8 +224,11 @@ export class AppSidebar extends LitElement {
     const recentSessions = navigation.recentSessions
       .slice(activeSession ? 1 : 0)
       .map(toSidebarSession);
+    const selectedSessionHasActiveRun = navigation.selectedSession
+      ? isSessionRunActive(navigation.selectedSession)
+      : false;
     const newSessionDisabled =
-      !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
+      !this.connected || this.sessionsLoading || selectedSessionHasActiveRun;
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
@@ -234,7 +238,7 @@ export class AppSidebar extends LitElement {
       newSessionDisabled,
       newSessionTitle: !this.connected
         ? "Connect to create a new session"
-        : navigation.selectedSession?.hasActiveRun
+        : selectedSessionHasActiveRun
           ? "Finish the active run before creating a new session"
           : "New session",
     };

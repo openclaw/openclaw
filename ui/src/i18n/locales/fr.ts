@@ -1543,6 +1543,11 @@ export const fr: TranslationMap = {
       retrySend: "Réessayer l’envoi",
       retryQueuedMessage: "Réessayer le message en file d’attente",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "QR d'appairage expiré",
       reason: "Exécutez /pair qr à nouveau pour générer un nouveau code de configuration.",

@@ -21,7 +21,6 @@ export type ChatRealtimeState = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
-  realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptions: RealtimeTalkOptions;
   realtimeTalkSession: RealtimeTalkSession | null;
@@ -45,7 +44,6 @@ export function createInitialChatRealtimeState() {
     realtimeTalkActive: false,
     realtimeTalkStatus: "idle" as RealtimeTalkStatus,
     realtimeTalkDetail: null,
-    realtimeTalkTranscript: null,
     realtimeTalkConversation: [],
     realtimeTalkOptions: createDefaultRealtimeTalkOptions(),
     realtimeTalkSession: null,
@@ -67,7 +65,6 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   state.realtimeTalkActive = false;
   state.realtimeTalkStatus = "idle";
   state.realtimeTalkDetail = null;
-  state.realtimeTalkTranscript = null;
   state.resetRealtimeTalkConversation();
 }
 
@@ -117,7 +114,6 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           state.requestUpdate();
         },
         onTranscript: (entry) => {
-          state.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
           state.realtimeTalkConversationState = updateRealtimeTalkConversation(
             state.realtimeTalkConversationState,
             entry,

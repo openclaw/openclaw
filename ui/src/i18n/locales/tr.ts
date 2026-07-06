@@ -1531,6 +1531,11 @@ export const tr: TranslationMap = {
       retrySend: "Göndermeyi yeniden dene",
       retryQueuedMessage: "Kuyruğa alınan iletiyi yeniden dene",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "Eşleştirme QR kodunun süresi doldu",
       reason: "Yeni bir kurulum kodu oluşturmak için /pair qr komutunu tekrar çalıştırın.",

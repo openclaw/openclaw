@@ -1527,6 +1527,11 @@ export const fa: TranslationMap = {
       retrySend: "تلاش دوباره برای ارسال",
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "کد QR جفت‌سازی منقضی شد",
       reason: "برای ساخت کد راه‌اندازی جدید، دوباره /pair qr را اجرا کنید.",

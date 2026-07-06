@@ -1538,6 +1538,11 @@ export const ru: TranslationMap = {
       retrySend: "Повторить отправку",
       retryQueuedMessage: "Повторить сообщение в очереди",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "QR-код сопряжения истек",
       reason: "Запустите /pair qr еще раз, чтобы создать новый код настройки.",

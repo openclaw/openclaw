@@ -1488,6 +1488,11 @@ export const zh_CN: TranslationMap = {
       retrySend: "重试发送",
       retryQueuedMessage: "重试排队消息",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "配对二维码已过期",
       reason: "再次运行 /pair qr 以生成新的设置代码。",

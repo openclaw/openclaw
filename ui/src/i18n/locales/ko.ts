@@ -1516,6 +1516,11 @@ export const ko: TranslationMap = {
       retrySend: "보내기 다시 시도",
       retryQueuedMessage: "대기 중인 메시지 다시 시도",
     },
+    modelPicker: {
+      discard: "Discard",
+      faster: "Faster",
+      smarter: "Smarter",
+    },
     pairingQrExpired: {
       title: "페어링 QR 만료됨",
       reason: "새 설정 코드를 생성하려면 /pair qr을 다시 실행하세요.",
