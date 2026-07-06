@@ -8171,7 +8171,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 243,
+      "line": 244,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "Share file",
       "surface": "apple",
@@ -8179,7 +8179,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 250,
+      "line": 251,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "Could not share this file.",
       "surface": "apple",
@@ -8187,7 +8187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 254,
+      "line": 255,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "OK",
       "surface": "apple",
