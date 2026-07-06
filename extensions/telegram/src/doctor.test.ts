@@ -438,6 +438,29 @@ describe("telegram doctor", () => {
     expect(result.changes[0]).toContain("@testuser");
   });
 
+  it("repairs @username entries using configured proxy and apiRoot", async () => {
+    lookupTelegramChatIdMock.mockResolvedValue("111");
+
+    const result = await maybeRepairTelegramAllowFromUsernames({
+      channels: {
+        telegram: {
+          botToken: "123:abc",
+          allowFrom: ["@testuser"],
+          proxy: "http://my-proxy",
+          apiRoot: "https://my-api-root",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.config.channels?.telegram?.allowFrom).toEqual(["111"]);
+    expect(lookupTelegramChatIdMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyUrl: "http://my-proxy",
+        apiRoot: "https://my-api-root",
+      }),
+    );
+  });
+
   it("surfaces negative chat ids as invalid allowFrom sender entries", async () => {
     const result = await maybeRepairTelegramAllowFromUsernames({
       channels: {

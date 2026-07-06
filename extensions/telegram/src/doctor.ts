@@ -464,6 +464,8 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
         const id = await lookupTelegramChatId({
           token,
           chatId: username,
+          proxyUrl: account.config.proxy,
+          apiRoot: account.config.apiRoot,
           network: account.config.network,
           signal: undefined,
         });
