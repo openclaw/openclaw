@@ -99,7 +99,7 @@ class TalkModeManagerTest {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
       shadowOf(app.packageManager)
-        .addResolveInfoForIntent(Intent(RecognitionService.SERVICE_INTERFACE), ResolveInfo())
+        .setResolveInfosForIntent(Intent(RecognitionService.SERVICE_INTERFACE), listOf(ResolveInfo()))
       val manager = createManager()
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       try {
