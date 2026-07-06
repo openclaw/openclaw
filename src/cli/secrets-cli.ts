@@ -53,7 +53,14 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
     import("../secrets/plan.js"),
   ]);
   const raw = readFileSync(pathname, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(
+      `Invalid secrets plan file: ${pathname}. File contains malformed JSON. Generate a fresh plan with ${formatCliCommand("openclaw secrets configure --plan-out <path>")}.`,
+    );
+  }
   if (!isSecretsApplyPlan(parsed)) {
     throw new Error(
       `Invalid secrets plan file: ${pathname}. Generate a fresh plan with ${formatCliCommand("openclaw secrets configure --plan-out <path>")}.`,
