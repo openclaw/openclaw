@@ -200,6 +200,11 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   return client;
 }
 
+export function refreshFeishuClient(creds: FeishuClientCredentials): Lark.Client {
+  clearClientCache(creds.accountId ?? "default");
+  return createFeishuClient(creds);
+}
+
 export type FeishuWsClientCallbacks = Pick<
   ConstructorParameters<typeof feishuClientSdk.WSClient>[0],
   "onError" | "onReady" | "onReconnected" | "onReconnecting"

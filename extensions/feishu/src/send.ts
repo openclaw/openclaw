@@ -116,8 +116,10 @@ type FeishuGetMessageResponse = {
 };
 
 /** Send a direct message as a fallback when a reply target is unavailable. */
+type FeishuCreateMessageClientRef = { current: FeishuCreateMessageClient };
+
 async function sendFallbackDirect(
-  client: FeishuCreateMessageClient,
+  clientRef: FeishuCreateMessageClientRef,
   params: {
     receiveId: string;
     receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
@@ -125,10 +127,11 @@ async function sendFallbackDirect(
     msgType: string;
   },
   errorPrefix: string,
+  options: { onInvalidToken?: () => void } = {},
 ): Promise<FeishuSendResult> {
   const response = await requestFeishuApi(
     () =>
-      client.im.message.create({
+      clientRef.current.im.message.create({
         params: { receive_id_type: params.receiveIdType },
         data: {
           receive_id: params.receiveId,
@@ -137,14 +140,14 @@ async function sendFallbackDirect(
         },
       }),
     errorPrefix,
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, onInvalidToken: options.onInvalidToken },
   );
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId, resolveFeishuReceiptKind(params.msgType));
 }
 
 async function sendReplyOrFallbackDirect(
-  client: FeishuCreateMessageClient,
+  clientRef: FeishuCreateMessageClientRef,
   params: {
     replyToMessageId?: string;
     replyInThread?: boolean;
@@ -160,9 +163,10 @@ async function sendReplyOrFallbackDirect(
     directErrorPrefix: string;
     replyErrorPrefix: string;
   },
+  options: { onInvalidToken?: () => void } = {},
 ): Promise<FeishuSendResult> {
   if (!params.replyToMessageId) {
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return sendFallbackDirect(clientRef, params.directParams, params.directErrorPrefix, options);
   }
 
   const replyTargetFallbackError =
@@ -176,7 +180,7 @@ async function sendReplyOrFallbackDirect(
   try {
     response = await requestFeishuApi(
       () =>
-        client.im.message.reply({
+        clientRef.current.im.message.reply({
           path: { message_id: params.replyToMessageId! },
           data: {
             content: params.content,
@@ -185,7 +189,7 @@ async function sendReplyOrFallbackDirect(
           },
         }),
       params.replyErrorPrefix,
-      { includeNestedErrorLogId: true },
+      { includeNestedErrorLogId: true, onInvalidToken: options.onInvalidToken },
     );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
@@ -194,13 +198,13 @@ async function sendReplyOrFallbackDirect(
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
     }
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return sendFallbackDirect(clientRef, params.directParams, params.directErrorPrefix, options);
   }
   if (shouldFallbackFromReplyTarget(response)) {
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
     }
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return sendFallbackDirect(clientRef, params.directParams, params.directErrorPrefix, options);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
   return toFeishuSendResult(
@@ -609,7 +613,15 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, refreshClient, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
+  const clientRef = { current: client };
+  const onInvalidToken = () => {
+    clientRef.current = refreshClient();
+  };
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -620,16 +632,20 @@ export async function sendMessageFeishu(
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType,
-    directParams,
-    directErrorPrefix: "Feishu send failed",
-    replyErrorPrefix: "Feishu reply failed",
-  });
+  return sendReplyOrFallbackDirect(
+    clientRef,
+    {
+      replyToMessageId,
+      replyInThread,
+      allowTopLevelReplyFallback,
+      content,
+      msgType,
+      directParams,
+      directErrorPrefix: "Feishu send failed",
+      replyErrorPrefix: "Feishu reply failed",
+    },
+    { onInvalidToken },
+  );
 }
 
 export type SendFeishuCardParams = {
@@ -646,20 +662,32 @@ export type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, refreshClient, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
+  const clientRef = { current: client };
+  const onInvalidToken = () => {
+    clientRef.current = refreshClient();
+  };
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType: "interactive",
-    directParams,
-    directErrorPrefix: "Feishu card send failed",
-    replyErrorPrefix: "Feishu card reply failed",
-  });
+  return sendReplyOrFallbackDirect(
+    clientRef,
+    {
+      replyToMessageId,
+      replyInThread,
+      allowTopLevelReplyFallback,
+      content,
+      msgType: "interactive",
+      directParams,
+      directErrorPrefix: "Feishu card send failed",
+      replyErrorPrefix: "Feishu card reply failed",
+    },
+    { onInvalidToken },
+  );
 }
 
 export async function editMessageFeishu(params: {

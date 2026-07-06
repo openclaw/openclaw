@@ -7,6 +7,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  getFeishuInvalidTokenCode,
+  getFeishuInvalidTokenCodeFromResponse,
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,
   requestFeishuApi,
@@ -68,6 +70,71 @@ describe("requestFeishuApi — success path", () => {
     const result = await requestFeishuApi(request, "prefix", NO_DELAY);
     expect(result).toBe("ok");
     expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("requestFeishuApi — invalid-token refresh", () => {
+  it("classifies Feishu invalid tenant-access-token errors", () => {
+    expect(getFeishuInvalidTokenCode(axiosError(99991663))).toBe(99991663);
+    expect(getFeishuInvalidTokenCode(axiosError(99991664))).toBe(99991664);
+    expect(getFeishuInvalidTokenCode(axiosError(230001))).toBeUndefined();
+    expect(getFeishuInvalidTokenCode(new Error("boom"))).toBeUndefined();
+  });
+
+  it("classifies fulfilled invalid-token response bodies", () => {
+    expect(getFeishuInvalidTokenCodeFromResponse({ code: 99991663 })).toBe(99991663);
+    expect(getFeishuInvalidTokenCodeFromResponse({ code: 99991664 })).toBe(99991664);
+    expect(getFeishuInvalidTokenCodeFromResponse({ code: 0 })).toBeUndefined();
+    expect(getFeishuInvalidTokenCodeFromResponse(null)).toBeUndefined();
+  });
+
+  it("refreshes cached Feishu auth state once before retrying a thrown invalid-token error", async () => {
+    const onInvalidToken = vi.fn();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockResolvedValueOnce("ok-after-refresh");
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onInvalidToken,
+    });
+
+    expect(result).toBe("ok-after-refresh");
+    expect(onInvalidToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes cached Feishu auth state once before retrying a fulfilled invalid-token body", async () => {
+    const onInvalidToken = vi.fn();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 99991664, msg: "invalid app access token" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_refreshed" } });
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onInvalidToken,
+    });
+
+    expect(result).toEqual({ code: 0, data: { message_id: "om_refreshed" } });
+    expect(onInvalidToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not loop forever when invalid-token retry also fails", async () => {
+    const onInvalidToken = vi.fn();
+    const request = vi.fn().mockRejectedValue(axiosError(99991663));
+
+    const err = await requestFeishuApi(request, "Feishu send failed", {
+      ...NO_DELAY,
+      onInvalidToken,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/99991663/);
+    expect(onInvalidToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });
 

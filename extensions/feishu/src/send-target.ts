@@ -1,11 +1,12 @@
 // Feishu plugin module implements send target behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import { createFeishuClient, refreshFeishuClient } from "./client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
 type FeishuSendTarget = {
   client: ReturnType<typeof createFeishuClient>;
+  refreshClient: () => ReturnType<typeof createFeishuClient>;
   receiveId: string;
   receiveIdType: ReturnType<typeof resolveReceiveIdType>;
 };
@@ -30,6 +31,7 @@ export function resolveFeishuSendTarget(params: {
   const withoutProviderPrefix = target.replace(/^(feishu|lark):/i, "");
   return {
     client,
+    refreshClient: () => refreshFeishuClient(account),
     receiveId,
     receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
   };

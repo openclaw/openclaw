@@ -94,6 +94,7 @@ export function createFeishuApiError(
 // 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
 // Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
 const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+const FEISHU_INVALID_TOKEN_CODES = new Set([99991663, 99991664]);
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -136,6 +137,24 @@ export function getFeishuSendRateLimitCodeFromResponse(response: unknown): numbe
   return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
 }
 
+export function getFeishuInvalidTokenCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_INVALID_TOKEN_CODES.has(code) ? code : undefined;
+}
+
+export function getFeishuInvalidTokenCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = (response as { code?: unknown }).code;
+  return typeof code === "number" && FEISHU_INVALID_TOKEN_CODES.has(code) ? code : undefined;
+}
+
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
@@ -144,10 +163,13 @@ export async function requestFeishuApi<T>(
     includeNestedErrorLogId?: boolean;
     /** Base delay per retry attempt in ms; multiplied by attempt index. @internal */
     retryDelayMs?: number;
+    /** Refresh cached Feishu auth/client state before one retry on invalid-token responses. */
+    onInvalidToken?: () => void;
   } = {},
 ): Promise<T> {
   const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
   let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
+  let didRefreshInvalidToken = false;
   for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
@@ -170,8 +192,24 @@ export async function requestFeishuApi<T>(
         }
         break;
       }
+      const fulfilledInvalidToken = getFeishuInvalidTokenCodeFromResponse(result);
+      if (
+        fulfilledInvalidToken !== undefined &&
+        options.onInvalidToken &&
+        !didRefreshInvalidToken
+      ) {
+        didRefreshInvalidToken = true;
+        options.onInvalidToken();
+        continue;
+      }
       return result;
     } catch (error) {
+      const isInvalidToken = getFeishuInvalidTokenCode(error) !== undefined;
+      if (isInvalidToken && options.onInvalidToken && !didRefreshInvalidToken) {
+        didRefreshInvalidToken = true;
+        options.onInvalidToken();
+        continue;
+      }
       const isRetryable =
         attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
       if (!isRetryable) {

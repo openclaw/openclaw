@@ -9,6 +9,7 @@ const {
   mockClientList,
   mockClientPatch,
   mockCreateFeishuClient,
+  mockRefreshFeishuClient,
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
   mockRuntimeConvertMarkdownTables,
@@ -19,6 +20,7 @@ const {
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
+  mockRefreshFeishuClient: vi.fn(),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
   mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
@@ -39,6 +41,7 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
+  refreshFeishuClient: mockRefreshFeishuClient,
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -138,7 +141,7 @@ describe("getMessageFeishu", () => {
       accountId: "default",
       configured: true,
     });
-    mockCreateFeishuClient.mockReturnValue({
+    const defaultClient = {
       im: {
         message: {
           create: vi.fn(),
@@ -147,7 +150,9 @@ describe("getMessageFeishu", () => {
           patch: mockClientPatch,
         },
       },
-    });
+    };
+    mockCreateFeishuClient.mockReturnValue(defaultClient);
+    mockRefreshFeishuClient.mockReturnValue(defaultClient);
   });
 
   it("sends text without requiring Feishu runtime text helpers", async () => {
@@ -214,6 +219,53 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("refreshes the cached Feishu client once when send sees an invalid token", async () => {
+    const staleCreate = vi.fn().mockResolvedValueOnce({
+      code: 99991663,
+      msg: "invalid tenant access token",
+    });
+    const freshCreate = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_refresh" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: staleCreate,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    mockRefreshFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: freshCreate,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "hello",
+    });
+
+    expect(result.messageId).toBe("om_refresh");
+    expect(staleCreate).toHaveBeenCalledTimes(1);
+    expect(mockRefreshFeishuClient).toHaveBeenCalledTimes(1);
+    expect(mockRefreshFeishuClient).toHaveBeenCalledWith({
+      accountId: "default",
+      configured: true,
+    });
+    expect(freshCreate).toHaveBeenCalledTimes(1);
   });
 
   it("sends automatic mentions as native post elements without rewriting body text", async () => {
