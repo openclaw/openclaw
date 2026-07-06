@@ -21,6 +21,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **PDF page selections:** reject fractional page tokens at the shared parser boundary instead of silently dropping them during fallback extraction. (#99393, #99399) Thanks @qingminglong.
+- **Control UI protocol mismatch:** preserve structured mismatch details and stop retrying unrecoverable browser connections while keeping transient reconnects unchanged. (#98413, #98414) Thanks @haruaiclone-droid.
+- **Google Gemini latest aliases:** apply Gemini 3 thought-signature replay to floating Pro, Flash, and Flash Lite aliases across native and OpenAI-compatible transports. (#100566, #100605) Thanks @chenxiaoyu209.
+- **Compaction participant deduplication:** include canonical sender identity in duplicate long-message keys so identical turns from different participants remain in compacted transcripts. (#98310, #98336) Thanks @SunnyShu0925.
 - **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
 - **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
