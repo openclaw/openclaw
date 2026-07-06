@@ -630,7 +630,10 @@ function findInstalledProcessPid(
   return null;
 }
 
-async function resolveScheduledTaskNodeHostProcess(env: GatewayServiceEnv): Promise<{
+async function resolveScheduledTaskProcess(
+  env: GatewayServiceEnv,
+  matchesProcess: (argv: string[]) => boolean,
+): Promise<{
   pid: number;
   port: number;
 } | null> {
@@ -650,11 +653,29 @@ async function resolveScheduledTaskNodeHostProcess(env: GatewayServiceEnv): Prom
   if (!snapshot) {
     return null;
   }
-  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
+  // Match the full persisted argv so another OpenClaw process on the same port
+  // cannot be mistaken for this task while its listener is still starting.
+  const pid = findInstalledProcessPid(snapshot, port, installedArguments, matchesProcess);
   if (!pid) {
     return null;
   }
   return { pid, port };
+}
+
+async function resolveScheduledTaskNodeHostProcess(env: GatewayServiceEnv): Promise<{
+  pid: number;
+  port: number;
+} | null> {
+  return await resolveScheduledTaskProcess(env, isNodeHostArgv);
+}
+
+async function resolveScheduledTaskGatewayProcess(env: GatewayServiceEnv): Promise<{
+  pid: number;
+  port: number;
+} | null> {
+  return await resolveScheduledTaskProcess(env, (argv) =>
+    isGatewayArgv(argv, { allowGatewayBinary: true }),
+  );
 }
 
 function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
@@ -724,6 +745,14 @@ async function resolveListenerBackedScheduledTaskRuntime(
       status: "running",
       pid: matched.pid,
       detail: `Node host process detected for gateway port ${matched.port}.`,
+    };
+  }
+  const matched = await resolveScheduledTaskGatewayProcess(env);
+  if (matched) {
+    return {
+      status: "running",
+      pid: matched.pid,
+      detail: `Gateway process detected for gateway port ${matched.port}.`,
     };
   }
   const port = await resolveScheduledTaskPort(env);
@@ -1118,10 +1147,12 @@ async function waitForFallbackTakeoverRuntime(
   const deadline = Date.now() + FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS;
   while (runtime.status !== "running" && Date.now() < deadline) {
     await sleep(FALLBACK_TAKEOVER_REPROBE_INTERVAL_MS);
-    runtime = await resolveFallbackRuntime(env, installedCommand, "control").catch((err) => ({
-      status: "unknown",
-      detail: `Could not re-inspect the existing Windows login item: ${String(err)}`,
-    }));
+    runtime = await resolveFallbackRuntime(env, installedCommand, "control").catch(
+      (err: unknown) => ({
+        status: "unknown",
+        detail: `Could not re-inspect the existing Windows login item: ${String(err)}`,
+      }),
+    );
   }
   if (runtime.status === "stopped" && previousRuntime.status === "running") {
     const previousPid = previousRuntime.pid;

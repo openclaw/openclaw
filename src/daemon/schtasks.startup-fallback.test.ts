@@ -682,6 +682,10 @@ describe("Windows startup fallback", () => {
           return makeSpawnSyncResult({
             stdout: JSON.stringify([
               {
+                ProcessId: 3131,
+                CommandLine: "C:\\manual\\openclaw.cmd gateway --port 18789",
+              },
+              {
                 ProcessId: 4242,
                 CommandLine:
                   '"C:\\Program Files\\nodejs\\node.exe" "C:\\other\\dist\\index.js" gateway --port 18789',
@@ -794,7 +798,7 @@ describe("Windows startup fallback", () => {
           args.includes(NODE_PROCESS_QUERY)
         ) {
           processQueries += 1;
-          if (processQueries > 3) {
+          if (processQueries > 5) {
             return makeSpawnSyncResult({ status: 1 });
           }
           return makeSpawnSyncResult({
@@ -832,7 +836,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(processQueries).toBe(3);
+      expect(processQueries).toBe(5);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
@@ -1515,6 +1519,42 @@ describe("Windows startup fallback", () => {
       expect(runtime.pid).toBe(4242);
       expect(runtime.state).toBe("Ready");
       expect(runtime.lastRunResult).toBe("267011");
+    });
+  });
+
+  it("reports the exact scheduled gateway process while its listener is still starting", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      await writeGatewayScript(env);
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+      );
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command === getWindowsPowerShellExePath() &&
+          Array.isArray(args) &&
+          args.includes(NODE_PROCESS_QUERY)
+        ) {
+          return makeSpawnSyncResult({
+            stdout: JSON.stringify([
+              {
+                ProcessId: 4242,
+                CommandLine:
+                  '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
+              },
+            ]),
+          });
+        }
+        return makeSpawnSyncResult();
+      });
+
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("running");
+      expect(runtime.pid).toBe(4242);
+      expect(runtime.detail).toContain("Gateway process detected");
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
     });
   });
 
