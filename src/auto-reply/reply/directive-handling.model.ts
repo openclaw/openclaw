@@ -394,7 +394,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
-    const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+    const commandPlugin =
+      params.surface && params.surface !== "telegram" ? getChannelPlugin(params.surface) : null;
     const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
     if (channelData) {
       return {

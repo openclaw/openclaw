@@ -21,6 +21,9 @@ const modelsCommandMock = vi.hoisted(() => ({
   delegateToActual: false,
   resolveModelsCommandReply: vi.fn(),
 }));
+const channelPluginMock = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn(),
+}));
 
 function defaultModelsCommandReply() {
   return {
@@ -91,6 +94,10 @@ vi.mock("./commands-models.js", () => ({
     }
     return defaultModelsCommandReply();
   },
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (surface: string) => channelPluginMock.getChannelPlugin(surface),
 }));
 
 vi.mock("./directive-handling.auth.js", () => ({
@@ -421,6 +428,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue(defaultModelsCommandReply());
   modelsCommandMock.delegateToActual = false;
+  channelPluginMock.getChannelPlugin.mockReset();
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -605,6 +613,38 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Current:");
     expect(reply?.text).toContain("Browse: /models");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("uses channel model browse data for non-Telegram summary replies", async () => {
+    channelPluginMock.getChannelPlugin.mockReturnValue({
+      commands: {
+        buildModelBrowseChannelData: () => ({ custom: { picker: true } }),
+      },
+    });
+
+    const reply = await resolveModelInfoReply({
+      surface: "custom",
+    });
+
+    expect(channelPluginMock.getChannelPlugin).toHaveBeenCalledWith("custom");
+    expect(reply?.text).toContain("Tap below to browse models");
+    expect(reply?.channelData).toEqual({ custom: { picker: true } });
+  });
+
+  it("does not attach Telegram channel model browse data to summary replies", async () => {
+    channelPluginMock.getChannelPlugin.mockReturnValue({
+      commands: {
+        buildModelBrowseChannelData: () => ({ telegram: { buttons: [[{ text: "Browse" }]] } }),
+      },
+    });
+
+    const reply = await resolveModelInfoReply({
+      surface: "telegram",
+    });
+
+    expect(channelPluginMock.getChannelPlugin).not.toHaveBeenCalled();
+    expect(reply?.text).toContain("Browse: /models");
+    expect(reply?.channelData).toBeUndefined();
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {
