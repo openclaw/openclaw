@@ -3,6 +3,7 @@
  *
  * Loads generated bundled channel entries, setup metadata, secrets, and legacy migration hooks.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -241,12 +242,48 @@ function resolveGeneratedBundledChannelModulePath(params: {
   if (!params.entry) {
     return null;
   }
-  return resolveBundledChannelGeneratedPath(
+  const generatedPath = resolveBundledChannelGeneratedPath(
     params.rootScope.packageRoot,
     params.entry,
     params.metadata.dirName,
     resolveBundledChannelScanDir(params.rootScope),
   );
+  if (generatedPath) {
+    return generatedPath;
+  }
+
+  // Persisted registries can preserve a valid source-only bundled channel root while the
+  // active mixed checkout prefers dist/extensions for other plugins. Resolve that authoritative
+  // root directly, but keep the fallback inside the active package and plugin boundaries.
+  let packageRoot: string;
+  let pluginRoot: string;
+  try {
+    packageRoot = fs.realpathSync.native(params.rootScope.packageRoot);
+    pluginRoot = fs.realpathSync.native(params.metadata.rootDir);
+  } catch {
+    return null;
+  }
+  if (!isPathInside(packageRoot, pluginRoot)) {
+    return null;
+  }
+  for (const rawEntry of [params.entry.built, params.entry.source]) {
+    if (!rawEntry) {
+      continue;
+    }
+    const candidate = path.isAbsolute(rawEntry)
+      ? path.normalize(rawEntry)
+      : path.resolve(pluginRoot, rawEntry);
+    let realCandidate: string;
+    try {
+      realCandidate = fs.realpathSync.native(candidate);
+    } catch {
+      continue;
+    }
+    if (isPathInside(pluginRoot, realCandidate)) {
+      return realCandidate;
+    }
+  }
+  return null;
 }
 
 function loadGeneratedBundledChannelModule(params: {

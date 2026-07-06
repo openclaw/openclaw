@@ -4,7 +4,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -71,6 +71,18 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
+
+function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
+  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
+  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
+  const extended = encodeURIComponent(filename).replace(
+    /[\x27()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  const kind = kindFromMime(mime);
+  const inline = kind === "image" || kind === "audio" || kind === "video";
+  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
+}
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -630,11 +642,12 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    if (mime) {
-      res.setHeader("Content-Type", mime);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
-    }
+    const contentType = mime ?? "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      buildAssistantMediaContentDisposition(path.basename(localPath), contentType),
+    );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
     const stream = opened.handle.createReadStream({ start: 0, autoClose: false });

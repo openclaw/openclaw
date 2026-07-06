@@ -436,6 +436,8 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(approvalCall.request.timeoutMs).toBe(70_000);
+    expect(approvalCall.timeoutParams.timeoutMs).toBe(80_000);
     expect(approvalCall.request.toolName).toBe("skill_workshop");
     expect(approvalCall.request.toolCallId).toBe("call-skill-apply");
     expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
@@ -479,6 +481,32 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("returns an actionable pending outcome when skill_workshop approval expires", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-timeout",
+      status: "accepted",
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-timeout",
+      decision: null,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      toolCallId: "call-skill-timeout",
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-approval",
+      reason:
+        "The Skill Workshop approval request expired without a decision. This lifecycle call left the proposal unchanged and pending; check its current status in case another operator acted on it. Decide in the Skill Workshop UI or run `openclaw skills workshop apply|reject|quarantine <id>`. Do not retry this tool call in a loop.",
+    });
   });
 
   it("runs trusted policies before skill_workshop lifecycle approval", async () => {

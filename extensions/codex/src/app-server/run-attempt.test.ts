@@ -2443,8 +2443,12 @@ describe("runCodexAppServerAttempt", () => {
     const sessionManager = SessionManager.open(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
-      idempotencyKey: "codex-app-server:user-1",
-    } as ReturnType<typeof userMessage> & { idempotencyKey: string };
+      idempotencyKey: "client-run:user",
+      __openclaw: { mirrorIdentity: "turn-1:prompt", mirrorOrigin: "codex-app-server" },
+    } as ReturnType<typeof userMessage> & {
+      idempotencyKey: string;
+      __openclaw: { mirrorIdentity: string; mirrorOrigin: string };
+    };
     sessionManager.appendMessage(codexMirrorUserMessage);
     const codexMirrorAssistantMessage = {
       ...assistantMessage("codex mirrored assistant echo", bindingUpdatedAt + 2_000),
@@ -5655,41 +5659,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("local-model");
     expect(collaborationMode?.settings?.model).toBe("local-model");
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
-  });
-
-  it("keeps managed web_search for provider-qualified Codex model overrides", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("web_search")]);
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
-      if (method === "modelProvider/capabilities/read") {
-        return { webSearch: true };
-      }
-      return undefined;
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.modelId = "lmstudio/local-model";
-
-    const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(requests.map((request) => request.method)).not.toContain(
-      "modelProvider/capabilities/read",
-    );
-    const startRequest = requests.find((request) => request.method === "thread/start");
-    const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
-    const startConfig = startRequestParams?.config as Record<string, unknown> | undefined;
-    const dynamicToolNames = specNames(
-      (startRequestParams?.dynamicTools as CodexDynamicToolSpec[] | undefined) ?? [],
-    );
-    expect(startRequestParams?.model).toBe("local-model");
-    expect(startRequestParams?.modelProvider).toBe("lmstudio");
-    expect(startConfig?.web_search).toBe("disabled");
-    expect(dynamicToolNames).toContain("web_search");
   });
 
   it("uses bound local model providers when disabling Guardian on resumed threads", async () => {

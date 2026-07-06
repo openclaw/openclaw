@@ -239,6 +239,239 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.emitChatFinal({ runId, text: "Harness verified." });
 
       await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
+
+      const spacedPairCommand = "/ pair qr";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(spacedPairCommand);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const commandRequests = await waitForRequests(gateway, "chat.send", 2);
+      const commandParams = requireRecord(commandRequests[1]?.params);
+      expect(commandParams.message).toBe(spacedPairCommand);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("downloads an assistant document with the server-provided Unicode filename", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const source = "/tmp/openclaw/测试 report.pdf";
+    const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
+    const requestedUrls: URL[] = [];
+    // The document opens in a new tab, so intercept at the context boundary.
+    await context.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const url = new URL(route.request().url());
+      requestedUrls.push(url);
+      await route.fulfill({
+        body: "%PDF-1.4\n",
+        contentType: "application/pdf",
+        headers: {
+          "Content-Disposition": `attachment; filename="__ report.pdf"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20report.pdf`,
+        },
+      });
+    });
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Your report is ready." },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                label: "测试 report.pdf",
+                mimeType: "application/pdf",
+                url: mediaUrl,
+              },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const link = page.getByRole("link", { name: "测试 report.pdf" });
+      await link.waitFor({ state: "visible", timeout: 10_000 });
+      const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+
+      expect(download.suggestedFilename()).toBe("测试 report.pdf");
+      expect(requestedUrls).toHaveLength(1);
+      expect(requestedUrls[0]?.searchParams.get("source")).toBe(source);
+      expect(requestedUrls[0]?.searchParams.get("mediaTicket")).toBe("ticket-download");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("renders a direct tool-result image from Gateway history", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const imageData =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X3q8AAAAAElFTkSuQmCC";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [
+            { alt: "Tool result preview", data: imageData, mimeType: "image/png", type: "image" },
+          ],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const image = page.getByAltText("Tool result preview");
+      await image.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await image.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
+      await gateway.waitForRequest("chat.startup");
+      await expect
+        .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+        .toBe(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("opens current context and latest-run usage from the composer ring", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        { role: "user", content: "Show current usage", timestamp: Date.now() - 1_000 },
+        {
+          role: "assistant",
+          content: "Usage ready.",
+          cost: {
+            input: 0.003456,
+            output: 0.018,
+            cacheRead: 0.0015,
+            cacheWrite: 0.0005,
+            total: 0.023456,
+          },
+          model: "gpt-5.5",
+          provider: "openai",
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: 200_000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              contextTokens: 200_000,
+              estimatedCostUsd: 0.023456,
+              inputTokens: 757_300,
+              key: "main",
+              kind: "direct",
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              outputTokens: 42_300,
+              totalTokens: 46_000,
+              updatedAt: Date.now(),
+            },
+          ],
+          ts: Date.now(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const trigger = page.locator("summary.context-ring");
+      await trigger.waitFor({ timeout: 10_000 });
+      await trigger.click();
+
+      const popover = page.locator(".context-usage__popover");
+      await expect.poll(() => popover.isVisible()).toBe(true);
+      await expect.poll(() => popover.textContent()).toContain("46k / 200k · 23%");
+      await expect.poll(() => popover.textContent()).toContain("757.3k");
+      await expect.poll(() => popover.textContent()).toContain("42.3k");
+      await expect.poll(() => popover.textContent()).toContain("Est. cost");
+      await expect.poll(() => popover.textContent()).toContain("$0.023");
+      await expect.poll(() => popover.textContent()).toContain("Cost by Type");
+      await expect.poll(() => popover.textContent()).toContain("$0.0035");
+      await expect.poll(() => popover.textContent()).toContain("$0.018");
+      await expect.poll(() => popover.textContent()).toContain("$0.0015");
+      await expect.poll(() => popover.textContent()).toContain("$0.0005");
+      await expect.poll(() => popover.textContent()).toContain("openai");
+      await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
+
+      await page.keyboard.press("Escape");
+      await expect.poll(() => popover.isHidden()).toBe(true);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps stale context visible as approximate without warning or compaction", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: { contextTokens: 200_000, model: "gpt-5.5", modelProvider: "openai" },
+          path: "",
+          sessions: [
+            {
+              contextTokens: 200_000,
+              key: "main",
+              kind: "direct",
+              totalTokens: 190_000,
+              totalTokensFresh: false,
+              updatedAt: Date.now(),
+            },
+          ],
+          ts: Date.now(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const trigger = page.locator("summary.context-ring");
+      await trigger.waitFor({ timeout: 10_000 });
+      expect((await trigger.textContent())?.trim()).toBe("~95%");
+      expect(await trigger.getAttribute("aria-label")).toBe(
+        "Session context usage: ~190k of 200k (~95%)",
+      );
+      expect(
+        await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
+      ).toBe(false);
+
+      await trigger.click();
+      await expect
+        .poll(() => page.locator(".context-usage__popover").textContent())
+        .toContain("~190k / 200k · ~95%");
+      expect(await page.locator(".context-ring__action").count()).toBe(0);
     } finally {
       await closeBrowserContext(context);
     }
@@ -921,9 +1154,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await waitForChatScrollIdle(page);
-      await scrollChatThreadToTop(page);
       await expect
-        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .poll(
+          async () => {
+            await scrollChatThreadToTop(page);
+            return chatThreadDistanceFromBottom(page);
+          },
+          { timeout: 10_000 },
+        )
         .toBeGreaterThan(200);
 
       await gateway.deferNext("chat.send");
@@ -1202,6 +1440,82 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("clears hover marquee state when a session switch reshuffles recent rows", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessions = chatSessionListResponse();
+    sessions.sessions[0].label = "Short";
+    sessions.sessions[1].label =
+      "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
+        4,
+      );
+    await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessions },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const recentRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
+      );
+      const recentLabel = recentRow.locator(".sidebar-recent-session__name");
+      await recentLabel.waitFor({ state: "visible", timeout: 10_000 });
+      const layout = await recentLabel.evaluate((label) => ({
+        clientWidth: label.clientWidth,
+        linkWidth: label.parentElement?.clientWidth ?? 0,
+        rowWidth: label.closest<HTMLElement>(".sidebar-recent-session")?.clientWidth ?? 0,
+        scrollWidth: label.scrollWidth,
+        text: label.textContent,
+      }));
+      expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
+
+      await recentRow.dispatchEvent("mouseenter");
+      await expect
+        .poll(() => recentLabel.evaluate((label) => getComputedStyle(label).textIndent))
+        .not.toBe("0px");
+
+      await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
+        button: 0,
+      });
+      await page
+        .locator(".sidebar-recent-session--active")
+        .getByText(sessions.sessions[1].label)
+        .waitFor({
+          timeout: 10_000,
+        });
+
+      const reshuffledLabel = page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .getByText("Short");
+      await reshuffledLabel.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textIndent)).toBe(
+        "0px",
+      );
+      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textOverflow)).toBe(
+        "ellipsis",
+      );
+
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const activeRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
+      );
+      await activeRow.dispatchEvent("mouseenter");
+      expect(
+        await activeRow.locator(".sidebar-recent-session__name").evaluate((label) => ({
+          textIndent: getComputedStyle(label).textIndent,
+          textOverflow: getComputedStyle(label).textOverflow,
+        })),
+      ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("shows a pending send while a model override save is still pending", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1300,6 +1614,74 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText("Recovered from refreshed history.").waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps live assistant stream text before the matching tool card", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "stream before tool";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "I will inspect the file.",
+        message: {
+          content: [{ text: "I will inspect the file.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
+
+      await gateway.emitGatewayEvent("agent", {
+        data: {
+          name: "read",
+          phase: "result",
+          result: "file contents",
+          toolCallId: "call-read",
+        },
+        runId,
+        seq: 1,
+        sessionKey: "main",
+        stream: "tool",
+        ts: Date.now() - 10_000,
+      });
+      const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
+      await toolBubble.waitFor({ timeout: 10_000 });
+
+      const visibleOrder = await page.locator(".chat-thread").evaluate((thread: Element) => {
+        return Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
+          const text = group.textContent ?? "";
+          if (text.includes("I will inspect the file.")) {
+            return ["assistant stream"];
+          }
+          if (group.querySelector('[data-message-id^="tool:assistant:call-read"]')) {
+            return ["tool card"];
+          }
+          return [];
+        });
+      });
+
+      expect(visibleOrder).toEqual(["assistant stream", "tool card"]);
     } finally {
       await closeBrowserContext(context);
     }

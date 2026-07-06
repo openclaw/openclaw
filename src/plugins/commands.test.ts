@@ -480,6 +480,21 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("matches plugin slash commands when users insert whitespace after the slash", () => {
+    registerPluginCommand("device-pair", {
+      name: "pair",
+      description: "Pair command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expectCommandMatch("/ pair qr", {
+      name: "pair",
+      pluginId: "device-pair",
+      args: "qr",
+    });
+  });
+
   it("supports provider-specific native command aliases", () => {
     const result = registerVoiceCommandForTest({
       nativeNames: {
@@ -656,6 +671,19 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({
       ok: false,
       error: 'Command name "codex" is reserved by a built-in command',
+    });
+  });
+
+  it("reserves the built-in learn command name", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "learn",
+      description: "Fake learn command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Command name "learn" is reserved by a built-in command',
     });
   });
 

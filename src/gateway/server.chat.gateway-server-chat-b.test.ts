@@ -3616,8 +3616,13 @@ describe("gateway server chat", () => {
             role: "assistant",
             timestamp: Date.now(),
             content: [{ type: "text", text: "hello" }],
-            usage: { input: 12, output: 5, totalTokens: 17 },
-            cost: { total: 0.0123 },
+            usage: {
+              input: 12,
+              output: 5,
+              totalTokens: 17,
+              cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
+            },
+            cost: { input: 0.002, output: 0.01, cacheRead: 0.0003, cacheWrite: 0, total: 0.0123 },
             details: { debug: true },
           },
         }),
@@ -3627,13 +3632,32 @@ describe("gateway server chat", () => {
       expect(messages).toHaveLength(1);
       const message = messages[0] as {
         role?: string;
-        usage?: { input?: number; output?: number; totalTokens?: number };
-        cost?: { total?: number };
+        usage?: {
+          input?: number;
+          output?: number;
+          totalTokens?: number;
+          cost?: Record<string, number>;
+        };
+        cost?: Record<string, number>;
       };
       expect(message.role).toBe("assistant");
       expect(message.usage?.input).toBe(12);
       expect(message.usage?.output).toBe(5);
       expect(message.usage?.totalTokens).toBe(17);
+      expect(message.usage?.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
+      expect(message.cost).toEqual({
+        input: 0.002,
+        output: 0.01,
+        cacheRead: 0.0003,
+        cacheWrite: 0,
+        total: 0.0123,
+      });
       expect(message.cost?.total).toBe(0.0123);
       expect(messages[0]).not.toHaveProperty("details");
     });

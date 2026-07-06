@@ -102,14 +102,14 @@ openclaw update repair --acknowledge-clawhub-risk
 openclaw update repair --json
 ```
 
-| Flag                                             | Description                                                                                                                                                                                                            |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, plugin convergence temporarily targets the stable/latest plugin line. Extended-stable repair is rejected on Git checkouts without changing config. |
-| `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                              |
-| `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                              |
-| `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                             |
-| `--acknowledge-clawhub-risk`                     | Same behavior as on `openclaw update`.                                                                                                                                                                                 |
-| `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                |
+| Flag                                             | Description                                                                                                                                                                                                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, eligible official npm plugins that follow bare/default or `latest` intent target the exact installed core version. Extended-stable repair is rejected on Git checkouts without changing config. |
+| `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                                                                           |
+| `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                                                                           |
+| `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                          |
+| `--acknowledge-clawhub-risk`                     | Same behavior as on `openclaw update`.                                                                                                                                                                                                                              |
+| `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                             |
 
 `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
 install records, syncs tracked plugins for the active update channel, updates
@@ -280,9 +280,11 @@ When the updated Gateway starts, plugin loading is verify-only: startup does not
 </Note>
 
 After an extended-stable core update succeeds, post-core plugin integrity and
-convergence still run, but official plugins temporarily target the
-stable/latest line. OpenClaw does not query plugin `@extended-stable`
-selectors in this release.
+convergence target eligible official npm plugins at the exact installed core
+version. For default/`latest` intent, OpenClaw does not query plugin
+`@extended-stable` or fall back to npm `latest`; it derives the package version
+from the installed core. Explicit version pins, explicit non-`latest` tags,
+third-party packages, and non-npm sources keep their existing intent.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged

@@ -432,6 +432,58 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `inline; filename="photo.png"; filename*=UTF-8''photo.png`,
+        );
+      },
+    });
+  });
+
+  it.each([
+    { filename: "voice.ogg", disposition: "inline" },
+    { filename: "clip.mp4", disposition: "inline" },
+    { filename: "report.pdf", disposition: "attachment" },
+    { filename: "archive.bin", disposition: "attachment" },
+  ])("serves $filename with $disposition disposition", async ({ filename, disposition }) => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-disposition-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `${disposition}; filename="${filename}"; filename*=UTF-8''${filename}`,
+        );
+      },
+    });
+  });
+
+  it("encodes Unicode and RFC 8187 delimiter characters in assistant media filenames", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-",
+      fn: async (tmpRoot) => {
+        const filename = `测试 100% 'draft' (1).pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="__ 100_ 'draft' (1).pdf"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20100%25%20%27draft%27%20%281%29.pdf`,
+        );
       },
     });
   });

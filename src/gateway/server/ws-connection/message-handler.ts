@@ -109,6 +109,7 @@ import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-to
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
+import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
@@ -169,6 +170,7 @@ import {
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
+  shouldPreserveLocalCliSharedAuthScopes,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import {
@@ -1026,6 +1028,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedAuthOk,
           authMethod,
         });
+        let preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
         const handleMissingDeviceIdentity = (): boolean => {
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
             isControlUi,
@@ -1051,13 +1060,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             hasSharedAuth,
             isLocalClient,
           });
-          // Shared token/password auth can bypass pairing for trusted operators.
-          // Device-less clients still clear self-declared scopes by default, with
-          // one narrow exception: the direct-local backend gateway-client shared-
-          // auth handoff used for in-process control-plane coordination.
+          // Device-less shared auth clears self-declared scopes by default.
+          // Only first-party local control paths preserve scopes: backend self-
+          // calls and CLI shared-secret calls that already proved loopback auth.
           if (
             !device &&
             !skipLocalBackendSelfPairing &&
+            !preserveLocalCliSharedAuthScopes &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
               decision,
               controlUiAuthPolicy,
@@ -1231,6 +1240,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authMethod,
         });
         skipLocalBackendSelfPairing = shouldSkipLocalBackendSelfPairing({
+          connectParams,
+          locality: pairingLocality,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
+        preserveLocalCliSharedAuthScopes = shouldPreserveLocalCliSharedAuthScopes({
           connectParams,
           locality: pairingLocality,
           hasBrowserOriginHeader,
@@ -2082,6 +2098,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           snapshot.stateVersion.health = getHealthVersion();
         }
         const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
+        const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
@@ -2091,6 +2108,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           },
           features: { methods: gatewayMethods, events },
           snapshot,
+          ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           auth: {
             role,

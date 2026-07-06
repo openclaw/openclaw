@@ -24,6 +24,13 @@ Map of OpenClaw features that can call paid provider APIs, where each reads its 
 - `/usage cost` prints a local cost summary; `/usage off` disables the footer.
 - Gemini CLI note: both `stream-json` and legacy `json` output carry usage under `stats`. OpenClaw normalizes `stats.cached` into `cacheRead` and derives input tokens from `stats.input_tokens - stats.cached` when needed.
 
+**Control UI → Usage** (cross-session analysis)
+
+- Shows transcript-derived token and estimated-cost totals for the selected date range, with breakdowns by provider, model, agent, channel, and token type.
+- Compares shorter calendar windows ending on the selected range end date. Missing dates count as zero-usage calendar days; they are not skipped to create a denser window.
+- Labels the daily chart scale directly. A `√` badge means square-root compression is keeping low-usage days visible.
+- These totals describe the available local session history, not a provider invoice or lifetime billing ledger. The UI warns when pricing is missing for some entries.
+
 **CLI usage windows** (provider quotas, not per-message cost)
 
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows** as `X% left`.

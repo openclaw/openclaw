@@ -468,6 +468,7 @@ export const zh_TW = {
       tokenHelpCopyToken: "3) 複製 token（格式類似 123456:ABC...）",
       tokenHelpNewBot: "2) 執行 /newbot（或 /mybots）",
       tokenHelpOpenBotFather: "1) 打開 Telegram 並與 @BotFather 對話",
+      tokenHelpWebApp: "偏好圖形介面？BotFather 網頁應用程式：{url}（建立 bot 後複製 token）",
       tokenInputPrompt: "輸入 Telegram bot token",
       tokenKeepPrompt: "Telegram token 已設定。保留目前值？",
       userIdHelpGetUpdates:

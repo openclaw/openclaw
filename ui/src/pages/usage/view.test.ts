@@ -19,6 +19,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       aggregates: null,
       costDaily: [],
       cacheStatus: undefined,
+      providerUsage: [],
     },
     filters: {
       startDate: "2026-05-14",
@@ -145,6 +146,51 @@ describe("renderUsage", () => {
     expect(agentFilter?.textContent).toContain("research");
   });
 
+  it("renders provider plans, quotas, and billing independently of session usage", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [
+              {
+                provider: "openrouter",
+                displayName: "OpenRouter",
+                plan: "Production",
+                windows: [{ label: "API key budget", usedPercent: 25 }],
+                billing: [
+                  {
+                    type: "balance",
+                    label: "Account balance",
+                    amount: 64.5,
+                    unit: "USD",
+                  },
+                  {
+                    type: "budget",
+                    label: "API key budget",
+                    used: 5,
+                    limit: 20,
+                    unit: "USD",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const card = container.querySelector(".provider-usage-card");
+    expect(card?.textContent).toContain("OpenRouter");
+    expect(card?.textContent).toContain("Production");
+    expect(card?.textContent).toContain("75% left");
+    expect(card?.textContent).toContain("$64.50");
+    expect(card?.textContent).toContain("$5.00 / $20.00");
+  });
+
   it("filters visible sessions when an agent scope is selected", () => {
     const container = document.createElement("div");
 
@@ -264,5 +310,52 @@ describe("renderUsage", () => {
       ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
     );
     expect(messagesValue?.textContent?.trim()).toBe("2");
+  });
+
+  it("hides range-wide cost windows when a post-load filter is active", () => {
+    const base = createUsageProps();
+    const totals = {
+      input: 100,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 100,
+      totalCost: 1,
+      inputCost: 1,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    };
+    const data = {
+      ...base.data,
+      totals,
+      costDaily: [{ ...totals, date: "2026-05-14" }],
+    };
+    const filterCases: Array<Partial<UsageProps["filters"]>> = [
+      { query: "provider:openai" },
+      { agentId: "main" },
+      { selectedDays: ["2026-05-14"] },
+      { selectedHours: [12] },
+      { selectedSessions: ["agent:main:main"] },
+    ];
+
+    const unfiltered = document.createElement("div");
+    render(renderUsage(createUsageProps({ data })), unfiltered);
+    expect(unfiltered.querySelector(".cost-window-analysis")).not.toBeNull();
+
+    for (const filterCase of filterCases) {
+      const container = document.createElement("div");
+      render(
+        renderUsage(
+          createUsageProps({
+            data,
+            filters: { ...base.filters, ...filterCase },
+          }),
+        ),
+        container,
+      );
+      expect(container.querySelector(".cost-window-analysis")).toBeNull();
+    }
   });
 });

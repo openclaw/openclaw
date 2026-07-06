@@ -1163,7 +1163,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]) {
       expect(resolveChangedTestTargetPlan([fixturePath]), fixturePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n-behavior.test.ts"],
+        targets: ["test/scripts/docs-i18n.test.ts"],
       });
     }
   });
@@ -3820,7 +3820,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
-  it("uses the large host-aware local profile on roomy local hosts", () => {
+  it("uses the global host worker budget for roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         61,
@@ -3831,7 +3831,7 @@ describe("scripts/test-projects full-suite sharding", () => {
           totalMemoryBytes: 48 * 1024 ** 3,
         },
       ),
-    ).toBe(10);
+    ).toBe(6);
   });
 
   it("keeps CI full-suite runs serial even on roomy hosts", () => {
@@ -4130,19 +4130,23 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    const toolingConfig = "test/vitest/vitest.tooling.config.ts";
+    const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
     const plans = leafShardPlans;
+    const toolingPlans = plans.filter((plan) => plan.config === toolingConfig);
+    const unitFastPlans = plans.filter((plan) => plan.config === unitFastConfig);
 
     if (leafShardHasGitGatewayListing) {
       expect(leafShardGatewayTreeReads).toEqual([]);
     }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
-      "test/vitest/vitest.unit-fast.config.ts",
+      ...unitFastPlans.map(() => unitFastConfig),
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
-      "test/vitest/vitest.tooling.config.ts",
+      ...toolingPlans.map(() => toolingConfig),
       "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -4235,9 +4239,36 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
-    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+    const unitFastTargets = unitFastPlans.flatMap((plan) => plan.forwardedArgs);
+    expect(unitFastPlans.length).toBeGreaterThan(10);
+    expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
+    expect(unitFastTargets.length).toBeGreaterThan(1_000);
+    expect(new Set(unitFastTargets).size).toBe(unitFastTargets.length);
+    expect(unitFastTargets).toContain("extensions/canvas/src/host/server.state-dir.test.ts");
+    expect(unitFastTargets).not.toContain("src/utils.test.ts");
+    const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
+    expect(toolingPlans.length).toBeGreaterThan(1);
+    expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+    expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(toolingTargets).toContain("test/scripts/test-group-report.test.ts");
+    expect(toolingTargets).toContain("src/scripts/control-ui-i18n-report.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(
+      plans.filter(
+        (plan) =>
+          plan.config !== gatewayServerConfig &&
+          plan.config !== toolingConfig &&
+          plan.config !== unitFastConfig,
+      ),
+    ).toEqual(
       plans
-        .filter((plan) => plan.config !== gatewayServerConfig)
+        .filter(
+          (plan) =>
+            plan.config !== gatewayServerConfig &&
+            plan.config !== toolingConfig &&
+            plan.config !== unitFastConfig,
+        )
         .map((plan) => ({
           config: plan.config,
           forwardedArgs: [],

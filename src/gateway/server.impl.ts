@@ -93,6 +93,7 @@ import {
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
+import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -107,6 +108,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import type { GatewaySidecarStartupMode } from "./server-startup-post-attach.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -499,11 +501,8 @@ export type GatewayServerOptions = {
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
-  /**
-   * Let post-listen sidecars (channels, plugin services) finish in the background.
-   * Defaults to false so gateway startup waits until sidecars are ready.
-   */
-  deferStartupSidecars?: boolean;
+  sidecarStartup?: GatewaySidecarStartupMode;
+  channelAutostartSuppression?: ChannelAutostartSuppression;
   /**
    * Optional startup timestamp used for concise readiness logging.
    */
@@ -865,8 +864,9 @@ export async function startGatewayServer(
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
   });
-  const deferStartupSidecars = opts.deferStartupSidecars === true;
-  const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
+  channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
+  const sidecarStartup = opts.sidecarStartup ?? "start";
+  const isGatewayStartupPending = () => !startupSidecarsReady && sidecarStartup === "start";
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
@@ -1064,6 +1064,7 @@ export async function startGatewayServer(
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
       mediaCleanup: runtimeState.mediaCleanup,
+      worktreeCleanup: runtimeState.worktreeCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
@@ -1178,6 +1179,7 @@ export async function startGatewayServer(
       );
     const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
+        log,
         broadcast,
         broadcastToConnIds,
         nodeSendToSession,
@@ -1215,6 +1217,7 @@ export async function startGatewayServer(
             clients,
             startChannel,
             stopChannel,
+            getChannelAutostartSuppression: channelManager.getAutostartSuppression,
             logChannels,
           }),
           coreGatewayHandlers: coreGatewayHandlersLocal,
@@ -1626,11 +1629,7 @@ export async function startGatewayServer(
       pluginServices: runtimeState.pluginServices,
     } = await startupTrace.measure("runtime.post-attach", () =>
       loadGatewayStartupPostAttachModule().then(
-        ({
-          shouldSkipProviderAuthStartupPrewarm,
-          startGatewayPostAttachRuntime,
-          stopPostReadySidecarsAfterCloseStarted,
-        }) =>
+        ({ startGatewayPostAttachRuntime, stopPostReadySidecarsAfterCloseStarted }) =>
           startGatewayPostAttachRuntime({
             minimalTestGateway,
             cfgAtStart,
@@ -1716,10 +1715,8 @@ export async function startGatewayServer(
             },
             isClosing: () => closePreludeStarted,
             startupTrace,
-            deferSidecars: deferStartupSidecars,
-            logReadyOnSidecars: !deferStartupSidecars,
+            sidecarStartup,
             providerAuthPrewarm: {
-              startupEnabled: !shouldSkipProviderAuthStartupPrewarm(),
               getConfig: getRuntimeConfig,
             },
           }),
@@ -1727,7 +1724,7 @@ export async function startGatewayServer(
     ));
     startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
     startupTrace.mark("ready");
-    if (deferStartupSidecars) {
+    if (sidecarStartup === "defer") {
       log.info("gateway ready");
     }
     finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
@@ -1767,6 +1764,7 @@ export async function startGatewayServer(
       },
       startChannel,
       stopChannel,
+      getChannelAutostartSuppression: channelManager.getAutostartSuppression,
       stopPostReadySidecars: stopRegisteredPostReadySidecars,
       reloadPlugins: reloadAttachedGatewayPlugins,
       logHooks,
@@ -1814,12 +1812,14 @@ export async function startGatewayServer(
             if (maintenance.mediaCleanup) {
               clearInterval(maintenance.mediaCleanup);
             }
+            clearInterval(maintenance.worktreeCleanup);
             return;
           }
           runtimeState.tickInterval = maintenance.tickInterval;
           runtimeState.healthInterval = maintenance.healthInterval;
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
+          runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
         },
         shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,
         markCronStartHandled: () => {

@@ -218,6 +218,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type PendingSkillSuggestion = {
+  skillName: string;
+  detectedAt: number;
+};
+
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -291,6 +296,10 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
+  pendingSkillSuggestion?: PendingSkillSuggestion;
+  /** Fingerprint of the last signal queued as a skill suggestion. */
+  lastSkillSuggestionSignalHash?: string;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -423,6 +432,8 @@ export type SessionEntry = {
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
+  /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
+  category?: string;
   displayName?: string;
   channel?: string;
   groupId?: string;

@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 /** Result of applying a stored chat draft to the current composer input. */
 internal data class DraftApplication(
@@ -123,11 +125,13 @@ fun ChatComposer(
   onSetThinkingLevel: (level: String) -> Unit,
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
-  onSend: (text: String) -> Unit,
+  /** Returns whether the send/enqueue was accepted; refusals restore the cleared draft. */
+  onSend: suspend (text: String) -> Boolean,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
+  val sendScope = rememberCoroutineScope()
   val slashCommands =
     remember(input, commands) {
       matchingSlashCommands(input = input, commands = commands)
@@ -144,10 +148,15 @@ fun ChatComposer(
     }
   }
 
-  // One in-flight run owns the composer actions; attachments alone are enough
-  // to send when the gateway is healthy.
+  // One in-flight run owns the composer actions; attachments alone are enough to send when the
+  // gateway is healthy. Offline, only text can be sent (it is queued durably; text-only v1).
   val canSend =
-    pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
+    pendingRunCount == 0 &&
+      if (healthOk) {
+        input.trim().isNotEmpty() || attachments.isNotEmpty()
+      } else {
+        input.trim().isNotEmpty() && attachments.isEmpty()
+      }
   val sendBusy = pendingRunCount > 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -179,7 +188,7 @@ fun ChatComposer(
 
     if (!healthOk) {
       Text(
-        text = "Gateway is offline. Open Settings to reconnect.",
+        text = "Gateway is offline. Text messages are queued and sent after reconnecting.",
         style = mobileCallout,
         color = ai.openclaw.app.ui.mobileWarning,
       )
@@ -263,7 +272,14 @@ fun ChatComposer(
           val action = resolveSheetComposerSendAction(input = message)
           if (action.sendMessage || attachments.isNotEmpty()) {
             input = ""
-            onSend(message)
+            sendScope.launch {
+              val accepted = onSend(message)
+              // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+              // restore it unless the user already started typing something new.
+              if (!accepted && input.isEmpty()) {
+                input = message
+              }
+            }
           }
         },
         enabled = canSend,

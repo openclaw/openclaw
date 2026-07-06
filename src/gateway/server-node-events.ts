@@ -30,7 +30,7 @@ import {
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
-  loadOrCreateDeviceIdentity,
+  loadOrCreateProcessDeviceIdentity,
   loadSessionEntry,
   normalizeChannelId,
   normalizeMainKey,
@@ -819,7 +819,7 @@ export const handleNodeEvent = async (
       try {
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
-          const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
+          const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
           if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
             ctx.logGateway.warn(
               `push relay register rejected node=${nodeId}: gateway identity mismatch`,

@@ -313,7 +313,6 @@ async function main() {
       );
     }
     if (concurrency > 1) {
-      const localFullSuiteProfile = resolveLocalFullSuiteProfile(baseEnv);
       const shardTimings = readShardTimings(process.cwd(), baseEnv);
       const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
         applyParallelVitestCachePaths(orderFullSuiteSpecsForParallelRun(runSpecs, shardTimings), {
@@ -322,16 +321,6 @@ async function main() {
         }),
         baseEnv,
       );
-      if (
-        !isCiLikeEnv(baseEnv) &&
-        !baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL &&
-        !baseEnv.OPENCLAW_VITEST_MAX_WORKERS &&
-        !baseEnv.OPENCLAW_TEST_WORKERS &&
-        localFullSuiteProfile.shardParallelism === 10 &&
-        localFullSuiteProfile.vitestMaxWorkers === 2
-      ) {
-        console.error("[test] using host-aware local full-suite profile: shards=10 workers=2");
-      }
       console.error(
         `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
       );

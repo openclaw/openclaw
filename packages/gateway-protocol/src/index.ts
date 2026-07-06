@@ -165,6 +165,10 @@ import {
   ConnectParamsSchema,
   type CronAddParams,
   CronAddParamsSchema,
+  type CronAddResult,
+  CronAddResultSchema,
+  type CronDeclarativeAddResult,
+  CronDeclarativeAddResultSchema,
   type CronGetParams,
   CronGetParamsSchema,
   type CronJob,
@@ -237,6 +241,10 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type SystemInfoParams,
+  SystemInfoParamsSchema,
+  type SystemInfoResult,
+  SystemInfoResultSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -509,6 +517,14 @@ import {
   CrestodianChatParamsSchema,
   type CrestodianChatResult,
   CrestodianChatResultSchema,
+  type CrestodianSetupDetectParams,
+  CrestodianSetupDetectParamsSchema,
+  type CrestodianSetupDetectResult,
+  CrestodianSetupDetectResultSchema,
+  type CrestodianSetupActivateParams,
+  CrestodianSetupActivateParamsSchema,
+  type CrestodianSetupActivateResult,
+  CrestodianSetupActivateResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -525,6 +541,24 @@ import {
   WizardStatusResultSchema,
   type WizardStep,
   WizardStepSchema,
+  type WorktreeRecord,
+  WorktreeRecordSchema,
+  type WorktreesListParams,
+  WorktreesListParamsSchema,
+  type WorktreesListResult,
+  WorktreesListResultSchema,
+  type WorktreesCreateParams,
+  WorktreesCreateParamsSchema,
+  type WorktreesRemoveParams,
+  WorktreesRemoveParamsSchema,
+  type WorktreesRemoveResult,
+  WorktreesRemoveResultSchema,
+  type WorktreesRestoreParams,
+  WorktreesRestoreParamsSchema,
+  type WorktreesGcParams,
+  WorktreesGcParamsSchema,
+  type WorktreesGcResult,
+  WorktreesGcResultSchema,
 } from "./schema.js";
 
 /** Normalized validation error shape exposed by every protocol validator. */
@@ -604,6 +638,18 @@ export const validateAgentIdentityParams =
 export const validateAgentWaitParams = lazyCompile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = lazyCompile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = lazyCompile<AgentsListParams>(AgentsListParamsSchema);
+export const validateWorktreesListParams =
+  lazyCompile<WorktreesListParams>(WorktreesListParamsSchema);
+export const validateWorktreesCreateParams = lazyCompile<WorktreesCreateParams>(
+  WorktreesCreateParamsSchema,
+);
+export const validateWorktreesRemoveParams = lazyCompile<WorktreesRemoveParams>(
+  WorktreesRemoveParamsSchema,
+);
+export const validateWorktreesRestoreParams = lazyCompile<WorktreesRestoreParams>(
+  WorktreesRestoreParamsSchema,
+);
+export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(WorktreesGcParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -646,6 +692,8 @@ export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams
 export const validateEnvironmentsStatusParams = lazyCompile<EnvironmentsStatusParams>(
   EnvironmentsStatusParamsSchema,
 );
+export const validateSystemInfoParams = lazyCompile<SystemInfoParams>(SystemInfoParamsSchema);
+export const validateSystemInfoResult = lazyCompile<SystemInfoResult>(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -755,6 +803,12 @@ export const validateConfigSchemaLookupResult = lazyCompile<ConfigSchemaLookupRe
 );
 export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
   CrestodianChatParamsSchema,
+);
+export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
+  CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
+  CrestodianSetupActivateParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
@@ -1061,6 +1115,8 @@ export {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
+  SystemInfoParamsSchema,
+  SystemInfoResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -1142,6 +1198,10 @@ export {
   UpdateStatusParamsSchema,
   CrestodianChatParamsSchema,
   CrestodianChatResultSchema,
+  CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResultSchema,
+  CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1240,6 +1300,8 @@ export {
   CronStatusParamsSchema,
   CronGetParamsSchema,
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
   CronRunParamsSchema,
@@ -1273,6 +1335,15 @@ export {
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
+  WorktreeRecordSchema,
+  WorktreesListParamsSchema,
+  WorktreesListResultSchema,
+  WorktreesCreateParamsSchema,
+  WorktreesRemoveParamsSchema,
+  WorktreesRemoveResultSchema,
+  WorktreesRestoreParamsSchema,
+  WorktreesGcParamsSchema,
+  WorktreesGcResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -1317,6 +1388,10 @@ export type {
   ConfigSchemaResponse,
   CrestodianChatParams,
   CrestodianChatResult,
+  CrestodianSetupDetectParams,
+  CrestodianSetupDetectResult,
+  CrestodianSetupActivateParams,
+  CrestodianSetupActivateResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1436,6 +1511,8 @@ export type {
   EnvironmentsListResult,
   EnvironmentsStatusParams,
   EnvironmentsStatusResult,
+  SystemInfoParams,
+  SystemInfoResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,
@@ -1474,6 +1551,8 @@ export type {
   CronStatusParams,
   CronGetParams,
   CronAddParams,
+  CronAddResult,
+  CronDeclarativeAddResult,
   CronUpdateParams,
   CronRemoveParams,
   CronRunParams,
@@ -1510,6 +1589,15 @@ export type {
   UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
+  WorktreeRecord,
+  WorktreesListParams,
+  WorktreesListResult,
+  WorktreesCreateParams,
+  WorktreesRemoveParams,
+  WorktreesRemoveResult,
+  WorktreesRestoreParams,
+  WorktreesGcParams,
+  WorktreesGcResult,
 };
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];

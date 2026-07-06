@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -16,6 +18,7 @@ import { runSkillResearchAutoCapture } from "./autocapture.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const SESSION_KEY = "agent:main:main";
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -33,9 +36,21 @@ async function makeWorkspace(): Promise<string> {
   return await tempDirs.make("openclaw-skill-workshop-");
 }
 
+async function seedSession(sessionKey = SESSION_KEY): Promise<void> {
+  await upsertSessionEntry(
+    { agentId: "main", sessionKey },
+    { sessionId: `session-${sessionKey}`, updatedAt: 1 },
+  );
+}
+
+function readSession(sessionKey = SESSION_KEY) {
+  return loadSessionEntry({ agentId: "main", sessionKey, readConsistency: "latest" });
+}
+
 describe("skill research auto-capture", () => {
   it("queues a pending proposal from durable user correction", async () => {
     const workspaceDir = await makeWorkspace();
+    await seedSession();
 
     await runSkillResearchAutoCapture({
       event: {
@@ -48,7 +63,7 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir, agentId: "main" },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
       config: {
         skills: {
           workshop: {
@@ -71,10 +86,12 @@ describe("skill research auto-capture", () => {
     const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
     expect(proposal?.content).toContain("status: proposal");
     expect(proposal?.content).toContain("always check CI before final response");
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
   });
 
-  it("stays inert when auto-capture is disabled", async () => {
+  it("records and one-shot consumes a suggestion with default config", async () => {
     const workspaceDir = await makeWorkspace();
+    await seedSession();
 
     await runSkillResearchAutoCapture({
       event: {
@@ -86,19 +103,103 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir },
-      config: {
-        skills: {
-          workshop: {
-            autonomous: {
-              enabled: false,
-            },
-          },
-        },
-      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
     });
 
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+    expect(readSession()?.pendingSkillSuggestion).toMatchObject({
+      skillName: "screenshot-asset-workflow",
+    });
+
+    const first = await consumeSessionSkillSuggestion({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+    });
+    expect(first?.suggestion).toMatchObject({ skillName: "screenshot-asset-workflow" });
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+
+    const second = await consumeSessionSkillSuggestion({
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+    });
+    expect(second?.suggestion).toBeUndefined();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+    });
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+  });
+
+  it("does not record a suggestion when no durable signal is present", async () => {
+    const workspaceDir = await makeWorkspace();
+    await seedSession();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [{ role: "user", content: "Please review this pull request." }],
+      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+    });
+
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+  });
+
+  it("does not record a suggestion after a failed turn", async () => {
+    const workspaceDir = await makeWorkspace();
+    await seedSession();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: false,
+        messages: [
+          {
+            role: "user",
+            content: "Remember to always verify generated screenshots before replying.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+    });
+
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
+  });
+
+  it("does not record a suggestion while a matching proposal is pending", async () => {
+    const workspaceDir = await makeWorkspace();
+    await seedSession();
+    const event = {
+      success: true,
+      messages: [
+        {
+          role: "user",
+          content:
+            "From now on, when working on GitHub PRs, always check CI before final response.",
+        },
+      ],
+    };
+
+    await runSkillResearchAutoCapture({
+      event,
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+    });
+    await runSkillResearchAutoCapture({
+      event,
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(1);
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
   });
 
   it.each([
@@ -136,6 +237,8 @@ describe("skill research auto-capture", () => {
     },
   ])("skips $name before queuing proposals", async ({ ctx }) => {
     const workspaceDir = await makeWorkspace();
+    const sessionKey = ctx.sessionKey ?? SESSION_KEY;
+    await seedSession(sessionKey);
 
     await runSkillResearchAutoCapture({
       event: {
@@ -149,22 +252,15 @@ describe("skill research auto-capture", () => {
         ],
       },
       ctx: { workspaceDir, agentId: "main", ...ctx },
-      config: {
-        skills: {
-          workshop: {
-            autonomous: {
-              enabled: true,
-            },
-          },
-        },
-      },
     });
 
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+    expect(readSession(sessionKey)?.pendingSkillSuggestion).toBeUndefined();
   });
 
   it("preserves existing skill content when auto-capturing an update", async () => {
     const workspaceDir = await makeWorkspace();
+    await seedSession();
     const skillFile = path.join(workspaceDir, "skills", "github-pr-workflow", "SKILL.md");
     await fs.mkdir(path.dirname(skillFile), { recursive: true });
     await fs.writeFile(
@@ -194,7 +290,7 @@ describe("skill research auto-capture", () => {
           },
         ],
       },
-      ctx: { workspaceDir, agentId: "main" },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
       config: {
         skills: {
           workshop: {
@@ -218,5 +314,20 @@ describe("skill research auto-capture", () => {
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Preserve this original review checklist.");
     expect(updatedSkill).toContain("always check CI before final response");
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", sessionKey: SESSION_KEY },
+    });
+    expect(readSession()?.pendingSkillSuggestion).toBeUndefined();
   });
 });

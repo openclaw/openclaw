@@ -2,6 +2,7 @@ run_hosted_prepare_gates() {
   local pr="$1"
   local current_head="$2"
   local changelog_only="$3"
+  local recent_sha="${4:-}"
   local remote_head
   remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
   if [ "$remote_head" != "$current_head" ]; then
@@ -15,12 +16,20 @@ run_hosted_prepare_gates() {
     scripts/verify-pr-hosted-gates.mjs
     --repo "$repo"
     --sha "$current_head"
+    --pr "$pr"
     --output ".local/gates-hosted-checks.json"
   )
+  if [ -n "$recent_sha" ]; then
+    args+=(--recent-sha "$recent_sha")
+  fi
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  run_quiet_logged "exact-head hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
+  run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
+}
+
+compute_pr_patch_id() {
+  git diff --binary "$1" "$2" | git patch-id --verbatim | awk 'NR == 1 { print $1 }'
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -192,7 +201,7 @@ write_gates_env_stamp() {
     GATES_MODE "$gates_mode" \
     LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
     FULL_GATES_HEAD_SHA "$full_gates_head" \
-    HOSTED_GATES_HEAD_SHA "$hosted_gates_head" \
+    HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head" \
     REMOTE_GATES_PROVIDER "$remote_provider" \
     REMOTE_GATES_LEASE_ID "$remote_lease_id" \
     REMOTE_GATES_RUN_URL "$remote_run_url" \
@@ -204,8 +213,8 @@ run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
   if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "A lease retry changed the prepared head, so its exact-head hosted evidence no longer applies."
-    echo "Stop here, wait for CI/Testbox on the pushed head, then re-run prepare-run."
+    echo "A lease retry changed the prepared head after gate selection."
+    echo "Stop here, wait for hosted evidence on the pushed branch, then re-run prepare-run."
     return 1
   fi
 
@@ -271,7 +280,7 @@ prepare_gates() {
   local gates_remote_mode
   gates_remote_mode=$(resolve_pr_gates_remote_mode)
   if [ "$gates_remote_mode" = "testbox" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "OPENCLAW_PR_GATES_REMOTE=testbox conflicts with OPENCLAW_TESTBOX=1; hosted exact-head gates already own remote proof."
+    echo "OPENCLAW_PR_GATES_REMOTE=testbox conflicts with OPENCLAW_TESTBOX=1; hosted PR gates already own remote proof."
     exit 2
   fi
 
@@ -371,14 +380,36 @@ prepare_gates() {
   fi
 
   if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    gates_mode="hosted_exact_head"
+    gates_mode="hosted_exact_or_recent_rebase"
     remote_gates_provider=""
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
+    local recent_hosted_sha=""
+    if [ -s .local/prep-sync.env ]; then
+      # shellcheck disable=SC1091
+      source .local/prep-sync.env
+      local current_prep_tree
+      current_prep_tree=$(git rev-parse "${current_head}^{tree}")
+      if [ "${PREP_SYNC_TREE:-}" != "$current_prep_tree" ]; then
+        echo "Prepared PR head no longer matches the recorded sync tree."
+        exit 1
+      fi
+      if [ -z "${PREP_SYNC_MAINLINE_BASE_SHA:-}" ] || [ -z "${PREP_SYNC_PATCH_ID:-}" ]; then
+        echo "Prepared PR sync evidence is incomplete."
+        exit 1
+      fi
+      local current_patch_id
+      current_patch_id=$(compute_pr_patch_id "$PREP_SYNC_MAINLINE_BASE_SHA" "$current_head")
+      if [ "$current_patch_id" != "$PREP_SYNC_PATCH_ID" ]; then
+        echo "Prepared PR patch no longer matches the verified pre-rebase patch."
+        exit 1
+      fi
+      recent_hosted_sha="${PREP_SYNC_EVIDENCE_SHA:-}"
+    fi
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$recent_hosted_sha"
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

@@ -5713,4 +5713,24 @@ describe("subagent registry seam flow", () => {
     expect(runs[41]?.delivery?.status).toBe("suspended");
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
+
+  it("contains background sweeper failures while direct sweeps stay observable", async () => {
+    mod.registerSubagentRun({
+      runId: "run-sweep-error",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "sweep error",
+      cleanup: "delete",
+    });
+    const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:child");
+    expect(run).toBeDefined();
+    run!.startedAt = Date.now() - 2_000;
+    mocks.loadSessionStore.mockImplementation(() => {
+      throw new Error("simulated sweep failure");
+    });
+
+    await expect(mod.testing.sweepOnceForTests()).rejects.toThrow("simulated sweep failure");
+    await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
+  });
 });

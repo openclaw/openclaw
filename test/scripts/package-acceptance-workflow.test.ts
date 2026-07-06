@@ -771,6 +771,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker-full "full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
     expect(workflow).toContain(
       'add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"',
@@ -794,7 +795,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
-    expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
+    expect(workflow).toContain("inputs.live_suite_filter == matrix.suite_group");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
@@ -1095,7 +1096,7 @@ describe("package artifact reuse", () => {
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      "run_setup_command npm install -g @anthropic-ai/claude-code",
+      'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
@@ -1548,6 +1549,17 @@ describe("package artifact reuse", () => {
       expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);
       expect(uploadStep.with?.["if-no-files-found"], label).toBe("error");
     }
+  });
+
+  it("maps every supported Slack approval checkpoint scenario family", () => {
+    const workflow = readFileSync(MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "utf8");
+
+    expectTextToIncludeAll(workflow, [
+      'endswith("-exec-native")',
+      'endswith("-plugin-native")',
+      'startswith("slack-codex-")',
+      'expected_result="Slack approval checkpoint passes for $scenario_label"',
+    ]);
   });
 
   it("fails Docker E2E release lanes when summary artifacts are missing", () => {
@@ -2410,6 +2422,12 @@ describe("package artifact reuse", () => {
     );
     expect(fullRelease.jobs?.prepare_release_package).toBeUndefined();
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(
+      workflowStep(
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+        "Setup Node environment",
+      ).with?.["install-deps"],
+    ).toBe("true");
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
