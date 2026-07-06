@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
@@ -94,6 +94,24 @@ describe("streamSessionTranscriptLines", () => {
     const lines = await collect(streamSessionTranscriptLines(transcriptPath));
 
     expect(lines).toEqual([longLine, "short"]);
+  });
+
+  it("does not crash when the read stream emits an error mid-read", async () => {
+    fs.writeFileSync(transcriptPath, "one\ntwo\n", "utf-8");
+
+    const originalCreateReadStream = fs.createReadStream;
+    vi.spyOn(fs, "createReadStream").mockImplementationOnce((...args: unknown[]) => {
+      const created = originalCreateReadStream.apply(fs, args as never);
+      process.nextTick(() => {
+        created.emit("error", new Error("stream read failed"));
+      });
+      return created;
+    });
+
+    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
+
+    vi.restoreAllMocks();
+    expect(lines).toEqual([]);
   });
 });
 

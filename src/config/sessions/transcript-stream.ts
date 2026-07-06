@@ -62,6 +62,9 @@ export async function* streamSessionTranscriptLines(
       }
       yield trimmed;
     }
+  } catch {
+    // Mid-stream read errors are swallowed so callers see a truncated but
+    // stable iterator, matching the behavior for missing/empty files.
   } finally {
     rl.close();
     stream.destroy();
