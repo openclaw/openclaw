@@ -6,6 +6,7 @@ import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { parseNonNegativeByteSize } from "../config/byte-size.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
@@ -794,6 +795,33 @@ type ToolResultCapTarget = {
   target?: string;
 };
 
+function collectInactiveMaxActiveTranscriptByteGuardFinding(
+  cfg: OpenClawConfig,
+): HealthFinding[] {
+  const compaction = cfg.agents?.defaults?.compaction;
+  const parsed = parseNonNegativeByteSize(compaction?.maxActiveTranscriptBytes);
+  if (
+    typeof parsed !== "number" ||
+    parsed <= 0 ||
+    compaction?.truncateAfterCompaction === true
+  ) {
+    return [];
+  }
+  return [
+    {
+      checkId: "core/doctor/tool-result-cap",
+      severity: "warning",
+      message:
+        "agents.defaults.compaction.maxActiveTranscriptBytes is set, but the active transcript byte guard is inactive until truncateAfterCompaction is true.",
+      path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+      target: "agents.defaults.compaction",
+      requirement: "truncateAfterCompaction-required",
+      fixHint:
+        "Set agents.defaults.compaction.truncateAfterCompaction to true, or unset maxActiveTranscriptBytes.",
+    },
+  ];
+}
+
 async function collectToolResultCapFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
@@ -828,14 +856,15 @@ async function collectToolResultCapFindings(
       target: `agents.list.${normalizedAgentId}`,
     });
   }
+  const byteGuardFindings = collectInactiveMaxActiveTranscriptByteGuardFinding(cfg);
   if (targets.length === 0) {
-    return [];
+    return byteGuardFindings;
   }
 
   const { collectToolResultCapDoctorIssues, toolResultCapDoctorIssueToHealthFinding } =
     await import("./doctor-tool-result-cap-advice.js");
 
-  return collectToolResultCapTargetAdvice({
+  const toolResultFindings = await collectToolResultCapTargetAdvice({
     cfg,
     readOnlyCatalog: true,
     targets,
@@ -844,6 +873,7 @@ async function collectToolResultCapFindings(
       collectToolResultCapDoctorIssues(entry).map(toolResultCapDoctorIssueToHealthFinding),
     ),
   );
+  return [...byteGuardFindings, ...toolResultFindings];
 }
 
 async function collectToolResultCapTargetAdvice(params: {
@@ -925,22 +955,29 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
       scopeLabel: `agent "${normalizedAgentId}"`,
     });
   }
-  if (targets.length === 0) {
+  const byteGuardFindings = collectInactiveMaxActiveTranscriptByteGuardFinding(ctx.cfg);
+  if (targets.length === 0 && byteGuardFindings.length === 0) {
     return;
   }
 
-  const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
   const { note } = await loadNoteModule();
-  const entries = await collectToolResultCapTargetAdvice({
-    cfg: ctx.cfg,
-    targets,
-  });
-  const lines = entries.flatMap((entry) =>
-    buildToolResultCapDoctorAdvice({
-      ...entry,
-      deep: ctx.options.deep === true,
-    }),
-  );
+  const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
+  const entries =
+    targets.length > 0
+      ? await collectToolResultCapTargetAdvice({
+          cfg: ctx.cfg,
+          targets,
+        })
+      : [];
+  const lines = [
+    ...entries.flatMap((entry) =>
+      buildToolResultCapDoctorAdvice({
+        ...entry,
+        deep: ctx.options.deep === true,
+      }),
+    ),
+    ...byteGuardFindings.map((entry) => `- ${entry.message}`),
+  ];
   if (lines.length > 0) {
     note(lines.join("\n"), "Tool result cap");
   }

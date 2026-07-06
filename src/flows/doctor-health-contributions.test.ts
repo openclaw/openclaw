@@ -1693,6 +1693,85 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("warns when maxActiveTranscriptBytes is set without transcript rotation", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const toolResultCapCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/tool-result-cap",
+    );
+    expect(toolResultCapCheck).toBeDefined();
+
+    const baseCtx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "10mb",
+            },
+          },
+        },
+      },
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(
+      runDoctorLintChecks(baseCtx, {
+        checks: [toolResultCapCheck!],
+        onlyIds: ["core/doctor/tool-result-cap"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/tool-result-cap",
+          path: "agents.defaults.compaction.maxActiveTranscriptBytes",
+          requirement: "truncateAfterCompaction-required",
+        }),
+      ],
+    });
+
+    const contribution = requireDoctorContribution("doctor:tool-result-cap");
+    await contribution.run({
+      ...baseCtx,
+      configResult: { cfg: baseCtx.cfg },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      options: {},
+      cfgForPersistence: baseCtx.cfg,
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    });
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("active transcript byte guard is inactive"),
+      "Tool result cap",
+    );
+
+    await expect(
+      runDoctorLintChecks(
+        {
+          ...baseCtx,
+          cfg: {
+            agents: {
+              defaults: {
+                compaction: {
+                  truncateAfterCompaction: true,
+                  maxActiveTranscriptBytes: "10mb",
+                },
+              },
+            },
+          },
+        },
+        {
+          checks: [toolResultCapCheck!],
+          onlyIds: ["core/doctor/tool-result-cap"],
+        },
+      ),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      findings: [],
+    });
+  });
+
   it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "openclaw-legacy-plugin-deps-lint-"));
