@@ -682,16 +682,8 @@ function upsertSqliteSession(
 }
 
 function estimateSqliteLedgerBytes(db: DatabaseSync): number {
-  const row = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0) AS sessions,
-         (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json) + COALESCE(length(run_id), 0) + 32), 0)
-            FROM acp_replay_events) AS events
-       FROM acp_replay_sessions`,
-    )
-    .get() as { sessions?: number | bigint; events?: number | bigint } | undefined;
-  return normalizeSqliteInteger(row?.sessions ?? 0) + normalizeSqliteInteger(row?.events ?? 0);
+  const row = db.prepare("PRAGMA page_count").get() as { page_count: number } | undefined;
+  return (row?.page_count ?? 0) * 4096;
 }
 
 function trimSqliteLedger(
