@@ -62,7 +62,7 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
 ].join(",");
 const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
 const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
-export const CHAT_ATTACHMENT_ACCEPT =
+const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
@@ -867,7 +867,7 @@ export type ChatAttachmentControlsProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
 };
 
-export type ChatQueueProps = {
+type ChatQueueProps = {
   queue: ChatQueueItem[];
   canAbort?: boolean;
   onQueueRetry?: (id: string) => void;
@@ -1019,11 +1019,11 @@ function clickComposerInput(event: MouseEvent, selector: string) {
   target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
 }
 
-export function clickComposerFileInput(event: MouseEvent) {
+function clickComposerFileInput(event: MouseEvent) {
   clickComposerInput(event, ".agent-chat__file-input");
 }
 
-export function clickComposerCameraInput(event: MouseEvent) {
+function clickComposerCameraInput(event: MouseEvent) {
   clickComposerInput(event, ".agent-chat__camera-input");
 }
 
@@ -1071,7 +1071,7 @@ function isImageAttachment(att: ChatAttachment): boolean {
   return att.mimeType.startsWith("image/");
 }
 
-export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
+function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
     return;
@@ -1112,7 +1112,7 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
   }
 }
 
-export function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
+function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
   const input = e.target as HTMLInputElement;
   if (!input.files || !props.onAttachmentsChange) {
     return;
@@ -1164,7 +1164,7 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
   }
 }
 
-export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
+function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
     return nothing;
@@ -1214,7 +1214,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
   `;
 }
 
-export type ComposerRunStatus =
+type ComposerRunStatus =
   | ChatRunUiStatus
   | {
       phase: "in-progress";
@@ -1326,7 +1326,7 @@ export function renderFallbackIndicator(status: FallbackStatus | null | undefine
   `;
 }
 
-export type ContextNoticeOptions = {
+type ContextNoticeOptions = {
   compactBusy?: boolean;
   compactDisabled?: boolean;
   messages?: unknown[];

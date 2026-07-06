@@ -38,7 +38,7 @@ export type ChatRealtimeTalkOptionsProps = {
   embedded?: boolean;
 };
 
-export type ChatRealtimeTalkConversationProps = {
+type ChatRealtimeTalkConversationProps = {
   assistantName: string;
   userName?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];

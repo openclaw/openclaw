@@ -76,7 +76,7 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
-export type ChatTimestampDisplay = {
+type ChatTimestampDisplay = {
   label: string;
   title: string;
   dateTime: string;
@@ -548,7 +548,7 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;

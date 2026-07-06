@@ -335,7 +335,7 @@ export async function requestSkillWorkshopRevisionChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-export function appendUserChatMessage(
+function appendUserChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],

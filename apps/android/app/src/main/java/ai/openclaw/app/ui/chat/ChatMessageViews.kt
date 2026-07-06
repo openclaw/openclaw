@@ -60,7 +60,10 @@ private data class ChatBubbleStyle(
 
 /** Renders one persisted chat message as text and image parts. */
 @Composable
-fun ChatMessageBubble(message: ChatMessage) {
+fun ChatMessageBubble(
+  message: ChatMessage,
+  onReplyMessage: (String) -> Unit = {},
+) {
   val role = normalizeVisibleChatMessageRole(message.role) ?: return
   val style = bubbleStyle(role)
 
@@ -76,8 +79,15 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
-    ChatMessageBody(content = displayableContent, textColor = mobileText)
+  val messageText = chatMessagePlainText(displayableContent)
+  ChatMessageActionHost(
+    text = messageText,
+    onReply = onReplyMessage,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+      ChatMessageBody(content = displayableContent, textColor = mobileText)
+    }
   }
 }
 

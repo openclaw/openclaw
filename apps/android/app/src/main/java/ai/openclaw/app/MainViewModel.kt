@@ -28,6 +28,16 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+enum class ChatDraftPlacement {
+  Replace,
+  BeforeExisting,
+}
+
+data class ChatDraft(
+  val text: String,
+  val placement: ChatDraftPlacement,
+)
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -47,8 +57,8 @@ class MainViewModel(
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
-  private val _chatDraft = MutableStateFlow<String?>(null)
-  val chatDraft: StateFlow<String?> = _chatDraft
+  private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
+  val chatDraft: StateFlow<ChatDraft?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
@@ -415,7 +425,7 @@ class MainViewModel(
       return
     }
     _pendingAssistantAutoSend.value = null
-    _chatDraft.value = request.prompt
+    _chatDraft.value = request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace) }
   }
 
   fun clearRequestedHomeDestination() {
@@ -428,6 +438,11 @@ class MainViewModel(
 
   fun clearChatDraft() {
     _chatDraft.value = null
+  }
+
+  fun setChatReplyDraft(value: String) {
+    _pendingAssistantAutoSend.value = null
+    _chatDraft.value = ChatDraft(text = value, placement = ChatDraftPlacement.BeforeExisting)
   }
 
   /** Claims an assistant prompt before sending so Compose effect restarts cannot dispatch it twice. */

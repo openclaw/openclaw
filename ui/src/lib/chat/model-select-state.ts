@@ -31,7 +31,7 @@ export type ChatModelSelectOption = {
   label: string;
 };
 
-export type ChatModelSelectState = {
+type ChatModelSelectState = {
   currentOverride: string;
   defaultSelectable: boolean;
   defaultModel: string;

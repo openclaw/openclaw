@@ -18,7 +18,7 @@ export type ChatRunUiStatus = {
   occurredAt: number;
 };
 
-export type LocalTerminalReconcile = {
+type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
@@ -112,7 +112,7 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
-export type ChatAbortOptions = { preserveDraft?: boolean };
+type ChatAbortOptions = { preserveDraft?: boolean };
 
 export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {

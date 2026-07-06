@@ -40,7 +40,7 @@ export type ChatCommandResetOptions = {
   restoreDraft?: boolean;
 };
 
-export type ChatCommandSendOptions = ChatCommandResetOptions & {
+type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
