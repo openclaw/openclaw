@@ -41,6 +41,7 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
     model: {
       activeRunId: null,
       connected: true,
+      draftScope: {},
       gatewayAvailable: true,
       loading: false,
       modelCatalog: [],

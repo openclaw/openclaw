@@ -1603,7 +1603,7 @@ export function renderContextNotice(
                 </div>
               `
             : nothing}
-          ${providerQuota === ""
+          ${providerQuota === "" || providerQuota === nothing
             ? nothing
             : html`<div class="context-usage__quota">${providerQuota}</div>`}
           ${model

@@ -673,6 +673,7 @@ class ChatPage extends LitElement {
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,
+          draftScope: state.client ?? state,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,

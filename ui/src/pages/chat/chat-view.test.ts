@@ -483,6 +483,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   return {
     activeRunId: state.chatRunId,
     connected: state.connected,
+    draftScope: state,
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
@@ -3389,6 +3390,56 @@ describe("chat model controls", () => {
       expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
       expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
     });
+  });
+
+  it("clears staged model settings when the active session changes", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
+      ?.click();
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+
+    state.sessionKey = "other";
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+    state.sessionKey = "main";
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
+      ?.click();
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        draftScope: {},
+      }),
+      container,
+    );
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
   });
 
   it("discards staged model settings when the model save fails", async () => {
