@@ -4,6 +4,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
@@ -80,6 +81,7 @@ export type ChatComposerProps = {
   draft: string;
   sessions: SessionsListResult | null;
   assistantName: string;
+  sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
   showNewMessages?: boolean;
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
@@ -1784,6 +1786,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const tokens = tokenEstimate(visibleDraft);
   const composerControls = props.composerControls;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
   const placeholder = !props.connected
     ? t("chat.composer.placeholderDisconnected")
@@ -1930,7 +1933,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       }
     }
 
-    if (event.key === "Enter" && !event.shiftKey) {
+    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
+    if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
       if (!canCompose) {
         return;
       }
@@ -2122,6 +2126,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+          aria-keyshortcuts=${sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
           @keydown=${handleKeyDown}
           @beforeinput=${handleBeforeInput}
           @input=${handleInput}
