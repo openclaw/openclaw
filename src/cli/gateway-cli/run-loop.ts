@@ -115,7 +115,7 @@ export async function runGatewayLoop(params: {
   if (process.title === "openclaw") {
     process.title = "openclaw-gateway";
   }
-  let startupStartedAt = Date.now();
+  let startupStartedAt: number;
   // Eagerly resolve the lifecycle runtime module before installing signal
   // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
   // SIGTERM-with-intent, restart iteration hook, stability bundle writer)

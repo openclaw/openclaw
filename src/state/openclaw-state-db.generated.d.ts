@@ -499,7 +499,7 @@ export interface FlowRuns {
 export interface GatewayBootLifecycle {
   boot_id: string;
   completed_at_ms: number | null;
-  outcome: "clean_stop" | "forced_stop" | "planned_restart" | "startup_failed" | null;
+  outcome: string | null;
   pid: number;
   reason: string | null;
   started_at_ms: number;

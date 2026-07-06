@@ -27,8 +27,9 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -48,6 +49,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -173,6 +175,24 @@ function normalizeMessageTimestampMs(value: unknown): number | undefined {
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
+}
+
+function projectSkillSuggestionForTurn(
+  entry: SessionEntry | undefined,
+  suggestion: PendingSkillSuggestion | undefined,
+): SessionEntry | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  if (suggestion) {
+    return { ...entry, pendingSkillSuggestion: suggestion };
+  }
+  if (!entry.pendingSkillSuggestion) {
+    return entry;
+  }
+  const projected = { ...entry };
+  delete projected.pendingSkillSuggestion;
+  return projected;
 }
 
 async function updateRoomEventAmbientTranscriptWatermark(params: {
@@ -755,40 +775,6 @@ export async function runPreparedReply(
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const inboundUserContextSessionCtx = isNewSession
-    ? {
-        ...sessionCtx,
-        ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
-          ? { InboundHistory: undefined, ThreadStarterBody: undefined }
-          : {}),
-      }
-    : { ...sessionCtx, ThreadStarterBody: undefined };
-  let goalContextSessionEntry = isHeartbeat
-    ? undefined
-    : (sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry);
-  let activeGoalContext = formatActiveGoalContext(goalContextSessionEntry);
-  let inboundUserContext = buildInboundUserContextPrefix(
-    inboundUserContextSessionCtx,
-    envelopeOptions,
-    goalContextSessionEntry,
-  );
-  const refreshGoalContextAfterAdmissionWait = () => {
-    if (isHeartbeat) {
-      return;
-    }
-    goalContextSessionEntry =
-      storePath && sessionKey
-        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
-        : (sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry);
-    activeGoalContext = formatActiveGoalContext(goalContextSessionEntry);
-    inboundUserContext = buildInboundUserContextPrefix(
-      inboundUserContextSessionCtx,
-      envelopeOptions,
-      goalContextSessionEntry,
-    );
-  };
-  const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -808,6 +794,72 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  const skillSuggestionEnabled = !resolveSkillWorkshopConfig(cfg).autonomous.enabled;
+  const inboundUserContextSessionCtx = isNewSession
+    ? {
+        ...sessionCtx,
+        ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
+          ? { InboundHistory: undefined, ThreadStarterBody: undefined }
+          : {}),
+      }
+    : { ...sessionCtx, ThreadStarterBody: undefined };
+  let consumedSkillSuggestion: PendingSkillSuggestion | undefined;
+  const resolveContextSessionEntry = async (
+    entry: SessionEntry | undefined,
+  ): Promise<SessionEntry | undefined> => {
+    if (isHeartbeat) {
+      return undefined;
+    }
+    let currentEntry = entry;
+    if (!consumedSkillSuggestion && currentEntry?.pendingSkillSuggestion) {
+      try {
+        const consumed = await consumeSessionSkillSuggestion({
+          agentId,
+          sessionKey,
+          storePath,
+        });
+        if (consumed) {
+          currentEntry = consumed.entry;
+          consumedSkillSuggestion = skillSuggestionEnabled ? consumed.suggestion : undefined;
+          sessionEntry = consumed.entry;
+          sessionEntryHandle?.replaceCurrent(consumed.entry);
+          if (sessionStore) {
+            sessionStore[sessionKey] = consumed.entry;
+          }
+        }
+      } catch (error) {
+        logVerbose(`Skill suggestion consume failed: ${String(error)}`);
+      }
+    }
+    return projectSkillSuggestionForTurn(currentEntry, consumedSkillSuggestion);
+  };
+  let inboundContextSessionEntry = await resolveContextSessionEntry(
+    sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry,
+  );
+  let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
+  let inboundUserContext = buildInboundUserContextPrefix(
+    inboundUserContextSessionCtx,
+    envelopeOptions,
+    inboundContextSessionEntry,
+  );
+  const refreshInboundContextAfterAdmissionWait = async () => {
+    if (isHeartbeat) {
+      return;
+    }
+    const latestSessionEntry =
+      storePath && sessionKey
+        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
+        : (sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry);
+    inboundContextSessionEntry = await resolveContextSessionEntry(latestSessionEntry);
+    activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
+    inboundUserContext = buildInboundUserContextPrefix(
+      inboundUserContextSessionCtx,
+      envelopeOptions,
+      inboundContextSessionEntry,
+    );
+  };
+  const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const promptEnvelopeBase = buildReplyPromptEnvelopeBase({
     ctx,
     sessionCtx,
@@ -1248,8 +1300,8 @@ export async function runPreparedReply(
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
-        // The interrupted run may have stopped or started a goal while admission waited.
-        refreshGoalContextAfterAdmissionWait();
+        // The interrupted run may have changed goal or suggestion state while admission waited.
+        await refreshInboundContextAfterAdmissionWait();
         ({
           prefixedCommandBody,
           queuedBody,

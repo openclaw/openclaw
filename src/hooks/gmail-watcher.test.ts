@@ -362,4 +362,31 @@ describe("startGmailWatcher", () => {
       vi.useRealTimers();
     }
   });
+
+  it("swallows stdout and stderr stream errors without crashing", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    let stdout: EventEmitter | undefined;
+    let stderr: EventEmitter | undefined;
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter();
+      stdout = new EventEmitter();
+      stderr = new EventEmitter();
+      const mockedChild = Object.assign(child, {
+        stdout,
+        stderr,
+        kill: vi.fn(() => {
+          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+          return true;
+        }),
+        killed: false,
+      });
+      queueMicrotask(() => {
+        stdout?.emit("error", new Error("stdout read failed"));
+        stderr?.emit("error", new Error("stderr read failed"));
+      });
+      return mockedChild;
+    });
+
+    await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });
+  });
 });
