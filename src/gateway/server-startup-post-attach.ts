@@ -36,7 +36,6 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
-const SKIP_PROVIDER_AUTH_PREWARM_ENV = "OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 
 type Awaitable<T> = T | Promise<T>;
@@ -129,12 +128,6 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-export function shouldSkipProviderAuthStartupPrewarm(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return isTruthyEnvValue(env[SKIP_PROVIDER_AUTH_PREWARM_ENV]);
-}
-
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
   if (cfg.memory?.backend !== "qmd") {
     return { mode: "off" };
@@ -207,7 +200,7 @@ function scheduleProviderAuthStatePrewarm(params: {
     warn: (msg: string) => void;
   };
   delayMs?: number;
-  startupEnabled?: boolean;
+  startupWarmEnabled: boolean;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -278,7 +271,9 @@ function scheduleProviderAuthStatePrewarm(params: {
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
-    if (params.startupEnabled === false) {
+    // Keep the broad provider sweep explicit; default startup only retains
+    // failure-triggered repair so discovery cannot starve gateway work.
+    if (!params.startupWarmEnabled) {
       return;
     }
     startupTimer = setTimeout(
@@ -1120,7 +1115,6 @@ export async function startGatewayPostAttachRuntime(
     logReadyOnSidecars?: boolean;
     providerAuthPrewarm?: {
       enabled?: boolean;
-      startupEnabled?: boolean;
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
     };
@@ -1294,13 +1288,13 @@ export async function startGatewayPostAttachRuntime(
             }),
           );
         }
-        if (params.providerAuthPrewarm?.enabled !== false) {
+        if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
-              getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
+              getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
-              delayMs: params.providerAuthPrewarm?.delayMs,
-              startupEnabled: params.providerAuthPrewarm?.startupEnabled,
+              delayMs: params.providerAuthPrewarm.delayMs,
+              startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
             }),
           );
         }
@@ -1404,7 +1398,6 @@ export const testing = {
   cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
-  shouldSkipProviderAuthStartupPrewarm,
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };

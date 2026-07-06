@@ -1047,7 +1047,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("skips provider auth startup prewarm without disabling failure rewarm", async () => {
+  it("keeps provider auth failure rewarm without default startup prewarm", async () => {
     vi.useFakeTimers();
     const onGatewayLifetimeSidecars = vi.fn();
 
@@ -1055,7 +1055,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         deferSidecars: true,
-        providerAuthPrewarm: { startupEnabled: false },
+        providerAuthPrewarm: {},
         onGatewayLifetimeSidecars,
       });
 
@@ -1240,6 +1240,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => ({ marker: "current" }) as never,
         log,
         delayMs: 1_000,
+        startupWarmEnabled: true,
       });
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
@@ -1260,7 +1261,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps the default provider auth prewarm out of the early post-ready window", async () => {
+  it("delays explicit provider auth prewarm beyond the early post-ready window", async () => {
     expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
 
@@ -1277,6 +1278,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => currentCfg,
         log,
         delayMs: 0,
+        startupWarmEnabled: true,
       });
       currentCfg = reloadedCfg;
       await vi.dynamicImportSettled();

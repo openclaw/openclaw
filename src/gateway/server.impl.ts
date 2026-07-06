@@ -1628,11 +1628,7 @@ export async function startGatewayServer(
       pluginServices: runtimeState.pluginServices,
     } = await startupTrace.measure("runtime.post-attach", () =>
       loadGatewayStartupPostAttachModule().then(
-        ({
-          shouldSkipProviderAuthStartupPrewarm,
-          startGatewayPostAttachRuntime,
-          stopPostReadySidecarsAfterCloseStarted,
-        }) =>
+        ({ startGatewayPostAttachRuntime, stopPostReadySidecarsAfterCloseStarted }) =>
           startGatewayPostAttachRuntime({
             minimalTestGateway,
             cfgAtStart,
@@ -1721,7 +1717,6 @@ export async function startGatewayServer(
             deferSidecars: deferStartupSidecars,
             logReadyOnSidecars: !deferStartupSidecars,
             providerAuthPrewarm: {
-              startupEnabled: !shouldSkipProviderAuthStartupPrewarm(),
               getConfig: getRuntimeConfig,
             },
           }),
