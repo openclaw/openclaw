@@ -75,4 +75,25 @@ describe.skipIf(process.platform === "win32")("waitForChildProcess", () => {
       vi.useRealTimers();
     }
   });
+
+  it("ignores stdout/stderr stream errors without crashing", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const fakeChild = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+    }) as unknown as ChildProcess;
+
+    const completion = waitForChildProcess(fakeChild);
+
+    // Emit stream errors - these should be ignored by the no-op error handlers
+    stdout.emit("error", new Error("ECONNRESET: stream read error"));
+    stderr.emit("error", new Error("ECONNRESET: stream read error"));
+
+    // Child exits normally
+    fakeChild.emit("exit", 0);
+
+    // Should resolve without crashing
+    await expect(completion).resolves.toBe(0);
+  });
 });

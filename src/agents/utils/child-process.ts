@@ -41,6 +41,8 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
       child.stderr?.removeListener("end", onStderrEnd);
       child.stdout?.removeListener("data", onData);
       child.stderr?.removeListener("data", onData);
+      child.stdout?.removeListener("error", onStreamError);
+      child.stderr?.removeListener("error", onStreamError);
     };
 
     const finalize = (code: number | null) => {
@@ -74,6 +76,12 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
       if (exited && !settled) {
         armIdleTimer();
       }
+    };
+
+    const onStreamError = () => {
+      // Stream read errors are non-fatal; the child process error/exit/close
+      // handlers report the real outcome. Ignore stream errors to avoid
+      // crashing the OpenClaw process when the child has already exited.
     };
 
     const onStdoutEnd = () => {
@@ -115,6 +123,8 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
     child.stderr?.once("end", onStderrEnd);
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
     child.once("error", onError);
     child.once("exit", onExit);
     child.once("close", onClose);
