@@ -59,9 +59,6 @@ function parseLsofFieldOutput(output: string): PortListener[] {
     } else if (line.startsWith("n")) {
       // TCP 127.0.0.1:18789 (LISTEN)
       // TCP *:18789 (LISTEN)
-      if (!processFields.pid) {
-        continue;
-      }
       listeners.push({ ...processFields, address: line.slice(1) });
     }
   }

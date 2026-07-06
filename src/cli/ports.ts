@@ -66,9 +66,9 @@ function getErrnoCode(err: unknown): string | undefined {
 }
 
 function isRecoverableLsofError(err: unknown): boolean {
-  // Permission or missing-binary failures can fall back to fuser on Linux.
+  // Permission, missing-binary, or malformed-output failures can fall back to fuser on Linux.
   const code = getErrnoCode(err);
-  if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
+  if (code === "ENOENT" || code === "EACCES" || code === "EPERM" || code === "EPROTO") {
     return true;
   }
   const message = formatErrorMessage(err);
@@ -150,8 +150,16 @@ export function parseLsofOutput(output: string): PortProcess[] {
       if (current.pid) {
         results.push(current as PortProcess);
       }
-      const rawPid = parseStrictPositiveInteger(line.slice(1));
-      current = rawPid !== undefined ? { pid: rawPid } : {};
+      const rawPidToken = line.slice(1);
+      const rawPid = parseStrictPositiveInteger(rawPidToken);
+      if (rawPid === undefined) {
+        throw withErrnoCode(
+          `lsof returned malformed PID field: ${JSON.stringify(rawPidToken)}`,
+          "EPROTO",
+          undefined,
+        );
+      }
+      current = { pid: rawPid };
     } else if (line.startsWith("c")) {
       current.command = line.slice(1);
     }
@@ -282,6 +290,11 @@ export async function forceFreePortAndWait(
   }
 
   if (killed.length === 0) {
+    if (await isPortBusy(port)) {
+      throw new Error(
+        `port ${port} is still busy after --force, but no listener PID could be determined`,
+      );
+    }
     return { killed, waitedMs: 0, escalatedToSigkill: false };
   }
 

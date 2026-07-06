@@ -439,13 +439,9 @@ function pollPortOnce(port: number): PollResult {
     if (res.status === 1) {
       // lsof canonical "no matching processes" exit — port is genuinely free.
       // Guard: on Linux containers with restricted /proc (AppArmor, seccomp,
-      // user namespaces), lsof can exit 1 AND still emit some output for the
-      // processes it could read. Parse stdout when non-empty to avoid false-free.
-      if (res.stdout) {
-        const pids = parsePidsFromLsofOutput(res.stdout, POLL_SPAWN_TIMEOUT_MS);
-        return pids.length === 0 ? { free: true } : { free: false };
-      }
-      return { free: true };
+      // user namespaces), lsof can exit 1 AND still emit partial output. Any
+      // record is enough to keep the poll fail-closed, even if its PID is malformed.
+      return res.stdout.trim() ? { free: false } : { free: true };
     }
     if (res.status !== 0) {
       // status > 1: runtime/permission/flag error. Cannot confirm port state —
@@ -453,10 +449,9 @@ function pollPortOnce(port: number): PollResult {
       // reporting the port as free (which would recreate the EADDRINUSE race).
       return { free: null, permanent: false };
     }
-    // status === 0: lsof found listeners. Parse pids from the stdout we
-    // already hold — no second lsof spawn, no new failure surface.
-    const pids = parsePidsFromLsofOutput(res.stdout, POLL_SPAWN_TIMEOUT_MS);
-    return pids.length === 0 ? { free: true } : { free: false };
+    // status === 0: lsof found a listener. Occupancy does not depend on whether
+    // its PID field is present, valid, or attributable to an OpenClaw process.
+    return { free: false };
   } catch {
     return { free: null, permanent: false };
   }

@@ -376,7 +376,7 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
-  it("ignores malformed lsof pid records in listener diagnostics", async () => {
+  it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
       if (typeof command !== "string") {
@@ -409,8 +409,14 @@ describeUnix("inspectPortUsage", () => {
 
     const result = await inspectPortUsage(18789);
 
-    expect(result.listeners).toHaveLength(1);
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toHaveLength(2);
     expect(result.listeners[0]).toMatchObject({
+      command: "node",
+      address: "TCP *:18789 (LISTEN)",
+    });
+    expect(result.listeners[0]?.pid).toBeUndefined();
+    expect(result.listeners[1]).toMatchObject({
       pid: 111,
       command: "bun",
       address: "TCP 127.0.0.1:18789 (LISTEN)",
@@ -419,8 +425,7 @@ describeUnix("inspectPortUsage", () => {
 
   it("rejects lsof pid tokens with trailing garbage instead of truncating them", async () => {
     // Number.parseInt("111abc", 10) === 111, which would silently accept a
-    // corrupted pid field. parseStrictPositiveInteger must reject the whole
-    // token so the listener record is dropped rather than mis-attributed.
+    // corrupted pid field. Keep the socket evidence without fabricating pid 111.
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
       if (typeof command !== "string") {
@@ -438,7 +443,14 @@ describeUnix("inspectPortUsage", () => {
 
     const result = await inspectPortUsage(18789);
 
-    expect(result.listeners).toHaveLength(0);
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toEqual([
+      {
+        command: "node",
+        address: "TCP *:18789 (LISTEN)",
+      },
+    ]);
+    expect(result.hints).toContain("Another process is listening on this port.");
   });
 
   it("reports multiple lsof socket records for one process", async () => {
