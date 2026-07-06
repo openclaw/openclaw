@@ -438,6 +438,59 @@ describe("runReplyAgent runtime config", () => {
     expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
   });
 
+  it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      compactionCount: 4,
+    };
+    replyParams.sessionEntry = sessionEntry;
+    runMemoryFlushIfNeededMock.mockResolvedValue({
+      sessionEntry,
+      outcome: "exhausted",
+    });
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { sessionEntry?: typeof sessionEntry }) => {
+        expect(params.sessionEntry?.sessionId).toBe("session-1");
+        return { ...params.sessionEntry, compactionCount: 5 };
+      },
+    );
+
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
+
+    expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("rotates when preflight cannot recover an exhausted memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runMemoryFlushIfNeededMock.mockResolvedValue({
+      sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
+      outcome: "exhausted",
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error("Preflight compaction required but failed: context_overflow"),
+    );
+
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
+
+    expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
+    expect(resetReplyRunSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        cleanupTranscripts: false,
+      },
+    });
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
   it("does not start the main turn after cancellation during memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,

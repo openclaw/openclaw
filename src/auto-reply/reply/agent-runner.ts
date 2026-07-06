@@ -1639,39 +1639,46 @@ export async function runReplyAgent(params: {
       throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
     }
 
-    if (memoryFlushResult.outcome === "exhausted") {
+    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    try {
+      activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+        runPreflightCompactionIfNeeded({
+          cfg,
+          followupRun,
+          promptForEstimate: followupRun.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          runtimePolicySessionKey,
+          storePath,
+          isHeartbeat,
+          replyOperation,
+          onCompactionNotice: sendDirectCompactionNotice,
+        }),
+      );
+      preflightCompactionApplied =
+        (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
+    } catch (err) {
+      if (memoryFlushResult.outcome !== "exhausted" || replyOperation.abortSignal.aborted) {
+        throw err;
+      }
+      logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
+    }
+
+    if (memoryFlushResult.outcome === "exhausted" && !preflightCompactionApplied) {
       await resetSession({
         failureLabel: "memory flush exhaustion",
         buildLogMessage: (nextSessionId) =>
           `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
-        // Rotate away from the bloated context, but preserve its transcript for recovery.
+        // Rotate only when compaction could not recover the bloated context.
         cleanupTranscripts: false,
       });
       if (activeSessionEntry?.sessionId) {
         replyOperation.updateSessionId(activeSessionEntry.sessionId);
       }
     }
-
-    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
     // Exhausted background maintenance is non-terminal: optionally notify, then reply normally.
     if (memoryFlushResult.outcome === "exhausted") {
