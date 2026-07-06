@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import type { ProviderQuotaPillProps } from "../../components/provider-quota-pill.ts";
 import "../../components/tooltip.ts";
@@ -87,6 +88,7 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string | null;
   assistantName: string;
+  sendShortcut?: ChatSendShortcut;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -212,6 +214,7 @@ export function renderChat(props: ChatProps) {
     sessions: props.sessions,
     providerQuota: props.providerQuota,
     assistantName: props.assistantName,
+    sendShortcut: props.sendShortcut,
     attachments: props.attachments,
     showNewMessages: props.showNewMessages,
     replyTarget: props.replyTarget,

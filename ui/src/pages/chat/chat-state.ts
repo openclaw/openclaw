@@ -1062,6 +1062,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatAutoScroll: next.chatAutoScroll,
+      chatSendShortcut: next.chatSendShortcut,
       splitRatio: next.splitRatio,
     });
     state.splitRatio = state.settings.splitRatio;

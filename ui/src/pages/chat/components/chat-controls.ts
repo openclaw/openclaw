@@ -3,6 +3,7 @@ import { html } from "lit";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import {
   normalizeChatAutoScrollMode,
+  normalizeChatSendShortcut,
   type ChatAutoScrollMode,
   type UiSettings,
 } from "../../../app/settings.ts";
@@ -99,6 +100,33 @@ function renderChatAutoScrollToggle(props: {
   `;
 }
 
+function renderChatSendShortcutPreference(props: {
+  settings: UiSettings;
+  onSettingsChange: (next: UiSettings) => void;
+}) {
+  const shortcut = normalizeChatSendShortcut(props.settings.chatSendShortcut);
+  return html`
+    <label class="chat-settings-popover__preference">
+      <span>${t("chat.sendShortcut")}</span>
+      <select
+        data-chat-send-shortcut="true"
+        .value=${shortcut}
+        @change=${(event: Event) => {
+          props.onSettingsChange({
+            ...props.settings,
+            chatSendShortcut: normalizeChatSendShortcut(
+              (event.currentTarget as HTMLSelectElement).value,
+            ),
+          });
+        }}
+      >
+        <option value="enter">${t("chat.sendShortcutEnter")}</option>
+        <option value="modifier-enter">${t("chat.sendShortcutModifierEnter")}</option>
+      </select>
+    </label>
+  `;
+}
+
 function renderCronFilterIcon(hiddenCount: number) {
   return html`
     <span style="position: relative; display: inline-flex; align-items: center;">
@@ -173,7 +201,7 @@ export function renderChatControls(props: ChatControlsProps) {
       : t("chat.showCronSessions")
     : t("chat.hideCronSessions");
   const settingsOpen = props.settingsOpen;
-  const settingsTitle = t("nav.settings");
+  const settingsTitle = t("chat.settings");
 
   return html`
     <div class="chat-settings-popover-wrapper">
@@ -299,6 +327,7 @@ export function renderChatControls(props: ChatControlsProps) {
               </button>
             </openclaw-tooltip>
           </div>
+          ${renderChatSendShortcutPreference(props)}
         </div>
         ${props.realtimeTalkOptions && props.onRealtimeTalkOptionsChange
           ? html`

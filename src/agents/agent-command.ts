@@ -143,6 +143,7 @@ import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -999,21 +1000,26 @@ async function agentCommandInternal(
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
+        const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
         const startedAt = Date.now();
-        registerAgentRunContext(
+        registerAgentRunContext(runId, {
+          sessionKey,
+          sessionId,
+          agentId: sessionAgentId,
+          lifecycleGeneration,
+          ...(suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
+        });
+        attemptExecutionRuntime.emitAcpLifecycleStart({
           runId,
-          suppressVisibleSessionEffects
-            ? { isControlUiVisible: false, lifecycleGeneration }
-            : {
-                sessionKey,
-                sessionId,
-                lifecycleGeneration,
-              },
-        );
-        attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt, lifecycleGeneration });
+          startedAt,
+          agentId: sessionAgentId,
+          lifecycleGeneration,
+        });
 
         const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
         let stopReason: string | undefined;
+        let resultStatus: "completed" | "cancelled" | undefined;
+        let terminalOutcome: "blocked" | undefined;
         try {
           const {
             resolveAcpAgentPolicyError,
@@ -1025,6 +1031,7 @@ async function agentCommandInternal(
               ? resolveAcpExplicitTurnPolicyError(cfg)
               : resolveAcpDispatchPolicyError(cfg);
           if (turnPolicyError) {
+            terminalOutcome = "blocked";
             throw turnPolicyError;
           }
           const acpAgent = normalizeAgentId(
@@ -1032,6 +1039,7 @@ async function agentCommandInternal(
           );
           const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
           if (agentPolicyError) {
+            terminalOutcome = "blocked";
             throw agentPolicyError;
           }
 
@@ -1058,12 +1066,16 @@ async function agentCommandInternal(
               if (event.type !== "text_delta") {
                 attemptExecutionRuntime.emitAcpRuntimeEvent({
                   runId,
+                  toolTracker: acpToolTracker,
                   sessionKey,
+                  agentId: sessionAgentId,
+                  abortSignal: opts.abortSignal,
                   event,
                 });
               }
               if (event.type === "done") {
                 stopReason = event.stopReason;
+                resultStatus = event.status;
                 return;
               }
               if (event.type !== "text_delta") {
@@ -1098,10 +1110,13 @@ async function agentCommandInternal(
           });
           attemptExecutionRuntime.emitAcpLifecycleError({
             runId,
+            toolTracker: acpToolTracker,
             error: acpError,
             sessionKey,
+            agentId: sessionAgentId,
             lifecycleGeneration,
             abortSignal: opts.abortSignal,
+            ...(terminalOutcome ? { terminalOutcome } : {}),
           });
           throw acpError;
         }
@@ -1166,8 +1181,10 @@ async function agentCommandInternal(
         if (isAgentRunRestartAbortReason(restartAbortReason)) {
           attemptExecutionRuntime.emitAcpLifecycleError({
             runId,
+            toolTracker: acpToolTracker,
             error: restartAbortReason,
             sessionKey,
+            agentId: sessionAgentId,
             lifecycleGeneration,
             abortSignal: opts.abortSignal,
           });
@@ -1175,8 +1192,12 @@ async function agentCommandInternal(
         }
         attemptExecutionRuntime.emitAcpLifecycleEnd({
           runId,
+          toolTracker: acpToolTracker,
+          agentId: sessionAgentId,
           lifecycleGeneration,
           abortSignal: opts.abortSignal,
+          stopReason,
+          resultStatus,
         });
 
         const result = applyAgentRunAbortMetadata(
@@ -1184,6 +1205,7 @@ async function agentCommandInternal(
             payloadText: finalText,
             startedAt,
             stopReason,
+            resultStatus,
             abortSignal: opts.abortSignal,
           }),
           opts.abortSignal,
@@ -1214,7 +1236,8 @@ async function agentCommandInternal(
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       if (sessionKey || suppressVisibleSessionEffects) {
         registerAgentRunContext(runId, {
-          ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey, sessionId } : {}),
+          ...(sessionKey ? { sessionKey, sessionId } : {}),
+          agentId: sessionAgentId,
           lifecycleGeneration,
           verboseLevel: resolvedVerboseLevel,
           isControlUiVisible: !suppressVisibleSessionEffects,
@@ -1872,7 +1895,7 @@ async function agentCommandInternal(
             startedAt,
             endedAt: Date.now(),
             error: error instanceof Error ? error.message : "Agent run failed",
-            ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
+            ...resolveAgentRunErrorLifecycleFields(error, opts.abortSignal),
           },
         });
       };
@@ -2210,9 +2233,9 @@ async function agentCommandInternal(
             continue;
           }
           if (!attemptLifecycleState.lifecycleEnded) {
-            const abortLifecycleFields = isAgentRunDirectAbortReason(err)
+            const errorLifecycleFields = isAgentRunDirectAbortReason(err)
               ? { aborted: true as const, stopReason: "aborted" as const }
-              : resolveAgentRunAbortLifecycleFields(opts.abortSignal);
+              : resolveAgentRunErrorLifecycleFields(err, opts.abortSignal);
             emitAgentEvent({
               runId,
               lifecycleGeneration,
@@ -2222,7 +2245,7 @@ async function agentCommandInternal(
                 startedAt,
                 endedAt: Date.now(),
                 error: err instanceof Error ? err.message : "Agent run failed",
-                ...abortLifecycleFields,
+                ...errorLifecycleFields,
               },
             });
           }

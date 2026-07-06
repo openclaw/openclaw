@@ -1730,6 +1730,12 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
+      talkMode.finishingPushToTalkCaptureId?.let {
+        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+          code = "PTT_BUSY",
+          message = "PTT_BUSY: previous push-to-talk turn is still finishing",
+        )
+      }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
@@ -1768,14 +1774,17 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      talkMode.activePushToTalkCaptureId?.let { captureId ->
-        val payload = TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy")
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      currentTalkPttOnceBusy()?.let { busy ->
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
       }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       val start =
-        withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
+        withPreparedTalkPttCommand(
+          lifecycleEpoch = lifecycleEpoch,
+          commandEpoch = commandEpoch,
+          beforePrepare = ::currentTalkPttOnceBusy,
+        ) { ownershipEpoch ->
           val started =
             talkMode.beginPushToTalkOnce(
               canStartCapture = {
@@ -1785,12 +1794,11 @@ class NodeRuntime private constructor(
                   voiceCaptureOwnershipEpoch.get() == ownershipEpoch
               },
             )
-          val captureId =
-            when (started) {
-              is TalkPttOnceStart.Busy -> started.payload.captureId
-              is TalkPttOnceStart.Started -> started.captureId
-            }
-          recordTalkPttOwnership(captureId = captureId, ownershipEpoch = ownershipEpoch)
+          when (started) {
+            is TalkPttOnceStart.Busy -> cleanupFailedTalkCapture(ownershipEpoch)
+            is TalkPttOnceStart.Started ->
+              recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          }
           started
         }
       val payload =
@@ -1804,9 +1812,17 @@ class NodeRuntime private constructor(
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
+  private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
+    val captureId = talkMode.activePushToTalkCaptureId ?: talkMode.finishingPushToTalkCaptureId ?: return null
+    return TalkPttOnceStart.Busy(
+      TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy"),
+    )
+  }
+
   private suspend fun <T> withPreparedTalkPttCommand(
     lifecycleEpoch: Long,
     commandEpoch: Long,
+    beforePrepare: () -> T? = { null },
     block: suspend (ownershipEpoch: Long) -> T,
   ): T =
     voiceCapturePreparationMutex.withLock {
@@ -1819,6 +1835,7 @@ class NodeRuntime private constructor(
       ) {
         throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
       }
+      beforePrepare()?.let { return@withLock it }
       val ownershipEpoch = prepareTalkCapture(lifecycleEpoch, commandEpoch)
       try {
         if (

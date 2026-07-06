@@ -113,7 +113,7 @@ export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 585,
+  "infra-runtime": 588,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -192,12 +192,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10435,
+      10453,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5207,
+      5218,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

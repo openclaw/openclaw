@@ -693,6 +693,9 @@ function renderChatModelReasoningSelect(params: {
   };
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
+    if (option.value === "") {
+      continue;
+    }
     const existing = providerGroups.get(option.provider);
     if (existing) {
       existing.push(option);
@@ -700,10 +703,58 @@ function renderChatModelReasoningSelect(params: {
       providerGroups.set(option.provider, [option]);
     }
   }
-  const selectedProvider =
+  const triggerProvider =
     modelOptions.find((option) => option.value === selectedModelValue)?.provider ??
     modelOptions[0]?.provider ??
     "other";
+  const selectedProvider =
+    selectedModelValue === ""
+      ? ([...providerGroups.keys()][0] ?? triggerProvider)
+      : triggerProvider;
+  const defaultModelOption = modelOptions.find((option) => option.value === "");
+  const renderModelOption = (entry: ChatModelProviderOption) => {
+    const selected = entry.value === selectedModelValue;
+    return html`
+      <div class="chat-controls__combined-model">
+        <button
+          class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
+            ? "chat-controls__inline-select-option--selected"
+            : ""}"
+          data-chat-model-option=${entry.value}
+          role="option"
+          aria-selected=${selected ? "true" : "false"}
+          type="button"
+          ?disabled=${disabled}
+          @click=${async (event: MouseEvent) => {
+            event.stopPropagation();
+            if (disabled || selected) {
+              event.preventDefault();
+              return;
+            }
+            chatModelPickerDrafts.delete(sessionKey);
+            (event.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
+            onRequestUpdate?.();
+            await onModelSelect(entry.value, sessionKey);
+          }}
+        >
+          <span class="chat-controls__model-option-icon">
+            ${renderChatModelProviderIcon(entry.provider)}
+          </span>
+          <span class="chat-controls__model-option-copy">
+            <span class="chat-controls__model-option-title">
+              ${formatCombinedPickerModelOptionLabel(entry, selected)}
+            </span>
+            <span class="chat-controls__model-option-provider">
+              ${formatChatModelProviderLabel(entry.provider)}
+            </span>
+          </span>
+          <span class="chat-controls__inline-select-check" aria-hidden="true" ?hidden=${!selected}>
+            ${icons.check}
+          </span>
+        </button>
+      </div>
+    `;
+  };
   return html`
     <details
       class="chat-controls__session chat-controls__inline-select chat-controls__model"
@@ -742,7 +793,7 @@ function renderChatModelReasoningSelect(params: {
           }
         }}
       >
-        ${renderChatModelProviderIcon(selectedProvider)}
+        ${renderChatModelProviderIcon(triggerProvider)}
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-icon" aria-hidden="true">
           ${icons.chevronDown}
@@ -752,6 +803,13 @@ function renderChatModelReasoningSelect(params: {
         class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined"
         aria-label=${t("chat.selectors.model")}
       >
+        ${defaultModelOption
+          ? html`
+              <div class="chat-controls__default-model-option">
+                ${renderModelOption(defaultModelOption)}
+              </div>
+            `
+          : ""}
         <div class="chat-controls__model-browser">
           <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
             <div class="chat-controls__inline-select-section-label">
@@ -791,57 +849,7 @@ function renderChatModelReasoningSelect(params: {
                   ${repeat(
                     options,
                     (entry) => entry.value,
-                    (entry) => {
-                      const selected = entry.value === selectedModelValue;
-                      return html`
-                        <div class="chat-controls__combined-model">
-                          <button
-                            class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
-                              ? "chat-controls__inline-select-option--selected"
-                              : ""}"
-                            data-chat-model-option=${entry.value}
-                            role="option"
-                            aria-selected=${selected ? "true" : "false"}
-                            type="button"
-                            ?disabled=${disabled}
-                            @click=${(event: MouseEvent) => {
-                              event.stopPropagation();
-                              if (disabled || selected) {
-                                event.preventDefault();
-                                return;
-                              }
-                              const draft = ensureChatModelPickerDraft({
-                                fastModeValue: initialFastModeValue,
-                                modelValue: initialModelValue,
-                                sessionKey,
-                                thinkingValue: initialThinkingValue,
-                              });
-                              draft.modelValue = entry.value;
-                              onRequestUpdate?.();
-                            }}
-                          >
-                            <span class="chat-controls__model-option-icon">
-                              ${renderChatModelProviderIcon(entry.provider)}
-                            </span>
-                            <span class="chat-controls__model-option-copy">
-                              <span class="chat-controls__model-option-title">
-                                ${formatCombinedPickerModelOptionLabel(entry, selected)}
-                              </span>
-                              <span class="chat-controls__model-option-provider">
-                                ${formatChatModelProviderLabel(entry.provider)}
-                              </span>
-                            </span>
-                            <span
-                              class="chat-controls__inline-select-check"
-                              aria-hidden="true"
-                              ?hidden=${!selected}
-                            >
-                              ${icons.check}
-                            </span>
-                          </button>
-                        </div>
-                      `;
-                    },
+                    (entry) => renderModelOption(entry),
                   )}
                 </div>
               `,

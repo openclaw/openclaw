@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2447,
+      "line": 2464,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2449,
+      "line": 2466,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2451,
+      "line": 2468,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -5235,7 +5235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 150,
+      "line": 151,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Thinking...",
       "surface": "android",
@@ -5243,7 +5243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 169,
+      "line": 170,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Running tools...",
       "surface": "android",
@@ -5251,7 +5251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 172,
+      "line": 173,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "${display.emoji} ${display.label}",
       "surface": "android",
@@ -5259,7 +5259,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 190,
+      "line": 191,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "... +${toolCalls.size - 6} more",
       "surface": "android",
@@ -5267,7 +5267,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 235,
+      "line": 236,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Retry",
       "surface": "android",
@@ -5275,7 +5275,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 238,
+      "line": 239,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Delete",
       "surface": "android",
@@ -5283,7 +5283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 306,
+      "line": 307,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "You",
       "surface": "android",
@@ -5291,7 +5291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 307,
+      "line": 308,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "System",
       "surface": "android",
@@ -5299,7 +5299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 308,
+      "line": 309,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -5307,7 +5307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 334,
+      "line": 335,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Unsupported attachment",
       "surface": "android",
@@ -5699,7 +5699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 503,
+      "line": 546,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -5707,7 +5707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 503,
+      "line": 546,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -5715,7 +5715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 906,
+      "line": 954,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -5723,7 +5723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 907,
+      "line": 955,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "surface": "android",
@@ -5731,7 +5731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 908,
+      "line": 956,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed: $reason",
       "surface": "android",
@@ -5739,7 +5739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1911,
+      "line": 1998,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -5747,7 +5747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1911,
+      "line": 1998,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",

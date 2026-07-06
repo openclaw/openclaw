@@ -118,6 +118,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       runTurn: vi.fn(),
     }));
     agentEventMocks.emitAgentEvent.mockReset();
+    agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();

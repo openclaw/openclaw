@@ -647,6 +647,7 @@ export class ChatPage extends LitElement {
       stream: state.chatStream,
       streamStartedAt: state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
+      sendShortcut: state.settings.chatSendShortcut,
       draft: state.chatMessage,
       queue: state.chatQueue,
       realtimeTalkActive: state.realtimeTalkActive,

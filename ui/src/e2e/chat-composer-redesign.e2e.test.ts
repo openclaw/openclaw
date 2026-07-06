@@ -116,7 +116,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const textarea = composer.locator("textarea");
       const attach = composer.getByRole("button", { name: "Attach file" });
       const camera = composerShell.getByRole("button", { name: "Take photo" });
-      const settings = composer.getByRole("button", { name: "Settings", exact: true });
+      const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
       const voice = page.getByRole("button", { name: "Start voice input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
@@ -322,7 +322,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const settingsDialog = page.getByRole("dialog", { name: "Settings" });
+      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
       await expect.poll(() => settingsDialog.isVisible()).toBe(true);
       await expect
         .poll(() => settingsDialog.locator(".chat-settings-popover__label").allTextContents())
