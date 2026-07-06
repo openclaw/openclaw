@@ -631,6 +631,14 @@ async function executeToolCallsSequential(
   const messages: ToolResultMessage[] = [];
 
   for (const toolCall of toolCalls) {
+    const canonicalToolCall = await canonicalizeToolCall(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+    );
     const hideFromChannelProgress = hidesToolCallFromChannelProgress(
       currentContext,
       toolCall,
@@ -639,7 +647,7 @@ async function executeToolCallsSequential(
     await emit({
       type: "tool_execution_start",
       toolCallId: toolCall.id,
-      toolName: toolCall.name,
+      toolName: canonicalToolCall.name,
       args: toolCall.arguments,
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     });
@@ -655,7 +663,7 @@ async function executeToolCallsSequential(
     let finalized: FinalizedToolCallOutcome;
     if (preparation.kind === "immediate") {
       finalized = {
-        toolCall,
+        toolCall: canonicalToolCall,
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
@@ -703,6 +711,14 @@ async function executeToolCallsParallel(
   const finalizedCalls: FinalizedToolCallEntry[] = [];
 
   for (const toolCall of toolCalls) {
+    const canonicalToolCall = await canonicalizeToolCall(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+    );
     const hideFromChannelProgress = hidesToolCallFromChannelProgress(
       currentContext,
       toolCall,
@@ -711,7 +727,7 @@ async function executeToolCallsParallel(
     await emit({
       type: "tool_execution_start",
       toolCallId: toolCall.id,
-      toolName: toolCall.name,
+      toolName: canonicalToolCall.name,
       args: toolCall.arguments,
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     });
@@ -726,7 +742,7 @@ async function executeToolCallsParallel(
     );
     if (preparation.kind === "immediate") {
       const finalized = {
-        toolCall,
+        toolCall: canonicalToolCall,
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
@@ -826,6 +842,92 @@ function prepareToolCallArguments(tool: AgentTool, toolCall: AgentToolCall): Age
   };
 }
 
+// Lowercase-normalised alias map.  Keys are normalised requested names (lower,
+// non-alphanumeric stripped); values are ordered fallback tool-name candidates —
+// the first one present in the agent's tool context wins.
+// Claude Code trains models on these tool names; OpenClaw exposes different names
+// with argument-compatible schemas (KnowledgeSearch/Glob/Grep all take a single
+// string).  Agent/Task are intentionally NOT included here because sessions_spawn
+// has a different argument shape (`task` vs `prompt`) and mapping it correctly
+// requires argument translation that belongs in the agent's tool context, not in
+// a shared alias table.  Deployments that need the Agent/Task alias can wrap
+// sessions_spawn with a compatible arg shape or bind the alias in their own
+// tool catalog.
+const TOOL_NAME_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  knowledgesearch: ["memory_search", "knowledge_search", "wiki_search", "search"],
+  glob: ["find"],
+  grep: ["grep"],
+};
+
+function normalizeToolName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// Name-level variant of resolveToolAlias for callers that hold a tool-name
+// catalog rather than AgentTool instances (e.g. transcript sanitizers keeping
+// persisted alias-named calls consistent with the canonical name the runtime
+// executed under). Returns the matching entry exactly as it appears in
+// `candidateNames`, so rewrites land on the canonical casing.
+export function resolveAliasedToolName(
+  requestedName: string,
+  candidateNames: Iterable<string>,
+): string | undefined {
+  const trimmed = requestedName.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // 1. Case-insensitive exact match.
+  const lower = trimmed.toLowerCase();
+  // 2. Normalised alias map — strip non-alphanumeric, look up candidates.
+  const normalizedIndex = new Map<string, string>();
+  for (const name of candidateNames) {
+    if (typeof name !== "string") {
+      continue;
+    }
+    const candidate = name.trim();
+    if (!candidate) {
+      continue;
+    }
+    if (candidate.toLowerCase() === lower) {
+      return candidate;
+    }
+    const n = normalizeToolName(candidate);
+    if (n && !normalizedIndex.has(n)) {
+      normalizedIndex.set(n, candidate);
+    }
+  }
+  const aliasTargets = TOOL_NAME_ALIASES[normalizeToolName(trimmed)];
+  if (aliasTargets) {
+    for (const target of aliasTargets) {
+      const found = normalizedIndex.get(normalizeToolName(target));
+      if (found !== undefined) {
+        return found;
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveToolAlias(
+  requestedName: string,
+  tools: readonly AgentTool[] | undefined,
+): AgentTool | undefined {
+  if (!tools?.length) {
+    return undefined;
+  }
+  const byName = new Map<string, AgentTool>();
+  for (const tool of tools) {
+    if (!byName.has(tool.name)) {
+      byName.set(tool.name, tool);
+    }
+  }
+  const resolvedName = resolveAliasedToolName(requestedName, byName.keys());
+  return resolvedName === undefined ? undefined : byName.get(resolvedName);
+}
+
 async function resolveToolCallTool(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -842,6 +944,9 @@ async function resolveToolCallTool(
   try {
     let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
     if (!tool) {
+      tool = resolveToolAlias(toolCall.name, currentContext.tools);
+    }
+    if (!tool) {
       const resolvedTool = await config.resolveDeferredTool?.(
         {
           assistantMessage,
@@ -850,8 +955,11 @@ async function resolveToolCallTool(
         },
         signal,
       );
-      // Keep execution and lifecycle/audit identity aligned with the original model call.
-      if (resolvedTool && resolvedTool.name !== toolCall.name) {
+      // Keep execution and lifecycle/audit identity aligned with the original model
+      // call — the deferred resolver may return an alias-compatible name, so accept
+      // any resolvedTool whose name is exact-, case-, or alias-equivalent to the
+      // requested name, and reject only genuinely unrelated resolutions.
+      if (resolvedTool && resolveToolAlias(toolCall.name, [resolvedTool]) !== resolvedTool) {
         throw new Error(
           `Deferred tool resolver returned "${resolvedTool.name}" for requested "${toolCall.name}"`,
         );
@@ -868,6 +976,37 @@ async function resolveToolCallTool(
   }
   resolvedToolCalls?.set(toolCall, resolution);
   return resolution;
+}
+
+// Resolve the canonical tool identity BEFORE the first lifecycle event fires, so
+// a single toolCallId carries one name from tool_execution_start through
+// tool_execution_update/_end and the persisted tool_result. Without this, an
+// aliased call starts as e.g. `KnowledgeSearch` and finishes as `memory_search`,
+// splitting the call's identity for event subscribers and session telemetry.
+// Resolution outcomes are cached in resolvedToolCalls, so the prepareToolCall()
+// that follows never re-runs the (potentially side-effectful) deferred resolver.
+// Unresolved calls keep the raw model-emitted name — not-found errors should
+// report what the model actually asked for.
+async function canonicalizeToolCall(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCall: AgentToolCall,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
+): Promise<AgentToolCall> {
+  const resolution = await resolveToolCallTool(
+    currentContext,
+    assistantMessage,
+    toolCall,
+    config,
+    signal,
+    resolvedToolCalls,
+  );
+  if (resolution.kind === "resolved" && resolution.tool && resolution.tool.name !== toolCall.name) {
+    return { ...toolCall, name: resolution.tool.name };
+  }
+  return toolCall;
 }
 
 async function prepareToolCall(
@@ -901,16 +1040,29 @@ async function prepareToolCall(
   }
   const tool = resolution.tool;
   if (!tool) {
+    const available = currentContext.tools?.map((t) => t.name) ?? [];
+    const availableClause =
+      available.length > 0 ? ` Available tools: ${available.join(", ")}.` : "";
     return {
       kind: "immediate",
-      result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+      result: createErrorToolResult(`Tool ${toolCall.name} not found.${availableClause}`),
       isError: true,
     };
   }
 
+  // When an alias resolved the tool, downstream extension hooks, execution
+  // events, persisted results, and session classifiers must see the canonical
+  // tool name so that policies/audits keyed on the canonical name (e.g.
+  // memory_search) don't get bypassed by the raw alias (KnowledgeSearch).
+  // The assistantMessage still carries the model's original tool_use content
+  // for trajectory replay; only the toolCall handed to the dispatch pipeline
+  // is rewritten.
+  const dispatchToolCall: AgentToolCall =
+    tool.name === toolCall.name ? toolCall : { ...toolCall, name: tool.name };
+
   let preparedToolCall: AgentToolCall;
   try {
-    preparedToolCall = prepareToolCallArguments(tool, toolCall);
+    preparedToolCall = prepareToolCallArguments(tool, dispatchToolCall);
   } catch (error) {
     return {
       kind: "immediate",
@@ -936,7 +1088,7 @@ async function prepareToolCall(
       const beforeResult = await config.beforeToolCall(
         {
           assistantMessage,
-          toolCall,
+          toolCall: dispatchToolCall,
           args: validatedArgs,
           context: currentContext,
         },
@@ -966,7 +1118,7 @@ async function prepareToolCall(
     }
     return {
       kind: "prepared",
-      toolCall,
+      toolCall: dispatchToolCall,
       tool,
       args: validatedArgs,
     };

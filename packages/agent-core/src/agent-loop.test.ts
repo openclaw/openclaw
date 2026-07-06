@@ -695,6 +695,349 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 });
 
+describe("runAgentLoop tool-name alias resolution", () => {
+  function makeToolCallStream(toolName: string): StreamFn {
+    let streamCalls = 0;
+    return () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-alias",
+                    name: toolName,
+                    arguments: {},
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+  }
+
+  it("resolves KnowledgeSearch to the first available alias tool (memory_search)", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "search result" }],
+        details: { ok: true },
+      }),
+    );
+    const memSearchTool: AgentTool = {
+      name: "memory_search",
+      label: "memory_search",
+      description: "Memory search tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "search for files", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [memSearchTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    // The tool_result message uses the CANONICAL name (memory_search) so that
+    // extension policy, session classifiers, and active-memory recovery see the
+    // resolved tool. The assistant message content still carries the model's
+    // original tool_use with name="KnowledgeSearch" for trajectory replay.
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "memory_search",
+        isError: false,
+      }),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: "toolCall", name: "KnowledgeSearch" }),
+        ]),
+      }),
+    );
+  });
+
+  it("keeps one canonical identity across lifecycle events for an aliased call", async () => {
+    // Regression: tool_execution_start used to fire with the raw alias while
+    // update/end/tool_result carried the canonical name, splitting one
+    // toolCallId across two names for event subscribers and session telemetry.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "search result" }],
+        details: { ok: true },
+      }),
+    );
+    const memSearchTool: AgentTool = {
+      name: "memory_search",
+      label: "memory_search",
+      description: "Memory search tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "search for files", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [memSearchTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (event: AgentEvent) => {
+        events.push(event);
+      },
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    const start = events.find((e) => e.type === "tool_execution_start");
+    const end = events.find((e) => e.type === "tool_execution_end");
+    expect(start).toMatchObject({ toolCallId: "call-alias", toolName: "memory_search" });
+    expect(end).toMatchObject({ toolCallId: "call-alias", toolName: "memory_search" });
+  });
+
+  it("keeps the raw model-emitted name in lifecycle events when no tool resolves", async () => {
+    const readTool: AgentTool = {
+      name: "Read",
+      label: "Read",
+      description: "Read tool",
+      execute: async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "ok" }],
+        details: { ok: true },
+      }),
+      parameters: Type.Object({}),
+    };
+
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "call unknown", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [readTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (event: AgentEvent) => {
+        events.push(event);
+      },
+      undefined,
+      makeToolCallStream("UnknownTool"),
+    );
+
+    const start = events.find((e) => e.type === "tool_execution_start");
+    const end = events.find((e) => e.type === "tool_execution_end");
+    expect(start).toMatchObject({ toolName: "UnknownTool" });
+    expect(end).toMatchObject({ toolName: "UnknownTool", isError: true });
+  });
+
+  it("resolves tool names case-insensitively", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "find result" }],
+        details: { ok: true },
+      }),
+    );
+    const findTool: AgentTool = {
+      name: "find",
+      label: "find",
+      description: "Find tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "run find", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [findTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("FIND"),
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    // Canonical name flows to tool_result / hooks; assistant message keeps FIND.
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "find",
+        isError: false,
+      }),
+    );
+  });
+
+  it("includes available tool names in the not-found error", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "ok" }],
+        details: { ok: true },
+      }),
+    );
+    const readTool: AgentTool = {
+      name: "Read",
+      label: "Read",
+      description: "Read tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "call unknown", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [readTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("UnknownTool"),
+    );
+
+    const errorResult = messages.find(
+      (m) => m.role === "toolResult" && (m as { isError?: boolean }).isError,
+    ) as { content?: Array<{ type: string; text?: string }> } | undefined;
+    expect(errorResult?.content?.[0]?.text).toMatch(/Available tools:.*Read/);
+  });
+
+  it("does not alias Agent to sessions_spawn (returns not-found because arg shapes differ)", async () => {
+    // Regression: sessions_spawn requires `task`, Claude Code Agent emits `prompt`.
+    // Silently aliasing would produce a schema-validation failure instead of a
+    // usable dispatch; the correct behaviour is to surface the not-found error so
+    // the model retries with a valid tool name.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "spawned" }],
+        details: { ok: true },
+      }),
+    );
+    const sessionsSpawnTool: AgentTool = {
+      name: "sessions_spawn",
+      label: "sessions_spawn",
+      description: "Spawn sub-session",
+      execute,
+      parameters: Type.Object({}),
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "spawn agent", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [sessionsSpawnTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("Agent"),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    const errorResult = messages.find(
+      (m) => m.role === "toolResult" && (m as { isError?: boolean }).isError,
+    ) as { content?: Array<{ type: string; text?: string }> } | undefined;
+    expect(errorResult?.content?.[0]?.text).toMatch(
+      /Tool Agent not found\. Available tools:.*sessions_spawn/,
+    );
+  });
+
+  it("accepts a deferred-tool resolver that returns an alias-equivalent name", async () => {
+    // The deferred resolver may materialise a tool under its canonical name
+    // (e.g. `memory_search`) even when the model called `KnowledgeSearch`; the
+    // dispatch path must accept that as a valid resolution rather than throwing
+    // on the name mismatch it does for genuinely unrelated resolutions.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "deferred search" }],
+        details: { ok: true },
+      }),
+    );
+    const deferredTool: AgentTool = {
+      name: "memory_search",
+      label: "memory_search",
+      description: "Deferred memory search tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+    const resolveDeferredTool = vi.fn(async () => deferredTool);
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "search deferred", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    // Deferred resolver returned canonical memory_search; tool_result carries
+    // the canonical name so downstream policy/persistence keys correctly.
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "memory_search",
+        isError: false,
+      }),
+    );
+  });
+
+  it("still rejects a deferred-tool resolver that returns an unrelated name", async () => {
+    // If the deferred resolver returns something with no alias/case relation to
+    // the requested name, that's a bug in the resolver — surface it as an error.
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "should not run" }],
+        details: { ok: true },
+      }),
+    );
+    const unrelatedTool: AgentTool = {
+      name: "not_related",
+      label: "not_related",
+      description: "Unrelated tool",
+      execute,
+      parameters: Type.Object({}),
+    };
+    const resolveDeferredTool = vi.fn(async () => unrelatedTool);
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "search", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      makeToolCallStream("KnowledgeSearch"),
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    const errorResult = messages.find(
+      (m) => m.role === "toolResult" && (m as { isError?: boolean }).isError,
+    ) as { content?: Array<{ type: string; text?: string }> } | undefined;
+    expect(errorResult?.content?.[0]?.text).toMatch(
+      /Deferred tool resolver returned "not_related" for requested "KnowledgeSearch"/,
+    );
+  });
+});
+
 describe("agentLoop tool termination", () => {
   function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
     return {
