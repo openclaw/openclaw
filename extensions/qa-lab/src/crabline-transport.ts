@@ -307,6 +307,7 @@ function createCrablineState(params: {
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
+  readonly #scenarioIds: ReadonlySet<string>;
   readonly #state: QaCrablineTransportState;
   readonly sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
   readonly waitForOutboundSequence?: (input: QaTransportOutboundSequenceMatch) => Promise<{
@@ -316,6 +317,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   constructor(params: {
     adapter: StartedOpenClawCrablineAdapter;
+    scenarioIds?: readonly string[];
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
   }) {
@@ -328,6 +330,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     });
     this.#adapter = params.adapter;
     this.#selection = params.selection;
+    this.#scenarioIds = new Set(params.scenarioIds ?? []);
     this.#state = params.state;
     if (params.selection.channel === "telegram") {
       this.sendNativeCommand = async (input) => {
@@ -346,8 +349,31 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     }
   }
 
-  createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig =>
-    this.#adapter.createGatewayConfig(params) as QaTransportGatewayConfig;
+  createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig => {
+    const config = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
+    if (
+      this.#selection.channel !== "telegram" ||
+      !this.#scenarioIds.has("channel-mention-gating")
+    ) {
+      return config as QaTransportGatewayConfig;
+    }
+    return {
+      ...config,
+      channels: {
+        ...config.channels,
+        telegram: {
+          ...config.channels?.telegram,
+          groups: {
+            ...config.channels?.telegram?.groups,
+            "*": {
+              ...config.channels?.telegram?.groups?.["*"],
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as QaTransportGatewayConfig;
+  };
 
   waitReady = (params: {
     gateway: QaTransportGatewayClient;
@@ -389,6 +415,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
 export async function createQaCrablineTransportAdapter(params: {
   outputDir: string;
+  scenarioIds?: readonly string[];
   selection: OpenClawCrablineChannelDriverSelection;
   state?: QaBusState;
 }) {
@@ -417,5 +444,10 @@ export async function createQaCrablineTransportAdapter(params: {
     state: params.state ?? createQaBusState(),
   });
   observeEvent = state.observeEvent;
-  return new QaCrablineTransport({ adapter, selection: params.selection, state });
+  return new QaCrablineTransport({
+    adapter,
+    scenarioIds: params.scenarioIds,
+    selection: params.selection,
+    state,
+  });
 }

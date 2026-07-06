@@ -6,6 +6,8 @@ import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
 export const TELEGRAM_CANONICAL_SCENARIO_IDS = [
+  "channel-canary",
+  "channel-mention-gating",
   "telegram-help-command",
   "telegram-commands-command",
   "telegram-tools-compact-command",
@@ -19,6 +21,8 @@ export const TELEGRAM_CANONICAL_SCENARIO_IDS = [
 ] as const;
 
 export const TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS = [
+  "channel-canary",
+  "channel-mention-gating",
   "telegram-help-command",
   "telegram-commands-command",
   "telegram-tools-compact-command",
@@ -29,6 +33,10 @@ export const TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS = [
 ] as const;
 
 export const WHATSAPP_CANONICAL_SCENARIO_IDS = [
+  "channel-canary",
+  "channel-dm-group-routing",
+  "channel-mention-gating",
+  "channel-top-level-reply-shape",
   "whatsapp-help-command",
   "whatsapp-status-command",
   "whatsapp-commands-command",
@@ -39,9 +47,19 @@ export const WHATSAPP_CANONICAL_SCENARIO_IDS = [
   "whatsapp-native-new-command",
 ] as const;
 
-export const WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS = ["whatsapp-help-command"] as const;
+export const WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS = [
+  "channel-canary",
+  "channel-dm-group-routing",
+  "channel-mention-gating",
+  "channel-top-level-reply-shape",
+  "whatsapp-help-command",
+] as const;
 
 export const WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS = [
+  "channel-canary",
+  "channel-dm-group-routing",
+  "channel-mention-gating",
+  "channel-top-level-reply-shape",
   "whatsapp-help-command",
   "whatsapp-commands-command",
   "whatsapp-tools-compact-command",

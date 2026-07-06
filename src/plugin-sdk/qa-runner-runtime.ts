@@ -20,6 +20,7 @@ type QaRunnerAdapterOptions = {
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
+  scenarioIds?: readonly string[];
 };
 
 type QaRunnerMessageRecorder = {

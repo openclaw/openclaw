@@ -22,7 +22,7 @@ import {
 import { loadNonYamlScenarioRefs } from "./live-transport-scenarios.js";
 
 describe("canonical live-transport scenarios", () => {
-  it("loads every migrated command and session-context scenario from YAML", () => {
+  it("loads every migrated routing, command, and session-context scenario from YAML", () => {
     const telegram = listCanonicalScenarios({
       ids: TELEGRAM_CANONICAL_SCENARIO_IDS,
       defaultIds: TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS,
@@ -44,7 +44,13 @@ describe("canonical live-transport scenarios", () => {
     expect(whatsapp.filter(({ defaultEnabled }) => defaultEnabled).map(({ id }) => id)).toEqual(
       expect.arrayContaining([...WHATSAPP_MOCK_DEFAULT_CANONICAL_SCENARIO_IDS]),
     );
-    expect(whatsappDefaultCanonicalScenarioIds("live-frontier")).toEqual(["whatsapp-help-command"]);
+    expect(whatsappDefaultCanonicalScenarioIds("live-frontier")).toEqual([
+      "channel-canary",
+      "channel-dm-group-routing",
+      "channel-mention-gating",
+      "channel-top-level-reply-shape",
+      "whatsapp-help-command",
+    ]);
     expect(telegram.find(({ id }) => id === "telegram-status-command")?.regressionRefs).toEqual([
       "openclaw/openclaw#74698",
     ]);

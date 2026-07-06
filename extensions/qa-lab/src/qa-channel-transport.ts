@@ -83,7 +83,21 @@ async function waitForQaChannelReady(params: {
 
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
+  scenarioIds?: readonly string[];
 }): QaTransportGatewayConfig {
+  const scenarioIds = new Set(params.scenarioIds ?? []);
+  const requiresMention = [
+    "channel-canary",
+    "channel-dm-group-routing",
+    "channel-mention-gating",
+    "channel-sender-allowlist",
+    "channel-top-level-reply-shape",
+    "channel-secondary-conversation-isolation",
+    "channel-multi-actor-ordering",
+  ].some((scenarioId) => scenarioIds.has(scenarioId));
+  const enforcesSenderAllowlist =
+    scenarioIds.has("channel-sender-allowlist") ||
+    scenarioIds.has("channel-multi-actor-ordering");
   return {
     channels: {
       [QA_CHANNEL_ID]: {
@@ -91,7 +105,22 @@ export function createQaChannelGatewayConfig(params: {
         baseUrl: params.baseUrl,
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
+        allowFrom: enforcesSenderAllowlist ? ["driver"] : ["*"],
+        ...(enforcesSenderAllowlist
+          ? {
+              groupPolicy: "allowlist" as const,
+              groupAllowFrom: ["driver"],
+            }
+          : {}),
+        ...(requiresMention
+          ? {
+              groups: {
+                "*": {
+                  requireMention: true,
+                },
+              },
+            }
+          : {}),
         pollTimeoutMs: 250,
       },
     },
@@ -134,7 +163,9 @@ async function handleQaChannelAction(params: {
 }
 
 class QaChannelTransport extends QaStateBackedTransportAdapter {
-  constructor(state: QaBusState) {
+  readonly #scenarioIds: readonly string[];
+
+  constructor(state: QaBusState, scenarioIds: readonly string[] = []) {
     super({
       id: QA_CHANNEL_ID,
       label: "qa-channel + qa-lab bus",
@@ -143,9 +174,11 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       supportedActions: ["delete", "edit", "react", "thread-create"],
       state,
     });
+    this.#scenarioIds = scenarioIds;
   }
 
-  createGatewayConfig = createQaChannelGatewayConfig;
+  createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>
+    createQaChannelGatewayConfig({ baseUrl, scenarioIds: this.#scenarioIds });
   waitReady = waitForQaChannelReady;
   buildAgentDelivery = ({ target }: { target: string }) => ({
     channel: QA_CHANNEL_ID,
@@ -170,6 +203,6 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   createReportNotes = createQaChannelReportNotes;
 }
 
-export function createQaChannelTransport(state: QaBusState) {
-  return new QaChannelTransport(state);
+export function createQaChannelTransport(state: QaBusState, scenarioIds?: readonly string[]) {
+  return new QaChannelTransport(state, scenarioIds);
 }
