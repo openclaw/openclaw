@@ -25,11 +25,17 @@ type LoginFailureKind =
   | "protocol-mismatch"
   | "network";
 
+export type LoginFailureStep = {
+  text: string;
+  /** Copyable CLI command for this step; rendered as a copy chip below the text. */
+  command?: string;
+};
+
 export type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
-  steps: string[];
+  steps: LoginFailureStep[];
   docsHref: string;
   docsLabel: string;
   rawError: string;
@@ -93,7 +99,7 @@ function buildFeedback(params: {
   docsHref?: string;
   titleKey: string;
   summaryKey: string;
-  stepKeys: string[];
+  steps: Array<{ key: string; command?: string }>;
   stepParams?: Record<string, string>;
 }): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
@@ -101,7 +107,10 @@ function buildFeedback(params: {
     kind: params.kind,
     title: t(params.titleKey, params.stepParams),
     summary: t(params.summaryKey, params.stepParams),
-    steps: params.stepKeys.map((key) => t(key, params.stepParams)),
+    steps: params.steps.map((step) => ({
+      text: t(step.key, params.stepParams),
+      ...(step.command ? { command: step.command } : {}),
+    })),
     docsHref,
     docsLabel: resolveDocsLabel(docsHref),
     rawError: redactLoginFailureError(params.rawError),
@@ -137,14 +146,16 @@ export function resolveLoginFailureFeedback(
         pairing.kind === "pairing-required"
           ? "login.failure.pairing.summary"
           : "login.failure.pairing.upgradeSummary",
-      stepKeys: [
-        "login.failure.pairing.stepList",
+      steps: [
+        { key: "login.failure.pairing.stepListDevices", command: "openclaw devices list" },
         pairing.requestId
-          ? "login.failure.pairing.stepApproveId"
-          : "login.failure.pairing.stepApprove",
-        "login.failure.pairing.stepReconnect",
+          ? {
+              key: "login.failure.pairing.stepApproveRequest",
+              command: `openclaw devices approve ${pairing.requestId}`,
+            }
+          : { key: "login.failure.pairing.stepApprove" },
+        { key: "login.failure.pairing.stepReconnect" },
       ],
-      stepParams: { requestId: pairing.requestId ?? "" },
     });
   }
 
@@ -158,10 +169,10 @@ export function resolveLoginFailureFeedback(
       rawError,
       titleKey: "login.failure.rateLimited.title",
       summaryKey: "login.failure.rateLimited.summary",
-      stepKeys: [
-        "login.failure.rateLimited.stepStop",
-        "login.failure.rateLimited.stepWait",
-        "login.failure.rateLimited.stepCheckClients",
+      steps: [
+        { key: "login.failure.rateLimited.stepStop" },
+        { key: "login.failure.rateLimited.stepWait" },
+        { key: "login.failure.rateLimited.stepCheckClients" },
       ],
     });
   }
@@ -173,10 +184,10 @@ export function resolveLoginFailureFeedback(
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
       titleKey: "login.failure.insecure.title",
       summaryKey: "login.failure.insecure.summary",
-      stepKeys: [
-        "login.failure.insecure.stepHttps",
-        "login.failure.insecure.stepLocalCompat",
-        "login.failure.insecure.stepAvoidDisable",
+      steps: [
+        { key: "login.failure.insecure.stepHttps" },
+        { key: "login.failure.insecure.stepLocalCompat" },
+        { key: "login.failure.insecure.stepAvoidDisable" },
       ],
     });
   }
@@ -192,10 +203,10 @@ export function resolveLoginFailureFeedback(
         "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
       titleKey: "login.failure.origin.title",
       summaryKey: "login.failure.origin.summary",
-      stepKeys: [
-        "login.failure.origin.stepAllowedOrigins",
-        "login.failure.origin.stepFullOrigin",
-        "login.failure.origin.stepRestart",
+      steps: [
+        { key: "login.failure.origin.stepAllowedOrigins" },
+        { key: "login.failure.origin.stepFullOrigin" },
+        { key: "login.failure.origin.stepRestart" },
       ],
     });
   }
@@ -208,10 +219,10 @@ export function resolveLoginFailureFeedback(
         "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
-      stepKeys: [
-        "login.failure.protocol.stepDashboard",
-        "login.failure.protocol.stepDevUi",
-        "login.failure.protocol.stepRestart",
+      steps: [
+        { key: "login.failure.protocol.stepReopenDashboard", command: "openclaw dashboard" },
+        { key: "login.failure.protocol.stepDevUi" },
+        { key: "login.failure.protocol.stepRestart" },
       ],
     });
   }
@@ -229,10 +240,16 @@ export function resolveLoginFailureFeedback(
       rawError,
       titleKey: "login.failure.authRequired.title",
       summaryKey: "login.failure.authRequired.summary",
-      stepKeys: [
-        "login.failure.authRequired.stepPaste",
-        "login.failure.authRequired.stepGenerate",
-        "login.failure.authRequired.stepConnect",
+      steps: [
+        {
+          key: "login.failure.authRequired.stepPasteToken",
+          command: "openclaw dashboard --no-open",
+        },
+        {
+          key: "login.failure.authRequired.stepGenerateToken",
+          command: "openclaw doctor --generate-gateway-token",
+        },
+        { key: "login.failure.authRequired.stepConnect" },
       ],
     });
   }
@@ -242,10 +259,13 @@ export function resolveLoginFailureFeedback(
       rawError,
       titleKey: "login.failure.authFailed.title",
       summaryKey: "login.failure.authFailed.summary",
-      stepKeys: [
-        "login.failure.authFailed.stepDashboard",
-        "login.failure.authFailed.stepReplace",
-        "login.failure.authFailed.stepMode",
+      steps: [
+        {
+          key: "login.failure.authFailed.stepFreshDashboard",
+          command: "openclaw dashboard --no-open",
+        },
+        { key: "login.failure.authFailed.stepReplace" },
+        { key: "login.failure.authFailed.stepMode" },
       ],
     });
   }
@@ -255,10 +275,10 @@ export function resolveLoginFailureFeedback(
     rawError,
     titleKey: "login.failure.network.title",
     summaryKey: "login.failure.network.summary",
-    stepKeys: [
-      "login.failure.network.stepGateway",
-      "login.failure.network.stepUrl",
-      "login.failure.network.stepDashboard",
+    steps: [
+      { key: "login.failure.network.stepCheckStatus", command: "openclaw status" },
+      { key: "login.failure.network.stepUrl" },
+      { key: "login.failure.network.stepRecopyDashboard", command: "openclaw dashboard --no-open" },
     ],
   });
 }
@@ -274,7 +294,12 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
       <div class="login-gate__failure-title">${feedback.title}</div>
       <div class="login-gate__failure-summary">${feedback.summary}</div>
       <ol class="login-gate__failure-steps">
-        ${feedback.steps.map((step) => html`<li>${step}</li>`)}
+        ${feedback.steps.map(
+          (step) =>
+            html`<li>
+              ${step.text}${step.command ? renderConnectCommand(step.command) : nothing}
+            </li>`,
+        )}
       </ol>
       <details class="login-gate__failure-detail">
         <summary>${t("login.failure.rawError")}</summary>

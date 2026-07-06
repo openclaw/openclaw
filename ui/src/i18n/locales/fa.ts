@@ -1406,18 +1406,17 @@ export const fa: TranslationMap = {
         title: "احراز هویت لازم است",
         summary:
           "Gateway در دسترس است، اما قبل از اتصال این مرورگر به یک توکن یا گذرواژه منطبق نیاز دارد.",
-        stepPaste:
-          "توکن openclaw dashboard --no-open را جای گذاری کنید یا گذرواژه پیکربندی شده را وارد کنید.",
-        stepGenerate:
-          "اگر توکنی پیکربندی نشده است، openclaw doctor --generate-gateway-token را روی میزبان Gateway اجرا کنید.",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "پس از به روز کردن اعتبارنامه، دوباره روی Connect کلیک کنید.",
       },
       authFailed: {
         title: "احراز هویت مطابقت نداشت",
         summary:
           "اعتبارنامه ارائه شده رد شد. رایج ترین علت، توکن قدیمی یا توکنی است که از URL یک Gateway دیگر کپی شده است.",
-        stepDashboard:
-          "openclaw dashboard --no-open را اجرا کنید و URL تازه را باز کنید یا توکن آن را جای گذاری کنید.",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace:
           "مقادیر قدیمی توکن/گذرواژه را جایگزین کنید؛ از توکن URL یک Gateway دیگر دوباره استفاده نکنید.",
         stepMode:
@@ -1441,8 +1440,8 @@ export const fa: TranslationMap = {
           "این مرورگر قبل از استفاده از Control UI به تأیید یک باره از میزبان Gateway نیاز دارد.",
         upgradeSummary:
           "این مرورگر از قبل شناخته شده است، اما دسترسی درخواستی تغییر کرده و به تأیید تازه نیاز دارد.",
-        stepList: "openclaw devices list را روی میزبان Gateway اجرا کنید.",
-        stepApproveId: "این درخواست را تأیید کنید: openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "درخواست در انتظار مرورگر/دستگاه را از آن فهرست تأیید کنید.",
         stepReconnect: "پس از تکمیل تأیید، دوباره وصل شوید.",
       },
@@ -1469,8 +1468,8 @@ export const fa: TranslationMap = {
         title: "عدم تطابق پروتکل",
         summary:
           "Control UI سرو شده و Gateway در حال اجرا درباره پروتکل اتصال پشتیبانی شده توافق ندارند.",
-        stepDashboard:
-          "داشبورد سرو شده را با openclaw dashboard دوباره باز کنید تا UI و Gateway از همان نصب باشند.",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "اگر از pnpm ui:dev استفاده می کنید، UI توسعه را بر اساس checkout فعلی دوباره بسازید یا راه اندازی کنید.",
         stepRestart:
@@ -1480,12 +1479,11 @@ export const fa: TranslationMap = {
         title: "اتصال برقرار نشد",
         summary:
           "مرورگر نتوانست اتصال Gateway را کامل کند. پیش از تلاش دوباره با اعتبارنامه ها، هدف و انتقال را بررسی کنید.",
-        stepGateway:
-          "با openclaw status یا openclaw gateway run تأیید کنید که Gateway در حال اجرا است.",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "URL WebSocket را بررسی کنید و وقتی Gateway پشت HTTPS/Tailscale Serve است از wss:// استفاده کنید.",
-        stepDashboard:
-          "داشبورد را با openclaw dashboard --no-open دوباره باز کنید تا URL و جزئیات احراز هویت فعلی را دوباره کپی کنید.",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

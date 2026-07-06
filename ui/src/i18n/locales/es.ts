@@ -1414,17 +1414,17 @@ export const es: TranslationMap = {
         title: "Autenticación requerida",
         summary:
           "Se puede acceder al Gateway, pero necesita un token o una contraseña coincidente antes de que este navegador pueda conectarse.",
-        stepPaste:
-          "Pega el token de openclaw dashboard --no-open o introduce la contraseña configurada.",
-        stepGenerate:
-          "Si no hay token configurado, ejecuta openclaw doctor --generate-gateway-token en el host del Gateway.",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "Haz clic en Connect de nuevo después de actualizar la credencial.",
       },
       authFailed: {
         title: "La autenticación no coincide",
         summary:
           "La credencial proporcionada fue rechazada. La causa más común es un token obsoleto o copiado desde otra URL de Gateway.",
-        stepDashboard: "Ejecuta openclaw dashboard --no-open y abre la URL nueva o pega su token.",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace:
           "Reemplaza valores obsoletos de token/contraseña; no reutilices un token de otra URL de Gateway.",
         stepMode:
@@ -1449,8 +1449,8 @@ export const es: TranslationMap = {
           "Este navegador necesita una aprobación única del host del Gateway antes de poder usar Control UI.",
         upgradeSummary:
           "Este navegador ya es conocido, pero el acceso solicitado cambió y necesita una aprobación nueva.",
-        stepList: "Ejecuta openclaw devices list en el host del Gateway.",
-        stepApproveId: "Aprueba esta solicitud: openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "Aprueba la solicitud pendiente de navegador/dispositivo desde esa lista.",
         stepReconnect: "Vuelve a conectar después de completar la aprobación.",
       },
@@ -1477,8 +1477,8 @@ export const es: TranslationMap = {
         title: "El protocolo no coincide",
         summary:
           "La Control UI servida y el Gateway en ejecución no coinciden en el protocolo de conexión admitido.",
-        stepDashboard:
-          "Vuelve a abrir el dashboard servido con openclaw dashboard para que UI y Gateway provengan de la misma instalación.",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "Si usas pnpm ui:dev, reconstruye o reinicia la UI de desarrollo contra el checkout actual.",
         stepRestart:
@@ -1488,12 +1488,11 @@ export const es: TranslationMap = {
         title: "No se pudo conectar",
         summary:
           "El navegador no pudo completar la conexión al Gateway. Revisa el destino y el transporte antes de reintentar credenciales.",
-        stepGateway:
-          "Confirma que el Gateway esté en ejecución con openclaw status u openclaw gateway run.",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "Revisa la URL de WebSocket y usa wss:// cuando el Gateway esté detrás de HTTPS/Tailscale Serve.",
-        stepDashboard:
-          "Vuelve a abrir el dashboard con openclaw dashboard --no-open para copiar la URL y los detalles de autenticación actuales.",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

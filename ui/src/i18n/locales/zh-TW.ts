@@ -1388,15 +1388,16 @@ export const zh_TW: TranslationMap = {
       authRequired: {
         title: "需要驗證",
         summary: "Gateway 可以連線，但此瀏覽器連接前需要相符的權杖或密碼。",
-        stepPaste: "貼上 openclaw dashboard --no-open 提供的權杖，或輸入已設定的密碼。",
-        stepGenerate:
-          "如果尚未設定權杖，請在 Gateway 主機上執行 openclaw doctor --generate-gateway-token。",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "更新憑證後再次按一下 Connect。",
       },
       authFailed: {
         title: "驗證不相符",
         summary: "提供的憑證遭到拒絕。最常見原因是權杖過期，或權杖複製自另一個 Gateway URL。",
-        stepDashboard: "執行 openclaw dashboard --no-open 並開啟新的 URL，或貼上其中的權杖。",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace: "替換過期的權杖/密碼；不要重複使用另一個 Gateway URL 的權杖。",
         stepMode:
           "一次只使用一種相符的驗證模式：token 模式使用 gateway token，password 模式使用密碼。",
@@ -1415,8 +1416,8 @@ export const zh_TW: TranslationMap = {
         metadataTitle: "裝置重新整理待核准",
         summary: "此瀏覽器需要 Gateway 主機的一次性核准後才能使用 Control UI。",
         upgradeSummary: "此瀏覽器已知，但要求的存取權限已變更，需要新的核准。",
-        stepList: "在 Gateway 主機上執行 openclaw devices list。",
-        stepApproveId: "核准此要求：openclaw devices approve {requestId}。",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "從該清單核准待處理的瀏覽器/裝置要求。",
         stepReconnect: "核准完成後重新連線。",
       },
@@ -1437,18 +1438,18 @@ export const zh_TW: TranslationMap = {
       protocol: {
         title: "協定不相符",
         summary: "提供的 Control UI 與執行中的 Gateway 對支援的連線協定不一致。",
-        stepDashboard:
-          "使用 openclaw dashboard 重新開啟提供的 dashboard，確保 UI 和 Gateway 來自同一安裝。",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi: "如果使用 pnpm ui:dev，請依目前 checkout 重新建置或重新啟動開發 UI。",
         stepRestart: "更新 OpenClaw 後重新啟動 Gateway，使其提供目前協定。",
       },
       network: {
         title: "無法連線",
         summary: "瀏覽器無法完成 Gateway 連線。重試憑證前請檢查目標與傳輸。",
-        stepGateway: "使用 openclaw status 或 openclaw gateway run 確認 Gateway 正在執行。",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl: "檢查 WebSocket URL；當 Gateway 位於 HTTPS/Tailscale Serve 後方時使用 wss://。",
-        stepDashboard:
-          "使用 openclaw dashboard --no-open 重新開啟 dashboard，以重新複製目前 URL 與驗證詳細資料。",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

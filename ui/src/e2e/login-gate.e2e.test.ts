@@ -25,8 +25,11 @@ async function renderLoginGate(page: Page): Promise<void> {
   await mountLoginGate(page);
 }
 
-async function mountLoginGate(page: Page): Promise<void> {
-  await page.evaluate(async () => {
+async function mountLoginGate(
+  page: Page,
+  lastError = "unauthorized: gateway token required",
+): Promise<void> {
+  await page.evaluate(async (mountError) => {
     await customElements.whenDefined("openclaw-login-gate");
     const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
       props: Record<string, unknown>;
@@ -36,7 +39,7 @@ async function mountLoginGate(page: Page): Promise<void> {
     gate.props = {
       basePath: "",
       connected: false,
-      lastError: "unauthorized: gateway token required",
+      lastError: mountError,
       lastErrorCode: null,
       hasToken: false,
       hasPassword: false,
@@ -57,7 +60,7 @@ async function mountLoginGate(page: Page): Promise<void> {
     };
     document.body.replaceChildren(gate);
     await gate.updateComplete;
-  });
+  }, lastError);
 }
 
 async function closeContext(context: BrowserContext): Promise<void> {
@@ -199,6 +202,53 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
       expect(await help.evaluate((element) => element.tagName)).toBe("DETAILS");
       expect(await help.getAttribute("open")).toBeNull();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(false);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("renders copyable recovery commands for pairing failures", async () => {
+    const context = await browser.newContext({
+      permissions: ["clipboard-read", "clipboard-write"],
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const requestId = "2f4a9c3e-8f6d-4b7a-9c1e-5d3f8a2b6c4d";
+
+    try {
+      const response = await page.goto(server.baseUrl);
+      expect(response?.status()).toBe(200);
+      await mountLoginGate(page, `pairing required (requestId: ${requestId})`);
+
+      const failure = page.locator(".login-gate__failure");
+      expect(await failure.getAttribute("data-kind")).toBe("pairing-required");
+
+      const commands = page.locator(".login-gate__failure-steps .login-gate__command code");
+      expect(await commands.count()).toBe(2);
+      expect(await commands.nth(0).textContent()).toBe("openclaw devices list");
+      expect(await commands.nth(1).textContent()).toBe(`openclaw devices approve ${requestId}`);
+
+      await page.locator(".login-gate__failure-steps .login-gate__command").nth(1).click();
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copied).toBe(`openclaw devices approve ${requestId}`);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("renders copyable recovery commands for auth failures", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+
+    try {
+      await renderLoginGate(page);
+      const failure = page.locator(".login-gate__failure");
+      expect(await failure.getAttribute("data-kind")).toBe("auth-required");
+
+      const commands = page.locator(".login-gate__failure-steps .login-gate__command code");
+      expect(await commands.count()).toBe(2);
+      expect(await commands.nth(0).textContent()).toBe("openclaw dashboard --no-open");
+      expect(await commands.nth(1).textContent()).toBe("openclaw doctor --generate-gateway-token");
     } finally {
       await closeContext(context);
     }

@@ -1419,18 +1419,17 @@ export const fr: TranslationMap = {
         title: "Authentification requise",
         summary:
           "Le Gateway est joignable, mais il lui faut un jeton ou un mot de passe correspondant avant que ce navigateur puisse se connecter.",
-        stepPaste:
-          "Collez le jeton de openclaw dashboard --no-open ou saisissez le mot de passe configuré.",
-        stepGenerate:
-          "Si aucun jeton n’est configuré, exécutez openclaw doctor --generate-gateway-token sur l’hôte Gateway.",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "Cliquez de nouveau sur Connect après avoir mis à jour l’identifiant.",
       },
       authFailed: {
         title: "L’authentification ne correspond pas",
         summary:
           "L’identifiant fourni a été refusé. La cause la plus courante est un jeton obsolète ou copié depuis une autre URL Gateway.",
-        stepDashboard:
-          "Exécutez openclaw dashboard --no-open et ouvrez la nouvelle URL ou collez son jeton.",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace:
           "Remplacez les valeurs de jeton/mot de passe obsolètes ; ne réutilisez pas un jeton provenant d’une autre URL Gateway.",
         stepMode:
@@ -1455,8 +1454,8 @@ export const fr: TranslationMap = {
           "Ce navigateur nécessite une approbation unique de l’hôte Gateway avant de pouvoir utiliser Control UI.",
         upgradeSummary:
           "Ce navigateur est déjà connu, mais l’accès demandé a changé et nécessite une nouvelle approbation.",
-        stepList: "Exécutez openclaw devices list sur l’hôte Gateway.",
-        stepApproveId: "Approuvez cette demande : openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "Approuvez la demande navigateur/appareil en attente depuis cette liste.",
         stepReconnect: "Reconnectez-vous après la fin de l’approbation.",
       },
@@ -1486,8 +1485,8 @@ export const fr: TranslationMap = {
         title: "Incompatibilité de protocole",
         summary:
           "La Control UI servie et le Gateway en cours d’exécution ne sont pas d’accord sur le protocole de connexion pris en charge.",
-        stepDashboard:
-          "Rouvrez le dashboard servi avec openclaw dashboard afin que l’UI et le Gateway viennent de la même installation.",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "Si vous utilisez pnpm ui:dev, reconstruisez ou redémarrez l’UI de développement avec le checkout actuel.",
         stepRestart:
@@ -1497,12 +1496,11 @@ export const fr: TranslationMap = {
         title: "Connexion impossible",
         summary:
           "Le navigateur n’a pas pu terminer la connexion au Gateway. Vérifiez la cible et le transport avant de réessayer les identifiants.",
-        stepGateway:
-          "Confirmez que le Gateway fonctionne avec openclaw status ou openclaw gateway run.",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "Vérifiez l’URL WebSocket et utilisez wss:// lorsque le Gateway est derrière HTTPS/Tailscale Serve.",
-        stepDashboard:
-          "Rouvrez le dashboard avec openclaw dashboard --no-open pour recopier l’URL actuelle et les détails d’authentification.",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

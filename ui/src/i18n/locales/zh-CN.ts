@@ -1387,15 +1387,16 @@ export const zh_CN: TranslationMap = {
       authRequired: {
         title: "需要认证",
         summary: "Gateway 可以访问，但此浏览器连接前需要匹配的令牌或密码。",
-        stepPaste: "粘贴 openclaw dashboard --no-open 提供的令牌，或输入已配置的密码。",
-        stepGenerate:
-          "如果未配置令牌，请在 Gateway 主机上运行 openclaw doctor --generate-gateway-token。",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "更新凭据后再次点击 Connect。",
       },
       authFailed: {
         title: "认证不匹配",
         summary: "提供的凭据被拒绝。最常见原因是令牌已过期，或令牌来自另一个 Gateway URL。",
-        stepDashboard: "运行 openclaw dashboard --no-open 并打开新的 URL，或粘贴其中的令牌。",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace: "替换过期的令牌/密码；不要复用另一个 Gateway URL 的令牌。",
         stepMode: "一次只使用一种匹配的认证模式：令牌模式使用 gateway token，密码模式使用密码。",
       },
@@ -1413,8 +1414,8 @@ export const zh_CN: TranslationMap = {
         metadataTitle: "设备刷新待批准",
         summary: "此浏览器需要 Gateway 主机的一次性批准后才能使用 Control UI。",
         upgradeSummary: "此浏览器已知，但请求的访问权限已变更，需要重新批准。",
-        stepList: "在 Gateway 主机上运行 openclaw devices list。",
-        stepApproveId: "批准此请求：openclaw devices approve {requestId}。",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "从该列表批准待处理的浏览器/设备请求。",
         stepReconnect: "批准完成后重新连接。",
       },
@@ -1435,18 +1436,18 @@ export const zh_CN: TranslationMap = {
       protocol: {
         title: "协议不匹配",
         summary: "提供的 Control UI 与正在运行的 Gateway 对支持的连接协议不一致。",
-        stepDashboard:
-          "使用 openclaw dashboard 重新打开提供的 dashboard，确保 UI 和 Gateway 来自同一安装。",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi: "如果使用 pnpm ui:dev，请基于当前 checkout 重新构建或重启开发 UI。",
         stepRestart: "更新 OpenClaw 后重启 Gateway，使其提供当前协议。",
       },
       network: {
         title: "无法连接",
         summary: "浏览器无法完成 Gateway 连接。重试凭据前请检查目标和传输方式。",
-        stepGateway: "使用 openclaw status 或 openclaw gateway run 确认 Gateway 正在运行。",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl: "检查 WebSocket URL；当 Gateway 位于 HTTPS/Tailscale Serve 后面时使用 wss://。",
-        stepDashboard:
-          "使用 openclaw dashboard --no-open 重新打开 dashboard，以重新复制当前 URL 和认证详情。",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },
