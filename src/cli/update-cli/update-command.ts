@@ -1252,7 +1252,7 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         throw new AggregateError(
           [err, resumeErr],
           `Failed to stop the managed gateway (${String(err)}) and restore Windows Scheduled Task autostart (${String(resumeErr)})`,
-          { cause: err },
+          { cause: resumeErr },
         );
       } finally {
         windowsTaskAutoStartRecovery.complete();
@@ -4211,7 +4211,7 @@ async function updateCommandInternal(
       throw new AggregateError(
         [err, resumeErr],
         `Update failed (${String(err)}) and Windows Scheduled Task autostart could not be restored (${String(resumeErr)})`,
-        { cause: err },
+        { cause: resumeErr },
       );
     }
     await maybeRestartServiceAfterFailedMutableUpdate({
