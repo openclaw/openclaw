@@ -320,6 +320,14 @@ export type CronJobState = {
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Timestamp of the last trigger script evaluation. */
+  lastTriggerEvalAtMs?: number;
+  /** Number of completed trigger script evaluations. */
+  triggerEvalCount?: number;
+  /** Timestamp of the last trigger evaluation that fired. */
+  lastTriggerFireAtMs?: number;
+  /** JSON state returned by the last trigger script evaluation. */
+  triggerState?: unknown;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
@@ -332,6 +340,11 @@ export type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error for the last failed run's failure notification. */
   lastFailureNotificationDeliveryError?: string;
+};
+
+export type CronTrigger = {
+  script: string;
+  once?: boolean;
 };
 
 /** Fully persisted cron job with spec fields and mutable run state. */
@@ -349,6 +362,7 @@ export type CronJob = CronJobBase<
     agentId?: string;
     sessionKey?: string;
   };
+  trigger?: CronTrigger;
   state: CronJobState;
 };
 
@@ -380,6 +394,7 @@ export type CronJobPatch = Partial<
   >
 > & {
   displayName?: string | null;
+  trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

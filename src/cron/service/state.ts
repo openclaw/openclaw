@@ -3,6 +3,7 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
+import type { CronTriggerEvaluationResult } from "../trigger-script.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -41,6 +42,7 @@ export type CronEvent = {
   sessionKey?: string;
   runId?: string;
   nextRunAtMs?: number;
+  triggerFired?: boolean;
 } & CronRunTelemetry;
 
 /** Logger contract consumed by cron service internals. */
@@ -67,6 +69,12 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  evaluateCronTrigger?: (params: {
+    job: CronJob;
+    script: string;
+    state: unknown;
+    abortSignal?: AbortSignal;
+  }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve session store path for a given agent id. */
