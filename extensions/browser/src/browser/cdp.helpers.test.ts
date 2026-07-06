@@ -339,7 +339,7 @@ describe("CDP reachability policy", () => {
     });
   });
 
-  it("merges the selected remote profile CDP host with existing hostname allowlists", () => {
+  it("merges the selected remote profile CDP host without widening navigation", async () => {
     const profile = createProfile({});
     const browserPolicy = { hostnameAllowlist: ["browserless.example.com"] };
 
@@ -348,6 +348,12 @@ describe("CDP reachability policy", () => {
       allowedHostnames: ["172.29.128.1"],
     });
     expect(browserPolicy).toStrictEqual({ hostnameAllowlist: ["browserless.example.com"] });
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "http://172.29.128.1/",
+        ssrfPolicy: browserPolicy,
+      }),
+    ).rejects.toThrow(/not in allowlist/i);
   });
 
   it("keeps local managed loopback CDP control outside browser SSRF policy", () => {
