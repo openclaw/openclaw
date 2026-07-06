@@ -329,6 +329,7 @@ type ToolHandlerState = Pick<
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
+  | "assistantMessageIndex"
 >;
 
 export type ToolHandlerContext = {
