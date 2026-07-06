@@ -423,6 +423,11 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       await details.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
+      await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
+      expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
       await details.locator('button[aria-label="Cancel"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");

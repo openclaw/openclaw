@@ -1503,6 +1503,16 @@
   justify-content: center;
 }
 
+.workboard-detail__actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workboard-detail__actions-row .workboard-card__move {
+  flex: 1 1 132px;
+}
+
 @media (max-width: 860px) {
   .workboard-modal {
     padding: 0;
