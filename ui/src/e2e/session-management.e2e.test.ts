@@ -172,19 +172,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
       await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
-      const researchLink = chatRows.filter({ hasText: "Research notes" }).locator("a").first();
-      await researchLink.click();
-      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
-      await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
-      await expect
-        .poll(() =>
-          chatRows
-            .filter({ hasText: "Research notes" })
-            .first()
-            .evaluate((row) => row.classList.contains("sidebar-recent-session--active")),
-        )
-        .toBe(true);
-
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
@@ -203,6 +190,21 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
       await captureUiProof(page, "sidebar-sessions.png");
+
+      // Selecting a visible row must not reshuffle the list: the highlight
+      // moves while every row keeps its slot.
+      const researchLink = sidebarResearch.locator("a").first();
+      await researchLink.click();
+      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
+      await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
+      await expect
+        .poll(() =>
+          chatRows
+            .filter({ hasText: "Research notes" })
+            .first()
+            .evaluate((row) => row.classList.contains("sidebar-recent-session--active")),
+        )
+        .toBe(true);
 
       await sidebarReleasePin.click();
       const pinPatch = await waitForPatch(

@@ -12,13 +12,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/app-topbar.ts",
-      "text": "⌘K"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/command-palette.ts",
       "text": "esc"
     },
