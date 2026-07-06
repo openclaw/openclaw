@@ -77,6 +77,14 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          entry.surface === "android" &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Search OpenClaw",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
           entry.path.endsWith("/ChatMessageActions.kt") &&
           entry.kind === "ui-named-argument" &&
           entry.source === "Message actions",

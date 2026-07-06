@@ -128,7 +128,7 @@ const CONDITIONAL_BRANCHES = [
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
 const UI_STRING_NAME_RE =
-  /(?:title|subtitle|body|message|label|text|description|detail|prompt|help)$/iu;
+  /(?:title|subtitle|body|message|label|text|description|detail|prompt|placeholder|help)$/iu;
 const APPLE_STRING_PROPERTY = /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*\{/gu;
 const APPLE_SWITCH_BRANCH =
   /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return\s+)?"((?:\\.|[^"\\])*)"/gu;

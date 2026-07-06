@@ -891,6 +891,14 @@
     },
     {
       "kind": "ui-named-argument",
+      "line": 109,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
+      "source": "Search OpenClaw",
+      "surface": "android",
+      "id": "native.android.9f877120690b0c59"
+    },
+    {
+      "kind": "ui-named-argument",
       "line": 113,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Quick actions",
@@ -2075,6 +2083,14 @@
     },
     {
       "kind": "ui-named-argument",
+      "line": 1524,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Paste setup code",
+      "surface": "android",
+      "id": "native.android.06a2214da1eee841"
+    },
+    {
+      "kind": "ui-named-argument",
       "line": 1528,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Setup code was not accepted",
@@ -2107,6 +2123,22 @@
     },
     {
       "kind": "ui-named-argument",
+      "line": 1568,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Host",
+      "surface": "android",
+      "id": "native.android.d54b9e3433ffd809"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1569,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Port",
+      "surface": "android",
+      "id": "native.android.e7f368b47b705410"
+    },
+    {
+      "kind": "ui-named-argument",
       "line": 1572,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Use the Gateway computer's LAN address or secure remote hostname.",
@@ -2123,6 +2155,14 @@
     },
     {
       "kind": "ui-named-argument",
+      "line": 1580,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Paste token",
+      "surface": "android",
+      "id": "native.android.7ac2b9aec9d78cda"
+    },
+    {
+      "kind": "ui-named-argument",
       "line": 1582,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Paste a shared Gateway token or operator-issued token.",
@@ -2136,6 +2176,14 @@
       "source": "Password",
       "surface": "android",
       "id": "native.android.4a5a1702f0130328"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1590,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Password optional",
+      "surface": "android",
+      "id": "native.android.e7045d344dd32ddc"
     },
     {
       "kind": "ui-named-argument",
@@ -2987,6 +3035,14 @@
     },
     {
       "kind": "ui-named-argument",
+      "line": 479,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Device name",
+      "surface": "android",
+      "id": "native.android.dbd3c9b24f72837a"
+    },
+    {
+      "kind": "ui-named-argument",
       "line": 480,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Save Profile",
@@ -3211,6 +3267,14 @@
     },
     {
       "kind": "ui-named-argument",
+      "line": 777,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Search apps",
+      "surface": "android",
+      "id": "native.android.05f0112f3661e947"
+    },
+    {
+      "kind": "ui-named-argument",
       "line": 780,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Show System Apps",
@@ -3426,12 +3490,60 @@
       "id": "native.android.0e8f4c02f7aa20e9"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 1077,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Setup code",
+      "surface": "android",
+      "id": "native.android.1fcfa6e7f5daac35"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1079,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Host",
+      "surface": "android",
+      "id": "native.android.29fe804ebbaed339"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1080,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Port",
+      "surface": "android",
+      "id": "native.android.066ae1c70e6db5c1"
+    },
+    {
       "kind": "conditional-branch",
       "line": 1084,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Local",
       "surface": "android",
       "id": "native.android.74e3d2481d44c4a1"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1088,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Token",
+      "surface": "android",
+      "id": "native.android.ce47022dd4d431fe"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1089,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Bootstrap",
+      "surface": "android",
+      "id": "native.android.1ac555d95edfac77"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 1091,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Password",
+      "surface": "android",
+      "id": "native.android.348365a5b167510d"
     },
     {
       "kind": "ui-named-argument",
@@ -5896,6 +6008,14 @@
       "source": "OpenClaw gateway",
       "surface": "android",
       "id": "native.android.794873efdfcdff4f"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 577,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt",
+      "source": "Ask OpenClaw anything",
+      "surface": "android",
+      "id": "native.android.2d3b6dd9a8f186fe"
     },
     {
       "kind": "ui-named-argument",
@@ -16210,6 +16330,14 @@
       "id": "native.apple.2e33f01115fd73dd"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 450,
+      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+      "source": "/Users/you/.ssh/id_ed25519",
+      "surface": "apple",
+      "id": "native.apple.5eaffd822af43300"
+    },
+    {
       "kind": "ui-call",
       "line": 452,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
@@ -16218,12 +16346,28 @@
       "id": "native.apple.8bd4eccc71e5668f"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 454,
+      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+      "source": "/home/you/Projects/openclaw",
+      "surface": "apple",
+      "id": "native.apple.c663b8a50de8a7d8"
+    },
+    {
       "kind": "ui-call",
       "line": 456,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "CLI path",
       "surface": "apple",
       "id": "native.apple.938ee646aac4ce66"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 458,
+      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+      "source": "/Applications/OpenClaw.app/.../openclaw",
+      "surface": "apple",
+      "id": "native.apple.09f99e863e081f9f"
     },
     {
       "kind": "ui-call",
