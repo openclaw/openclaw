@@ -24,13 +24,13 @@ describe("shouldSupersedeTelegramReplyFence", () => {
     ).toBe(false);
   });
 
-  it("keeps normal turns and authorized aborts interrupting active runs", () => {
+  it("keeps normal group turns from superseding older owed replies while preserving aborts", () => {
     expect(
       shouldSupersedeTelegramReplyFence({
         CommandBody: "@bot answer this",
         CommandAuthorized: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSupersedeTelegramReplyFence({
         CommandBody: "/stop",
@@ -43,16 +43,33 @@ describe("shouldSupersedeTelegramReplyFence", () => {
         CommandAuthorized: false,
       }),
     ).toBe(false);
+  });
+
+  it("lets authorized explicit group commands supersede active reply work", () => {
     expect(
       shouldSupersedeTelegramReplyFence({
         CommandBody: "/export-trajectory bundle",
         CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "export-trajectory",
+          body: "/export-trajectory bundle",
+        },
       }),
     ).toBe(true);
     expect(
       shouldSupersedeTelegramReplyFence({
         CommandBody: "/diagnostics confirm abc123def456",
         CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "diagnostics",
+          body: "/diagnostics confirm abc123def456",
+        },
       }),
     ).toBe(true);
   });

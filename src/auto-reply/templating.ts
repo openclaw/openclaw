@@ -270,6 +270,16 @@ export type MsgContext = {
   LocationSource?: string;
   LocationIsLive?: boolean;
   LocationCaption?: string;
+  /**
+   * Channel-derived routing hint for platform-forced split turns such as
+   * Telegram self-replies and media sent after a long text message.
+   */
+  TelegramContinuationIntent?: string;
+  TelegramContinuationReason?: string;
+  TelegramContinuationAnchorId?: string;
+  TelegramContinuationAnchorSenderId?: string;
+  TelegramContinuationAnchorBody?: string;
+  TelegramContinuationCurrentMessageId?: string;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */
