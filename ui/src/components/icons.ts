@@ -186,6 +186,13 @@ export const icons = {
       <rect width="16" height="3" x="4" y="19" rx="1" />
     </svg>
   `,
+  listFilter: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M7 12h10" />
+      <path d="M10 18h4" />
+    </svg>
+  `,
   arrowDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 5v14" />

@@ -1608,6 +1608,9 @@ export const fr: TranslationMap = {
     sidebar: {
       allSessions: "Toutes les sessions",
       openSessionMenu: "Open session menu",
+      sortCreated: "Créé",
+      sortSessions: "Trier les sessions",
+      sortUpdated: "Dernière mise à jour",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

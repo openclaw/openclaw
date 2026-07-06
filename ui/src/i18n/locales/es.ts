@@ -1599,6 +1599,9 @@ export const es: TranslationMap = {
     sidebar: {
       allSessions: "Todas las sesiones",
       openSessionMenu: "Open session menu",
+      sortCreated: "Creado",
+      sortSessions: "Ordenar sesiones",
+      sortUpdated: "Última actualización",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

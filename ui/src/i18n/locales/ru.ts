@@ -1602,6 +1602,9 @@ export const ru: TranslationMap = {
     sidebar: {
       allSessions: "Все сеансы",
       openSessionMenu: "Open session menu",
+      sortCreated: "Создано",
+      sortSessions: "Сортировать сеансы",
+      sortUpdated: "Последнее обновление",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

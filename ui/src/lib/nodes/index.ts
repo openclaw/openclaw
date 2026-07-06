@@ -76,7 +76,7 @@ export type ExecApprovalsAllowlistEntry = {
   lastResolvedPath?: string;
 };
 
-export type ExecApprovalsAgent = ExecApprovalsDefaults & {
+type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecApprovalsAllowlistEntry[];
 };
 

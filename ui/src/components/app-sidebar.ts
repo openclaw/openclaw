@@ -36,7 +36,11 @@ import {
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
 import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
-import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
+import {
+  compareSessionRowsByUpdatedAt,
+  resolveSessionNavigation,
+  searchForSession,
+} from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
@@ -71,6 +75,16 @@ type SidebarSessionMenuState = {
   y: number;
   submenuLeft: boolean;
 };
+
+type SidebarSessionSortMode = "created" | "updated";
+
+const SIDEBAR_SESSION_SORT_OPTIONS = [
+  { mode: "created", labelKey: "chat.sidebar.sortCreated" },
+  { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
+] as const satisfies ReadonlyArray<{
+  mode: SidebarSessionSortMode;
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+}>;
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (
@@ -112,6 +126,8 @@ export class AppSidebar extends LitElement {
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   @state() private sessionGroupSubmenuOpen = false;
+  @state() private sessionSortMode: SidebarSessionSortMode = "created";
+  @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
@@ -122,7 +138,9 @@ export class AppSidebar extends LitElement {
   private stopGatewaySubscription: (() => void) | undefined;
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
+  private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
+  private sessionCreatedOrder = new Map<string, number>();
   private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
@@ -138,6 +156,7 @@ export class AppSidebar extends LitElement {
   override disconnectedCallback() {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
     this.stopAgentsSubscription?.();
@@ -194,6 +213,13 @@ export class AppSidebar extends LitElement {
     this.sessionsResult = snapshot.result;
     this.sessionsAgentId = snapshot.agentId;
     this.sessionsLoading = snapshot.loading;
+    if (snapshot.result) {
+      for (const row of snapshot.result.sessions) {
+        if (row.key && !this.sessionCreatedOrder.has(row.key)) {
+          this.sessionCreatedOrder.set(row.key, this.sessionCreatedOrder.size);
+        }
+      }
+    }
     if (snapshot.result && snapshot.agentId) {
       this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
     }
@@ -208,12 +234,26 @@ export class AppSidebar extends LitElement {
       return;
     }
     this.sessionRowsByAgent = {};
+    this.sessionCreatedOrder.clear();
     this.gatewayClient = client;
   }
 
   private getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
+
+  private readonly compareSidebarSessionRows = (
+    a: SessionsListResult["sessions"][number],
+    b: SessionsListResult["sessions"][number],
+  ) => {
+    if (this.sessionSortMode === "updated") {
+      return compareSessionRowsByUpdatedAt(a, b);
+    }
+    return (
+      (this.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+      (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+    );
+  };
 
   private getSessionNavigationState() {
     const context = this.context;
@@ -225,23 +265,21 @@ export class AppSidebar extends LitElement {
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
+      compareSessions: this.compareSidebarSessionRows,
     });
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === navigation.currentSessionKey,
+      active: row.key === navigation.activeRowKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
       category: normalizeOptionalString(row.category),
       unread: row.unread === true,
     });
-    const recentSessions = navigation.recentSessions.map((row) => ({
-      ...toSidebarSession(row),
-      active: row.key === navigation.activeRowKey,
-    }));
+    const recentSessions = navigation.recentSessions.map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
     return {
@@ -383,6 +421,7 @@ export class AppSidebar extends LitElement {
     const menuWidth = 240;
     const menuMaxHeight = 420;
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
     this.customizeMenuTrigger = trigger;
     this.customizeMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -415,6 +454,7 @@ export class AppSidebar extends LitElement {
     const menuWidth = 240;
     const menuMaxHeight = 460;
     this.closeCustomizeMenu();
+    this.closeSessionSortMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionGroupSubmenuOpen = false;
     const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
@@ -436,6 +476,34 @@ export class AppSidebar extends LitElement {
     this.sessionMenuTrigger = null;
     this.sessionMenu = null;
     this.sessionGroupSubmenuOpen = false;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private openSessionSortMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+    const menuWidth = 180;
+    const menuMaxHeight = 180;
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.sessionSortMenuTrigger = trigger;
+    this.sessionSortMenuPosition = {
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-session-sort-menu__item")?.focus();
+    });
+  }
+
+  private closeSessionSortMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.sessionSortMenuTrigger;
+    this.sessionSortMenuTrigger = null;
+    this.sessionSortMenuPosition = null;
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -527,12 +595,15 @@ export class AppSidebar extends LitElement {
 
   private readonly handleDocumentPointerDown = (event: PointerEvent) => {
     const path = event.composedPath();
-    const menu = this.querySelector(".sidebar-customize-menu, .sidebar-session-menu");
+    const menu = this.querySelector(
+      ".sidebar-customize-menu, .sidebar-session-menu, .sidebar-session-sort-menu",
+    );
     if (menu && path.includes(menu)) {
       return;
     }
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
   };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -540,6 +611,7 @@ export class AppSidebar extends LitElement {
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
       this.closeSessionMenu({ restoreFocus: true });
+      this.closeSessionSortMenu({ restoreFocus: true });
     }
   };
 
@@ -801,6 +873,41 @@ export class AppSidebar extends LitElement {
           <span class="sidebar-session-menu__icon" aria-hidden="true">${icons.trash}</span>
           <span class="sidebar-session-menu__text">${t("sessionsView.deleteSessionMenu")}</span>
         </button>
+      </div>
+    `;
+  }
+
+  private renderSessionSortMenu() {
+    const position = this.sessionSortMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="sidebar-session-sort-menu"
+        role="menu"
+        aria-label=${t("chat.sidebar.sortSessions")}
+        style="left: ${position.x}px; top: ${position.y}px;"
+      >
+        ${SIDEBAR_SESSION_SORT_OPTIONS.map(
+          (option) => html`
+            <button
+              type="button"
+              class="sidebar-session-sort-menu__item"
+              role="menuitemradio"
+              aria-checked=${String(this.sessionSortMode === option.mode)}
+              @click=${() => {
+                this.sessionSortMode = option.mode;
+                this.closeSessionSortMenu({ restoreFocus: true });
+              }}
+            >
+              <span class="sidebar-session-menu__check" aria-hidden="true">
+                ${this.sessionSortMode === option.mode ? icons.check : nothing}
+              </span>
+              <span class="sidebar-session-menu__text">${t(option.labelKey)}</span>
+            </button>
+          `,
+        )}
       </div>
     `;
   }
@@ -1080,6 +1187,21 @@ export class AppSidebar extends LitElement {
                             : t("sessionsView.title")}</span
                         >
                         ${this.renderAgentScope(routeSessionKey, selectedAgentId)}
+                        <button
+                          type="button"
+                          class="sidebar-session-sort"
+                          title=${t("chat.sidebar.sortSessions")}
+                          aria-label=${t("chat.sidebar.sortSessions")}
+                          aria-haspopup="menu"
+                          aria-expanded=${String(this.sessionSortMenuPosition !== null)}
+                          @click=${(event: MouseEvent) => {
+                            const trigger = event.currentTarget as HTMLElement;
+                            const rect = trigger.getBoundingClientRect();
+                            this.openSessionSortMenu(rect.right - 180, rect.bottom + 4, trigger);
+                          }}
+                        >
+                          ${icons.listFilter}
+                        </button>
                       </div>
                       <div class="sidebar-recent-sessions__list">
                         ${recentSessions.length === 0
@@ -1297,7 +1419,7 @@ export class AppSidebar extends LitElement {
             </div>
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()}
+        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionSortMenu()}
       </aside>
     `;
   }

@@ -1579,6 +1579,9 @@ export const ko: TranslationMap = {
     sidebar: {
       allSessions: "모든 세션",
       openSessionMenu: "Open session menu",
+      sortCreated: "생성일",
+      sortSessions: "세션 정렬",
+      sortUpdated: "마지막 업데이트",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

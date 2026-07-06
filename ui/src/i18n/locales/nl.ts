@@ -1595,6 +1595,9 @@ export const nl: TranslationMap = {
     sidebar: {
       allSessions: "Alle sessies",
       openSessionMenu: "Open session menu",
+      sortCreated: "Aangemaakt",
+      sortSessions: "Sessies sorteren",
+      sortUpdated: "Laatst bijgewerkt",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

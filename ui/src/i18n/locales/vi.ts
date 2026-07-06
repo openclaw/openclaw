@@ -1581,6 +1581,9 @@ export const vi: TranslationMap = {
     sidebar: {
       allSessions: "Tất cả phiên",
       openSessionMenu: "Open session menu",
+      sortCreated: "Đã tạo",
+      sortSessions: "Sắp xếp phiên",
+      sortUpdated: "Cập nhật lần cuối",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

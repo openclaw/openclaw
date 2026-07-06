@@ -25,6 +25,7 @@ export type SessionNavigationInput = {
   sessionKey: string;
   assistantAgentId?: string | null;
   hello?: GatewayHelloOk | null;
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
 
 export type SessionNavigation = {
@@ -33,7 +34,6 @@ export type SessionNavigation = {
   defaultAgentId: string;
   selectedSession?: GatewaySessionRow;
   recentSessions: GatewaySessionRow[];
-  /** Key of the row in `recentSessions` that is the open session, if any. */
   activeRowKey: string | null;
 };
 
@@ -248,19 +248,18 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     agentId: selectedAgentId,
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
-  }).toSorted(compareSessionRowsByUpdatedAt);
-  // Stable presentation order: rows keep their recency slot and the open
-  // session highlights in place. Hoisting it to the top made every click
-  // reshuffle the list. Pinned chats are explicit user choices, so the
-  // recent-chat cap only trims unpinned rows; otherwise a tenth pin
-  // silently vanishes.
+  }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
+  // Keep visible selections in their sorted slot. Hoisting every active row
+  // makes the list move after each click. Pinned chats remain outside the
+  // recent-chat cap so explicit pins never disappear.
   const pinnedSessions = sortedSessions.filter((row) => row.pinned === true);
-  const chatSessions = sortedSessions.filter((row) => row.pinned !== true).slice(0, 9);
-  let recentSessions = [...pinnedSessions, ...chatSessions];
+  let recentSessions = [
+    ...pinnedSessions,
+    ...sortedSessions.filter((row) => row.pinned !== true).slice(0, 9),
+  ];
   let activeRow = recentSessions.find(matchesCurrentSession);
   if (!activeRow && activeSession) {
-    // The open session is not in the visible list (deep link, capped, or
-    // archived); surface it at the top so the user can see where they are.
+    // Deep-linked, archived, and capped sessions still need a visible row.
     activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
     recentSessions = [activeRow, ...recentSessions.filter((row) => row !== activeRow)];
   }

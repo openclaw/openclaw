@@ -185,6 +185,16 @@ function chatSessionListResponse() {
   };
 }
 
+async function sidebarSessionOrder(page: Page): Promise<string[]> {
+  return page
+    .locator(".sidebar-recent-session")
+    .evaluateAll((rows) =>
+      rows
+        .map((row) => row.getAttribute("data-session-key") ?? "")
+        .filter((key) => key.startsWith("agent:main:session-")),
+    );
+}
+
 describeControlUiE2e("Control UI mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -1685,7 +1695,106 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("clears hover marquee state when a session switch reshuffles recent rows", async () => {
+  it("keeps sidebar session order stable while selecting sessions and supports sort modes", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const createdSessionKeys = Array.from(
+      { length: 11 },
+      (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
+    );
+    const sessions = {
+      count: createdSessionKeys.length + 1,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: [
+        {
+          key: "agent:main:session-pinned",
+          kind: "direct",
+          label: "Pinned Session",
+          pinned: true,
+          pinnedAt: 1,
+          updatedAt: 50,
+        },
+        ...createdSessionKeys.map((key, index) => ({
+          key,
+          kind: "direct",
+          label: `Session ${key.slice(-1).toUpperCase()}`,
+          updatedAt: (index + 1) * 100,
+        })),
+      ],
+      ts: Date.now(),
+    };
+    await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessions },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .waitFor({
+          timeout: 10_000,
+        });
+      await expect
+        .poll(() => sidebarSessionOrder(page))
+        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
+        .click();
+      await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
+        timeout: 10_000,
+      });
+      await expect
+        .poll(() => sidebarSessionOrder(page))
+        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+
+      const activeWeight = await page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .locator(".sidebar-recent-session__name")
+        .evaluate((label) => getComputedStyle(label).fontWeight);
+      const inactiveWeight = await page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .locator(".sidebar-recent-session__name")
+        .evaluate((label) => getComputedStyle(label).fontWeight);
+      expect(activeWeight).toBe(inactiveWeight);
+
+      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("menuitemradio", { name: "Last updated" }).click();
+      await expect
+        .poll(() => sidebarSessionOrder(page))
+        .toEqual([
+          "agent:main:session-pinned",
+          "agent:main:session-b",
+          ...createdSessionKeys.slice(2).toReversed(),
+        ]);
+
+      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("menuitemradio", { name: "Created" }).click();
+      await expect
+        .poll(() => sidebarSessionOrder(page))
+        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+
+      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("main").click();
+      await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps long sidebar labels clipped after a session switch", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -1719,11 +1828,6 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
-      await recentRow.dispatchEvent("mouseenter");
-      await expect
-        .poll(() => recentLabel.evaluate((label) => getComputedStyle(label).textIndent))
-        .not.toBe("0px");
-
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,
       });
@@ -1734,22 +1838,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timeout: 10_000,
         });
 
-      const reshuffledLabel = page
-        .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
-        .getByText("Short");
-      await reshuffledLabel.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textIndent)).toBe(
-        "0px",
-      );
-      expect(await reshuffledLabel.evaluate((label) => getComputedStyle(label).textOverflow)).toBe(
-        "ellipsis",
-      );
-
-      await page.emulateMedia({ reducedMotion: "reduce" });
       const activeRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
-      await activeRow.dispatchEvent("mouseenter");
       expect(
         await activeRow.locator(".sidebar-recent-session__name").evaluate((label) => ({
           textIndent: getComputedStyle(label).textIndent,

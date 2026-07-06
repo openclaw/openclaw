@@ -1574,6 +1574,9 @@ export const hi: TranslationMap = {
     sidebar: {
       allSessions: "सभी सत्र",
       openSessionMenu: "Open session menu",
+      sortCreated: "बनाया गया",
+      sortSessions: "सत्र क्रमबद्ध करें",
+      sortUpdated: "अंतिम अपडेट",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

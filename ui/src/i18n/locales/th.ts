@@ -1556,6 +1556,9 @@ export const th: TranslationMap = {
     sidebar: {
       allSessions: "เซสชันทั้งหมด",
       openSessionMenu: "Open session menu",
+      sortCreated: "สร้างเมื่อ",
+      sortSessions: "จัดเรียงเซสชัน",
+      sortUpdated: "อัปเดตล่าสุด",
       sessionMenu: "Actions for {session}",
     },
     welcome: {
