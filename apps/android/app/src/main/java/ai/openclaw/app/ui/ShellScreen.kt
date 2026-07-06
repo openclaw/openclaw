@@ -13,6 +13,7 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -92,6 +93,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -128,6 +130,7 @@ private val shellContentInsets: WindowInsets
 private val overviewMetricTileMinHeight = 96.dp
 private val overviewTalkPanelMinHeight = 72.dp
 private val overviewListRowMinHeight = 54.dp
+private const val overviewRecentSessionLimit = 50
 
 internal fun shellBottomNavVisible(
   keyboardVisible: Boolean,
@@ -380,13 +383,19 @@ private fun OverviewScreen(
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
+  val overviewSessions = overviewRecentSessions(sessions)
+  val overviewSessionCount = overviewSessions.size
+  val recentRows =
+    remember(overviewSessions, channelsSummary) {
+      overviewRecentSessionRows(sessions = overviewSessions, channelsSummary = channelsSummary)
+    }
   val metricCards =
     overviewMetricCards(
       isConnected = isConnected,
       hasAttention = attentionRows.isNotEmpty(),
       nodesDevicesSummary = nodesDevicesSummary,
       pendingApprovals = pendingApprovalsCount,
-      sessionCount = sessions.size,
+      sessionCount = overviewSessionCount,
     )
 
   LaunchedEffect(isConnected) {
@@ -426,7 +435,7 @@ private fun OverviewScreen(
             statusText = gatewaySummary(gatewayConnectionDisplay),
             isConnected = gatewayConnectionDisplay.isConnected,
             pendingRunCount = pendingRunCount,
-            sessionCount = sessions.size,
+            sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
             onOpenVoice = { onSelectTab(Tab.Voice) },
@@ -455,7 +464,7 @@ private fun OverviewScreen(
 
         item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
 
-        if (sessions.isEmpty()) {
+        if (recentRows.isEmpty()) {
           item {
             ClawEmptyState(
               title = "No recent sessions",
@@ -466,16 +475,7 @@ private fun OverviewScreen(
         } else {
           item {
             RecentSessionList(
-              rows =
-                sessions.take(3).map { session ->
-                  val title = displaySessionTitle(session.displayName)
-                  RecentSessionListItem(
-                    key = session.key,
-                    title = title,
-                    source = sessionSourceLabel(session.key, channelsSummary),
-                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
-                  )
-                },
+              rows = recentRows,
               onOpen = { sessionKey ->
                 viewModel.switchChatSession(sessionKey)
                 onSelectTab(Tab.Chat)
@@ -860,6 +860,12 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstNotNullOfOrNull { it.settingsRoute } ?: SettingsRoute.Gateway
 
+internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int =
+  overviewRecentSessions(sessions).size
+
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
+  sessions.take(overviewRecentSessionLimit).distinctBy { session -> session.key }
+
 internal data class OverviewMetricCard(
   val title: String,
   val value: String,
@@ -1242,6 +1248,22 @@ private data class RecentSessionListItem(
   val source: String,
   val metadata: String,
 )
+
+private fun overviewRecentSessionRows(
+  sessions: List<ChatSessionEntry>,
+  channelsSummary: GatewayChannelsSummary,
+): List<RecentSessionListItem> =
+  sessions
+    .take(3)
+    .map { session ->
+      val title = displaySessionTitle(session.displayName)
+      RecentSessionListItem(
+        key = session.key,
+        title = title,
+        source = sessionSourceLabel(session.key, channelsSummary),
+        metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
+      )
+    }
 
 /** Recent sessions panel that preserves the session key behind display labels. */
 @Composable

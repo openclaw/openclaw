@@ -349,6 +349,20 @@ Notes:
 
 Android nodes can expose `sms.send` and `sms.search` when the user grants **SMS** permission and the device supports telephony. Both commands are dangerous-by-default: the gateway operator must also add them to `gateway.nodes.allowCommands` before they can be invoked (see [Command policy](#command-policy)).
 
+For read-only SMS search, opt in explicitly in `openclaw.json`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      allowCommands: ["sms.search"],
+    },
+  },
+}
+```
+
+Add `sms.send` separately only when the node should also be able to send messages. Android permission and Gateway command authorization are independent; granting the phone permission does not edit Gateway policy.
+
 Low-level invoke:
 
 ```bash
@@ -357,8 +371,9 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 
 Notes:
 
-- The permission prompt must be accepted on the Android device before the capability is advertised.
+- `sms.search` may be declared before `READ_SMS` is granted so an invocation can return a permission diagnostic; reading messages still requires that Android permission.
 - Wi-Fi-only devices without telephony will not advertise `sms.send`.
+- A `requires explicit gateway.nodes.allowCommands opt-in` error means the phone declared the command but the Gateway operator has not authorized it.
 
 ## Device and personal data commands
 

@@ -91,11 +91,9 @@ internal data class SheetComposerSendAction(
   val sendMessage: Boolean,
 )
 
-internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection =
-  SheetSlashCommandSelection(input = slashCommandCompletion(command))
+internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection = SheetSlashCommandSelection(input = slashCommandCompletion(command))
 
-internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction =
-  SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
+internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction = SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
 
 /** Applies a draft exactly once so restored prompts do not overwrite user edits. */
 internal fun applyDraftText(

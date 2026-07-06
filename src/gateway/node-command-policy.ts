@@ -229,10 +229,10 @@ export function listDangerousPluginNodeCommands(): string[] {
     return [];
   }
   const commands = [
-    ...(registry.nodeHostCommands ?? [])
+    ...registry.nodeHostCommands
       .filter((entry) => entry.command.dangerous === true)
       .map((entry) => entry.command.command),
-    ...(registry.nodeInvokePolicies ?? [])
+    ...registry.nodeInvokePolicies
       .filter((entry) => entry.policy.dangerous === true)
       .flatMap((entry) => entry.policy.commands),
   ];
@@ -244,7 +244,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
+  const commands = registry.nodeInvokePolicies.flatMap((entry) => {
     if (entry.policy.dangerous === true) {
       return [];
     }
@@ -263,7 +263,7 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
   if (!normalized) {
     return false;
   }
-  return (registry.nodeInvokePolicies ?? []).some(
+  return registry.nodeInvokePolicies.some(
     (entry) =>
       entry.policy.foregroundRestrictedOnIos === true &&
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
