@@ -791,7 +791,6 @@ export async function buildSessionEntry(
       isUsageCountedSessionArchiveTranscriptPath(absPath);
     const sessionStoreAlreadyClassifiedCron =
       sessionStoreClassification?.generatedByCronRun === true;
-    let hasSeenPriorUserMessage = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -843,29 +842,11 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      // ponytail: content-based cron heuristic — scope decision.
-      // `!hasSeenPriorUserMessage` restricts cron classification to the first
-      // user message, preventing mid-transcript `[cron:]` from wiping content.
-      // Side effect: a first-turn human `[cron:...]` in a reset/deleted archive
-      // is indistinguishable from an orphan cron archive (no session-store
-      // evidence), so it is also classified as cron-generated. Trusted
-      // session-store provenance would be needed to eliminate this trade-off
-      // without sacrificing orphan-cron opacity.
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        !sessionStoreAlreadyClassifiedCron &&
-        !hasSeenPriorUserMessage &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
-      }
-      if (message.role === "user") {
-        hasSeenPriorUserMessage = true;
-      }
+      // ponytail: content-based cron heuristic intentionally removed.
+      // Record-level provenance (isCronRunGeneratedRecord / sessionKey)
+      // and session-store classification are sufficient to keep genuine
+      // cron archives opaque. The cron prompt text itself is still
+      // dropped by sanitizeSessionText.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already

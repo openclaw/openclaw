@@ -862,15 +862,7 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBeUndefined();
   });
 
-  // ponytail: first-turn edge case — documented scope decision.
-  // When the very first user message in a reset/deleted archive starts with
-  // `[cron:...]`, the `!hasSeenPriorUserMessage` guard can't distinguish
-  // genuine orphan cron (intended opaque) from human-authored content.
-  // The heuristic preserves orphan-cron opacity at the cost of treating
-  // this edge case as cron-generated. Trusted session-store provenance
-  // would be needed to eliminate this trade-off — see maintainer options in
-  // the ClawSweeper review.
-  it("first-turn [cron:...] after reset: known scope decision — behaves as cron", async () => {
+  it("preserves archive content when first user message starts with [cron:]", async () => {
     const archivePath = path.join(
       tmpDir,
       "agent-first-turn-cron.jsonl.reset.2026-07-01T00-00-00.000Z",
@@ -900,11 +892,15 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    // Current behavior: first-turn [cron:] is classified as cron-generated
-    // because !hasSeenPriorUserMessage is true. Content is wiped.
-    // This is the documented scope trade-off — see the guard comment.
-    expect(entry.content).toBe("");
-    expect(entry.generatedByCronRun).toBe(true);
+    // The content-based cron heuristic was removed — only record-level
+    // provenance (isCronRunGeneratedRecord) sets generatedByCronRun.
+    // The [cron:...] message text itself is dropped by sanitizeSessionText,
+    // but the rest of the conversation is preserved and searchable.
+    expect(entry.content).toContain("Those are cron job logs.");
+    expect(entry.content).toContain("Can you explain more?");
+    expect(entry.content).toContain("Sure. Each line is a task.");
+    expect(entry.content).not.toContain("[cron:daily-digest]");
+    expect(entry.generatedByCronRun).toBeUndefined();
   });
 
   it("keeps cron archive opaque when records carry nested data.sessionKey provenance", async () => {
