@@ -620,6 +620,28 @@ struct ChatTypingIndicatorBubble: View {
 
 /// Status footer for a user bubble backed by the durable offline outbox.
 @MainActor
+/// Inline playback state under an assistant bubble while Listen is active;
+/// tapping it stops speech.
+struct ChatSpeechStatusChip: View {
+    let isPreparing: Bool
+    let onStop: () -> Void
+
+    var body: some View {
+        Button(action: self.onStop) {
+            HStack(spacing: 4) {
+                Image(systemName: self.isPreparing ? "hourglass" : "speaker.wave.2.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(self.isPreparing ? "Preparing audio…" : "Speaking…")
+                    .font(OpenClawChatTypography.caption)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            self.isPreparing ? "Preparing audio, tap to cancel" : "Speaking, tap to stop")
+    }
+}
+
 struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
 
