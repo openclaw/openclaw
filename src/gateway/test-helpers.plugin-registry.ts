@@ -1,6 +1,6 @@
 // Plugin registry test helpers provide a process-wide stub registry with default
 // channel and speech providers for gateway suites.
-import type { PluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createDefaultGatewayTestChannels } from "./test-helpers.channels.js";
@@ -11,47 +11,9 @@ import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.j
  */
 function createStubPluginRegistry(): PluginRegistry {
   return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
+    ...createEmptyPluginRegistry(),
     channels: createDefaultGatewayTestChannels(),
-    channelSetups: [],
-    providers: [],
-    modelCatalogProviders: [],
-    embeddingProviders: [],
     speechProviders: createDefaultGatewayTestSpeechProviders(),
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    mediaUnderstandingProviders: [],
-    transcriptSourceProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    codexAppServerExtensionFactories: [],
-    agentToolResultMiddlewares: [],
-    memoryEmbeddingProviders: [],
-    textTransforms: [],
-    agentHarnesses: [],
-    gatewayHandlers: {},
-    gatewayMethodDescriptors: [],
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    gatewayDiscoveryServices: [],
-    commands: [],
-    sessionExtensions: [],
-    trustedToolPolicies: [],
-    toolMetadata: [],
-    controlUiDescriptors: [],
-    runtimeLifecycles: [],
-    agentEventSubscriptions: [],
-    sessionSchedulerJobs: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
   };
 }
 

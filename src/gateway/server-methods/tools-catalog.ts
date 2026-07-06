@@ -101,12 +101,9 @@ function buildPluginGroups(params: {
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
-  const pluginToolMetadata = new Map<
-    string,
-    NonNullable<PluginRegistry["toolMetadata"]>[number]["metadata"]
-  >();
+  const pluginToolMetadata = new Map<string, PluginRegistry["toolMetadata"][number]["metadata"]>();
   if (catalogRegistry) {
-    for (const entry of catalogRegistry.toolMetadata ?? []) {
+    for (const entry of catalogRegistry.toolMetadata) {
       const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
       pluginToolMetadata.set(metadataKey, entry.metadata);
     }

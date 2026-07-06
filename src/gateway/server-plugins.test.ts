@@ -3,7 +3,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import type { PluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
@@ -81,39 +81,7 @@ vi.mock("../channels/registry.js", () => ({
 }));
 
 const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels: [],
-  channelSetups: [],
-  commands: [],
-  providers: [],
-  modelCatalogProviders: [],
-  embeddingProviders: [],
-  speechProviders: [],
-  realtimeTranscriptionProviders: [],
-  realtimeVoiceProviders: [],
-  mediaUnderstandingProviders: [],
-  transcriptSourceProviders: [],
-  imageGenerationProviders: [],
-  musicGenerationProviders: [],
-  videoGenerationProviders: [],
-  webFetchProviders: [],
-  webSearchProviders: [],
-  migrationProviders: [],
-  memoryEmbeddingProviders: [],
-  codexAppServerExtensionFactories: [],
-  agentToolResultMiddlewares: [],
-  textTransforms: [],
-  agentHarnesses: [],
-  gatewayHandlers: {},
-  gatewayMethodDescriptors: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  gatewayDiscoveryServices: [],
-  conversationBindingResolvedHandlers: [],
+  ...createEmptyPluginRegistry(),
   diagnostics,
 });
 
