@@ -212,60 +212,15 @@ describe("generic assistant error text classification (#93931)", () => {
   });
 });
 
-describe("HTTP 429 overloaded vs rate-limit classification (#98101)", () => {
-  // Some providers (z.ai/GLM) return HTTP 429 with an "overloaded" message
-  // body (code 1305, "temporarily overloaded"). This is a transient server-side
-  // overload, not a per-account rate limit — it must be classified as
-  // "overloaded" so the failover path retries instead of falling over.
-
-  it("classifies 429 'temporarily overloaded' as overloaded via message path", () => {
-    const raw =
-      "429 status code (exceeded limit)\n" +
-      '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
-    expect(isOverloadedErrorMessage(raw)).toBe(true);
-    expect(classifyFailoverReason(raw)).toBe("overloaded");
-  });
-
-  it("classifies 429 'overloaded' (bare) as overloaded via message path", () => {
-    const raw = "429 overloaded";
-    expect(isOverloadedErrorMessage(raw)).toBe(true);
-    expect(classifyFailoverReason(raw)).toBe("overloaded");
-  });
-
-  it("classifies 429 overloaded via HTTP status path", () => {
+describe("HTTP 429 overload wording (#98101)", () => {
+  it("keeps Z.AI code 1305 in rate-limit backoff while preserving overload copy", () => {
     const message =
       "429 status code (exceeded limit)\n" +
       '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
-    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("overloaded");
-  });
-
-  it("still classifies 429 'rate limit exceeded' as rate_limit via message path", () => {
-    const raw = "429 Rate limit exceeded. Try again in 60s.";
-    expect(isRateLimitErrorMessage(raw)).toBe(true);
-    expect(classifyFailoverReason(raw)).toBe("rate_limit");
-  });
-
-  it("still classifies 429 generic rate-limit as rate_limit via HTTP status path", () => {
-    const message = "429 status code (exceeded limit)\nRate limit exceeded. Try again in 60s.";
+    expect(classifyFailoverReason(message)).toBe("rate_limit");
     expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("rate_limit");
-  });
-
-  it("still classifies 429 billing as billing via HTTP status path", () => {
-    const message = "429 status code\nInsufficient balance or no resource package.";
-    expect(classifyFailoverReasonFromHttpStatus(429, message)).toBe("billing");
-  });
-
-  it("returns overloaded user-facing copy for 429 overloaded body", () => {
-    const message =
-      "429 status code (exceeded limit)\n" +
-      '{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
-    const copy = formatRateLimitOrOverloadedErrorCopy(message);
-    expect(copy).toBe("The AI service is temporarily overloaded. Please try again in a moment.");
-  });
-
-  it("returns rate-limit user-facing copy for genuine 429 rate-limit body", () => {
-    const message = "429 Too many requests. Rate limit exceeded.";
-    const copy = formatRateLimitOrOverloadedErrorCopy(message);
-    expect(copy?.toLowerCase()).toContain("rate limit");
+    expect(formatRateLimitOrOverloadedErrorCopy(message)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
   });
 });

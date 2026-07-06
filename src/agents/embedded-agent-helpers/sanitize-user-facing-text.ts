@@ -127,16 +127,11 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 }
 
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  // MODEL_CAPACITY_ERROR_RE is the most specific overloaded variant ("selected
-  // model is at capacity") and must be checked first — otherwise the broader
-  // isOverloadedErrorMessage matcher (which also covers "model at capacity")
-  // would shadow it with a less specific message.
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
-  // Check overloaded BEFORE rate limit: isRateLimitErrorMessage matches the
-  // bare "429" token, so an overloaded-worded 429 body (z.ai code 1305 etc.)
-  // would surface the wrong user-facing copy ("API rate limit reached").
+  // Retry classification still owns 429 backoff; user copy can preserve the provider's
+  // overload wording without changing cooldown semantics.
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
   }
