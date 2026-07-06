@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { readJsonFile } from "../infra/json-files.js";
 import {
+  closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
@@ -70,6 +71,8 @@ export type AcpEventLedger = {
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
+  /** Release underlying resources (close database handles, etc.). */
+  close: () => void;
 };
 
 type LedgerSession = {
@@ -422,6 +425,8 @@ function createLedgerApi(params: {
         return buildReplay(session);
       });
     },
+
+    close() {},
   };
 }
 
@@ -432,13 +437,14 @@ export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEv
     store: createEmptyStore(),
     ...normalized,
   };
-  return createLedgerApi({
+  const api = createLedgerApi({
     state,
     mutate: async (fn) => {
       fn();
     },
     read: async (fn) => fn(),
   });
+  return { ...api, close() {} };
 }
 
 /** Resolves the legacy file-backed ACP ledger path under the OpenClaw state directory. */
@@ -903,6 +909,10 @@ export function createSqliteAcpEventLedger(
       return read((db) =>
         buildSqliteReplay(readLatestCompleteSqliteSessionByKey(db, replayParams.sessionKey)),
       );
+    },
+
+    close() {
+      closeOpenClawStateDatabase();
     },
   };
 }
