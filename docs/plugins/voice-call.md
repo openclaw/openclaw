@@ -253,7 +253,7 @@ Current runtime behavior:
 
 - `realtime.enabled` is supported for Twilio and Telnyx.
 - `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
-- Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
+- Bundled realtime voice providers: Anvil Voice (`anvil`), Google Gemini Live (`google`), and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
@@ -320,6 +320,37 @@ for tool work, current information, memory lookups, or workspace state.
 ### Realtime provider examples
 
 <Tabs>
+  <Tab title="Anvil Voice">
+    Same-host Anvil Voice uses the Gateway relay and can omit `apiKey` when
+    the Anvil realtime server is bound to loopback. Use `apiKey` as a SecretRef
+    for remote or tailnet endpoints.
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                enabled: true,
+                provider: "anvil",
+                instructions: "Keep spoken answers concise.",
+                providers: {
+                  anvil: {
+                    realtimeUrl: "ws://127.0.0.1:8765/v1/realtime",
+                    model: "fast-local",
+                    silenceDurationMs: 200,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Tab>
   <Tab title="Google Gemini Live">
     Defaults: API key from `realtime.providers.google.apiKey`, `GEMINI_API_KEY`,
     or `GOOGLE_API_KEY`; model `gemini-2.5-flash-native-audio-preview-12-2025`;
@@ -387,8 +418,8 @@ for tool work, current information, memory lookups, or workspace state.
   </Tab>
 </Tabs>
 
-See [Google provider](/providers/google) and
-[OpenAI provider](/providers/openai) for provider-specific realtime voice
+See [Anvil Voice](/providers/anvil-voice), [Google provider](/providers/google),
+and [OpenAI provider](/providers/openai) for provider-specific realtime voice
 options.
 
 ## Streaming transcription

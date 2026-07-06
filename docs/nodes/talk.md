@@ -96,8 +96,9 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 | `outputFormat`                           | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                      |
 | `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                |
 | `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                          |
-| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                   |
+| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, `anvil` for Anvil Voice through Gateway relay, or another bridge-only provider through Gateway relay.                                                                                                              |
 | `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                               |
+| `realtime.providers.anvil.realtimeUrl`   | -                                          | Anvil Voice realtime WebSocket URL, for example `ws://127.0.0.1:8765/v1/realtime` for same-host loopback. Use `baseUrl` plus an `apiKey` SecretRef for remote endpoints.                                                                                                 |
 | `realtime.providers.openai.speakerVoice` | `alloy`                                    | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2` voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
 | `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                |
 | `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                               |
@@ -105,6 +106,28 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 | `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt (voice style/tone); the default `openclaw_agent_consult` guidance stays.                                                                                                              |
 
 `talk.catalog` exposes canonical provider ids and registry aliases, each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags, and the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally; treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`; the current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
+
+Anvil Voice is a backend-only speech-to-speech provider, so select it with the
+Gateway relay transport and `agent-consult` brain:
+
+```json5
+{
+  talk: {
+    realtime: {
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "anvil",
+      providers: {
+        anvil: {
+          realtimeUrl: "ws://127.0.0.1:8765/v1/realtime",
+          model: "fast-local",
+        },
+      },
+    },
+  },
+}
+```
 
 ## macOS UI
 
