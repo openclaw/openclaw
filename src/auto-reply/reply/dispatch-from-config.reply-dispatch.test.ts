@@ -403,6 +403,57 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, secondReply);
   });
 
+  it("preserves same-content final payloads with distinct reply-threading identity", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const implicitReply = {
+      text: "same threaded reply",
+      replyToId: "message-1",
+    } satisfies ReplyPayload;
+    const explicitReply = setReplyPayloadMetadata(
+      {
+        text: "same threaded reply",
+        replyToId: "message-1",
+      } satisfies ReplyPayload,
+      { replyToIdExplicit: true },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [implicitReply, explicitReply],
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, implicitReply);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, explicitReply);
+  });
+
+  it("preserves same-content final payloads from distinct assistant messages", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const firstReply = setReplyPayloadMetadata(
+      { text: "intentional repeat" } satisfies ReplyPayload,
+      { assistantMessageIndex: 1 },
+    );
+    const secondReply = setReplyPayloadMetadata(
+      { text: "intentional repeat" } satisfies ReplyPayload,
+      { assistantMessageIndex: 2 },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [firstReply, secondReply],
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, firstReply);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, secondReply);
+  });
+
   it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
     const deliveryOrder: string[] = [];
     let startDelivery: () => void = () => {};

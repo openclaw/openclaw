@@ -234,9 +234,13 @@ function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
       isStatusNotice: payload.isStatusNotice,
       channelData: payload.channelData,
     },
-    route: {
+    identity: {
+      assistantMessageIndex: metadata?.assistantMessageIndex,
+      assistantTranscriptOwned: metadata?.assistantTranscriptOwned,
+      replyToIdExplicit: metadata?.replyToIdExplicit,
       replyDelivery: metadata?.replyDelivery,
       replyDeliverySource: metadata?.replyDeliverySource,
+      sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror,
     },
   });
 }
