@@ -1,31 +1,53 @@
-// Real behavior proof: `TranscriptsStore.readUtterancesFromDir` handles
-// readline/file stream errors gracefully instead of crashing.
+// Real behavior proof: TranscriptsStore handles a real filesystem stream error
+// gracefully instead of leaking an unhandled rejection.
 //
-// The regression test mocks `createReadStream` to emit an `error` event after
-// a valid transcript line and verifies that the store returns the utterances
-// parsed so far. Before the fix the unhandled stream error would reject.
+// The proof creates a real transcript session directory where `transcript.jsonl`
+// is a directory instead of a file. `fs.createReadStream` on a directory emits
+// an EISDIR error on the stream. With the fix, `readUtterancesFromSessionDir`
+// catches that error and returns the utterances parsed so far (none, in this
+// case). Before the fix the unhandled stream error would reject the promise.
 
-import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+const { TranscriptsStore } = await import(path.join(repoRoot, "src/transcripts/store.js"));
+
+const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-proof-transcripts-"));
+
+const session = {
+  sessionId: "proof-session",
+  startedAt: "2026-07-01T00:00:00Z",
+};
+
+const store = new TranscriptsStore(tmpDir);
+const sessionDir = store.sessionDir(session);
+await fs.mkdir(sessionDir, { recursive: true });
+
+// Make transcript.jsonl a directory. createReadStream on a directory emits
+// EISDIR, which exercises the stream error handler in readUtterancesFromDir.
+const transcriptPath = path.join(sessionDir, "transcript.jsonl");
+await fs.mkdir(transcriptPath);
 
 console.log("=== Proof: transcripts store stream error catch ===\n");
-console.log("Running regression test suite: src/transcripts/store.test.ts\n");
+console.log(`Created directory-as-file at: ${transcriptPath}`);
+console.log("Calling readUtterancesFromSessionDir with maxUtterances...\n");
 
-const result = spawnSync(
-  "node",
-  ["scripts/run-vitest.mjs", "src/transcripts/store.test.ts"],
-  { cwd: process.cwd(), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-);
-
-if (result.stdout) {
-  console.log(result.stdout);
-}
-if (result.stderr) {
-  console.error(result.stderr);
-}
-
-if (result.status === 0 && result.error === undefined) {
-  console.log("\nPASS: transcript store stream errors return parsed utterances.");
-} else {
-  console.log("\nFAIL: regression test suite did not pass.");
+try {
+  const result = await store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 });
+  console.log(`Result: ${JSON.stringify(result)}`);
+  if (Array.isArray(result) && result.length === 0) {
+    console.log("\nPASS: EISDIR stream error was caught and returned an empty array.");
+  } else {
+    console.log("\nFAIL: unexpected result shape.");
+    process.exitCode = 1;
+  }
+} catch (err) {
+  console.error("\nFAIL: readUtterancesFromSessionDir rejected with:");
+  console.error(err);
   process.exitCode = 1;
+} finally {
+  await fs.rm(tmpDir, { recursive: true, force: true });
 }
