@@ -22,7 +22,8 @@ import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
@@ -31,8 +32,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -984,31 +989,33 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun pttStartQueuedAfterCancelIsInvalidatedBeforePreparation() =
-    runBlocking {
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
       val runtime = NodeRuntime(app)
       val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
       val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
-      preparationMutex.lock()
+      try {
+        preparationMutex.lock()
+        val cancel = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null) }
+        runCurrent()
+        val start = async { dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null) }
+        runCurrent()
+        preparationMutex.unlock()
+        runCurrent()
 
-      val cancel =
-        async(start = CoroutineStart.UNDISPATCHED) {
-          dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
-        }
-      yield()
-      val start =
-        async(start = CoroutineStart.UNDISPATCHED) {
-          dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
-        }
-      preparationMutex.unlock()
-
-      assertNull(withTimeout(5_000) { cancel.await() }.error)
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)
-      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
-      assertNull(talkMode.activePushToTalkCaptureId)
-      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+        assertNull(withTimeout(5_000) { cancel.await() }.error)
+        assertEquals("NODE_BACKGROUND_UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)
+        val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+        assertNull(talkMode.activePushToTalkCaptureId)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        if (preparationMutex.isLocked) preparationMutex.unlock()
+        Dispatchers.resetMain()
+      }
     }
 
   @Test
