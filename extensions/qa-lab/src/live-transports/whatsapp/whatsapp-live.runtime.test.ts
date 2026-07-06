@@ -585,9 +585,9 @@ describe("WhatsApp QA live runtime", () => {
     expect(() => testing.assertSafeArchiveEntries(["/tmp/creds.json"])).toThrow("unsafe entry");
   });
 
-  it("registers the WhatsApp canary and pairing scenarios", () => {
-    const scenarios = testing.findScenarios(["whatsapp-canary", "whatsapp-pairing-block"]);
-    expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary", "whatsapp-pairing-block"]);
+  it("registers the WhatsApp canary scenario", () => {
+    const scenarios = testing.findScenarios(["whatsapp-canary"]);
+    expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary"]);
   });
 
   it("keeps direct Gateway scenario ids stable while labeling report headings as Gateway probes", () => {
@@ -1321,7 +1321,6 @@ describe("WhatsApp QA live runtime", () => {
       "canary",
       "mention-gating",
       "top-level-reply-shape",
-      "restart-resume",
       "help-command",
       "quote-reply",
       "reaction-observation",
@@ -1577,10 +1576,8 @@ describe("WhatsApp QA live runtime", () => {
   it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
     const expectedDefaultIds = [
       "whatsapp-canary",
-      "whatsapp-pairing-block",
       "whatsapp-mention-gating",
       "whatsapp-top-level-reply-shape",
-      "whatsapp-restart-resume",
       "whatsapp-help-command",
       "whatsapp-reply-to-message",
       "whatsapp-group-reply-to-message",
@@ -1599,14 +1596,12 @@ describe("WhatsApp QA live runtime", () => {
   it("adds deterministic audio preflight to the default mock-openai WhatsApp selection", () => {
     expect(testing.findScenarios(undefined, "mock-openai").map(({ id }) => id)).toEqual([
       "whatsapp-canary",
-      "whatsapp-pairing-block",
       "whatsapp-mention-gating",
       "whatsapp-group-pending-history-context",
       "whatsapp-broadcast-group-fanout",
       "whatsapp-group-activation-always",
       "whatsapp-group-reply-to-bot-triggers",
       "whatsapp-top-level-reply-shape",
-      "whatsapp-restart-resume",
       "whatsapp-help-command",
       "whatsapp-commands-command",
       "whatsapp-tools-compact-command",
@@ -1633,10 +1628,6 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-message-actions",
       "whatsapp-inbound-structured-messages",
       "whatsapp-group-audio-gating",
-      "whatsapp-access-control-dm-open",
-      "whatsapp-access-control-dm-disabled",
-      "whatsapp-access-control-group-open",
-      "whatsapp-access-control-group-disabled",
       "whatsapp-reply-delivery-shape",
       "whatsapp-stream-final-message-accounting",
       "whatsapp-native-new-command",
