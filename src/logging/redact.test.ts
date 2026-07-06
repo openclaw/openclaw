@@ -1117,6 +1117,11 @@ describe("redactSecrets", () => {
         {
           error: "apple app-specific-password abcd-efgh-ijkl-mnop is invalid",
         },
+        // Plain "app password" without "specific" qualifier is also masked
+        {
+          text: "standalone app password abcd-efgh-ijkl-mnop",
+          errorMessage: "failed with app password qrst-uvwx-yzab-cdef",
+        },
       ],
       appleCredentials: {
         "app-specific-password": "abcd-efgh-ijkl-mnop",
@@ -1131,6 +1136,8 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("eyJheaderabcd.eyJpayloadabcd.signatureabcd123456");
     // App password in a password field is still redacted
     expect(serialized).not.toContain("abcd-efgh-ijkl-mnop");
+    // Plain "app password" wording in generic fields is also masked
+    expect(serialized).not.toContain("qrst-uvwx-yzab-cdef");
     // Generic text/errorMessage fields without context keywords no longer trigger masking
     expect(serialized).toContain("kube-node-pool-spec");
     expect(serialized).toContain("help-desk-team-page");
