@@ -22403,7 +22403,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1361,
+      "line": 1362,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "delivery unconfirmed",
       "surface": "apple",
@@ -22411,7 +22411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1361,
+      "line": 1362,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "queued after route change",
       "surface": "apple",
