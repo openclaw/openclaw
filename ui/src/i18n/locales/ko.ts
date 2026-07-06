@@ -1544,9 +1544,9 @@ export const ko: TranslationMap = {
       retryQueuedMessage: "대기 중인 메시지 다시 시도",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "버리기",
+      faster: "더 빠르게",
+      smarter: "더 똑똑하게",
     },
     pairingQrExpired: {
       title: "페어링 QR 만료됨",
@@ -1872,6 +1872,8 @@ export const ko: TranslationMap = {
       disable: "비활성화",
       enable: "활성화",
       run: "실행",
+      runIfDue: "실행 시점이면 실행",
+      moreActions: "추가 작업",
       history: "기록",
       remove: "제거",
     },

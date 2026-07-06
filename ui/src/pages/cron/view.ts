@@ -1687,13 +1687,13 @@ function renderJob(job: CronJob, props: CronProps) {
               class="btn btn--sm cron-job-menu__trigger"
               role="button"
               aria-haspopup="menu"
-              aria-label="More actions"
-              title="More actions"
+              aria-label=${t("cron.jobList.moreActions")}
+              title=${t("cron.jobList.moreActions")}
             >
               ${icon("moreHorizontal")}
             </summary>
             <div class="cron-job-menu__panel" role="menu">
-              ${menuItem("Run if due", () => props.onRun(job, "due"))}
+              ${menuItem(t("cron.jobList.runIfDue"), () => props.onRun(job, "due"))}
               ${menuItem(job.enabled ? t("cron.jobList.disable") : t("cron.jobList.enable"), () =>
                 props.onToggle(job, !job.enabled),
               )}

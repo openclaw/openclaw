@@ -1539,9 +1539,9 @@ export const hi: TranslationMap = {
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "त्यागें",
+      faster: "तेज़",
+      smarter: "अधिक बुद्धिमान",
     },
     pairingQrExpired: {
       title: "पेयरिंग QR की समय-सीमा समाप्त हो गई",
@@ -1868,6 +1868,8 @@ export const hi: TranslationMap = {
       disable: "अक्षम करें",
       enable: "सक्षम करें",
       run: "चलाएँ",
+      runIfDue: "समय होने पर चलाएँ",
+      moreActions: "अधिक कार्रवाइयाँ",
       history: "इतिहास",
       remove: "हटाएँ",
     },

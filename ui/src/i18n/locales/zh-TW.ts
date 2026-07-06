@@ -1518,9 +1518,9 @@ export const zh_TW: TranslationMap = {
       retryQueuedMessage: "重試佇列中的訊息",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "捨棄",
+      faster: "更快",
+      smarter: "更智慧",
     },
     pairingQrExpired: {
       title: "配對 QR 碼已過期",
@@ -1846,6 +1846,8 @@ export const zh_TW: TranslationMap = {
       disable: "停用",
       enable: "啟用",
       run: "執行",
+      runIfDue: "到期時執行",
+      moreActions: "更多操作",
       history: "記錄",
       remove: "移除",
     },

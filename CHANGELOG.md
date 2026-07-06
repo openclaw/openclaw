@@ -22,6 +22,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent helper downloads:** bound fd and ripgrep archive downloads and extraction with declared and streamed byte caps, extraction limits, timeouts, traversal-safe unpacking, and partial-file cleanup. (#98988) Thanks @LeonidasLux.
+- **Control UI cron actions:** localize the overflow-menu label and due-only run action across all supported locales.
 - **OpenAI Realtime Codex auth:** reuse external Codex OAuth profiles for Realtime voice sessions when no explicit OpenAI API key is configured.
 - **OpenAI-compatible TTS voice notes:** route configured MP3 speech output through native voice-message delivery when the channel supports it, while keeping WAV output on the audio-file path. (#83227, #80317) Thanks @HemantSudarshan.
 - **Talk transcription providers:** cold-load explicitly configured Voice Call streaming providers, including runtime aliases, when another provider registry is already active, keeping catalog and session selection aligned. (#97170, #97738) Thanks @solavrc.
@@ -33,7 +35,9 @@ Docs: https://docs.openclaw.ai
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
+- **Session usage logs:** normalize malformed transcript timestamps before sorting and Gateway serialization so invalid dates cannot surface as null usage-log times. (#99418) Thanks @sheyanmin.
 - **Config size-drop guard:** compare writes against canonical bytes for parseable object configs instead of raw BOM and indentation overhead, while preserving raw audit telemetry and the conservative malformed-input fallback. (#100591, #71865) Thanks @vincentkoc.
+- **Managed update handoffs:** keep detached update helpers alive for the configured Gateway restart-drain window, including indefinite drains, before applying the bounded shutdown reserve. (#99695) Thanks @ZOOWH.
 - **Control UI coalesced updates:** show a clear queued-restart completion banner when an update joins an already-running Gateway restart. (#93082) Thanks @goutamadwant.
 - **Control UI connection errors:** preserve structured pairing and authentication failures for pending RPC callers while keeping generic disconnect behavior unchanged. (#54758) Thanks @ruanrrn.
 - **TUI startup status:** show `starting up` during post-connect initialization without overwriting active-run or reconnect state. (#93999) Thanks @ml12580.

@@ -1557,9 +1557,9 @@ export const uk: TranslationMap = {
       retryQueuedMessage: "Повторити повідомлення в черзі",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Відкинути",
+      faster: "Швидше",
+      smarter: "Розумніше",
     },
     pairingQrExpired: {
       title: "QR-код для пар'ювання застарів",
@@ -1892,6 +1892,8 @@ export const uk: TranslationMap = {
       disable: "Вимкнути",
       enable: "Увімкнути",
       run: "Запустити",
+      runIfDue: "Запустити, якщо настав час",
+      moreActions: "Інші дії",
       history: "Історія",
       remove: "Видалити",
     },

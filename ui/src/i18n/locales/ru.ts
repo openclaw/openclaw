@@ -1567,9 +1567,9 @@ export const ru: TranslationMap = {
       retryQueuedMessage: "Повторить сообщение в очереди",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Сбросить",
+      faster: "Быстрее",
+      smarter: "Умнее",
     },
     pairingQrExpired: {
       title: "QR-код сопряжения истек",
@@ -1905,6 +1905,8 @@ export const ru: TranslationMap = {
       disable: "Отключить",
       enable: "Включить",
       run: "Запустить",
+      runIfDue: "Запустить, если пора",
+      moreActions: "Другие действия",
       history: "История",
       remove: "Удалить",
     },

@@ -3455,13 +3455,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/cron/view.ts",
-      "text": "More actions"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
       "text": "+1555... or chat id"
@@ -3486,13 +3479,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
       "text": "default"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "title",
-      "path": "ui/src/pages/cron/view.ts",
-      "text": "More actions"
     },
     {
       "count": 1,

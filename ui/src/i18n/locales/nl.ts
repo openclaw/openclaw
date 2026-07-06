@@ -1560,9 +1560,9 @@ export const nl: TranslationMap = {
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Verwerpen",
+      faster: "Sneller",
+      smarter: "Slimmer",
     },
     pairingQrExpired: {
       title: "Koppelings-QR verlopen",
@@ -1894,6 +1894,8 @@ export const nl: TranslationMap = {
       disable: "Uitschakelen",
       enable: "Inschakelen",
       run: "Uitvoeren",
+      runIfDue: "Uitvoeren indien gepland",
+      moreActions: "Meer acties",
       history: "Historie",
       remove: "Verwijderen",
     },

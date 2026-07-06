@@ -1516,9 +1516,9 @@ export const zh_CN: TranslationMap = {
       retryQueuedMessage: "重试排队消息",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "放弃",
+      faster: "更快",
+      smarter: "更智能",
     },
     pairingQrExpired: {
       title: "配对二维码已过期",
@@ -1844,6 +1844,8 @@ export const zh_CN: TranslationMap = {
       disable: "禁用",
       enable: "启用",
       run: "运行",
+      runIfDue: "到期时运行",
+      moreActions: "更多操作",
       history: "历史",
       remove: "删除",
     },

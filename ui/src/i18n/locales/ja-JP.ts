@@ -1561,9 +1561,9 @@ export const ja_JP: TranslationMap = {
       retryQueuedMessage: "キュー内のメッセージを再試行",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "破棄",
+      faster: "より速く",
+      smarter: "より賢く",
     },
     pairingQrExpired: {
       title: "ペアリングQRの有効期限が切れました",
@@ -1897,6 +1897,8 @@ export const ja_JP: TranslationMap = {
       disable: "無効にする",
       enable: "有効にする",
       run: "実行",
+      runIfDue: "期限が来たら実行",
+      moreActions: "その他の操作",
       history: "履歴",
       remove: "削除",
     },

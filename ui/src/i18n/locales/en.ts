@@ -1874,6 +1874,8 @@ export const en: TranslationMap = {
       disable: "Disable",
       enable: "Enable",
       run: "Run",
+      runIfDue: "Run if due",
+      moreActions: "More actions",
       history: "History",
       remove: "Remove",
     },

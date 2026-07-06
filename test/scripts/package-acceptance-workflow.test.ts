@@ -1096,7 +1096,7 @@ describe("package artifact reuse", () => {
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      "run_setup_command npm install -g @anthropic-ai/claude-code",
+      'run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",

@@ -1546,9 +1546,9 @@ export const vi: TranslationMap = {
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Bỏ",
+      faster: "Nhanh hơn",
+      smarter: "Thông minh hơn",
     },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",
@@ -1877,6 +1877,8 @@ export const vi: TranslationMap = {
       disable: "Tắt",
       enable: "Bật",
       run: "Chạy",
+      runIfDue: "Chạy nếu đến hạn",
+      moreActions: "Thao tác khác",
       history: "Lịch sử",
       remove: "Xóa",
     },

@@ -1573,9 +1573,9 @@ export const fr: TranslationMap = {
       retryQueuedMessage: "Réessayer le message en file d’attente",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Abandonner",
+      faster: "Plus rapide",
+      smarter: "Plus intelligent",
     },
     pairingQrExpired: {
       title: "QR d'appairage expiré",
@@ -1912,6 +1912,8 @@ export const fr: TranslationMap = {
       disable: "Désactiver",
       enable: "Activer",
       run: "Exécuter",
+      runIfDue: "Exécuter à l’échéance",
+      moreActions: "Plus d’actions",
       history: "Historique",
       remove: "Supprimer",
     },

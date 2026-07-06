@@ -1559,9 +1559,9 @@ export const pl: TranslationMap = {
       retryQueuedMessage: "Ponów wiadomość w kolejce",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Odrzuć",
+      faster: "Szybciej",
+      smarter: "Inteligentniej",
     },
     pairingQrExpired: {
       title: "Kod QR parowania wygasł",
@@ -1899,6 +1899,8 @@ export const pl: TranslationMap = {
       disable: "Wyłącz",
       enable: "Włącz",
       run: "Uruchom",
+      runIfDue: "Uruchom, jeśli nadszedł termin",
+      moreActions: "Więcej działań",
       history: "Historia",
       remove: "Usuń",
     },

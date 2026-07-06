@@ -1537,9 +1537,9 @@ export const ar: TranslationMap = {
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "تجاهل",
+      faster: "أسرع",
+      smarter: "أذكى",
     },
     pairingQrExpired: {
       title: "انتهت صلاحية رمز الاقتران QR",
@@ -1866,6 +1866,8 @@ export const ar: TranslationMap = {
       disable: "تعطيل",
       enable: "تفعيل",
       run: "تشغيل",
+      runIfDue: "تشغيل إذا حان الموعد",
+      moreActions: "إجراءات أخرى",
       history: "السجل",
       remove: "إزالة",
     },

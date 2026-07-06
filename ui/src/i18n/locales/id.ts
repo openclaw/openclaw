@@ -1555,9 +1555,9 @@ export const id: TranslationMap = {
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
     },
     modelPicker: {
-      discard: "Discard",
-      faster: "Faster",
-      smarter: "Smarter",
+      discard: "Buang",
+      faster: "Lebih cepat",
+      smarter: "Lebih cerdas",
     },
     pairingQrExpired: {
       title: "QR pemasangan kedaluwarsa",
@@ -1887,6 +1887,8 @@ export const id: TranslationMap = {
       disable: "Nonaktifkan",
       enable: "Aktifkan",
       run: "Jalankan",
+      runIfDue: "Jalankan jika waktunya",
+      moreActions: "Tindakan lainnya",
       history: "Riwayat",
       remove: "Hapus",
     },
