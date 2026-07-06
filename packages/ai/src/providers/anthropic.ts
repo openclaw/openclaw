@@ -1157,6 +1157,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch: getAiTransportHost().buildModelFetch(model),
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };

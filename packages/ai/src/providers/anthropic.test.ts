@@ -206,6 +206,32 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("wires host buildModelFetch into the github-copilot Anthropic client", async () => {
+    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    const model = makeAnthropicModel({
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      authHeader: true,
+    });
+    const context = {
+      messages: [{ role: "user", content: "x", timestamp: 0 }],
+    } satisfies Context;
+
+    streamAnthropic(model, context, { apiKey: "copilot-token" });
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+      fetch?: unknown;
+    };
+
+    expect(config.apiKey).toBeNull();
+    expect(config.authToken).toBe("copilot-token");
+    expect(config.fetch).toBe(hostFetch);
+  });
+
   it("keeps aggregate cache billing buckets out of the context total", async () => {
     const client = {
       messages: {
