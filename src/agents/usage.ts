@@ -9,6 +9,8 @@ export type ContextUsage =
   | { state: "available"; promptTokens: number; totalTokens: number }
   | { state: "unavailable" };
 
+export type UsageCostTotalOrigin = "provider-billed" | "estimated";
+
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
   input?: number;
@@ -50,6 +52,16 @@ export type UsageLike = {
     prompt_n?: number;
     predicted_n?: number;
   };
+  // Optional cost metadata carried through transcripts for downstream cost accounting.
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
+    totalOrigin?: UsageCostTotalOrigin;
+  };
 };
 
 /** Normalized token counts used by runtime accounting. */
@@ -86,6 +98,8 @@ export type AssistantUsageSnapshot = {
     cacheRead: number;
     cacheWrite: number;
     total: number;
+    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
+    totalOrigin?: UsageCostTotalOrigin;
   };
 };
 

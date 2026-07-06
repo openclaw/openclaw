@@ -149,6 +149,7 @@ async function applyOpenRouterBilledCost(params: {
     });
     if (totalCost !== undefined) {
       params.message.usage.cost.total = totalCost;
+      params.message.usage.cost.totalOrigin = "provider-billed";
     }
   } catch (error) {
     log.debug?.(
