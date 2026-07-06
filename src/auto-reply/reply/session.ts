@@ -166,6 +166,7 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
+  initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
   sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;

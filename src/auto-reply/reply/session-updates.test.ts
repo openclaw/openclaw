@@ -199,4 +199,46 @@ describe("ensureSkillSnapshot", () => {
     expect(result.systemSent).toBe(false);
     expect(sessionStore[sessionKey]).toEqual(reboundEntry);
   });
+
+  it("persists first-turn skill snapshots as a guarded partial update", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const sessionKey = "agent:main:main";
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 10,
+      modelOverride: "gpt-5.5",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    updateSessionEntryMock.mockImplementationOnce(async (_scope, update) => {
+      const patch = await update({
+        ...sessionEntry,
+        updatedAt: 20,
+        modelOverride: "sonnet-4.6",
+      });
+      expect(patch).toMatchObject({
+        sessionId: "session-1",
+        systemSent: true,
+      });
+      expect(patch).not.toHaveProperty("modelOverride");
+      return {
+        ...sessionEntry,
+        ...patch,
+        modelOverride: "sonnet-4.6",
+      };
+    });
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId: "session-1",
+      storePath: "/tmp/sessions.json",
+      isFirstTurnInSession: true,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(result.sessionEntry?.modelOverride).toBe("sonnet-4.6");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("sonnet-4.6");
+  });
 });

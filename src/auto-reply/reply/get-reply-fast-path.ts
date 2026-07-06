@@ -7,9 +7,10 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -246,7 +247,7 @@ export function initFastReplySessionState(params: {
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
       ? existingEntry.sessionFile
-      : resolveSessionTranscriptPath(sessionId, agentId);
+      : formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -299,6 +300,7 @@ export function initFastReplySessionState(params: {
   return {
     sessionCtx,
     sessionEntry,
+    initialSessionEntry: existingEntry ? { ...existingEntry } : undefined,
     sessionEntryHandle,
     sessionStore,
     sessionKey,

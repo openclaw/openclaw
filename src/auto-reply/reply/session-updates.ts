@@ -28,6 +28,7 @@ async function persistSessionEntryUpdate(params: {
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
+  updates: Partial<SessionEntry>;
 }): Promise<SessionEntry | undefined> {
   if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
     return undefined;
@@ -48,7 +49,7 @@ async function persistSessionEntryUpdate(params: {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    (entry) => (entry.sessionId === params.expectedSessionId ? params.nextEntry : null),
+    (entry) => (entry.sessionId === params.expectedSessionId ? params.updates : null),
   );
   if (persistedEntry) {
     if (params.sessionEntryHandle) {
@@ -220,6 +221,12 @@ export async function ensureSkillSnapshot(params: {
       sessionKey,
       storePath,
       nextEntry,
+      updates: {
+        sessionId: nextEntry.sessionId,
+        updatedAt: nextEntry.updatedAt,
+        systemSent: nextEntry.systemSent,
+        skillsSnapshot: nextEntry.skillsSnapshot,
+      },
     });
     nextEntry = persistedEntry;
     systemSent = persistedEntry?.systemSent ?? systemSent;
@@ -258,6 +265,11 @@ export async function ensureSkillSnapshot(params: {
       sessionKey,
       storePath,
       nextEntry,
+      updates: {
+        sessionId: nextEntry.sessionId,
+        updatedAt: nextEntry.updatedAt,
+        skillsSnapshot: nextEntry.skillsSnapshot,
+      },
     });
   }
 

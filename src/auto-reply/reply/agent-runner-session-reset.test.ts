@@ -80,6 +80,13 @@ describe("resetReplyRunSession", () => {
       fallbackNoticeSelectedModel: "anthropic/claude",
       fallbackNoticeActiveModel: "openai/gpt",
       fallbackNoticeReason: "rate limit",
+      compactionCount: 4,
+      memoryFlushAt: 50,
+      memoryFlushCompactionCount: 3,
+      memoryFlushContextHash: "context-hash",
+      memoryFlushFailureCount: 2,
+      memoryFlushLastFailedAt: 60,
+      memoryFlushLastFailureError: "memory failed",
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -126,6 +133,13 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.fallbackNoticeActiveModel).toBeUndefined();
     expect(activeSessionEntry?.fallbackNoticeReason).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
+    expect(activeSessionEntry?.compactionCount).toBe(0);
+    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "main",
       previousSessionId: "session",
@@ -138,6 +152,8 @@ describe("resetReplyRunSession", () => {
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.fallbackNoticeReason).toBeUndefined();
+    expect(persisted?.compactionCount).toBe(0);
+    expect(persisted?.memoryFlushAt).toBeUndefined();
   });
 
   it("cleans up the old transcript when requested", async () => {

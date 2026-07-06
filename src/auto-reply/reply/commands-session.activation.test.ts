@@ -90,6 +90,9 @@ describe("handleActivationCommand", () => {
     });
     expect(params.sessionEntry?.groupActivation).toBe("always");
     expect(params.sessionEntry?.groupActivationNeedsSystemIntro).toBe(true);
-    expect(persistSessionEntryMock).toHaveBeenCalledWith(params);
+    expect(persistSessionEntryMock).toHaveBeenCalledWith({
+      ...params,
+      touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
+    });
   });
 });
