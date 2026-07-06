@@ -132,8 +132,8 @@ export function resolveOpenAICodexImportProfileName(
   if (identity.accountId) {
     return `account-${identity.accountId.replaceAll(/[^A-Za-z0-9._-]+/gu, "-")}`;
   }
-  if (identity.profileName?.startsWith("id-")) {
-    return identity.profileName;
+  if (identity.profileName) {
+    return identity.profileName.replaceAll(/[^A-Za-z0-9._-]+/gu, "-");
   }
   return fallback;
 }

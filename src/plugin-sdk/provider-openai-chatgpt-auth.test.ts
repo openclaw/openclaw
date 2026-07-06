@@ -84,4 +84,11 @@ describe("OpenAI Codex provider auth helpers", () => {
     ).toBeUndefined();
     expect(resolveOpenAICodexAccessTokenExpiry("not-a-jwt")).toBeUndefined();
   });
+
+  it("uses sanitized profileName even when not starting with id- prefix", () => {
+    const identity = {
+      profileName: "peter@example.com",
+    };
+    expect(resolveOpenAICodexImportProfileName(identity, "codex-import")).toBe("peter-example.com");
+  });
 });
