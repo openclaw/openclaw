@@ -6,6 +6,7 @@ import {
   fetchClawHubPromotions,
   type ClawHubPromotion,
 } from "../../infra/clawhub.js";
+import { markPromotionSlugsNotified } from "../../infra/promotions-feed.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 function formatWindowEnd(promotion: ClawHubPromotion): string {
@@ -31,6 +32,9 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
     );
     return;
   }
+  // The user has now seen these offers; suppress the one-time passive
+  // discovery notice for them (`models list` reads the same markers).
+  markPromotionSlugsNotified(promotions.map((promotion) => promotion.slug));
   if (opts.json) {
     runtime.log(JSON.stringify({ promotions }, null, 2));
     return;

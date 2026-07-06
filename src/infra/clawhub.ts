@@ -423,6 +423,7 @@ type ClawHubRequestParams = {
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
   skipAuth?: boolean;
+  headers?: Record<string, string>;
 };
 
 type ClawHubConfigLike = {
@@ -705,6 +706,7 @@ async function clawhubRequest(
     const headers = {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(params.headers ?? {}),
     };
     const init: RequestInit = { signal: controller.signal };
     if (params.method) {
@@ -1741,6 +1743,20 @@ export type ClawHubPromotion = {
   launchPageUrl?: string;
 };
 
+// A hosted-feed snapshot entry: the same declarative payload without the
+// live-only status/active flags (the feed only ever contains live records;
+// clients still window-filter on startsAt/endsAt).
+export type ClawHubPromotionsFeedEntry = Omit<ClawHubPromotion, "status" | "active">;
+
+export type ClawHubPromotionsFeed = {
+  schemaVersion: number;
+  id: string;
+  generatedAt: string;
+  sequence: number;
+  expiresAt: string;
+  entries: ClawHubPromotionsFeedEntry[];
+};
+
 // Shell-safe contract for provider/model refs: they are echoed into
 // copy-paste CLI commands, so whitespace and shell metacharacters must fail
 // parsing rather than reach a terminal.
@@ -1775,11 +1791,12 @@ const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 // Safe identifier grammar for provider ids and auth choice ids.
 const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 
-export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
-  const context = "promotion";
-  if (!isJsonObject(value)) {
-    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
-  }
+// Shared shape between the live API promotion and a feed entry: everything
+// except the live-only `status`/`active` flags.
+function parseClawHubPromotionCore(
+  value: Record<string, unknown>,
+  context: string,
+): ClawHubPromotionsFeedEntry {
   const modelsRaw = value.models;
   if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
     throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
@@ -1788,12 +1805,10 @@ export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   if (!CLAWHUB_PROMOTION_SLUG_RE.test(slug)) {
     throw new Error(`Malformed ClawHub ${context}: slug must be lowercase [a-z0-9-].`);
   }
-  const promotion: ClawHubPromotion = {
+  const promotion: ClawHubPromotionsFeedEntry = {
     slug,
     title: requiredStringField(value, "title", context),
     blurb: requiredStringField(value, "blurb", context),
-    status: requiredStringField(value, "status", context),
-    active: requiredBooleanField(value, "active", context),
     startsAt: requiredNumberField(value, "startsAt", context),
     endsAt: requiredNumberField(value, "endsAt", context),
     models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
@@ -1834,6 +1849,18 @@ export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   return promotion;
 }
 
+export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+  const context = "promotion";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
+  return {
+    ...parseClawHubPromotionCore(value, context),
+    status: requiredStringField(value, "status", context),
+    active: requiredBooleanField(value, "active", context),
+  };
+}
+
 export async function fetchClawHubPromotions(
   params: {
     baseUrl?: string;
@@ -1866,4 +1893,99 @@ export async function fetchClawHubPromotion(params: {
     fetchImpl: params.fetchImpl,
   });
   return parseClawHubPromotion(response);
+}
+
+// ─── ClawHub promotions feed (GET /api/v1/feeds/promotions) ───────────────
+// Immutable hosted snapshot used for passive discovery: cheap conditional
+// GETs (`If-None-Match` → 304), never authoritative for claiming — `promos
+// claim` always revalidates against the live API so the kill switch wins
+// regardless of snapshot staleness.
+
+export const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
+// Strict cross-repo wire contract with ClawHub's promotionsFeed publisher.
+// Bump only in lockstep with the server-side schema.
+export const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
+
+export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFeed {
+  const context = "promotions feed";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
+  const id = requiredStringField(value, "id", context);
+  if (id !== CLAWHUB_PROMOTIONS_FEED_ID) {
+    throw new Error(`Malformed ClawHub ${context}: unexpected feed id.`);
+  }
+  const schemaVersion = requiredNumberField(value, "schemaVersion", context);
+  if (schemaVersion !== CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION) {
+    throw new Error(`Unsupported ClawHub ${context} schema version ${schemaVersion}.`);
+  }
+  const sequence = requiredNumberField(value, "sequence", context);
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new Error(`Malformed ClawHub ${context}: sequence must be a non-negative integer.`);
+  }
+  const generatedAt = requiredStringField(value, "generatedAt", context);
+  const expiresAt = requiredStringField(value, "expiresAt", context);
+  if (!Number.isFinite(Date.parse(generatedAt)) || !Number.isFinite(Date.parse(expiresAt))) {
+    throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
+  }
+  const entriesRaw = value.entries;
+  if (!Array.isArray(entriesRaw)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an entries array.`);
+  }
+  const entries = entriesRaw.map((entry) => {
+    if (!isJsonObject(entry)) {
+      throw new Error(`Malformed ClawHub ${context}: expected each entry to be an object.`);
+    }
+    if (requiredStringField(entry, "type", context) !== "promotion") {
+      throw new Error(`Malformed ClawHub ${context}: unexpected entry type.`);
+    }
+    return parseClawHubPromotionCore(entry, context);
+  });
+  return { schemaVersion, id, generatedAt, sequence, expiresAt, entries };
+}
+
+export type ClawHubPromotionsFeedFetchResult =
+  | { status: "not-modified" }
+  | { status: "ok"; feed: ClawHubPromotionsFeed; payload: string; etag?: string };
+
+export async function fetchClawHubPromotionsFeed(
+  params: {
+    etag?: string;
+    baseUrl?: string;
+    timeoutMs?: number;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<ClawHubPromotionsFeedFetchResult> {
+  const { response, url } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/feeds/promotions",
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    // Public CDN-served snapshot; an Authorization header would only
+    // fragment edge caches.
+    skipAuth: true,
+    ...(params.etag ? { headers: { "If-None-Match": params.etag } } : {}),
+  });
+  if (response.status === 304) {
+    return { status: "not-modified" };
+  }
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, false, params.timeoutMs);
+  }
+  const buffer = await readClawHubResponseBytes({
+    response,
+    maxBytes: CLAWHUB_JSON_MAX_BYTES,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: "promotions feed",
+  });
+  const payload = new TextDecoder().decode(buffer);
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(payload);
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
+  const feed = parseClawHubPromotionsFeed(parsedJson);
+  const etag = response.headers.get("etag") ?? undefined;
+  return { status: "ok", feed, payload, ...(etag ? { etag } : {}) };
 }

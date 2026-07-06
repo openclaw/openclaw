@@ -14,6 +14,13 @@ const mocks = vi.hoisted(() => ({
   enablePluginInConfig: vi.fn(),
   repairCodex: vi.fn(),
   repairCopilot: vi.fn(),
+  recordPromotionClaim: vi.fn(),
+  markPromotionSlugsNotified: vi.fn(),
+}));
+
+vi.mock("../../infra/promotions-feed.js", () => ({
+  recordPromotionClaim: mocks.recordPromotionClaim,
+  markPromotionSlugsNotified: mocks.markPromotionSlugsNotified,
 }));
 
 vi.mock("../../infra/clawhub.js", async () => {
@@ -163,6 +170,15 @@ describe("promosClaimCommand", () => {
     });
     expect(next.agents.defaults.model).toBeUndefined();
     expect(mocks.applyAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
+    // Provenance powers the `promo` tags in `models list` and future cleanup.
+    expect(mocks.recordPromotionClaim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "spring-models",
+        provider: "openrouter",
+        modelKeys: ["openrouter/example/model-alpha"],
+      }),
+    );
+    expect(mocks.markPromotionSlugsNotified).toHaveBeenCalledWith(["spring-models"]);
   });
 
   it("sets the suggested model as default with --set-default", async () => {

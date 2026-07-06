@@ -57,3 +57,24 @@ Claims a live promotion:
 When the promotion's window ends, the provider stops serving the free models;
 your configuration and credentials are untouched. Switch back anytime with
 `openclaw models set <model>`.
+
+## Passive discovery in `models list`
+
+`openclaw models list` also surfaces promotions without you asking ClawHub
+directly:
+
+- Live offers whose models you have not configured appear in an
+  "Available via promotion" group below the table, each with its claim
+  command.
+- Models you registered through `promos claim` carry a `promo` tag, which
+  flips to `promo ended` once the offer's window passes.
+- The first time a new offer is seen, a one-time notice points at
+  `openclaw promos list`. Offers you have already listed or claimed are never
+  announced again.
+
+This reads a locally cached copy of ClawHub's hosted promotions feed
+(refreshed at most once a day with a conditional request, silently skipped
+when offline) and never blocks or breaks the listing. `--json` and `--plain`
+output stay machine-clean: no promotion sections or notices. Claiming always
+revalidates against the live ClawHub API, so an offer withdrawn early is
+refused even while a cached copy still shows it.

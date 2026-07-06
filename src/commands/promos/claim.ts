@@ -12,6 +12,7 @@ import {
   fetchClawHubPromotion,
   type ClawHubPromotion,
 } from "../../infra/clawhub.js";
+import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
@@ -354,6 +355,18 @@ export async function promosClaimCommand(
     }
     return next;
   });
+
+  // Config entries carry no promo marker, so provenance lives in the state
+  // DB — it powers the `promo`/`promo ended` annotations in `models list`
+  // and future cleanup. Best-effort by design: never fails the claim.
+  recordPromotionClaim({
+    slug: promotion.slug,
+    provider,
+    modelKeys: [...new Set(registered)],
+    endsAtMs: promotion.endsAt,
+    claimedAtMs: Date.now(),
+  });
+  markPromotionSlugsNotified([promotion.slug]);
 
   if (makeDefault && suggested) {
     // `models set` repairs provider runtime plugin installs (Codex/Copilot)
