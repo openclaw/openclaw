@@ -665,6 +665,20 @@ PY
       expect(links[1]?.textContent).toBe("foo.ts:7:3");
     });
 
+    it("links Windows absolute paths", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual([
+        "C:/repo/src/foo.ts",
+        "D:\\work\\bar.ts",
+      ]);
+      expect(links[0]?.dataset.fileLine).toBe("42");
+    });
+
     it("links inline-code paths and conservative bare filenames", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml("`src/lib/foo.ts` `navigation.ts` `foo.bar()` `notes.xyz123`", {

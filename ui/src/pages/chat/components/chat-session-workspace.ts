@@ -28,7 +28,7 @@ export type SessionWorkspaceProps = {
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onCopyPath: (path: string) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
 };
@@ -149,6 +149,16 @@ function fileSidebarContent(name: string, content: string): string {
 
 function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
+}
+
+export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+  if (!root) {
+    return filePath;
+  }
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  const base = root.replace(/[\\/]+$/, "");
+  const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
+  return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
 }
 
 function artifactSidebarContent(params: {
@@ -342,13 +352,16 @@ function openFile(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   path: string,
-  opts: { line?: number | null } = {},
+  opts: { line?: number | null; requestPath?: string } = {},
 ) {
   openWorkspaceItem(
     state,
     workspace,
     `file:${path}`,
-    (request) => state.sessions.getFile(request.sessionKey, path, { agentId: request.agentId }),
+    (request) =>
+      state.sessions.getFile(request.sessionKey, opts.requestPath ?? path, {
+        agentId: request.agentId,
+      }),
     (result) => {
       const file = result.file;
       if (!file || typeof file.content !== "string") {
@@ -462,7 +475,15 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     onCopyPath: (path) => {
       void copyToClipboard(path);
     },
-    onOpenFile: (path) => openFile(state, workspace, path),
+    onOpenFile: (path, origin) => {
+      // Session paths are cwd-relative; browser rows are workspace-root-relative.
+      // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
+      const opts =
+        origin === "workspace"
+          ? { requestPath: workspaceBrowserFilePath(workspace.list?.root, path) }
+          : {};
+      openFile(state, workspace, path, opts);
+    },
     onSearch: (search) => {
       workspace.browserSearch = search;
       clearWorkspaceSearchTimer(workspace);
@@ -547,7 +568,7 @@ export function renderSessionWorkspaceRail(
   const hasSessionItems = files.length > 0 || artifacts.length > 0;
   const hasBrowserItems = (browser?.entries.length ?? 0) > 0;
   const hasItems = hasSessionItems || hasBrowserItems;
-  const renderPathActions = (path: string): TemplateResult => html`
+  const renderPathActions = (path: string, origin: "session" | "workspace"): TemplateResult => html`
     <span
       class="chat-workspace-rail__row-actions"
       role="group"
@@ -560,7 +581,7 @@ export function renderSessionWorkspaceRail(
           aria-label=${t("chat.workspaceFiles.preview")}
           @click=${(event: Event) => {
             event.stopPropagation();
-            sessionWorkspace.onOpenFile(path);
+            sessionWorkspace.onOpenFile(path, origin);
           }}
         >
           ${icons.eye}
@@ -616,7 +637,7 @@ export function renderSessionWorkspaceRail(
                   <button
                     class="chat-workspace-rail__file-open"
                     type="button"
-                    @click=${() => sessionWorkspace.onOpenFile(file.path)}
+                    @click=${() => sessionWorkspace.onOpenFile(file.path, "session")}
                   >
                     <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
                     <span class="chat-workspace-rail__file-main">
@@ -635,7 +656,7 @@ export function renderSessionWorkspaceRail(
                         >${t("chat.workspaceFiles.missing")}</span
                       >`
                     : nothing}
-                  ${renderPathActions(file.path)}
+                  ${renderPathActions(file.path, "session")}
                 </div>
               `;
             })}
@@ -759,7 +780,7 @@ export function renderSessionWorkspaceRail(
                       @click=${() =>
                         entry.kind === "directory"
                           ? sessionWorkspace.onBrowsePath(entry.path)
-                          : sessionWorkspace.onOpenFile(entry.path)}
+                          : sessionWorkspace.onOpenFile(entry.path, "workspace")}
                     >
                       <span class="chat-workspace-rail__file-icon"
                         >${entry.kind === "directory" ? icons.folder : icons.fileText}</span
@@ -776,7 +797,7 @@ export function renderSessionWorkspaceRail(
                       </span>
                     </button>
                     ${renderBrowserBadge(entry.sessionKind)}
-                    ${entry.kind === "file" ? renderPathActions(entry.path) : nothing}
+                    ${entry.kind === "file" ? renderPathActions(entry.path, "workspace") : nothing}
                   </div>
                 `;
               })}

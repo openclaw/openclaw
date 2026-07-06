@@ -1184,8 +1184,8 @@ describe("chat composer workbench", () => {
       .querySelector<HTMLButtonElement>('button[aria-label="Collapse session workspace"]')
       ?.click();
 
-    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md");
-    expect(onOpenFile).toHaveBeenCalledWith("package.json");
+    expect(onOpenFile).toHaveBeenCalledWith("/workspace/AGENTS.md", "session");
+    expect(onOpenFile).toHaveBeenCalledWith("package.json", "workspace");
     expect(onCopyPath).toHaveBeenCalledWith("/workspace/AGENTS.md");
     expect(onBrowsePath).toHaveBeenCalledWith("ui");
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);

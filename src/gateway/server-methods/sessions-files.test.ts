@@ -286,6 +286,14 @@ describe("sessions.files RPC handlers", () => {
     );
     expect(preview.file.content).toBe("# Nested read me\n");
 
+    const workspaceRootPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: path.join(workspaceRoot, "src/readme.md"),
+      }),
+    );
+    expect(workspaceRootPreview.file.content).toBe("# Read me\n");
+
     const browserPreview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
         sessionKey: "agent:main:main",

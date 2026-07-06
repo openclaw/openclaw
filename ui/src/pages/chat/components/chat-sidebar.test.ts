@@ -45,6 +45,18 @@ describe("editorOpenUrl", () => {
       "zed://file/workspace/src/foo.ts:42",
     );
   });
+
+  it("normalizes Windows paths", () => {
+    expect(editorOpenUrl("vscode", "C:\\workspace\\src\\foo.ts", 42)).toBe(
+      "vscode://file/C:/workspace/src/foo.ts:42",
+    );
+  });
+
+  it("encodes URL-significant path characters", () => {
+    expect(editorOpenUrl("windsurf", "/workspace/#notes?.md")).toBe(
+      "windsurf://file/workspace/%23notes%3F.md",
+    );
+  });
 });
 
 describe("splitHighlightedHtmlIntoLines", () => {

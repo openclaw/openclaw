@@ -195,17 +195,29 @@ export function editorOpenUrl(
   absPath: string,
   line?: number | null,
 ): string {
-  return `${editor}://file${encodeURI(absPath)}${line ? `:${line}` : ""}`;
+  const normalizedPath = absPath.replaceAll("\\", "/");
+  const urlPath = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+  const encodedPath = urlPath
+    .split("/")
+    .map((segment, index) =>
+      index === 1 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
+    )
+    .join("/");
+  return `${editor}://file${encodedPath}${line ? `:${line}` : ""}`;
 }
 
 function absoluteFilePath(content: FileSidebarContent): string | null {
-  if (content.path.startsWith("/")) {
+  if (
+    content.path.startsWith("/") ||
+    /^[a-z]:[\\/]/i.test(content.path) ||
+    content.path.startsWith("\\\\")
+  ) {
     return content.path;
   }
   if (!content.root) {
     return null;
   }
-  return `${content.root.replace(/\/$/, "")}/${content.path}`;
+  return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
 }
 
 function highlightedFileLines(
