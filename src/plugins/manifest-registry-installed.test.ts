@@ -47,6 +47,32 @@ function writePlugin(rootDir: string, pluginId: string, modelPrefix: string) {
   );
 }
 
+function writePluginWithRequires(
+  rootDir: string,
+  pluginId: string,
+  modelPrefix: string,
+  requiresPlugins: string[],
+) {
+  fs.writeFileSync(
+    path.join(rootDir, "index.ts"),
+    "throw new Error('runtime entry should not load while reading manifests');\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      configSchema: { type: "object" },
+      providers: [pluginId],
+      modelSupport: {
+        modelPrefixes: [modelPrefix],
+      },
+      requiresPlugins,
+    }),
+    "utf8",
+  );
+}
+
 function createIndex(rootDir: string): InstalledPluginIndex {
   return {
     version: 1,
@@ -896,5 +922,75 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.diagnostics.length).toBeGreaterThan(0);
     expect(registry.diagnostics[0].level).toBe("warn");
     expect(registry.diagnostics[0].message).toContain("bundled plugin directory");
+  });
+
+  it("warns when a load-path plugin requires a missing plugin (P2 regression)", () => {
+    const installedRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+
+    const loadPathRoot = makeTempDir();
+    writePluginWithRequires(loadPathRoot, "load-path-plugin", "load-", ["missing-plugin"]);
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            paths: [loadPathRoot],
+          },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    // Should warn that "load-path-plugin" requires "missing-plugin"
+    const requiresWarning = registry.diagnostics.find(
+      (d) =>
+        d.level === "warn" &&
+        d.pluginId === "load-path-plugin" &&
+        d.message.includes("missing-plugin"),
+    );
+    expect(requiresWarning).toBeTruthy();
+    expect(requiresWarning!.message).toContain(
+      'plugin "load-path-plugin" requires plugin "missing-plugin"',
+    );
+  });
+
+  it("does not false-warn when a load-path plugin requires a plugin already in the index", () => {
+    const installedRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+
+    const loadPathRoot = makeTempDir();
+    writePluginWithRequires(loadPathRoot, "load-path-plugin", "load-", ["installed"]);
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: {
+            paths: [loadPathRoot],
+          },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    // "installed" is in the index, so no missing-required-plugin diagnostic
+    // should be produced for "load-path-plugin" requiring "installed"
+    const requiresWarning = registry.diagnostics.find(
+      (d) =>
+        d.level === "warn" &&
+        d.pluginId === "load-path-plugin" &&
+        d.message.includes("requires plugin"),
+    );
+    expect(requiresWarning).toBeUndefined();
   });
 });

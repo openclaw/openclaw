@@ -7,7 +7,11 @@ import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
-import { discoverFromConfigPaths, type PluginCandidate } from "./discovery.js";
+import {
+  addMissingRequiredPluginDiagnostics,
+  discoverFromConfigPaths,
+  type PluginCandidate,
+} from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -659,12 +663,22 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         extraDiagnostics = loadPathDiscovery.diagnostics;
       }
 
+      // P2: Preserve requiresPlugins diagnostics over the combined index plus
+      // load-path candidate set. Normal discovery calls
+      // addMissingRequiredPluginDiagnostics after merging all candidates, but the
+      // installed-index path builds candidates from index records and optional
+      // config load paths separately, so the combined-candidate check is needed
+      // here to surface missing-required-plugin warnings that users would get on
+      // the normal discovery path.
+      const combinedDiagnostics: PluginDiagnostic[] = [...diagnostics, ...extraDiagnostics];
+      addMissingRequiredPluginDiagnostics({ candidates, diagnostics: combinedDiagnostics });
+
       return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
         candidates,
-        diagnostics: [...diagnostics, ...extraDiagnostics],
+        diagnostics: combinedDiagnostics,
         installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
         ...(params.bundledChannelConfigCollector
           ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }

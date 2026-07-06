@@ -403,7 +403,7 @@ function mergeDiscoveryResult(
   }
 }
 
-function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): void {
+export function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): void {
   const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
   const seen = new Set<string>();
   for (const candidate of result.candidates) {
