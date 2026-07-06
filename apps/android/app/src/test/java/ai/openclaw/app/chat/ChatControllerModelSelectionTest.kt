@@ -231,4 +231,72 @@ class ChatControllerModelSelectionTest {
       val metadataRequest = requests.single { it.first == "chat.metadata" }
       assertTrue(metadataRequest.second.orEmpty().contains("\"agentId\":\"ops\""))
     }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun emptyModelCatalogIsRetriedOnNextHealthEvent() =
+    runTest {
+      var metadataRequests = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "chat.metadata" -> {
+                metadataRequests += 1
+                if (metadataRequests == 1) {
+                  """{"commands":[{"name":"new","textAliases":["/new"]}],"models":[]}"""
+                } else {
+                  """{"commands":[{"name":"new","textAliases":["/new"]}],"models":[{"id":"gpt-5","provider":"openai","input":["text"]}]}"""
+                }
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertTrue(controller.modelCatalog.value.isEmpty())
+
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(2, metadataRequests)
+      assertEquals(
+        "gpt-5",
+        controller.modelCatalog.value
+          .single()
+          .id,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun validEmptyModelCatalogStopsAfterOneRetry() =
+    runTest {
+      var metadataRequests = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.metadata") {
+              metadataRequests += 1
+              """{"commands":[],"models":[]}"""
+            } else {
+              "{}"
+            }
+          },
+        )
+
+      repeat(3) {
+        controller.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+      }
+
+      assertEquals(2, metadataRequests)
+      assertTrue(controller.modelCatalog.value.isEmpty())
+    }
 }

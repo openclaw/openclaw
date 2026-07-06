@@ -145,6 +145,7 @@ class ChatController internal constructor(
 
   private var lastHealthPollAtMs: Long? = null
   private var chatMetadataAgentId: String? = null
+  private var chatMetadataLoadState = ChatMetadataLoadState.Unloaded
   private var sessionsListArchived = false
 
   // One acknowledgement per unread episode: the pending flag clears when the
@@ -195,6 +196,7 @@ class ChatController internal constructor(
     _commands.value = emptyList()
     _modelCatalog.value = emptyList()
     chatMetadataAgentId = null
+    chatMetadataLoadState = ChatMetadataLoadState.Unloaded
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.addAll(pendingRuns)
     }
@@ -526,6 +528,7 @@ class ChatController internal constructor(
       _commands.value = emptyList()
       _modelCatalog.value = emptyList()
       chatMetadataAgentId = null
+      chatMetadataLoadState = ChatMetadataLoadState.Unloaded
     }
     updateErrorText(null)
     _healthOk.value = false
@@ -1109,7 +1112,16 @@ class ChatController internal constructor(
       if (agentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
         _commands.value = parseChatCommands(json, res)
         val root = json.parseToJsonElement(res).asObjectOrNull()
-        _modelCatalog.value = parseGatewayModels(root?.get("models") as? JsonArray)
+        val models = parseGatewayModels(root?.get("models") as? JsonArray)
+        _modelCatalog.value = models
+        // chat.metadata cannot distinguish a valid empty catalog from its timeout fallback.
+        // Retry one empty response, then accept empty so health events cannot poll forever.
+        chatMetadataLoadState =
+          when {
+            models.isNotEmpty() -> ChatMetadataLoadState.Loaded
+            chatMetadataLoadState == ChatMetadataLoadState.RetryEmptyCatalog -> ChatMetadataLoadState.Loaded
+            else -> ChatMetadataLoadState.RetryEmptyCatalog
+          }
         chatMetadataAgentId = agentId
       }
     } catch (_: Throwable) {
@@ -1117,6 +1129,7 @@ class ChatController internal constructor(
         _commands.value = emptyList()
         _modelCatalog.value = emptyList()
         chatMetadataAgentId = null
+        chatMetadataLoadState = ChatMetadataLoadState.Unloaded
       }
     }
   }
@@ -1139,7 +1152,7 @@ class ChatController internal constructor(
     try {
       requestGateway("health", null)
       markHealthOk()
-      if (_commands.value.isEmpty() || chatMetadataAgentId != resolveAgentIdForSessionKey(_sessionKey.value)) {
+      if (!hasCurrentChatMetadata()) {
         fetchChatMetadata()
       }
     } catch (_: Throwable) {
@@ -1157,8 +1170,12 @@ class ChatController internal constructor(
     }
   }
 
+  private fun hasCurrentChatMetadata(): Boolean =
+    chatMetadataLoadState == ChatMetadataLoadState.Loaded &&
+      chatMetadataAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
+
   private fun refreshCommandsAfterReconnect() {
-    if (_commands.value.isNotEmpty() && chatMetadataAgentId == resolveAgentIdForSessionKey(_sessionKey.value)) return
+    if (hasCurrentChatMetadata()) return
     scope.launch { fetchChatMetadata() }
   }
 
@@ -2051,6 +2068,12 @@ class ChatController internal constructor(
       "high" -> "high"
       else -> "off"
     }
+}
+
+private enum class ChatMetadataLoadState {
+  Unloaded,
+  RetryEmptyCatalog,
+  Loaded,
 }
 
 private const val NEW_CHAT_SESSION_LABEL = "New chat"
