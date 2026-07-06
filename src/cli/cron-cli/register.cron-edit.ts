@@ -85,7 +85,7 @@ async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Pr
     // without paying the paginated lookup cost on current gateways.
     const existing = await loadCronJobForEditViaList(opts, id);
     if (!existing) {
-      throw new Error(`unknown cron job id: ${id}`);
+      throw new Error(`unknown cron job id: ${id}`, { cause: error });
     }
     return existing;
   }
