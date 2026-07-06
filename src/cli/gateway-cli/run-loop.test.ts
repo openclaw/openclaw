@@ -1772,6 +1772,109 @@ describe("runGatewayLoop", () => {
     },
   );
 
+  it("upgrades an accepted restart when a managed update arrives during shutdown", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReset();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValue(null);
+    consumeGatewaySigusr1RestartIntent.mockReset();
+    consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
+    consumeGatewaySigusr1RestartAuthorization.mockReset();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValue(true);
+    peekGatewaySigusr1RestartReason.mockReset();
+    peekGatewaySigusr1RestartReason
+      .mockReturnValueOnce("config.patch")
+      .mockReturnValueOnce("update.auto");
+    respawnGatewayProcessForUpdate.mockReturnValueOnce({ mode: "supervised" });
+
+    let releaseClose: () => void = () => {};
+    const close = vi.fn<GatewayCloseFn>(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        }),
+    );
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => close.mock.calls.length === 1,
+        "restart close did not start",
+      );
+      sigusr1();
+      await waitForLoopCondition(
+        () =>
+          gatewayLog.info.mock.calls.some(([message]) =>
+            String(message).includes("upgrading to update.auto"),
+          ),
+        "accepted restart was not upgraded",
+      );
+
+      releaseClose();
+      await expect(exited).resolves.toBe(0);
+      expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+      expectRestartHandoffCall({
+        restartKind: "update-process",
+        reason: "update.auto",
+        supervisorMode: "external",
+      });
+    });
+  });
+
+  it("reads a managed update upgrade after asynchronous lock release", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReset();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValue(null);
+    consumeGatewaySigusr1RestartIntent.mockReset();
+    consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
+    consumeGatewaySigusr1RestartAuthorization.mockReset();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValue(true);
+    peekGatewaySigusr1RestartReason.mockReset();
+    peekGatewaySigusr1RestartReason
+      .mockReturnValueOnce("config.patch")
+      .mockReturnValueOnce("update.auto");
+    respawnGatewayProcessForUpdate.mockReturnValueOnce({ mode: "supervised" });
+
+    let releaseLock: () => void = () => {};
+    const lockReleaseBlocked = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const lockRelease = vi.fn(async () => {
+      await lockReleaseBlocked;
+    });
+    acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runtime, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () => lockRelease.mock.calls.length === 1,
+        "restart did not reach lock release",
+      );
+      sigusr1();
+      await waitForLoopCondition(
+        () =>
+          gatewayLog.info.mock.calls.some(([message]) =>
+            String(message).includes("upgrading to update.auto"),
+          ),
+        "lock-release restart was not upgraded",
+      );
+
+      releaseLock();
+      await expect(exited).resolves.toBe(0);
+      expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
   it("probes the configured gateway host for update respawn health", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
