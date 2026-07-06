@@ -129,6 +129,7 @@ export async function buildCodexPluginThreadConfig(
   const appInventoryRefreshDeferredForActivation =
     inventory.records.some((record) => record.activationRequired) &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
+  let inventoryRefreshedInThisCall = false;
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
     await refreshAppInventoryNow(params, appCache, {
       // OpenClaw is missing its process-local snapshot, but Codex may already
@@ -150,6 +151,7 @@ export async function buildCodexPluginThreadConfig(
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
     });
+    inventoryRefreshedInThisCall = true;
   }
   const activationDiagnostics: CodexPluginThreadConfigDiagnostic[] = [];
   const activationResults: CodexPluginActivationResult[] = [];
@@ -182,7 +184,13 @@ export async function buildCodexPluginThreadConfig(
     appInventoryRefreshDeferredForActivation &&
     !postInstallRefreshRequired &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
-  if (postInstallRefreshRequired || deferredMissingRefreshRequired) {
+  // Avoid redundant disk I/O from repeated app discovery in a single request.
+  // If we already refreshed the inventory earlier in this call, skip subsequent
+  // forced refreshes unless there's a specific reason that requires it.
+  if (
+    (postInstallRefreshRequired || deferredMissingRefreshRequired) &&
+    !inventoryRefreshedInThisCall
+  ) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: postInstallRefreshRequired ? "post_install" : "deferred_missing",
@@ -200,8 +208,12 @@ export async function buildCodexPluginThreadConfig(
       pluginConfig: params.pluginConfig,
       appCacheKey: params.appCacheKey,
     });
+    inventoryRefreshedInThisCall = true;
   }
-  if (shouldForceRefreshForNotReadyPluginApps(params, policy, inventory)) {
+  if (
+    shouldForceRefreshForNotReadyPluginApps(params, policy, inventory) &&
+    !inventoryRefreshedInThisCall
+  ) {
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
