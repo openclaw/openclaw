@@ -250,4 +250,38 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("does not duplicate the active chat when its only session is pinned", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:pinned", "Pinned only", Date.parse("2026-07-01T16:00:00.000Z"), {
+            pinned: true,
+          }),
+        ]),
+      },
+      sessionKey: "agent:main:pinned",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const sessionGroups = page.locator(".sidebar-recent-sessions__group");
+      const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
+      const chatsGroup = sessionGroups.filter({ hasText: "Chats" });
+      await expect
+        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
+        .toEqual(["Pinned only"]);
+      await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
 });

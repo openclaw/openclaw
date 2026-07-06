@@ -713,7 +713,7 @@ export class AppSidebar extends LitElement {
                   </div>
                   ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
                   <div class="sidebar-recent-sessions__list">
-                    ${chatRows.length === 0
+                    ${allRows.length === 0
                       ? this.renderChatFallback()
                       : chatRows.map((session) => this.renderRecentSession(session))}
                   </div>
