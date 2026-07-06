@@ -1578,6 +1578,7 @@ export const tr: TranslationMap = {
       discard: "Vazgeç",
       faster: "Daha hızlı",
       smarter: "Daha akıllı",
+      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "Eşleştirme QR kodunun süresi doldu",
@@ -1588,7 +1589,10 @@ export const tr: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      addAttachment: "Add attachment",
+      attachPhoto: "Photo",
       attachFile: "Attach file",
+      attachFileOption: "File",
       contextUsage: {
         title: "Bağlam kullanımı ayrıntıları",
         open: "Bağlam kullanımı ayrıntılarını aç",

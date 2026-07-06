@@ -1563,6 +1563,7 @@ export const vi: TranslationMap = {
       discard: "Bỏ",
       faster: "Nhanh hơn",
       smarter: "Thông minh hơn",
+      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",
@@ -1573,7 +1574,10 @@ export const vi: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      addAttachment: "Add attachment",
+      attachPhoto: "Photo",
       attachFile: "Attach file",
+      attachFileOption: "File",
       contextUsage: {
         title: "Chi tiết mức sử dụng ngữ cảnh",
         open: "Mở chi tiết mức sử dụng ngữ cảnh",

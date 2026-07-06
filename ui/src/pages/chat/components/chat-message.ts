@@ -819,14 +819,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
             <span class="chat-sender-name">${who}</span>
             ${renderMessageMeta(group.timestamp, meta)}
-            ${opts.onDelete && normalizedRole !== "user"
-              ? renderDeleteButton(opts.onDelete, "right")
-              : nothing}
           </div>
-          ${footerActionDetails
+          ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
             ? html`
                 <div class="chat-group-footer-actions">
-                  ${renderMessageActionButtons(footerActionDetails, opts, opts.onOpenSidebar)}
+                  ${opts.onDelete && normalizedRole !== "user"
+                    ? renderDeleteButton(opts.onDelete, "right")
+                    : nothing}
+                  ${footerActionDetails
+                    ? renderMessageActionButtons(footerActionDetails, opts, opts.onOpenSidebar)
+                    : nothing}
                 </div>
               `
             : nothing}

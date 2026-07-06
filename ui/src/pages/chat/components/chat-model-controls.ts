@@ -8,6 +8,7 @@ import type {
 } from "../../../api/types.ts";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import {
@@ -714,58 +715,60 @@ function renderChatModelReasoningSelect(params: {
       orderedProviderGroups.unshift(defaultProviderGroup);
     }
   }
-  const triggerProvider =
+  const selectedModelProvider =
     modelOptions.find((option) => option.value === selectedModelValue)?.provider ??
     modelOptions[0]?.provider ??
     "other";
   const selectedProvider =
     selectedModelValue === ""
-      ? (orderedProviderGroups[0]?.[0] ?? triggerProvider)
-      : triggerProvider;
+      ? (orderedProviderGroups[0]?.[0] ?? selectedModelProvider)
+      : selectedModelProvider;
   const renderModelOption = (entry: ChatModelProviderOption) => {
     const selected = entry.value === selectedModelValue;
+    const modelLabel = formatCombinedPickerModelOptionLabel(entry, selected);
     return html`
       <div class="chat-controls__combined-model">
-        <button
-          class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
-            ? "chat-controls__inline-select-option--selected"
-            : ""}"
-          data-chat-model-option=${entry.value}
-          role="option"
-          aria-selected=${selected ? "true" : "false"}
-          type="button"
-          ?disabled=${disabled}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            if (disabled || selected) {
-              event.preventDefault();
-              return;
-            }
-            const draft = ensureChatModelPickerDraft({
-              fastModeValue: initialFastModeValue,
-              modelValue: initialModelValue,
-              sessionKey,
-              thinkingValue: initialThinkingValue,
-            });
-            draft.modelValue = entry.value;
-            onRequestUpdate?.();
-          }}
-        >
-          <span class="chat-controls__model-option-icon">
-            ${renderChatModelProviderIcon(entry.provider)}
-          </span>
-          <span class="chat-controls__model-option-copy">
-            <span class="chat-controls__model-option-title">
-              ${formatCombinedPickerModelOptionLabel(entry, selected)}
+        <openclaw-tooltip .content=${modelLabel}>
+          <button
+            class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
+              ? "chat-controls__inline-select-option--selected"
+              : ""}"
+            data-chat-model-option=${entry.value}
+            role="option"
+            aria-selected=${selected ? "true" : "false"}
+            type="button"
+            ?disabled=${disabled}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              if (disabled || selected) {
+                event.preventDefault();
+                return;
+              }
+              const draft = ensureChatModelPickerDraft({
+                fastModeValue: initialFastModeValue,
+                modelValue: initialModelValue,
+                sessionKey,
+                thinkingValue: initialThinkingValue,
+              });
+              draft.modelValue = entry.value;
+              onRequestUpdate?.();
+            }}
+          >
+            <span class="chat-controls__model-option-copy">
+              <span class="chat-controls__model-option-title">${modelLabel}</span>
+              <span class="chat-controls__model-option-provider">
+                ${formatChatModelProviderLabel(entry.provider)}
+              </span>
             </span>
-            <span class="chat-controls__model-option-provider">
-              ${formatChatModelProviderLabel(entry.provider)}
+            <span
+              class="chat-controls__inline-select-check"
+              aria-hidden="true"
+              ?hidden=${!selected}
+            >
+              ${icons.check}
             </span>
-          </span>
-          <span class="chat-controls__inline-select-check" aria-hidden="true" ?hidden=${!selected}>
-            ${icons.check}
-          </span>
-        </button>
+          </button>
+        </openclaw-tooltip>
       </div>
     `;
   };
@@ -807,7 +810,6 @@ function renderChatModelReasoningSelect(params: {
           }
         }}
       >
-        ${renderChatModelProviderIcon(triggerProvider)}
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-icon" aria-hidden="true">
           ${icons.chevronDown}
@@ -817,13 +819,6 @@ function renderChatModelReasoningSelect(params: {
         class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined"
         aria-label=${t("chat.selectors.model")}
       >
-        ${defaultModelOption
-          ? html`
-              <div class="chat-controls__default-model-option">
-                ${renderModelOption(defaultModelOption)}
-              </div>
-            `
-          : ""}
         <div class="chat-controls__model-browser">
           <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
             <div class="chat-controls__inline-select-section-label">
@@ -1052,8 +1047,40 @@ function renderChatModelReasoningSelect(params: {
             `
           : ""}
         <div class="chat-controls__picker-actions">
+          ${defaultModelOption
+            ? html`
+                <button
+                  class="btn btn--sm chat-controls__use-default-model"
+                  type="button"
+                  ?disabled=${disabled ||
+                  chatModelPickerDrafts.get(sessionKey)?.saving ||
+                  selectedModelValue === ""}
+                  @click=${(event: MouseEvent) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (
+                      disabled ||
+                      chatModelPickerDrafts.get(sessionKey)?.saving ||
+                      selectedModelValue === ""
+                    ) {
+                      return;
+                    }
+                    const draft = ensureChatModelPickerDraft({
+                      fastModeValue: initialFastModeValue,
+                      modelValue: initialModelValue,
+                      sessionKey,
+                      thinkingValue: initialThinkingValue,
+                    });
+                    draft.modelValue = "";
+                    onRequestUpdate?.();
+                  }}
+                >
+                  ${t("chat.modelPicker.useDefaultModel")}
+                </button>
+              `
+            : ""}
           <button
-            class="btn btn--sm"
+            class="btn btn--sm chat-controls__discard"
             type="button"
             ?disabled=${chatModelPickerDrafts.get(sessionKey)?.saving}
             @click=${(event: MouseEvent) => {

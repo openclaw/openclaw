@@ -120,6 +120,11 @@ type PendingClearedSubmittedDraft = {
   value: string;
 };
 
+type ComposingDraft = {
+  key: string;
+  value: string;
+};
+
 type ChatComposerState = {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -130,6 +135,7 @@ type ChatComposerState = {
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
   composerComposing: boolean;
+  composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
@@ -146,6 +152,7 @@ function createChatComposerState(): ChatComposerState {
     slashMenuExpanded: false,
     slashCommandRefreshPending: false,
     composerComposing: false,
+    composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
@@ -1016,11 +1023,16 @@ function clickComposerInput(event: MouseEvent, selector: string) {
   if (!(target instanceof HTMLElement)) {
     return;
   }
+  target.closest("details")?.removeAttribute("open");
   target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
 }
 
 function clickComposerFileInput(event: MouseEvent) {
   clickComposerInput(event, ".agent-chat__file-input");
+}
+
+function clickComposerPhotoInput(event: MouseEvent) {
+  clickComposerInput(event, ".agent-chat__photo-input");
 }
 
 function clickComposerCameraInput(event: MouseEvent) {
@@ -1645,7 +1657,7 @@ export function renderContextNotice(
           ${provider
             ? html`
                 <div class="context-usage__model">
-                  <span>${t("sessionsView.provider")}</span>
+                  <span>${t("sessionsView.provider")}:</span>
                   <strong>${provider}</strong>
                 </div>
               `
@@ -1653,7 +1665,7 @@ export function renderContextNotice(
           ${responseModel
             ? html`
                 <div class="context-usage__model">
-                  <span>${t("sessionsView.model")}</span>
+                  <span>${t("sessionsView.model")}:</span>
                   <strong>${responseModel}</strong>
                 </div>
               `
@@ -1689,7 +1701,6 @@ export function renderContextNotice(
 
 export type ChatRunControlsProps = {
   canAbort: boolean;
-  cameraAction?: TemplateResult;
   connected: boolean;
   draft: string;
   hasAttachments?: boolean;
@@ -1819,7 +1830,6 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
 
   return html`
     <div class="agent-chat__toolbar-right">
-      ${props.cameraAction ?? nothing}
       ${showSecondary && !props.canAbort
         ? html`
             <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
@@ -1872,6 +1882,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const visibleDraft = props.draft;
+  const draftKey = composerDraftKey(props);
+  const actionDraft =
+    composerState.composingDraft?.key === draftKey
+      ? composerState.composingDraft.value
+      : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(visibleDraft);
@@ -1886,19 +1901,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       providerQuota: props.providerQuota,
     },
   );
-  const cameraAction = html`
-    <openclaw-tooltip .content=${t("chat.composer.takePhoto")}>
-      <button
-        type="button"
-        class="agent-chat__input-btn agent-chat__camera-btn"
-        @click=${clickComposerCameraInput}
-        aria-label=${t("chat.composer.takePhoto")}
-        ?disabled=${!canCompose}
-      >
-        ${icons.camera}
-      </button>
-    </openclaw-tooltip>
-  `;
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel =
@@ -2084,10 +2086,14 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleInput = (event: InputEvent) => {
     const target = event.target as HTMLTextAreaElement;
-    const draftKey = composerDraftKey(props);
     const hasInputIntent = consumeComposerInputIntent(draftKey);
     if (composerState.composerComposing || event.isComposing) {
+      composerState.composingDraft = { key: draftKey, value: target.value };
+      requestUpdate();
       return;
+    }
+    if (composerState.composingDraft?.key === draftKey) {
+      composerState.composingDraft = null;
     }
     if (
       suppressStaleSubmittedDraftReplay(
@@ -2103,10 +2109,16 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     composerState.composerComposing = false;
+    if (composerState.composingDraft?.key === draftKey) {
+      composerState.composingDraft = null;
+    }
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    if (composerState.composingDraft?.key === draftKey) {
+      composerState.composingDraft = null;
+    }
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
@@ -2132,7 +2144,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
     connected: canCompose,
-    draft: visibleDraft,
+    draft: actionDraft,
     hasAttachments: Boolean(props.attachments?.length),
     hasMessages: props.messages.length > 0,
     isBusy,
@@ -2236,6 +2248,18 @@ export function renderChatComposer(props: ChatComposerProps) {
         <input
           type="file"
           accept="image/*"
+          multiple
+          class="agent-chat__photo-input"
+          ?disabled=${!canCompose}
+          @change=${(event: Event) => {
+            if (canCompose) {
+              handleChatAttachmentFileSelect(event, props);
+            }
+          }}
+        />
+        <input
+          type="file"
+          accept="image/*"
           capture="environment"
           class="agent-chat__camera-input"
           ?disabled=${!canCompose}
@@ -2279,18 +2303,59 @@ export function renderChatComposer(props: ChatComposerProps) {
           : nothing}
 
         <div class="agent-chat__composer-input-row">
-          <openclaw-tooltip .content=${t("chat.composer.attachFile")}>
-            <button
-              type="button"
+          <details class="agent-chat__attach-menu">
+            <summary
               class="agent-chat__input-btn agent-chat__input-btn--attach"
-              @click=${clickComposerFileInput}
-              aria-label=${t("chat.composer.attachFile")}
-              ?disabled=${!canCompose}
+              aria-label=${t("chat.composer.addAttachment")}
+              aria-disabled=${canCompose ? "false" : "true"}
+              title=${t("chat.composer.addAttachment")}
+              @pointerdown=${(event: PointerEvent) => {
+                if (document.activeElement === composerTextarea) {
+                  event.preventDefault();
+                }
+              }}
+              @click=${(event: MouseEvent) => {
+                if (!canCompose) {
+                  event.preventDefault();
+                }
+              }}
             >
-              ${icons.paperclip}
-              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
-            </button>
-          </openclaw-tooltip>
+              ${icons.plus}
+            </summary>
+            <div
+              class="agent-chat__attach-menu-popover"
+              role="menu"
+              aria-label=${t("chat.composer.addAttachment")}
+            >
+              <button
+                type="button"
+                class="agent-chat__attach-menu-option"
+                role="menuitem"
+                @click=${clickComposerCameraInput}
+              >
+                ${icons.camera}
+                <span>${t("chat.composer.takePhoto")}</span>
+              </button>
+              <button
+                type="button"
+                class="agent-chat__attach-menu-option"
+                role="menuitem"
+                @click=${clickComposerPhotoInput}
+              >
+                ${icons.image}
+                <span>${t("chat.composer.attachPhoto")}</span>
+              </button>
+              <button
+                type="button"
+                class="agent-chat__attach-menu-option"
+                role="menuitem"
+                @click=${clickComposerFileInput}
+              >
+                ${icons.folder}
+                <span>${t("chat.composer.attachFileOption")}</span>
+              </button>
+            </div>
+          </details>
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref((element) => {
@@ -2315,8 +2380,12 @@ export function renderChatComposer(props: ChatComposerProps) {
               @keydown=${handleKeyDown}
               @beforeinput=${handleBeforeInput}
               @input=${handleInput}
-              @compositionstart=${() => {
+              @compositionstart=${(event: CompositionEvent) => {
                 composerState.composerComposing = true;
+                composerState.composingDraft = {
+                  key: draftKey,
+                  value: (event.target as HTMLTextAreaElement).value,
+                };
               }}
               @compositionend=${handleCompositionEnd}
               @blur=${handleBlur}
@@ -2345,7 +2414,7 @@ export function renderChatComposer(props: ChatComposerProps) {
             >
           </div>
           <div class="agent-chat__composer-actions">
-            ${cameraAction} ${renderChatPrimaryActions(runControlsProps)}
+            ${renderChatPrimaryActions(runControlsProps)}
           </div>
         </div>
 

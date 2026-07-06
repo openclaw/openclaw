@@ -1556,6 +1556,7 @@ export const hi: TranslationMap = {
       discard: "त्यागें",
       faster: "तेज़",
       smarter: "अधिक बुद्धिमान",
+      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "पेयरिंग QR की समय-सीमा समाप्त हो गई",
@@ -1566,7 +1567,10 @@ export const hi: TranslationMap = {
       placeholder: "{name} को संदेश भेजें",
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
+      addAttachment: "Add attachment",
+      attachPhoto: "Photo",
       attachFile: "फ़ाइल संलग्न करें",
+      attachFileOption: "File",
       contextUsage: {
         title: "संदर्भ उपयोग विवरण",
         open: "संदर्भ उपयोग विवरण खोलें",

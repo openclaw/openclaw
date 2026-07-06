@@ -1574,6 +1574,7 @@ export const uk: TranslationMap = {
       discard: "Відкинути",
       faster: "Швидше",
       smarter: "Розумніше",
+      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "QR-код для пар'ювання застарів",
@@ -1584,7 +1585,10 @@ export const uk: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      addAttachment: "Add attachment",
+      attachPhoto: "Photo",
       attachFile: "Attach file",
+      attachFileOption: "File",
       contextUsage: {
         title: "Відомості про використання контексту",
         open: "Відкрити відомості про використання контексту",

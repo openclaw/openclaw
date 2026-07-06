@@ -340,12 +340,18 @@ function chatHtml(
               }
               <div class="agent-chat__composer-status-stack"> </div>
               <div class="agent-chat__composer-input-row">
-                <button class="agent-chat__input-btn" aria-label="Attach file">${iconSvg()}</button>
+                <details class="agent-chat__attach-menu">
+                  <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
+                  <div class="agent-chat__attach-menu-popover" role="menu">
+                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
+                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
+                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
+                  </div>
+                </details>
                 <div class="agent-chat__composer-combobox">
                   <textarea rows="1">Queued follow-up for the active operator session</textarea>
                 </div>
                 <div class="agent-chat__composer-actions">
-                  <button class="agent-chat__input-btn agent-chat__camera-btn" aria-label="Take photo">${iconSvg()}</button>
                   <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
                 </div>
               </div>
@@ -729,9 +735,10 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(geometry.composer?.borderRadius).toBe(10);
 
       const composerInset = width <= 768 ? 4 : 8;
-      expect(geometry.textarea?.paddingTop).toBe(composerInset);
+      const textareaBlockInset = width <= 768 ? 10 : composerInset;
+      expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
       expect(geometry.textarea?.paddingRight).toBe(composerInset);
-      expect(geometry.textarea?.paddingBottom).toBe(composerInset);
+      expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
       expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
       expect(geometry.footer?.paddingLeft).toBe(composerInset);
       expect(geometry.footer?.paddingRight).toBe(composerInset);
@@ -958,19 +965,20 @@ describeBrowserLayout("chat responsive browser layout", () => {
   it("keeps composer actions touch-sized on phones", async () => {
     const page = await openFixture(320, 568);
     try {
-      const sizes = await page
-        .locator(".agent-chat__input-btn, .chat-send-btn")
-        .evaluateAll((nodes) =>
-          nodes.map((node) => {
-            const rect = (node as HTMLElement).getBoundingClientRect();
-            return { width: rect.width, height: rect.height };
-          }),
-        );
+      const sizes = await page.locator(".chat-send-btn").evaluateAll((nodes) =>
+        nodes.map((node) => {
+          const rect = (node as HTMLElement).getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }),
+      );
       expect(sizes.length).toBeGreaterThan(0);
       for (const size of sizes) {
         expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
+      const attach = await getRect(page, ".agent-chat__input-btn--attach");
+      expect(attach.width).toBeGreaterThanOrEqual(36);
+      expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1047,8 +1055,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const textareaStyle = textareaNode ? getComputedStyle(textareaNode) : null;
         const textareaRect = rectFor(".agent-chat__composer-combobox > textarea");
         return {
-          attach: rectFor('.agent-chat__input-btn[aria-label="Attach file"]'),
-          attachIcon: rectFor('.agent-chat__input-btn[aria-label="Attach file"] svg'),
+          attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
+          attachIcon: rectFor('.agent-chat__input-btn[aria-label="Add attachment"] svg'),
           input: rectFor(".agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
@@ -1186,8 +1194,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
             model: rectFor(".chat-composer-model-control"),
             context: rectFor(".context-ring"),
             settings: rectFor(".chat-settings-chip"),
-            camera: rectFor(".agent-chat__camera-btn"),
-            attach: rectFor('.agent-chat__input-btn[aria-label="Attach file"]'),
+            attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
         });
@@ -1203,7 +1210,6 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const model = expectControlRect(controls.model, "composer model control");
         const context = expectControlRect(controls.context, "composer context control");
         const settings = expectControlRect(controls.settings, "composer settings control");
-        const camera = expectControlRect(controls.camera, "composer camera control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
@@ -1262,19 +1268,10 @@ describeBrowserLayout("chat responsive browser layout", () => {
             ).toBeLessThanOrEqual(2);
           }
           expect(footer.height).toBeLessThanOrEqual(49.1);
-          expect(camera.display).not.toBe("none");
-          expect(camera.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(camera.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(camera.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
-          expect(
-            Math.abs(camera.x + camera.width / 2 - (send.x + send.width / 2)),
-          ).toBeLessThanOrEqual(2);
-          expect(camera.y + camera.height).toBeLessThanOrEqual(send.y + 1);
           expect(settings.width).toBeGreaterThanOrEqual(36);
           expect(settings.height).toBeGreaterThanOrEqual(36);
         } else {
           expect(composerFontSize).toBe(14);
-          expect(camera.display).toBe("none");
           expect(send.width).toBeCloseTo(36, 2);
           expect(send.height).toBeCloseTo(36, 2);
         }

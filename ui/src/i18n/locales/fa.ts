@@ -1572,6 +1572,7 @@ export const fa: TranslationMap = {
       discard: "رد کردن",
       faster: "سریع‌تر",
       smarter: "هوشمندتر",
+      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "کد QR جفت‌سازی منقضی شد",
@@ -1582,7 +1583,10 @@ export const fa: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      addAttachment: "Add attachment",
+      attachPhoto: "Photo",
       attachFile: "Attach file",
+      attachFileOption: "File",
       contextUsage: {
         title: "جزئیات استفاده از زمینه",
         open: "باز کردن جزئیات استفاده از زمینه",

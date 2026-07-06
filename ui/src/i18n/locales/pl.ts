@@ -1576,6 +1576,7 @@ export const pl: TranslationMap = {
       discard: "Odrzuć",
       faster: "Szybciej",
       smarter: "Inteligentniej",
+      useDefaultModel: "Use default model",
     },
     pairingQrExpired: {
       title: "Kod QR parowania wygasł",
@@ -1586,7 +1587,10 @@ export const pl: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      addAttachment: "Add attachment",
+      attachPhoto: "Photo",
       attachFile: "Attach file",
+      attachFileOption: "File",
       contextUsage: {
         title: "Szczegóły użycia kontekstu",
         open: "Otwórz szczegóły użycia kontekstu",

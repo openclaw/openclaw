@@ -45,6 +45,7 @@
 /* Footer at bottom of message group (role + time) */
 .chat-group-footer {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -55,7 +56,7 @@
 .chat-group-footer__meta {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
 }
@@ -67,6 +68,10 @@
   justify-content: flex-end;
   gap: 4px;
   margin-left: auto;
+}
+
+.chat-group-footer-actions {
+  flex: 0 0 auto;
 }
 
 .chat-message-actions-row {
@@ -294,6 +299,7 @@ img.chat-avatar {
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-expand-btn,
+  .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
   .chat-message-actions-row .chat-expand-btn {
     min-width: 44px;

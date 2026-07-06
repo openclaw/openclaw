@@ -1841,8 +1841,8 @@ describe("chat voice controls", () => {
     expect(talkButton.textContent?.trim()).toBe(startTalkLabel);
     requireElement(
       container,
-      `[aria-label="${t("chat.composer.attachFile")}"]`,
-      "localized attach file button",
+      `[aria-label="${t("chat.composer.addAttachment")}"]`,
+      "localized attachment menu",
     );
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
@@ -1872,7 +1872,7 @@ describe("chat voice controls", () => {
     const container = renderChatView();
     const attachButton = requireElement(
       container,
-      `[aria-label="${t("chat.composer.attachFile")}"]`,
+      `[aria-label="${t("chat.composer.addAttachment")}"]`,
       "attach button",
     );
     const textarea = requireElement(
@@ -1911,22 +1911,30 @@ describe("chat voice controls", () => {
 });
 
 describe("chat composer IME composition", () => {
-  it("defers draft sync while IME composition is active", () => {
+  it("switches to send on the first composing character without committing the draft", () => {
     const onDraftChange = vi.fn();
-    const onRequestUpdate = vi.fn();
-    const container = renderChatView({ onDraftChange, onRequestUpdate });
+    const container = document.createElement("div");
+    let props = createChatProps({ onDraftChange });
+    const onRequestUpdate = vi.fn(() => {
+      render(renderChat(props), container);
+    });
+    props = { ...props, onRequestUpdate };
+    render(renderChat(props), container);
     const textarea = requireElement(
       container,
       ".agent-chat__composer-combobox > textarea",
       "composer textarea",
     ) as HTMLTextAreaElement;
 
+    expect(container.querySelector('button[aria-label="Start voice input"]')).not.toBeNull();
+
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    textarea.value = "dangqian";
+    textarea.value = "d";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
 
     expect(onDraftChange).not.toHaveBeenCalled();
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
 
     textarea.value = "当前";
     textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
@@ -1953,7 +1961,7 @@ describe("chat composer IME composition", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
 
     expect(onDraftChange).not.toHaveBeenCalled();
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
 
     render(renderChat({ ...props, draft: "" }), container);
 
@@ -2674,23 +2682,21 @@ describe("chat attachment picker", () => {
     expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
   });
 
-  it("opens the scoped file input from the visible attach button", () => {
+  it("opens the scoped file input from the attachment menu", () => {
     const container = renderChatView();
     const input = requireElement(
       container,
       ".agent-chat__file-input",
       "attachment file input",
     ) as HTMLInputElement;
-    const attachButton = requireElement(
-      container,
-      `[aria-label="${t("chat.composer.attachFile")}"]`,
-      "attach button",
-    ) as HTMLButtonElement;
+    const attachButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
+    ).find((button) => button.textContent?.trim() === t("chat.composer.attachFileOption"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
-    attachButton.click();
+    expect(attachButton).toBeInstanceOf(HTMLButtonElement);
+    attachButton!.click();
 
-    expect(attachButton.type).toBe("button");
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
@@ -2702,20 +2708,17 @@ describe("chat attachment picker", () => {
       ".agent-chat__camera-input",
       "camera capture input",
     ) as HTMLInputElement;
-    const cameraButton = requireElement(
-      container,
-      '.agent-chat__camera-btn[aria-label="Take photo"]',
-      "camera button",
-    ) as HTMLButtonElement;
+    const cameraButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
+    ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton.closest(".agent-chat__composer-input-row")).not.toBeNull();
-    expect(
-      container.querySelector(".agent-chat__composer-footer .agent-chat__camera-btn"),
-    ).toBeNull();
-    cameraButton.click();
+    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton!.closest(".agent-chat__attach-menu")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
+    cameraButton!.click();
     expect(clickInput).toHaveBeenCalledTimes(1);
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -2733,12 +2736,14 @@ describe("chat attachment picker", () => {
     });
   });
 
-  it("keeps the mobile camera action available when the composer has text", () => {
+  it("keeps the camera attachment option available when the composer has text", () => {
     const container = renderChatView({ draft: "Ready to send" });
 
-    expect(
-      container.querySelector('.agent-chat__camera-btn[aria-label="Take photo"]'),
-    ).not.toBeNull();
+    const cameraOption = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
+    ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
+    expect(cameraOption).toBeInstanceOf(HTMLButtonElement);
+    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 
@@ -3009,7 +3014,7 @@ describe("chat model controls", () => {
       container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")
         ?.disabled,
     ).toBe(true);
-    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .btn")?.click();
+    container.querySelector<HTMLButtonElement>(".chat-controls__discard")?.click();
   });
 
   it("groups models by provider and switches the visible provider section", () => {
@@ -3180,9 +3185,52 @@ describe("chat model controls", () => {
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
     ).toBe("GPT-5.5 · High");
-    expect(container.querySelector('[data-chat-model-option=""]')?.textContent).toContain(
-      "GPT-5.5",
+    expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).toContain("GPT-5.5");
+  });
+
+  it("stages clearing a model override until save", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const container = document.createElement("div");
+    const sessionKey = "default-clear";
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        sessionKey,
+        modelOverrides: { [sessionKey]: "openai/gpt-5.4" },
+        onModelSelect,
+      }),
+      container,
     );
+
+    const useDefault = container.querySelector<HTMLButtonElement>(
+      ".chat-controls__use-default-model",
+    );
+    expect(useDefault).toBeInstanceOf(HTMLButtonElement);
+    expect(useDefault?.disabled).toBe(false);
+    useDefault?.click();
+    expect(onModelSelect).not.toHaveBeenCalled();
+
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
+    await vi.waitFor(() => {
+      expect(onModelSelect).toHaveBeenCalledWith("", sessionKey);
+    });
   });
 
   it("shows canonical OpenAI names for legacy Codex model references", () => {
@@ -3315,7 +3363,13 @@ describe("chat model controls", () => {
     expect(slider?.getAttribute("aria-valuetext")).toBe("Default (High)");
     expect(speedButtons.map((button) => button.textContent?.trim())).toEqual(["Standard", "Fast"]);
     expect(
-      container.querySelector('.chat-controls__model-option-icon [data-provider-icon="codex"]'),
+      container.querySelector('[data-chat-model-select="true"] .chat-controls__provider-icon'),
+    ).toBeNull();
+    expect(
+      container.querySelector("[data-chat-model-option] .chat-controls__provider-icon"),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-chat-model-provider="openai"] [data-provider-icon]'),
     ).not.toBeNull();
   });
 
