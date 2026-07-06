@@ -8,6 +8,7 @@ import {
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
@@ -554,17 +555,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText =
       "1. Verdict: the answer completed cleanly. 2. Evidence: the runner captured final text.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         timedOut: true,
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [{ type: "text", text: finalText }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
       }),
     );
 
@@ -617,16 +620,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: rateLimitAssistant,
       }),
     );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered after a short rate-limit wait."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [{ type: "text", text: "Recovered after a short rate-limit wait." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
       }),
     );
 
@@ -969,16 +974,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: undefined,
       }),
     );
+    const recoveredAssistant = {
+      role: "assistant",
+      stopReason: "end_turn",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Recovered answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Recovered answer."],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "end_turn",
-          provider: "openai",
-          model: "gpt-5.5",
-          content: [{ type: "text", text: "Recovered answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: recoveredAssistant,
+        currentAttemptAssistant: recoveredAssistant,
       }),
     );
 
@@ -1734,6 +1741,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("delivers the current final answer when the session assistant is stale (#80918)", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText = "The requested update is complete.";
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([{ text: finalText }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [finalText],
@@ -1744,6 +1752,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           provider: "openai",
           model: "gpt-5.5",
           content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
+          usage: { input: 100, output: 5, total: 105 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
         currentAttemptAssistant: {
           role: "assistant",
@@ -1751,6 +1760,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           provider: "openai",
           model: "gpt-5.5",
           content: [{ type: "text", text: finalText }],
+          usage: { input: 200, output: 20, total: 220 },
         } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
       }),
     );
@@ -1763,8 +1773,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentAssistant: expect.objectContaining({
+          stopReason: "stop",
+          content: [{ type: "text", text: finalText }],
+        }),
+        lastAssistant: expect.objectContaining({ stopReason: "toolUse" }),
+      }),
+    );
     expect(result.meta.finalAssistantVisibleText).toBe(finalText);
     expect(result.meta.stopReason).toBe("stop");
+    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
+      input: 200,
+      output: 20,
+      total: 220,
+    });
     expectNoWarnMessageWith("incomplete turn detected");
   });
 
