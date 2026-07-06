@@ -387,6 +387,54 @@ describe("sendMessageSignal receipts", () => {
     });
   });
 
+  it("keeps standalone plugin approval prompts on plugin reaction config without a plugin-prefixed id", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567897 });
+
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            default: {
+              httpUrl: "http://signal.test",
+              account: "+15550001111",
+              allowFrom: ["+15551234567"],
+            },
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "+15551234567" }],
+        },
+      },
+    };
+
+    await sendMessageSignal(
+      "+15551234567",
+      "Plugin approval required\nID: abc\n\nReply with: /approve abc allow-once|deny",
+      { cfg },
+    );
+
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
+      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
+    });
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551234567",
+        messageId: "1234567897",
+        reactionKey: "👍",
+        targetAuthor: "+15550001111",
+      }),
+    ).resolves.toMatchObject({
+      approvalId: "abc",
+      approvalKind: "plugin",
+      decision: "allow-once",
+    });
+  });
+
   it.each([
     {
       name: "exec",
@@ -401,7 +449,7 @@ describe("sendMessageSignal receipts", () => {
       approvalId: "plugin:abc",
     },
   ])("adds reaction approval hints for icon-prefixed $name approval text", async (testCase) => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567897 });
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567898 });
 
     const cfg = {
       channels: {
@@ -433,7 +481,7 @@ describe("sendMessageSignal receipts", () => {
       resolveSignalApprovalReactionTargetWithPersistence({
         accountId: "default",
         conversationKey: "+15551234567",
-        messageId: "1234567897",
+        messageId: "1234567898",
         reactionKey: "👍",
         targetAuthor: "+15550001111",
       }),

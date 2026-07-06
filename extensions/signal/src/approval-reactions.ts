@@ -371,15 +371,22 @@ export function addSignalApprovalReactionHintToText(params: {
   return addApprovalReactionHintToText(params);
 }
 
-function isStandaloneApprovalPromptText(text: string): boolean {
+function resolveStandaloneApprovalPromptKind(text: string): ApprovalKind | null {
   const firstLine = text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean);
-  return (
-    /^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "") ||
-    /^(?:(?:🛡️|🛡|🚨|ℹ️|ℹ)\s*)?Plugin approval required$/.test(firstLine ?? "")
-  );
+  if (/^(?:🔒\s*)?Exec approval required$/.test(firstLine ?? "")) {
+    return "exec";
+  }
+  if (/^(?:(?:🛡️|🛡|🚨|ℹ️|ℹ)\s*)?Plugin approval required$/.test(firstLine ?? "")) {
+    return "plugin";
+  }
+  return null;
+}
+
+function isStandaloneApprovalPromptText(text: string): boolean {
+  return resolveStandaloneApprovalPromptKind(text) !== null;
 }
 
 function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
@@ -399,6 +406,7 @@ const APPROVE_REPLY_COMMAND_LINE_RE =
 
 export function extractSignalApprovalPromptBinding(text: string): {
   approvalId: string;
+  approvalKind: ApprovalKind;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
   const lines = text.split(/\r?\n/);
@@ -409,6 +417,8 @@ export function extractSignalApprovalPromptBinding(text: string): {
     return null;
   }
   const approvalId = idHeaderMatch[1];
+  const approvalKind =
+    resolveStandaloneApprovalPromptKind(text) ?? resolveApprovalKindFromId(approvalId);
   const allowedDecisions: ExecApprovalReplyDecision[] = [];
   for (const line of lines) {
     const match = line.match(APPROVE_REPLY_COMMAND_LINE_RE);
@@ -422,7 +432,7 @@ export function extractSignalApprovalPromptBinding(text: string): {
       }
     }
   }
-  return allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
+  return allowedDecisions.length > 0 ? { approvalId, approvalKind, allowedDecisions } : null;
 }
 
 function buildTargetRoute(params: {
@@ -492,6 +502,7 @@ export function shouldAppendSignalApprovalReactionHintForOutboundMessage(params:
       accountId: params.accountId,
       to: params.to,
       approvalId: binding.approvalId,
+      approvalKind: binding.approvalKind,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     }),
@@ -775,6 +786,7 @@ export function registerSignalApprovalReactionTargetForOutboundMessage(params: {
     accountId: params.accountId,
     to: params.to,
     approvalId: binding.approvalId,
+    approvalKind: binding.approvalKind,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
@@ -787,6 +799,7 @@ export function registerSignalApprovalReactionTargetForOutboundMessage(params: {
       conversationKey,
       messageId: params.messageId,
       approvalId: binding.approvalId,
+      approvalKind: binding.approvalKind,
       allowedDecisions: binding.allowedDecisions,
       targetAuthorKeys,
       route,
