@@ -1610,8 +1610,8 @@ export const fr: TranslationMap = {
       splitDown: "Fractionner vers le bas",
       closePane: "Fermer le volet",
       sessionSelect: "Session du volet",
-      dropSplit: "Split",
-      dropOpenHere: "Open here",
+      dropSplit: "Scinder",
+      dropOpenHere: "Ouvrir ici",
     },
     sidebar: {
       allSessions: "Toutes les sessions",

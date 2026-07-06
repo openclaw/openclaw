@@ -1595,8 +1595,8 @@ export const pl: TranslationMap = {
       splitDown: "Podziel w dół",
       closePane: "Zamknij panel",
       sessionSelect: "Sesja panelu",
-      dropSplit: "Split",
-      dropOpenHere: "Open here",
+      dropSplit: "Podziel",
+      dropOpenHere: "Otwórz tutaj",
     },
     sidebar: {
       allSessions: "Wszystkie sesje",
