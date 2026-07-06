@@ -3449,6 +3449,296 @@ ${JSON.stringify({
     }
   });
 
+  it("times out Claude live sessions that only emit thinking progress", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          `${JSON.stringify({
+            type: "system",
+            subtype: "init",
+            session_id: "live-thinking-stall",
+          })}\n`,
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-thinking-stall",
+        pid: 4401,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn((reason: string) => {
+          cancel(reason);
+        }),
+      };
+    });
+
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-thinking-stall",
+      timeoutMs: 10_000,
+      backend: {
+        liveSession: "claude-stdio",
+      },
+    });
+    const run = runClaudeLiveSessionTurn({
+      context,
+      args: context.preparedBackend.backend.args ?? [],
+      env: {},
+      prompt: "think forever",
+      useResume: false,
+      noOutputTimeoutMs: 1_000,
+      getProcessSupervisor: () => ({
+        spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+          supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+        cancel: vi.fn(),
+        cancelScope: vi.fn(),
+        getRecord: vi.fn(),
+      }),
+      onAssistantDelta: () => {},
+      onThinkingDelta: () => {},
+      cleanup: async () => {},
+    });
+    const runExpectation = expectRejectsWithFields(run, {
+      name: "FailoverError",
+      message: "CLI made no assistant or tool progress for 1s and was terminated.",
+      code: "cli_semantic_progress_timeout",
+    });
+
+    await vi.waitFor(() => expect(stdin.write).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(500);
+    stdoutListener?.(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "still thinking" },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    await vi.advanceTimersByTimeAsync(500);
+
+    await runExpectation;
+    expect(cancel).toHaveBeenCalledWith("manual-cancel");
+  });
+
+  it("keeps Claude live sessions alive for buffered commentary text", async () => {
+    vi.useFakeTimers();
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          `${JSON.stringify({
+            type: "system",
+            subtype: "init",
+            session_id: "live-commentary-text",
+          })}\n`,
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-commentary-text",
+        pid: 4402,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-commentary-text",
+      timeoutMs: 10_000,
+      backend: {
+        liveSession: "claude-stdio",
+      },
+    });
+    const run = runClaudeLiveSessionTurn({
+      context,
+      args: context.preparedBackend.backend.args ?? [],
+      env: {},
+      prompt: "stream commentary before answering",
+      useResume: false,
+      noOutputTimeoutMs: 1_000,
+      getProcessSupervisor: () => ({
+        spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+          supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+        cancel: vi.fn(),
+        cancelScope: vi.fn(),
+        getRecord: vi.fn(),
+      }),
+      onAssistantDelta: () => {},
+      onCommentaryText: () => {},
+      cleanup: async () => {},
+    });
+
+    await vi.waitFor(() => expect(stdin.write).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(500);
+    stdoutListener?.(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "still working" },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    await vi.advanceTimersByTimeAsync(600);
+    stdoutListener?.(
+      [
+        JSON.stringify({
+          type: "result",
+          session_id: "live-commentary-text",
+          result: "done",
+        }),
+      ].join("\n") + "\n",
+    );
+
+    await expect(run).resolves.toMatchObject({ output: { text: "done" } });
+  });
+
+  it("keeps Claude live sessions alive while tool input is streaming", async () => {
+    vi.useFakeTimers();
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({
+              type: "system",
+              subtype: "init",
+              session_id: "live-tool-input",
+            }),
+            JSON.stringify({
+              type: "stream_event",
+              event: {
+                type: "content_block_start",
+                index: 0,
+                content_block: {
+                  type: "tool_use",
+                  id: "tool-stream-1",
+                  name: "Bash",
+                },
+              },
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-tool-input",
+        pid: 4403,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "sonnet",
+      runId: "run-live-tool-input",
+      timeoutMs: 10_000,
+      backend: {
+        liveSession: "claude-stdio",
+      },
+    });
+    const run = runClaudeLiveSessionTurn({
+      context,
+      args: context.preparedBackend.backend.args ?? [],
+      env: {},
+      prompt: "stream a tool call",
+      useResume: false,
+      noOutputTimeoutMs: 1_000,
+      getProcessSupervisor: () => ({
+        spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+          supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+        cancel: vi.fn(),
+        cancelScope: vi.fn(),
+        getRecord: vi.fn(),
+      }),
+      onAssistantDelta: () => {},
+      onToolUseStart: () => {},
+      cleanup: async () => {},
+    });
+
+    await vi.waitFor(() => expect(stdin.write).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(500);
+    stdoutListener?.(
+      `${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json: '{"command":' },
+        },
+      })}\n`,
+    );
+    await vi.advanceTimersByTimeAsync(600);
+    stdoutListener?.(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '"pwd"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_stop",
+            index: 0,
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "live-tool-input",
+          result: "done",
+        }),
+      ].join("\n") + "\n",
+    );
+
+    await expect(run).resolves.toMatchObject({ output: { text: "done" } });
+  });
+
   it("restarts Claude live sessions when selected skills change", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-skills-"));
     const weatherDir = path.join(workspaceDir, "skills", "weather");
