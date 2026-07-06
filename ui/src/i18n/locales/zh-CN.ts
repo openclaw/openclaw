@@ -1423,6 +1423,12 @@ export const zh_CN: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway 连接已断开",
+    reconnecting: "正在重新连接…",
+    offlineHint: "实时更新和操作已暂停，直到连接恢复。",
+    retryNow: "立即重试",
+  },
   chat: {
     disconnected: "已断开与网关的连接。",
     archivedSessionDisabled: "恢复此会话以发送消息。",

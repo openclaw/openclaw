@@ -1466,6 +1466,12 @@ export const nl: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway-verbinding verbroken",
+    reconnecting: "Opnieuw verbinden…",
+    offlineHint: "Live-updates en acties zijn gepauzeerd totdat de verbinding is hersteld.",
+    retryNow: "Nu opnieuw proberen",
+  },
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",
     archivedSessionDisabled: "Herstel deze sessie om berichten te verzenden.",

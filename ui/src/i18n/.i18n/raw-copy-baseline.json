@@ -597,7 +597,7 @@
       "text": "Close"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",

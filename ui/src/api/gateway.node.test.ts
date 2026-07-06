@@ -446,6 +446,7 @@ describe("GatewayBrowserClient", () => {
     );
     expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
     expect(closeErrorDetails.browserErrorName).toBe("SecurityError");
+    expect(close.willRetry).toBe(false);
     expect(wsInstances).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -483,6 +484,7 @@ describe("GatewayBrowserClient", () => {
     expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
     expect(closeErrorDetails.browserErrorName).toBe("TypeError");
     expect(closeErrorDetails.browserMessage).toBe("constructor failed");
+    expect(close.willRetry).toBe(false);
     expect(wsInstances).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -742,6 +744,7 @@ describe("GatewayBrowserClient", () => {
         code: 1006,
         reason: "socket lost",
         error: undefined,
+        willRetry: true,
       });
       expect(consoleError).toHaveBeenCalledWith(
         "[gateway] close handler error:",
@@ -1005,6 +1008,7 @@ describe("GatewayBrowserClient", () => {
           retryable: false,
           retryAfterMs: undefined,
         },
+        willRetry: false,
       });
     } finally {
       client.stop();
@@ -1102,6 +1106,7 @@ describe("GatewayBrowserClient", () => {
         retryable: false,
         retryAfterMs: undefined,
       },
+      willRetry: false,
     });
 
     client.stop();
@@ -1321,6 +1326,38 @@ describe("GatewayBrowserClient", () => {
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
       "stored-device-token",
     );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("reports willRetry=false on credential rejections so the UI can fall back to the login gate", async () => {
+    useNodeFakeTimers();
+    const onClose = vi.fn();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      password: "wrong-password",
+      onClose,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: "AUTH_PASSWORD_MISMATCH" },
+      },
+    });
+    await expectSocketClosed(ws);
+    ws.emitClose(4008, "connect failed");
+
+    const close = requireFirstMockArg(onClose, "close");
+    expect(close.willRetry).toBe(false);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 
