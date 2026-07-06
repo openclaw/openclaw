@@ -1997,4 +1997,87 @@ describe("Anthropic provider", () => {
       },
     ]);
   });
+
+  it("preserves thinking blocks in history assistant turns containing tool calls even when replayThinkingEnabled is false", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [
+          { role: "user", content: "call tool please", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal thought block",
+                thinkingSignature: "sig_tool",
+              },
+              { type: "toolCall", name: "some_tool", id: "call_1", arguments: {} },
+            ],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "some_tool",
+            isError: false,
+            content: [{ type: "text", text: "tool output" }],
+            timestamp: 2,
+          },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            content: [{ type: "text", text: "final answer" }],
+            timestamp: 3,
+          },
+          { role: "user", content: "next question", timestamp: 4 },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+
+    const payload = capturedPayload as { messages: Array<{ role: string; content: any[] }> };
+    const historicalAssistantMessage = payload.messages.find(
+      (m) => m.role === "assistant" && m.content.some((b) => b.type === "tool_use"),
+    );
+
+    expect(historicalAssistantMessage).toBeDefined();
+    const hasThinking = historicalAssistantMessage?.content.some(
+      (b) => b.type === "thinking" || b.type === "redacted_thinking",
+    );
+    expect(hasThinking).toBe(true);
+  });
 });

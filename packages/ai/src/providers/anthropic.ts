@@ -1407,8 +1407,11 @@ function convertMessages(
           });
         } else if (block.type === "thinking") {
           if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
-            omittedThinking = true;
-            continue;
+            const hasToolCall = msg.content.some((b) => b.type === "toolCall");
+            if (!hasToolCall) {
+              omittedThinking = true;
+              continue;
+            }
           }
           // Redacted thinking: pass the opaque payload back as redacted_thinking
           if (block.redacted) {
