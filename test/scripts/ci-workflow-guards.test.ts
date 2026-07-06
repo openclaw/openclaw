@@ -119,6 +119,9 @@ describe("ci workflow guards", () => {
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
+    expect(workflow.jobs["native-i18n"]["runs-on"]).toContain(
+      "github.event_name == 'workflow_dispatch'",
+    );
   });
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
