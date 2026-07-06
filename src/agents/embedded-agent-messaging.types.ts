@@ -13,6 +13,7 @@ export type MessagingToolSend = {
   threadSuppressed?: boolean;
   text?: string;
   mediaUrls?: string[];
+  hasRichContent?: true;
 };
 
 export type MessagingToolSourceReplyPayload = Pick<

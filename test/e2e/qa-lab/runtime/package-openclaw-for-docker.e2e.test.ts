@@ -234,6 +234,7 @@ describe("package-openclaw-for-docker", () => {
     )}\n`;
     const installedAiPath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
     fs.mkdirSync(path.join(sourceDir, "packages", "ai"), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "packages", "ai", "package.json"), "{}\n");
     fs.mkdirSync(installedAiPath, { recursive: true });
     fs.writeFileSync(path.join(installedAiPath, "original-marker"), "workspace package");
     fs.writeFileSync(packageJsonPath, originalPackageJson);
@@ -288,6 +289,67 @@ describe("package-openclaw-for-docker", () => {
     } finally {
       fs.rmSync(sourceDir, { recursive: true, force: true });
       fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves pre-AI-workspace package sources unchanged", async () => {
+    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-legacy-source-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-legacy-output-"));
+    const packageJsonPath = path.join(sourceDir, "package.json");
+    const originalPackageJson = `${JSON.stringify({
+      dependencies: { "dep-a": "1.2.3" },
+      name: "openclaw",
+      version: "2026.7.1",
+    })}\n`;
+    fs.writeFileSync(packageJsonPath, originalPackageJson);
+    const runCapture = vi.fn();
+
+    try {
+      const cleanup = await prepareBundledAiRuntimePackage(sourceDir, outputDir, runCapture);
+
+      expect(runCapture).not.toHaveBeenCalled();
+      expect(fs.readFileSync(packageJsonPath, "utf8")).toBe(originalPackageJson);
+      await cleanup();
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects incomplete AI workspace package sources", async () => {
+    const cases = [
+      {
+        dependencies: { "@openclaw/ai": "workspace:*" },
+        expected: "@openclaw/ai dependency requires the packages/ai workspace",
+        withWorkspace: false,
+      },
+      {
+        dependencies: {},
+        expected: "root package.json must declare @openclaw/ai as a dependency",
+        withWorkspace: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-invalid-source-"));
+      const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-invalid-output-"));
+      fs.writeFileSync(
+        path.join(sourceDir, "package.json"),
+        `${JSON.stringify({ dependencies: testCase.dependencies, name: "openclaw" })}\n`,
+      );
+      if (testCase.withWorkspace) {
+        fs.mkdirSync(path.join(sourceDir, "packages", "ai"), { recursive: true });
+        fs.writeFileSync(path.join(sourceDir, "packages", "ai", "package.json"), "{}\n");
+      }
+
+      try {
+        await expect(prepareBundledAiRuntimePackage(sourceDir, outputDir, vi.fn())).rejects.toThrow(
+          testCase.expected,
+        );
+      } finally {
+        fs.rmSync(sourceDir, { recursive: true, force: true });
+        fs.rmSync(outputDir, { recursive: true, force: true });
+      }
     }
   });
 

@@ -1698,3 +1698,53 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     expect(result.stdout).not.toContain("Multiple OpenClaw global installs detected");
   });
 });
+
+describe("install.sh doctor cancellation and dashboard guard", () => {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  it("guards every run_doctor caller against failure", () => {
+    // Both run_doctor call sites must guard the return value so a
+    // failed or cancelled doctor does not launch the dashboard.
+    // The upgrade path uses: if run_doctor; then should_open_dashboard=true; fi
+    // The existing-config path must also guard: if run_doctor; then ...
+    expect(script).toContain("if run_doctor; then");
+    // Ensure there is no bare "run_doctor" call followed by
+    // "should_open_dashboard=true" without an if-guard
+    const bareDoctor = /^\s+run_doctor\s*$/m;
+    const lines = script.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (bareDoctor.test(lines[i])) {
+        // A bare run_doctor is only acceptable inside the run_doctor
+        // function definition itself, not at a call site
+        const context = lines.slice(Math.max(0, i - 3), i + 3).join("\n");
+        if (!context.includes("run_doctor()")) {
+          throw new Error(
+            `Unguarded run_doctor call at line ${i + 1}. ` +
+              `All run_doctor callers must check the return value.`,
+          );
+        }
+      }
+    }
+  });
+
+  it("clears dashboard flag when doctor fails during upgrade", () => {
+    // The upgrade interactive doctor path must clear should_open_dashboard
+    // when doctor_exit is non-zero.
+    expect(script).toContain("should_open_dashboard=false");
+    expect(script).toContain("if (( doctor_exit != 0 )); then");
+  });
+
+  it("propagates signal exit codes through run_quiet_step", () => {
+    // run_quiet_step preserves signal exit codes (130=SIGINT, 143=SIGTERM)
+    // so run_doctor can detect user cancellation.
+    expect(script).toContain("if (( cmd_exit > 128 )); then");
+    expect(script).toContain('return "$cmd_exit"');
+  });
+
+  it("aborts on SIGINT (exit 130) from doctor", () => {
+    // Both the run_doctor function and the interactive doctor path
+    // must call abort_install_int on exit code 130.
+    expect(script).toContain("if (( doctor_exit == 130 )); then");
+    expect(script).toContain("abort_install_int");
+  });
+});

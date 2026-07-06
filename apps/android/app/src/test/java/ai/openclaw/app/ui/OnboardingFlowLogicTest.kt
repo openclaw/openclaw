@@ -1188,7 +1188,7 @@ class OnboardingFlowLogicTest {
         password = "shared-password",
       )
 
-    assertEquals(GatewaySavedAuthAction.PRESERVE, plan?.savedAuthAction)
+    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
     assertEquals("127.0.0.1", plan?.config?.host)
     assertEquals(18789, plan?.config?.port)
     assertEquals(false, plan?.config?.tls)

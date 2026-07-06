@@ -992,8 +992,8 @@
     "target": "轨迹导出"
   },
   {
-    "source": "Tencent Cloud (TokenHub)",
-    "target": "腾讯云（TokenHub）"
+    "source": "Tencent Cloud (TokenHub / TokenPlan)",
+    "target": "腾讯云（TokenHub / TokenPlan）"
   },
   {
     "source": "Codex Harness Context Engine Port",

@@ -151,6 +151,8 @@ import {
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -300,6 +302,7 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
 import {
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
@@ -336,6 +339,17 @@ import {
   WizardStatusResultSchema,
   WizardStepSchema,
 } from "./wizard.js";
+import {
+  WorktreeRecordSchema,
+  WorktreesCreateParamsSchema,
+  WorktreesGcParamsSchema,
+  WorktreesGcResultSchema,
+  WorktreesListParamsSchema,
+  WorktreesListResultSchema,
+  WorktreesRemoveParamsSchema,
+  WorktreesRemoveResultSchema,
+  WorktreesRestoreParamsSchema,
+} from "./worktrees.js";
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
@@ -358,6 +372,8 @@ export const ProtocolSchemas = {
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResult: EnvironmentsStatusResultSchema,
+  SystemInfoParams: SystemInfoParamsSchema,
+  SystemInfoResult: SystemInfoResultSchema,
   AgentEvent: AgentEventSchema,
   MessageActionParams: MessageActionParamsSchema,
   SendParams: SendParamsSchema,
@@ -367,6 +383,15 @@ export const ProtocolSchemas = {
   AgentIdentityResult: AgentIdentityResultSchema,
   AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
+  WorktreeRecord: WorktreeRecordSchema,
+  WorktreesListParams: WorktreesListParamsSchema,
+  WorktreesListResult: WorktreesListResultSchema,
+  WorktreesCreateParams: WorktreesCreateParamsSchema,
+  WorktreesRemoveParams: WorktreesRemoveParamsSchema,
+  WorktreesRemoveResult: WorktreesRemoveResultSchema,
+  WorktreesRestoreParams: WorktreesRestoreParamsSchema,
+  WorktreesGcParams: WorktreesGcParamsSchema,
+  WorktreesGcResult: WorktreesGcResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
   NodePairRequestParams: NodePairRequestParamsSchema,
@@ -582,6 +607,8 @@ export const ProtocolSchemas = {
   CronStatusParams: CronStatusParamsSchema,
   CronGetParams: CronGetParamsSchema,
   CronAddParams: CronAddParamsSchema,
+  CronAddResult: CronAddResultSchema,
+  CronDeclarativeAddResult: CronDeclarativeAddResultSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,
   CronRunParams: CronRunParamsSchema,

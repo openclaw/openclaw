@@ -14,7 +14,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { hasVisibleActiveSessionRun } from "./server-methods/session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
@@ -75,6 +75,7 @@ function buildGatewaySessionSnapshot(params: {
   displayName?: string;
   parentSessionKey?: string;
   hasActiveRun?: boolean;
+  activeRunIds?: string[];
 }): Record<string, unknown> {
   const { sessionRow } = params;
   if (!sessionRow) {
@@ -89,6 +90,9 @@ function buildGatewaySessionSnapshot(params: {
   if (session && params.hasActiveRun !== undefined) {
     session.hasActiveRun = params.hasActiveRun;
   }
+  if (session && params.activeRunIds !== undefined) {
+    session.activeRunIds = params.activeRunIds;
+  }
   return {
     ...(session ? { session } : {}),
     ...buildGatewaySessionEventFields({
@@ -98,6 +102,7 @@ function buildGatewaySessionSnapshot(params: {
       displayName: params.displayName,
       parentSessionKey: params.parentSessionKey,
       hasActiveRun: params.hasActiveRun,
+      activeRunIds: params.activeRunIds,
     }),
     subagentRunState: sessionRow.subagentRunState,
     hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
@@ -178,8 +183,8 @@ async function handleTranscriptUpdateBroadcast(
     agentId: visibleAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
   });
-  const hasActiveRun = sessionRow
-    ? hasVisibleActiveSessionRun({
+  const activeRunState = sessionRow
+    ? resolveVisibleActiveSessionRunState({
         context: params,
         requestedKey: sessionKey,
         canonicalKey: sessionRow.key,
@@ -187,12 +192,13 @@ async function handleTranscriptUpdateBroadcast(
         ...(sessionRow.key === "global" && visibleAgentId ? { agentId: visibleAgentId } : {}),
         defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
       })
-    : false;
+    : null;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow,
     agentId: visibleAgentId,
     includeSession: true,
-    hasActiveRun,
+    hasActiveRun: activeRunState?.active,
+    activeRunIds: activeRunState?.runIds,
   });
   const idempotencyKey = readMessageIdempotencyKey(update.message);
   const senderIsOwner = readMessageSenderIsOwner(update.message);
@@ -246,12 +252,23 @@ async function handleTranscriptUpdateBroadcast(
 export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   return (event: SessionLifecycleEvent): void => {
     const connIds = params.sessionEventSubscribers.getAll();
     if (connIds.size === 0) {
       return;
     }
+    const sessionRow = loadGatewaySessionRow(event.sessionKey);
+    const activeRunState = sessionRow
+      ? resolveVisibleActiveSessionRunState({
+          context: params,
+          requestedKey: event.sessionKey,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
+        })
+      : null;
     params.broadcastToConnIds(
       "sessions.changed",
       {
@@ -262,10 +279,12 @@ export function createLifecycleEventBroadcastHandler(params: {
         displayName: event.displayName,
         ts: Date.now(),
         ...buildGatewaySessionSnapshot({
-          sessionRow: loadGatewaySessionRow(event.sessionKey),
+          sessionRow,
           label: event.label,
           displayName: event.displayName,
           parentSessionKey: event.parentSessionKey,
+          hasActiveRun: activeRunState?.active,
+          activeRunIds: activeRunState?.runIds,
         }),
       },
       connIds,

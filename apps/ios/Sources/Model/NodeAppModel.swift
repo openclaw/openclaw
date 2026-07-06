@@ -261,7 +261,11 @@ final class NodeAppModel {
     #if DEBUG
     @ObservationIgnored private var testAgentRequestHandler: ((AgentDeepLink) async throws -> Void)?
     #endif
-    private var pttVoiceWakeSuspended = false
+    private var pttVoiceWakeLeaseCount = 0
+    private var pttVoiceWakeWasSuspended = false
+    private var pttSessionOwnsVoiceWakeLease = false
+    private var talkInvokeInFlight = false
+    private var talkInvokeWaiters: [CheckedContinuation<Void, Never>] = []
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
@@ -279,6 +283,7 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageRetryAttempts: [String: Int] = [:]
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
     @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
+    @ObservationIgnored private var chatTranscriptCachesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
     private var watchExecApprovalPromptsByID: [String: ExecApprovalPrompt] = [:]
     private var pendingWatchExecApprovalRecoveryPushes: [ExecApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
@@ -326,7 +331,107 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
-        return IOSGatewayChatTransport(gateway: self.operatorSession)
+        return IOSGatewayChatTransport(
+            gateway: self.operatorSession,
+            globalAgentId: self.chatAgentId)
+    }
+
+    /// Gateway identity the transcript cache is scoped to: the active
+    /// connection's stableID, or the keychain-persisted last connection on
+    /// cold open before the gateway session is up. Nil for fixture transports
+    /// and unpaired installs so demo or foreign rows can never leak into a
+    /// real gateway's transcript.
+    var chatTranscriptCacheGatewayID: String? {
+        guard !self.isLocalGatewayFixtureEnabled else { return nil }
+        let stableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? GatewaySettingsStore.loadLastGatewayConnection()?.stableID
+        guard let stableID, !stableID.isEmpty else { return nil }
+        return stableID
+    }
+
+    /// Recreation key for the chat view model. Includes the cache gateway
+    /// identity: switching paired gateways while the transport mode stays
+    /// "operator" must rebuild the view model so transcripts are never read
+    /// from or written under another gateway's cache scope.
+    var chatViewModelIdentityID: String {
+        "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
+    }
+
+    private var chatTranscriptCacheGeneration = 0
+
+    /// Offline transcript cache plus durable command outbox, both scoped to
+    /// the paired gateway identity (one SQLite file per gateway, memoized so
+    /// retire/purge can close every open handle). Nil for fixture/unpaired
+    /// transports: no cache and no outbox.
+    func makeChatOfflineStore() -> OpenClawChatSQLiteTranscriptCache? {
+        guard let gatewayID = self.chatTranscriptCacheGatewayID else { return nil }
+        if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
+            return cache
+        }
+        guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
+        let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+        self.chatTranscriptCachesByGatewayID[gatewayID] = cache
+        return cache
+    }
+
+    func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
+        guard let cache = self.makeChatOfflineStore() else { return [] }
+        return await cache.loadSessions()
+    }
+
+    func storeCachedChatSessions(_ sessions: [OpenClawChatSessionEntry]) async {
+        guard let cache = self.makeChatOfflineStore() else { return }
+        await cache.storeSessions(sessions)
+    }
+
+    /// Delete one gateway's cache during bootstrap replacement, or the whole
+    /// disposable database during a full onboarding reset. The offline command
+    /// outbox shares each gateway's database file, so purging a cache also
+    /// drops that gateway's queued commands.
+    func purgeChatTranscriptCache(gatewayID: String? = nil) async {
+        if let gatewayID, !gatewayID.isEmpty {
+            guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
+            if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
+                await cache.retire()
+            }
+            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
+            self.chatTranscriptCacheGeneration &+= 1
+            return
+        }
+
+        // Full reset retires every open handle before removing SQLite sidecars,
+        // so deleted transcript bytes cannot survive in WAL or journal pages.
+        for cache in self.chatTranscriptCachesByGatewayID.values {
+            await cache.retire()
+        }
+        if let directoryURL = self.chatTranscriptCacheDirectoryURL() {
+            try? FileManager.default.removeItem(at: directoryURL)
+        }
+        self.chatTranscriptCachesByGatewayID.removeAll()
+        self.chatTranscriptCacheGeneration &+= 1
+    }
+
+    /// Debug launch reset runs before Chat can create a cache actor, so direct
+    /// file removal preserves the launch flag's synchronous startup contract.
+    func purgeChatTranscriptCacheBeforeStartup() {
+        guard let directoryURL = self.chatTranscriptCacheDirectoryURL() else { return }
+        try? FileManager.default.removeItem(at: directoryURL)
+        self.chatTranscriptCachesByGatewayID.removeAll()
+        self.chatTranscriptCacheGeneration &+= 1
+    }
+
+    private func chatTranscriptCacheDirectoryURL() -> URL? {
+        try? OpenClawNodeStorage.appSupportDir()
+            .appendingPathComponent("chat-cache", isDirectory: true)
+    }
+
+    private func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
+        let digest = SHA256.hash(data: Data(gatewayID.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return self.chatTranscriptCacheDirectoryURL()?
+            .appendingPathComponent("\(digest).sqlite", isDirectory: false)
     }
 
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -1803,31 +1908,50 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        if req.command == OpenClawTalkCommand.pttOnce.rawValue {
+            self.acquirePttVoiceWakeLease()
+            defer { self.releasePttVoiceWakeLease() }
+            let payload = try await talkMode.runPushToTalkOnce()
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        }
+
+        await self.acquireTalkInvoke()
+        defer { self.releaseTalkInvoke() }
+
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
-            self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            let payload = try await talkMode.beginPushToTalk()
+            let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
+            if acquiredLease {
+                self.acquirePttVoiceWakeLease()
+                self.pttSessionOwnsVoiceWakeLease = true
+            }
+            let payload: OpenClawTalkPTTStartPayload
+            do {
+                payload = try await self.talkMode.beginPushToTalk()
+            } catch {
+                if acquiredLease {
+                    self.pttSessionOwnsVoiceWakeLease = false
+                    self.releasePttVoiceWakeLease()
+                }
+                throw error
+            }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttStop.rawValue:
             let payload = await talkMode.endPushToTalk()
-            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
-            self.pttVoiceWakeSuspended = false
+            if self.pttSessionOwnsVoiceWakeLease {
+                self.pttSessionOwnsVoiceWakeLease = false
+                self.releasePttVoiceWakeLease()
+            }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
             let payload = await talkMode.cancelPushToTalk()
-            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
-            self.pttVoiceWakeSuspended = false
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        case OpenClawTalkCommand.pttOnce.rawValue:
-            self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            defer {
-                self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
-                self.pttVoiceWakeSuspended = false
+            if self.pttSessionOwnsVoiceWakeLease {
+                self.pttSessionOwnsVoiceWakeLease = false
+                self.releasePttVoiceWakeLease()
             }
-            let payload = try await talkMode.runPushToTalkOnce()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
@@ -1836,6 +1960,41 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    private func acquirePttVoiceWakeLease() {
+        if self.pttVoiceWakeLeaseCount == 0 {
+            self.pttVoiceWakeWasSuspended = self.voiceWake.suspendForExternalAudioCapture()
+        }
+        self.pttVoiceWakeLeaseCount += 1
+    }
+
+    private func releasePttVoiceWakeLease() {
+        guard self.pttVoiceWakeLeaseCount > 0 else { return }
+        self.pttVoiceWakeLeaseCount -= 1
+        guard self.pttVoiceWakeLeaseCount == 0 else { return }
+        // Overlapping one-shot and session PTT captures share one Voice Wake suspension.
+        // Resume only after the final owner releases it or microphone capture can overlap.
+        self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeWasSuspended)
+        self.pttVoiceWakeWasSuspended = false
+    }
+
+    private func acquireTalkInvoke() async {
+        if !self.talkInvokeInFlight {
+            self.talkInvokeInFlight = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.talkInvokeWaiters.append(continuation)
+        }
+    }
+
+    private func releaseTalkInvoke() {
+        guard !self.talkInvokeWaiters.isEmpty else {
+            self.talkInvokeInFlight = false
+            return
+        }
+        self.talkInvokeWaiters.removeFirst().resume()
     }
 }
 
@@ -6673,6 +6832,14 @@ extension NodeAppModel {
         gatewayStableID: String? = nil) async -> BridgeInvokeResponse
     {
         await self.handleInvoke(req, gatewayStableID: gatewayStableID)
+    }
+
+    func _test_acquirePttVoiceWakeLease() {
+        self.acquirePttVoiceWakeLease()
+    }
+
+    func _test_releasePttVoiceWakeLease() {
+        self.releasePttVoiceWakeLease()
     }
 
     static func _test_decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {

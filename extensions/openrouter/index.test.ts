@@ -156,6 +156,10 @@ describe("openrouter provider hooks", () => {
     });
 
     expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
+    expect(providers[0]).toMatchObject({
+      resolveUsageAuth: expect.any(Function),
+      fetchUsageSnapshot: expect.any(Function),
+    });
     expect(speechProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);

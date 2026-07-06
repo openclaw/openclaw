@@ -313,6 +313,7 @@ export function parseAt(input: string, tz?: string): string | null {
 }
 
 const CRON_ID_PAD = 36;
+const CRON_DECLARATION_PAD = 24;
 const CRON_NAME_PAD = 24;
 const CRON_SCHEDULE_PAD = 32;
 const CRON_NEXT_PAD = 10;
@@ -321,6 +322,7 @@ const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
 const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
+const CRON_OWNER_PAD = 24;
 const CRON_MODEL_PAD = 20;
 
 const stringifyCell = (value: unknown, fallback = "-") => {
@@ -434,6 +436,7 @@ export function printCronList(
   const rich = isRich();
   const header = [
     pad("ID", CRON_ID_PAD),
+    pad("Declaration", CRON_DECLARATION_PAD),
     pad("Name", CRON_NAME_PAD),
     pad("Schedule", CRON_SCHEDULE_PAD),
     pad("Next", CRON_NEXT_PAD),
@@ -442,6 +445,7 @@ export function printCronList(
     pad("Target", CRON_TARGET_PAD),
     pad("Delivery", CRON_DELIVERY_PAD),
     pad("Agent ID", CRON_AGENT_PAD),
+    pad("Owner", CRON_OWNER_PAD),
     pad("Model", CRON_MODEL_PAD),
   ].join(" ");
 
@@ -451,7 +455,14 @@ export function printCronList(
   for (const job of jobs) {
     const state = job.state ?? {};
     const idLabel = pad(job.id, CRON_ID_PAD);
-    const nameLabel = pad(truncate(stringifyCell(job.name), CRON_NAME_PAD), CRON_NAME_PAD);
+    const declarationLabel = pad(
+      truncate(job.declarationKey ?? "-", CRON_DECLARATION_PAD),
+      CRON_DECLARATION_PAD,
+    );
+    const nameLabel = pad(
+      truncate(stringifyCell(job.displayName ?? job.name), CRON_NAME_PAD),
+      CRON_NAME_PAD,
+    );
     const scheduleLabel = pad(
       truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
       CRON_SCHEDULE_PAD,
@@ -470,6 +481,10 @@ export function printCronList(
       : "-";
     const deliveryLabel = pad(truncate(deliveryText, CRON_DELIVERY_PAD), CRON_DELIVERY_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const ownerLabel = pad(
+      truncate(job.owner?.sessionKey ?? job.owner?.agentId ?? "-", CRON_OWNER_PAD),
+      CRON_OWNER_PAD,
+    );
     const modelLabel = pad(
       truncate(
         (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
@@ -504,6 +519,7 @@ export function printCronList(
 
     const line = [
       colorize(rich, theme.accent, idLabel),
+      colorize(rich, theme.muted, declarationLabel),
       colorize(rich, theme.info, nameLabel),
       colorize(rich, theme.info, scheduleLabel),
       colorize(rich, theme.muted, nextLabel),
@@ -514,6 +530,7 @@ export function printCronList(
         ? colorize(rich, theme.info, deliveryLabel)
         : colorize(rich, theme.muted, deliveryLabel),
       coloredAgent,
+      colorize(rich, job.owner ? theme.info : theme.muted, ownerLabel),
       job.payload?.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
@@ -530,7 +547,11 @@ export function printCronShow(
 ) {
   const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
   runtime.log(`id: ${job.id}`);
+  runtime.log(`declaration: ${job.declarationKey ?? "-"}`);
   runtime.log(`name: ${job.name}`);
+  runtime.log(`display name: ${job.displayName ?? "-"}`);
+  runtime.log(`owner agent: ${job.owner?.agentId ?? "-"}`);
+  runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
   runtime.log(`session: ${job.sessionTarget ?? "-"}`);
@@ -540,5 +561,8 @@ export function printCronShow(
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
   runtime.log(`status: ${computeStatus(job)}`);
+  runtime.log(`last error: ${job.state.lastError ?? "-"}`);
+  runtime.log(`last delivery: ${job.state.lastDeliveryStatus ?? "-"}`);
+  runtime.log(`last delivery error: ${job.state.lastDeliveryError ?? "-"}`);
   runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
 }

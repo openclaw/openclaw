@@ -2339,7 +2339,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Currently documented flags
   - H2: Local model lean mode
-  - H3: Why these three tools
+  - H3: Why these tools
   - H3: When to turn it on
   - H3: When to leave it off
   - H3: Enable
@@ -2353,6 +2353,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Highlights
   - H2: Full list
   - H2: Related
+
+## concepts/managed-worktrees.md
+
+- Route: /concepts/managed-worktrees
+- Headings:
+  - H2: Layout and names
+  - H2: Provision ignored files
+  - H2: Run repository setup
+  - H2: Snapshots, cleanup, and restore
+  - H2: CLI
+  - H2: Gateway methods
+  - H2: Workboard workspaces
 
 ## concepts/mantis-slack-desktop-runbook.md
 
@@ -5495,6 +5507,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Hook catalog
+  - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
   - H3: Exec environment hook
@@ -7812,7 +7825,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Non-interactive setup
   - H2: Built-in catalog
-  - H2: Tiered pricing
   - H2: Advanced configuration
   - H2: Related
 
@@ -8955,6 +8967,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Critical rule for the Control UI
   - H2: Validate in layers
   - H3: Layer 1: verify Chrome is serving CDP on Windows
+  - H4: Diagnose IPv4 and IPv6 before changing portproxy
   - H3: Layer 2: verify WSL2 can reach that Windows endpoint
   - H3: Layer 3: configure the correct browser profile
   - H3: Layer 4: verify the Control UI layer separately
@@ -9204,6 +9217,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Statuses
   - H2: Token budgets
   - H2: Model tools
+  - H2: Goal context on every turn
   - H2: TUI
   - H2: Channel behavior
   - H2: Troubleshooting
@@ -9474,15 +9488,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Lifecycle
   - H2: Chat
+  - H3: Learn from recent work
   - H2: CLI
   - H2: Proposal content
   - H2: Support files
   - H2: Agent tool
+  - H2: Suggested skills
   - H2: Approval and autonomy
   - H2: Gateway methods
   - H2: Storage
   - H2: Limits
   - H2: Troubleshooting
+  - H3: Tool-policy diagnostic
   - H2: Related
 
 ## tools/skills-config.md
@@ -9778,13 +9795,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Pair a mobile device
   - H2: Personal identity (browser-local)
   - H2: Runtime config endpoint
+  - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
+  - H2: Sidebar navigation
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Chat behavior
+  - H2: Connection loss and reconnect
   - H2: PWA install and web push
   - H2: Hosted embeds
   - H2: Chat message width

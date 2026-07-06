@@ -42,6 +42,7 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
+  withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -60,6 +61,7 @@ import {
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   isProfileDecorated,
+  usesOpenClawMockKeychain,
 } from "./chrome.profile-decoration.js";
 import {
   getManagedBrowserMissingDisplayError,
@@ -85,6 +87,7 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 ] as const;
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
+const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -732,8 +735,10 @@ export function buildOpenClawChromeLaunchArgs(params: {
   headlessOverride?: boolean;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  useMockKeychain?: boolean;
 }): string[] {
   const { resolved, profile, userDataDir } = params;
+  const platform = params.platform ?? process.platform;
   const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, params);
   const args: string[] = [
     `--remote-debugging-port=${profile.cdpPort}`,
@@ -749,6 +754,12 @@ export function buildOpenClawChromeLaunchArgs(params: {
     "--password-store=basic",
   ];
 
+  if (platform === "darwin" && params.useMockKeychain) {
+    // This is an isolated OpenClaw-owned profile, not the user's Chrome profile.
+    // Keep its basic password store non-interactive so headless Chrome can
+    // encrypt and persist cookies without login-keychain prompts.
+    args.push("--use-mock-keychain");
+  }
   if (headlessMode.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
@@ -756,7 +767,7 @@ export function buildOpenClawChromeLaunchArgs(params: {
   if (resolved.noSandbox) {
     args.push("--no-sandbox");
   }
-  if (process.platform === "linux") {
+  if (platform === "linux") {
     args.push("--disable-dev-shm-usage");
   }
   if (!hasChromeProxyControlArg(resolved.extraArgs)) {
@@ -933,6 +944,16 @@ export async function launchOpenClawChrome(
   fs.mkdirSync(userDataDir, { recursive: true });
   await ensureOutputDirectory(DEFAULT_DOWNLOAD_DIR);
 
+  const localStatePath = path.join(userDataDir, "Local State");
+  const preferencesPath = path.join(userDataDir, "Default", "Preferences");
+  const profileIsNew = !exists(localStatePath);
+  const needsBootstrap = profileIsNew || !exists(preferencesPath);
+  // Never change the encryption key source for an established profile: doing
+  // so would make its existing cookies unreadable. New headless profiles opt in.
+  const useMockKeychain =
+    process.platform === "darwin" &&
+    (usesOpenClawMockKeychain(userDataDir) || (profileIsNew && headlessMode.headless));
+
   const needsDecorate = !isProfileDecorated(
     userDataDir,
     profile.name,
@@ -947,6 +968,7 @@ export async function launchOpenClawChrome(
       profile,
       userDataDir,
       ...launchOptions,
+      useMockKeychain,
     });
     const env: NodeJS.ProcessEnv = {
       ...omitChromeProxyEnv(process.env),
@@ -972,10 +994,6 @@ export async function launchOpenClawChrome(
   };
 
   const startedAt = Date.now();
-
-  const localStatePath = path.join(userDataDir, "Local State");
-  const preferencesPath = path.join(userDataDir, "Default", "Preferences");
-  const needsBootstrap = !exists(localStatePath) || !exists(preferencesPath);
 
   // If the profile doesn't exist yet, bootstrap it once so Chrome creates defaults.
   // Then decorate (if needed) before the "real" run.
@@ -1012,6 +1030,7 @@ export async function launchOpenClawChrome(
         name: profile.name,
         color: profile.color,
         downloadDir: DEFAULT_DOWNLOAD_DIR,
+        mockKeychain: useMockKeychain,
       });
       log.info(`🦞 openclaw browser profile decorated (${profile.color})`);
     } catch (err) {
@@ -1129,6 +1148,55 @@ export async function launchOpenClawChrome(
   return await launchOnceAndWait(true);
 }
 
+async function requestGracefulChromeClose(cdpPort: number, timeoutMs: number): Promise<boolean> {
+  const commandTimeoutMs = Math.max(
+    1,
+    Math.min(timeoutMs, CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS),
+  );
+  let commandSent = false;
+  try {
+    const wsUrl = await getChromeWebSocketUrl(
+      cdpUrlForPort(cdpPort),
+      Math.min(commandTimeoutMs, CHROME_STOP_PROBE_TIMEOUT_MS),
+    );
+    if (!wsUrl) {
+      return false;
+    }
+    await withCdpSocket(
+      wsUrl,
+      async (send) => {
+        commandSent = true;
+        await send("Browser.close");
+      },
+      {
+        commandTimeoutMs,
+        handshakeTimeoutMs: commandTimeoutMs,
+        handshakeRetries: 0,
+      },
+    );
+    return true;
+  } catch (err) {
+    log.debug(`Chrome graceful close skipped: ${safeChromeCdpErrorMessage(err)}`);
+    // Chrome may close the socket before acknowledging Browser.close. Once the
+    // command was sent, still give it time to flush the profile and exit.
+    return commandSent;
+  }
+}
+
+async function waitForChromeCdpShutdown(cdpPort: number, timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!(await isChromeReachable(cdpUrlForPort(cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
+      return true;
+    }
+    const remainingMs = timeoutMs - (Date.now() - start);
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(1, Math.min(100, remainingMs)));
+    });
+  }
+  return !(await isChromeReachable(cdpUrlForPort(cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS));
+}
+
 /** Stop a managed Chrome process and wait for shutdown. */
 export async function stopOpenClawChrome(
   running: RunningChrome,
@@ -1136,7 +1204,17 @@ export async function stopOpenClawChrome(
 ) {
   const proc = running.proc;
   try {
-    if (proc.killed) {
+    // The fixed CDP port may already belong to a replacement. Once the
+    // tracked child exits, never send Browser.close to the current listener.
+    if (proc.killed || proc.exitCode != null || proc.signalCode != null) {
+      return;
+    }
+
+    // Gateway shutdown/restart awaits the Browser plugin stop chain into this
+    // method. Browser.close keeps cookies in Chromium's protected profile;
+    // signals remain a bounded fallback without duplicating credentials.
+    const gracefulCloseRequested = await requestGracefulChromeClose(running.cdpPort, timeoutMs);
+    if (gracefulCloseRequested && (await waitForChromeCdpShutdown(running.cdpPort, timeoutMs))) {
       return;
     }
     try {
@@ -1145,20 +1223,8 @@ export async function stopOpenClawChrome(
       // ignore
     }
 
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (!proc.exitCode && proc.killed) {
-        break;
-      }
-      if (
-        !(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))
-      ) {
-        return;
-      }
-      const remainingMs = timeoutMs - (Date.now() - start);
-      await new Promise((r) => {
-        setTimeout(r, Math.max(1, Math.min(100, remainingMs)));
-      });
+    if (await waitForChromeCdpShutdown(running.cdpPort, timeoutMs)) {
+      return;
     }
 
     try {

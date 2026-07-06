@@ -103,11 +103,14 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async listPage(opts) {
       return await (await load()).state.cron.listPage(opts);
     },
-    async add(input) {
-      return await (await load()).state.cron.add(input);
+    async add(input, opts) {
+      return await (await load()).state.cron.add(input, opts);
     },
     async update(id, patch) {
       return await (await load()).state.cron.update(id, patch);
+    },
+    async updateWithPrecondition(id, patch, precondition) {
+      return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition);
     },
     async remove(id) {
       return await (await load()).state.cron.remove(id);

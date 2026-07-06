@@ -28,7 +28,6 @@ import {
 } from "../attachment-payload-store.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
-import type { RealtimeTalkCatalogProvider } from "../realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
@@ -84,8 +83,8 @@ export type ChatComposerProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
+  canOpenRealtimeTalkSettings?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -97,6 +96,7 @@ export type ChatComposerProps = {
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeTalkOptions?: () => void;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  onOpenRealtimeTalkSettings?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -1290,18 +1290,19 @@ export function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   compactRecommended: boolean;
+  approximate: boolean;
 } | null {
-  if (session?.totalTokensFresh === false) {
-    return null;
-  }
   const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }
+  const approximate = session?.totalTokensFresh === false;
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
-  const warning = ratio >= CONTEXT_NOTICE_RATIO;
+  // A stale total is still useful orientation, but must not drive warning or
+  // compaction decisions because the session may already have compacted.
+  const warning = !approximate && ratio >= CONTEXT_NOTICE_RATIO;
   // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
   const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
   const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
@@ -1324,11 +1325,12 @@ export function getContextNoticeViewModel(
     return {
       pct,
       ...usage,
-      detail: `${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
+      detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
       compactRecommended: false,
+      approximate,
     };
   }
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
@@ -1349,6 +1351,7 @@ export function getContextNoticeViewModel(
     bg,
     warning,
     compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
+    approximate,
   };
 }
 
@@ -1367,10 +1370,11 @@ export function renderContextNotice(
   const canRenderCompact = model.compactRecommended && options.onCompact;
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
   const summary = t("chat.composer.contextUsage.summary", {
-    used: formatCompactTokenCount(model.used),
+    used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
     limit: formatCompactTokenCount(model.limit),
-    pct: String(model.pct),
+    pct: `${model.approximate ? "~" : ""}${model.pct}`,
   });
+  const percentage = `${model.approximate ? "~" : ""}${model.pct}%`;
   const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
   const providerCosts = latestProviderCostStats(options.messages);
   const provider = providerCosts?.provider ?? model.provider;
@@ -1411,14 +1415,14 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          <span class="context-ring__pct">${model.pct}%</span>
+          <span class="context-ring__pct">${percentage}</span>
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
           <div class="context-usage__header">
             <span class="context-usage__title"
               >${t("chat.composer.contextUsage.contextWindow")}</span
             >
-            <strong class="context-usage__context-value">${model.detail} · ${model.pct}%</strong>
+            <strong class="context-usage__context-value">${model.detail} · ${percentage}</strong>
           </div>
           <div
             class="context-usage__bar"
@@ -2000,49 +2004,55 @@ export function renderChatComposer(props: ChatComposerProps) {
             </button>
           </openclaw-tooltip>
 
-          ${props.onToggleRealtimeTalk
+          ${props.onToggleRealtimeTalk || props.onToggleRealtimeTalkOptions
             ? html`
-                <openclaw-tooltip
-                  .content=${props.realtimeTalkActive
-                    ? t("chat.composer.stopTalk")
-                    : t("chat.composer.startTalk")}
-                >
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkActive
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalk}
-                    aria-label=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
-                    ?disabled=${!canCompose && !props.realtimeTalkActive}
-                  >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
-                    <span class="agent-chat__control-label"
-                      >${props.realtimeTalkActive
-                        ? t("chat.composer.stopTalk")
-                        : t("chat.composer.startTalk")}</span
-                    >
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          ${props.onToggleRealtimeTalkOptions
-            ? html`
-                <openclaw-tooltip content="Talk settings">
-                  <button
-                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--talk"
-                      : ""}"
-                    @click=${props.onToggleRealtimeTalkOptions}
-                    aria-label="Talk settings"
-                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                    ?disabled=${!canCompose || props.realtimeTalkActive}
-                  >
-                    ${icons.settings}
-                    <span class="agent-chat__control-label">Talk settings</span>
-                  </button>
-                </openclaw-tooltip>
+                <div class="agent-chat__talk-group">
+                  ${props.onToggleRealtimeTalk
+                    ? html`
+                        <openclaw-tooltip
+                          .content=${props.realtimeTalkActive
+                            ? t("chat.composer.stopTalk")
+                            : t("chat.composer.startTalk")}
+                        >
+                          <button
+                            class="agent-chat__input-btn agent-chat__talk-toggle ${props.realtimeTalkActive
+                              ? "agent-chat__input-btn--talk"
+                              : ""}"
+                            @click=${props.onToggleRealtimeTalk}
+                            aria-label=${props.realtimeTalkActive
+                              ? t("chat.composer.stopTalk")
+                              : t("chat.composer.startTalk")}
+                            ?disabled=${!canCompose && !props.realtimeTalkActive}
+                          >
+                            ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
+                            <span class="agent-chat__control-label"
+                              >${props.realtimeTalkActive
+                                ? t("chat.composer.stopTalk")
+                                : t("chat.composer.startTalk")}</span
+                            >
+                          </button>
+                        </openclaw-tooltip>
+                      `
+                    : nothing}
+                  ${props.onToggleRealtimeTalkOptions
+                    ? html`
+                        <openclaw-tooltip content="Talk settings">
+                          <button
+                            class="agent-chat__input-btn agent-chat__talk-caret ${props.realtimeTalkOptionsOpen
+                              ? "agent-chat__input-btn--open"
+                              : ""}"
+                            @click=${props.onToggleRealtimeTalkOptions}
+                            aria-label="Talk settings"
+                            aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
+                            ?disabled=${!canCompose || props.realtimeTalkActive}
+                          >
+                            ${icons.chevronDown}
+                            <span class="agent-chat__control-label">Talk settings</span>
+                          </button>
+                        </openclaw-tooltip>
+                      `
+                    : nothing}
+                </div>
               `
             : nothing}
           ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}

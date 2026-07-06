@@ -771,7 +771,7 @@ import UIKit
             fallback: bootstrapOptions).allowStoredDeviceAuth)
     }
 
-    @Test @MainActor func `bootstrap pairing clears only the target gateway`() throws {
+    @Test @MainActor func `bootstrap pairing clears only the target gateway`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -811,7 +811,7 @@ import UIKit
         }
 
         let appModel = NodeAppModel()
-        GatewayOnboardingReset.prepareForBootstrapPairing(
+        await GatewayOnboardingReset.prepareForBootstrapPairing(
             appModel: appModel,
             instanceId: "",
             gatewayStableID: gatewayB,

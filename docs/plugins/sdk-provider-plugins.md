@@ -606,6 +606,24 @@ catalog, API-key auth, and dynamic model resolution.
         auth but has no usable usage token, and OpenClaw must skip generic
         API-key/OAuth fallback. Return `null` or `undefined` when the provider did
         not handle the request and OpenClaw should continue with generic fallback.
+
+        Declare the provider id in `contracts.usageProviders`. When that manifest
+        contract and **both** hooks are present, OpenClaw automatically includes
+        the provider in usage collection without loading unrelated provider
+        plugins. No core allowlist update is required.
+        `fetchUsageSnapshot` returns the shared provider-neutral shape:
+
+        - `plan`: provider-reported subscription or key label
+        - `windows`: resettable quota windows as used percentages
+        - `billing`: typed `balance`, `spend`, or `budget` entries; `unit` can be
+          an ISO currency or a provider unit such as `credits`
+        - `summary`: compact provider-specific context that does not fit those
+          structured fields
+
+        Keep currency semantics exact. A provider credit is not USD unless the
+        upstream contract says so. A plugin that implements only
+        `fetchUsageSnapshot` remains available for explicit/synthetic callers but
+        is not auto-discovered, because OpenClaw cannot resolve its usage credential.
       </Tab>
     </Tabs>
 

@@ -22,10 +22,12 @@ import type { UpdateCheckResult } from "./update-check.js";
 
 const {
   detectRespawnSupervisorMock,
+  getRuntimeConfigMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
 } = vi.hoisted(() => ({
   detectRespawnSupervisorMock: vi.fn(),
+  getRuntimeConfigMock: vi.fn(() => ({})),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
   startManagedServiceUpdateHandoffMock: vi.fn(async () => ({
     status: "started" as const,
@@ -33,6 +35,10 @@ const {
     command: "openclaw update --yes --channel beta --timeout 2700",
     logPath: "/tmp/openclaw-handoff.log",
   })),
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: getRuntimeConfigMock,
 }));
 
 vi.mock("./openclaw-root.js", async () => {
@@ -44,6 +50,12 @@ vi.mock("./openclaw-root.js", async () => {
 });
 
 vi.mock("./restart.js", () => ({
+  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return 300_000;
+    }
+    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
+  },
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
@@ -233,6 +245,8 @@ describe("update-startup", () => {
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
     vi.mocked(runCommandWithTimeout).mockClear();
+    getRuntimeConfigMock.mockReset();
+    getRuntimeConfigMock.mockReturnValue({});
     detectRespawnSupervisorMock.mockReset();
     detectRespawnSupervisorMock.mockReturnValue(null);
     scheduleGatewaySigusr1RestartMock.mockClear();
@@ -545,6 +559,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "stable",
       timeoutMs: 45 * 60 * 1000,
+      restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
     });
   });
@@ -552,6 +567,9 @@ describe("update-startup", () => {
   it("runs beta auto-update checks hourly when enabled", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
+    getRuntimeConfigMock.mockReturnValue({
+      gateway: { reload: { deferralTimeoutMs: 90_000 } },
+    });
 
     await runAutoUpdateCheckWithDefaults({
       cfg: createBetaAutoUpdateConfig(),
@@ -562,6 +580,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "beta",
       timeoutMs: 45 * 60 * 1000,
+      restartDrainTimeoutMs: 90_000,
       root: "/opt/openclaw",
     });
   });
@@ -669,6 +688,7 @@ describe("update-startup", () => {
       expect.objectContaining({
         root: "/opt/openclaw",
         timeoutMs: 45 * 60 * 1000,
+        restartDrainTimeoutMs: 300_000,
         channel: "beta",
         restartDelayMs: 0,
         supervisor: "launchd",

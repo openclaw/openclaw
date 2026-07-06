@@ -702,6 +702,7 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
@@ -760,13 +761,14 @@ async function requestPluginToolApproval(params: {
       }
       return {
         blocked: true,
-        kind: "failure",
+        kind: approval.timeoutReason ? "veto" : "failure",
         deniedReason: "plugin-approval",
-        reason: "Approval timed out",
+        reason: approval.timeoutReason ?? "Approval timed out",
         params: params.baseParams,
       };
     }
 
+    gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
       status?: string;
@@ -799,6 +801,7 @@ async function requestPluginToolApproval(params: {
       },
       { expectFinal: false },
     );
+    gatewayApprovalPhase = "none";
     const id = requestResult?.id;
     if (!id) {
       notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
@@ -830,6 +833,7 @@ async function requestPluginToolApproval(params: {
     } else {
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
+      gatewayApprovalPhase = "wait";
       const waitPromise: Promise<{
         id?: string;
         decision?: string | null;
@@ -897,16 +901,17 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
+    const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
     const timeoutReason =
       requestResult?.deliveryRoute === "turn-source"
         ? buildPluginApprovalFailureReason({
-            fallbackReason: "Approval timed out",
+            fallbackReason: fallbackTimeoutReason,
             ctx: params.ctx,
           })
-        : "Approval timed out";
+        : fallbackTimeoutReason;
     return {
       blocked: true,
-      kind: "failure",
+      kind: approval.timeoutReason ? "veto" : "failure",
       deniedReason: "plugin-approval",
       reason: timeoutReason,
       params: params.baseParams,
@@ -929,13 +934,15 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    // UNAVAILABLE can also arrive as a structured response. Only validation
-    // rejection proves a healthy Gateway rejected the approval payload.
-    const requestRejected =
+    // INVALID_REQUEST means different things before and after registration.
+    const invalidRequest =
       err instanceof GatewayClientRequestError && err.gatewayCode === "INVALID_REQUEST";
-    const reason = requestRejected
-      ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
-      : "Plugin approval required (gateway unavailable)";
+    const reason =
+      invalidRequest && gatewayApprovalPhase === "request"
+        ? `Plugin approval request rejected: ${formatErrorMessage(err)}`
+        : invalidRequest && gatewayApprovalPhase === "wait"
+          ? `Plugin approval no longer available: ${formatErrorMessage(err)}`
+          : "Plugin approval required (gateway unavailable)";
     log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
     return {
       blocked: true,
@@ -1027,10 +1034,11 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   ctx?: HookContext;
   signal?: AbortSignal;
 }): Promise<HookOutcome | undefined> {
-  const result = resolveSkillWorkshopToolApproval({
+  const result = await resolveSkillWorkshopToolApproval({
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
     ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+    ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({
     result,
@@ -1260,10 +1268,11 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
-    const initialCorePolicyResult = resolveSkillWorkshopToolApproval({
+    const initialCorePolicyResult = await resolveSkillWorkshopToolApproval({
       toolName,
       toolParams: normalizedParams,
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+      ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };

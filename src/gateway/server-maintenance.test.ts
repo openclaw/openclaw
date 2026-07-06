@@ -36,7 +36,10 @@ function createActiveRun(
 }
 
 function createMaintenanceTimerDeps() {
-  return createGatewayMaintenanceStateForTest();
+  return {
+    ...createGatewayMaintenanceStateForTest(),
+    runWorktreeGc: vi.fn(async () => undefined),
+  };
 }
 
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
@@ -103,10 +106,12 @@ function stopMaintenanceTimers(timers: {
   healthInterval: NodeJS.Timeout;
   dedupeCleanup: NodeJS.Timeout;
   mediaCleanup: NodeJS.Timeout | null;
+  worktreeCleanup: NodeJS.Timeout;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
+  clearInterval(timers.worktreeCleanup);
   if (timers.mediaCleanup) {
     clearInterval(timers.mediaCleanup);
   }
@@ -128,6 +133,20 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(cleanOldMediaMock).not.toHaveBeenCalled();
     expect(timers.mediaCleanup).toBeNull();
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("runs managed worktree cleanup at startup and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await Promise.resolve();
+    expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
 
     stopMaintenanceTimers(timers);
   });

@@ -175,6 +175,23 @@ export const fr: TranslationMap = {
     lastInput: "Dernière entrée {time}",
     reason: "Raison {reason}",
   },
+  worktrees: {
+    title: "Worktrees gérés",
+    subtitle: "Checkouts de dépôt isolés appartenant à OpenClaw.",
+    cleanNow: "Nettoyer maintenant",
+    name: "Nom",
+    repo: "Dépôt",
+    branch: "Branche",
+    status: "Statut",
+    lastActive: "Dernière activité",
+    actions: "Actions",
+    empty: "Aucun worktree géré.",
+    restorable: "Restaurable",
+    restore: "Restaurer",
+    confirmDelete: "Créer un instantané et supprimer {name} ?",
+    confirmForceDelete:
+      "Échec de la création de l’instantané : {error}\n\nSupprimer sans instantané ?",
+  },
   sessionsView: {
     title: "Sessions",
     subtitle: "Clés de session actives et remplacements par session.",
@@ -443,12 +460,13 @@ export const fr: TranslationMap = {
   },
   nav: {
     chat: "Chat",
-    control: "Contrôle",
-    agent: "Agent",
     settings: "Paramètres",
     expand: "Développer la barre latérale",
     collapse: "Réduire la barre latérale",
     resize: "Redimensionner la barre latérale",
+    more: "Plus",
+    customize: "Personnaliser la barre latérale",
+    customizeReset: "Réinitialiser les paramètres par défaut",
   },
   terminal: {
     title: "Terminal",
@@ -473,6 +491,7 @@ export const fr: TranslationMap = {
     activity: "Activité",
     overview: "Aperçu",
     workboard: "Tableau de travail",
+    worktrees: "Worktrees",
     channels: "Canaux",
     instances: "Instances",
     sessions: "Sessions",
@@ -499,6 +518,7 @@ export const fr: TranslationMap = {
     activity: "Résumés d’activité des outils locaux au navigateur.",
     overview: "Statut, points d’entrée, santé.",
     workboard: "File de travail de l’agent et transfert de session.",
+    worktrees: "Checkouts de tâches d’agent isolés et instantanés de récupération.",
     channels: "Canaux et paramètres.",
     instances: "Clients et nœuds connectés.",
     sessions: "Sessions actives et valeurs par défaut.",
@@ -1132,6 +1152,16 @@ export const fr: TranslationMap = {
       session: "session",
       sessions: "sessions",
     },
+    providerUsage: {
+      title: "Forfaits et facturation des fournisseurs",
+      subtitle:
+        "Données en temps réel sur les forfaits, quotas, soldes et budgets communiquées par les fournisseurs configurés.",
+      balance: "Solde",
+      spend: "Utilisation",
+      budget: "Budget",
+      remaining: "{percent}% restant",
+      resets: "Réinitialisation le {date}",
+    },
     presets: {
       today: "Aujourd’hui",
       last7d: "7 j",
@@ -1216,6 +1246,15 @@ export const fr: TranslationMap = {
       byType: "Par type",
       tokensTitle: "Utilisation quotidienne des jetons",
       costTitle: "Coût quotidien",
+      compressedScaleHint:
+        "L’échelle en racine carrée permet de garder visibles les jours de faible utilisation.",
+    },
+    costWindows: {
+      title: "Périodes de coût",
+      subtitle: "Périodes calendaires se terminant le {date}",
+      selectedRange: "Période sélectionnée",
+      lastDays: "{count} derniers jours",
+      perDay: "/ jour",
     },
     breakdown: {
       output: "Sortie",
@@ -1263,6 +1302,7 @@ export const fr: TranslationMap = {
       cached: "en cache",
       prompt: "prompt",
       calls: "appels",
+      costShare: "{percent} % du coût",
       topModels: "Principaux modèles",
       topProviders: "Principaux providers",
       topTools: "Principaux outils",
@@ -1466,6 +1506,13 @@ export const fr: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Connexion au Gateway perdue",
+    reconnecting: "Reconnexion…",
+    offlineHint:
+      "Les mises à jour en direct et les actions sont en pause jusqu’au rétablissement de la connexion.",
+    retryNow: "Réessayer maintenant",
+  },
   chat: {
     disconnected: "Déconnecté du Gateway.",
     archivedSessionDisabled: "Restaurez cette session pour envoyer des messages.",
@@ -1529,7 +1576,7 @@ export const fr: TranslationMap = {
       badge: "Expiré",
     },
     composer: {
-      placeholder: "Message {name} (Enter to send)",
+      placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
@@ -1856,6 +1903,8 @@ export const fr: TranslationMap = {
       disable: "Désactiver",
       enable: "Activer",
       run: "Exécuter",
+      runIfDue: "Exécuter à l’échéance",
+      moreActions: "Plus d’actions",
       history: "Historique",
       remove: "Supprimer",
     },
