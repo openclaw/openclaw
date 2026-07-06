@@ -666,6 +666,7 @@ export async function runCommandWithTimeout(
         child.stdout?.destroy();
         child.stderr?.destroy();
       }, 250);
+      closeFallbackTimer.unref();
     });
     const resolveFromClose = (code: number | null, signalValue: NodeJS.Signals | null) => {
       if (settled) {

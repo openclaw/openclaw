@@ -334,6 +334,46 @@ describe("runCommandWithTimeout", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "unrefs the close fallback timer so it does not delay process exit",
+    { timeout: 5_000 },
+    async () => {
+      await loadExecModules({ mockSpawn: true });
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+
+      const unref = vi.fn();
+      const fakeFallbackTimer = { unref } as unknown as NodeJS.Timeout;
+      const originalSetTimeout = globalThis.setTimeout.bind(globalThis);
+      const timeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay) => {
+          if (delay === 250) {
+            return fakeFallbackTimer;
+          }
+          return originalSetTimeout(callback as TimerHandler, delay as number);
+        });
+
+      try {
+        const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+          timeoutMs: 2_000,
+        });
+
+        child.emit("exit", 0, null);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+        expect(unref).toHaveBeenCalledOnce();
+
+        child.emit("close", 0, null);
+        const result = await resultPromise;
+        expect(result.termination).toBe("exit");
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "swallows stdin EPIPE when child exits before input is consumed (#75438)",
     { timeout: 5_000 },
     async () => {
