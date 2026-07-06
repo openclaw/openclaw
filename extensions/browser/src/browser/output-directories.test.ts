@@ -1,5 +1,4 @@
 // Browser tests cover output directories plugin behavior.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,28 +6,6 @@ import { describe, expect, it } from "vitest";
 import { ensureOutputDirectory } from "./output-directories.js";
 
 const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
-
-const canCreateDirectorySymlinks = (() => {
-  let probeDir: string | undefined;
-  try {
-    probeDir = fsSync.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-output-dir-symlink-probe-"),
-    );
-    const targetDir = path.join(probeDir, "target");
-    const linkDir = path.join(probeDir, "link");
-    fsSync.mkdirSync(targetDir);
-    fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (probeDir) {
-      try {
-        fsSync.rmSync(probeDir, { recursive: true, force: true });
-      } catch {}
-    }
-  }
-})();
 
 async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-output-dir-test-"));
@@ -62,20 +39,26 @@ describe("ensureOutputDirectory", () => {
     });
   });
 
-  it.skipIf(!canCreateDirectorySymlinks)(
-    "rejects symlinked output directory ancestors",
-    async () => {
-      await withTempDir(async (tempDir) => {
-        const outsideDir = path.join(tempDir, "outside");
-        await fs.mkdir(outsideDir);
-        const symlinkDir = path.join(tempDir, "downloads");
+  it("rejects symlinked output directory ancestors", async ({ skip }) => {
+    await withTempDir(async (tempDir) => {
+      const outsideDir = path.join(tempDir, "outside");
+      await fs.mkdir(outsideDir);
+      const symlinkDir = path.join(tempDir, "downloads");
+      try {
         await fs.symlink(outsideDir, symlinkDir, directorySymlinkType);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EACCES" || code === "EPERM" || code === "ENOTSUP") {
+          skip("directory links are unavailable on this host");
+          return;
+        }
+        throw error;
+      }
 
-        await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
-          /symlink|output directory/i,
-        );
-        await expectPathMissing(path.join(outsideDir, "nested"));
-      });
-    },
-  );
+      await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
+        /symlink|output directory/i,
+      );
+      await expectPathMissing(path.join(outsideDir, "nested"));
+    });
+  });
 });
