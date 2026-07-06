@@ -48,6 +48,25 @@ describe("buildExecApprovalText", () => {
       },
     } as never);
 
+    expect(text).toContain("Agent: main");
     expect(text).toContain("Session: agent:main:qqbot:direct:42");
+  });
+
+  it("sanitizes agent and session identity fields", () => {
+    const text = buildExecApprovalText({
+      id: "approval-123",
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+      request: {
+        command: "echo hi",
+        agentId: "main\n**admin**",
+        sessionKey: "global\u202E\n[approve](danger)",
+      },
+    } as never);
+
+    expect(text).toContain("Agent: main ＊＊admin＊＊");
+    expect(text).toContain("Session: global ［approve］（danger）");
+    expect(text).not.toContain("\n**admin**");
+    expect(text).not.toContain("\n[approve](danger)");
   });
 });

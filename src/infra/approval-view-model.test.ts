@@ -59,6 +59,30 @@ describe("buildPendingApprovalView", () => {
     expect(withoutSession.metadata.some((row) => row.label === "Session")).toBe(false);
   });
 
+  it("sanitizes displayed identity metadata without changing raw routing fields", () => {
+    const agentId = "main\n**admin**";
+    const sessionKey = "global\u202E\n[approve](danger)";
+    const view = buildPendingApprovalView({
+      id: "approval-id",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        command: "echo hi",
+        host: "node",
+        agentId,
+        sessionKey,
+      },
+    });
+
+    expect(view.metadata).toContainEqual({ label: "Agent", value: "main ＊＊admin＊＊" });
+    expect(view.metadata).toContainEqual({
+      label: "Session",
+      value: "global ［approve］（danger）",
+    });
+    expect(view.agentId).toBe(agentId);
+    expect(view.sessionKey).toBe(sessionKey);
+  });
+
   it("includes session identity in plugin metadata rows", () => {
     const view = buildPendingApprovalView({
       id: "plugin:req-1",

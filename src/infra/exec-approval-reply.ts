@@ -12,6 +12,7 @@ import type {
 import { formatHumanList } from "../shared/human-list.js";
 // Builds reply payloads for exec approval prompts and outcomes.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
+import { formatApprovalIdentityForDisplay } from "./approval-display-identity.js";
 import { formatApprovalDisplayPath } from "./approval-display-paths.js";
 import {
   describeNativeExecApprovalClientSetup,
@@ -380,10 +381,15 @@ export function buildExecApprovalPendingReplyPayload(
   if (params.nodeId) {
     info.push(`Node: ${params.nodeId}`);
   }
-  if (params.sessionKey) {
+  const agentId = formatApprovalIdentityForDisplay(params.agentId);
+  if (agentId) {
+    info.push(`Agent: ${agentId}`);
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(params.sessionKey);
+  if (sessionKey) {
     // Disambiguates concurrent sessions of one agent in native/forwarded
     // prompts, matching the generic fallback text and the payload envelope.
-    info.push(`Session: ${params.sessionKey}`);
+    info.push(`Session: ${sessionKey}`);
   }
   if (params.cwd) {
     info.push(`CWD: ${formatApprovalDisplayPath(params.cwd)}`);
