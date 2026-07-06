@@ -108,6 +108,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
+      const chatContent = page.locator("main.content--chat");
       const chatMain = page.locator(".chat-workbench__main");
       const model = composer.locator('[data-chat-model-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
@@ -233,6 +234,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await model.click();
 
       const [
+        chatContentBox,
         chatMainBox,
         composerShellBox,
         composerBox,
@@ -241,6 +243,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         attachBox,
         voiceBox,
       ] = await Promise.all([
+        chatContent.boundingBox(),
         chatMain.boundingBox(),
         composerShell.boundingBox(),
         composer.boundingBox(),
@@ -249,6 +252,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         attach.boundingBox(),
         voice.boundingBox(),
       ]);
+      expect(chatContentBox).not.toBeNull();
       expect(chatMainBox).not.toBeNull();
       expect(composerShellBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
@@ -257,6 +261,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(attachBox).not.toBeNull();
       expect(voiceBox).not.toBeNull();
       if (
+        !chatContentBox ||
         !chatMainBox ||
         !composerShellBox ||
         !composerBox ||
@@ -267,6 +272,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       ) {
         throw new Error("expected composer controls to have layout boxes");
       }
+      expect(Math.abs(chatMainBox.x - chatContentBox.x)).toBeLessThanOrEqual(1);
       expect(composerShellBox.width).toBeGreaterThanOrEqual(1099);
       expect(composerShellBox.width).toBeLessThanOrEqual(1101);
       expect(
