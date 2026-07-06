@@ -33,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -161,6 +162,16 @@ function resolveSignalStatusReactionEmojis(
   };
 }
 
+const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
+const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+
+function isRetryableSignalInboundError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
+}
+
 async function finalizeSignalStatusReaction(params: {
   controller: StatusReactionController;
   outcome: "done" | "error";
@@ -219,6 +230,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
+    retryAttempt?: number;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -680,8 +692,34 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaTypes: undefined,
       });
     },
-    onError: (err) => {
-      deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
+    onError: (err, entries) => {
+      if (isRetryableSignalInboundError(err)) {
+        const retryEntries = entries
+          .map((entry) => {
+            const retryAttempt = entry.retryAttempt ?? 0;
+            if (retryAttempt >= RETRYABLE_FLUSH_MAX_ATTEMPTS) {
+              return null;
+            }
+            return {
+              ...entry,
+              retryAttempt: retryAttempt + 1,
+            };
+          })
+          .filter((entry) => entry !== null);
+        if (retryEntries.length > 0) {
+          const retryTimer = setTimeout(() => {
+            for (const entry of retryEntries) {
+              void inboundDebouncer.enqueue(entry).catch((retryErr: unknown) => {
+                deps.runtime.error?.(
+                  `signal inbound retry enqueue failed: ${formatErrorMessage(retryErr)}`,
+                );
+              });
+            }
+          }, RETRYABLE_FLUSH_RETRY_DELAY_MS);
+          retryTimer.unref?.();
+        }
+      }
+      deps.runtime.error?.(`signal debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
 

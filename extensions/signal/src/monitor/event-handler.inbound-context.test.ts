@@ -1863,6 +1863,102 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
+  it("retries debounced direct messages after reply session initialization conflicts", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtimeError = vi.fn();
+      dispatchInboundMessageMock.mockRejectedValueOnce(
+        new Error("Signal dispatch failed", {
+          cause: new Error(
+            "reply session initialization conflicted for agent:main:signal:direct:+15550002222",
+          ),
+        }),
+      );
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 10 } },
+            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+          } as any,
+          runtime: { log: () => {}, error: runtimeError } as any,
+          historyLimit: 0,
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000001,
+          dataMessage: {
+            message: "second request",
+            attachments: [],
+          },
+        }),
+      );
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(requireCapturedContext().RawBody).toBe("second request");
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("signal debounce flush failed: Signal dispatch failed"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying reply session initialization conflicts after the bounded retry limit", async () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 4; i += 1) {
+        dispatchInboundMessageMock.mockRejectedValueOnce(
+          new Error(
+            "reply session initialization conflicted for agent:main:signal:direct:+15550002222",
+          ),
+        );
+      }
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 0 } },
+            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+          } as any,
+          historyLimit: 0,
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000001,
+          dataMessage: {
+            message: "second request",
+            attachments: [],
+          },
+        }),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("dispatches failed-media commands without text debounce", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
