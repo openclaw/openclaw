@@ -48,11 +48,10 @@ describe("clearSessionResetRuntimeState", () => {
     });
     operation.setPhase("running");
 
-    const result = clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      activeReplySessionIds: ["old-session"],
+    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+      activeReplySessionId: "old-session",
     });
 
-    expect(result.activeReplyRunsCleared).toBe(1);
     expect(cancel).toHaveBeenCalledWith("restart");
     expect(replyRunRegistry.isActive("agent:main:slack:room:1")).toBe(false);
     const nextOperation = createReplyOperation({
@@ -71,12 +70,41 @@ describe("clearSessionResetRuntimeState", () => {
     });
     operation.setPhase("running");
 
-    const result = clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      activeReplySessionIds: ["old-session"],
+    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+      activeReplySessionId: "old-session",
     });
 
-    expect(result.activeReplyRunsCleared).toBe(0);
     expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
+  });
+
+  it("does not clear a replacement admitted while the archived run is cancelling", () => {
+    let replacement: ReturnType<typeof createReplyOperation> | undefined;
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:slack:room:1",
+      sessionId: "old-session",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel() {
+        operation.complete();
+        replacement = createReplyOperation({
+          sessionKey: "agent:main:slack:room:1",
+          sessionId: "old-session",
+          resetTriggered: false,
+        });
+        replacement.setPhase("running");
+      },
+      isStreaming: () => false,
+    });
+    operation.setPhase("running");
+
+    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+      activeReplySessionId: "old-session",
+    });
+
+    expect(replacement).toBeDefined();
+    expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(replacement);
   });
 
   it("leaves queued reservations for the archived id so session init can rebind them", () => {
@@ -86,11 +114,10 @@ describe("clearSessionResetRuntimeState", () => {
       resetTriggered: false,
     });
 
-    const result = clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
-      activeReplySessionIds: ["old-session"],
+    clearSessionResetRuntimeState(["agent:main:slack:room:1", "old-session"], {
+      activeReplySessionId: "old-session",
     });
 
-    expect(result.activeReplyRunsCleared).toBe(0);
     expect(operation.phase).toBe("queued");
     expect(replyRunRegistry.get("agent:main:slack:room:1")).toBe(operation);
   });

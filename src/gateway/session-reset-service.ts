@@ -402,7 +402,7 @@ async function ensureSessionRuntimeCleanup(params: {
     queueKeys.add(params.sessionId);
   }
   clearSessionResetRuntimeState([...queueKeys], {
-    activeReplySessionIds: [params.sessionId],
+    activeReplySessionId: params.sessionId,
   });
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
