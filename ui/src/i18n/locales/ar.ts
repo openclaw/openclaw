@@ -1572,6 +1572,9 @@ export const ar: TranslationMap = {
     sidebar: {
       allSessions: "كل الجلسات",
       openSessionMenu: "Open session menu",
+      sortCreated: "Created",
+      sortSessions: "Sort sessions",
+      sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

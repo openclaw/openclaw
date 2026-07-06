@@ -1551,6 +1551,9 @@ export const zh_CN: TranslationMap = {
     sidebar: {
       allSessions: "所有会话",
       openSessionMenu: "Open session menu",
+      sortCreated: "Created",
+      sortSessions: "Sort sessions",
+      sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

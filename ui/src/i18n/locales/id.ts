@@ -1590,6 +1590,9 @@ export const id: TranslationMap = {
     sidebar: {
       allSessions: "Semua sesi",
       openSessionMenu: "Open session menu",
+      sortCreated: "Created",
+      sortSessions: "Sort sessions",
+      sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
     },
     welcome: {
