@@ -216,7 +216,7 @@ struct OpenClawTypographyTests {
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
         #expect(settingsSections.contains("private struct AppearanceSettingsScreen"))
         #expect(settingsSections.contains("Section(\"Gateway\")"))
-        #expect(settingsSections.contains("LabeledContent(\"Address\", value: self.gatewayAddress)"))
+        #expect(settingsSections.contains("SettingsDetailRow(\"Address\", value: self.gatewayAddress)"))
         #expect(settingsSections.contains("func gatewayActionButton"))
         #expect(settingsSections.contains("func settingsToggle"))
         #expect(settingsSections.contains(".font(OpenClawType.subheadSemiBold)"))
@@ -387,7 +387,7 @@ struct OpenClawTypographyTests {
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
         line.range(
-            of: #"\b(Button|Link|Picker|Toggle|TextField|SecureField|Menu|DisclosureGroup)\s*\(""#,
+            of: #"\b(Button|Link|Picker|Toggle|TextField|SecureField|Menu|DisclosureGroup|LabeledContent)\s*\(""#,
             options: .regularExpression) != nil
     }
 

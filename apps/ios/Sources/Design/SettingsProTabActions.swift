@@ -108,15 +108,6 @@ extension SettingsProTab {
         }
     }
 
-    func detailRow(_ label: String, value: String) -> some View {
-        LabeledContent(label) {
-            Text(value)
-                .font(OpenClawType.subhead)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-    }
-
     func reconnectGateway() async {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         guard !self.isReconnectingGateway else { return }

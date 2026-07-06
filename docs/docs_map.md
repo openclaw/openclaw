@@ -8967,6 +8967,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Critical rule for the Control UI
   - H2: Validate in layers
   - H3: Layer 1: verify Chrome is serving CDP on Windows
+  - H4: Diagnose IPv4 and IPv6 before changing portproxy
   - H3: Layer 2: verify WSL2 can reach that Windows endpoint
   - H3: Layer 3: configure the correct browser profile
   - H3: Layer 4: verify the Control UI layer separately
@@ -9497,6 +9498,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Storage
   - H2: Limits
   - H2: Troubleshooting
+  - H3: Tool-policy diagnostic
   - H2: Related
 
 ## tools/skills-config.md

@@ -496,6 +496,16 @@ export interface FlowRuns {
   wait_json: string | null;
 }
 
+export interface GatewayBootLifecycle {
+  boot_id: string;
+  completed_at_ms: number | null;
+  outcome: "clean_stop" | "forced_stop" | "planned_restart" | "startup_failed" | null;
+  pid: number;
+  reason: string | null;
+  started_at_ms: number;
+  startup_reason: string | null;
+}
+
 export interface GatewayRestartHandoff {
   created_at: number;
   expires_at: number;
@@ -1006,6 +1016,7 @@ export interface DB {
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
+  gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;

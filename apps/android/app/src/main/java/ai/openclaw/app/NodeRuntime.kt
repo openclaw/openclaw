@@ -22,6 +22,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
 import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
@@ -874,6 +875,18 @@ class NodeRuntime private constructor(
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
       },
     )
+
+  /**
+   * Triggers an immediate gateway reconnect when Android reports a validated transport
+   * restore, instead of waiting for the time-based backoff slot in [GatewaySession].
+   * Each session keeps ownership of desired-connection and auth-pause decisions.
+   */
+  private val networkMonitor = NetworkMonitor(appContext, ::retryGatewaySessionsAfterNetworkRestore)
+
+  private fun retryGatewaySessionsAfterNetworkRestore() {
+    operatorSession.retryAfterNetworkRestore()
+    nodeSession.retryAfterNetworkRestore()
+  }
 
   private val notificationOutbox: NotificationNodeEventOutbox by lazy {
     NotificationNodeEventOutbox(

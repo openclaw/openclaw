@@ -1977,20 +1977,20 @@ function renderGroupedMessage(
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
     : singleToolDisplayDetail
-      ? singleToolCard?.outputText?.trim()
-        ? "output"
-        : undefined
+      ? !markdown && !hasImages
+        ? singleToolDisplayDetail
+        : singleToolCard?.outputText?.trim()
+          ? "output"
+          : undefined
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
-    : singleToolDisplayDetail && !markdown && !hasImages
-      ? singleToolDisplayDetail
-      : singleToolDisplay && !markdown && !hasImages
-        ? singleToolDisplay.label
-        : "Tool output";
+    : singleToolDisplay && !markdown && !hasImages
+      ? singleToolDisplay.label
+      : "Tool output";
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
