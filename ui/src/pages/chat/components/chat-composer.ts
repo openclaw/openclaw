@@ -1951,7 +1951,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
     const hostDraft = props.getDraft?.() ?? props.draft;
-    const draftKey = composerDraftKey(props);
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
