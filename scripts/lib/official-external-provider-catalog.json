@@ -1221,6 +1221,36 @@
                 ]
               }
             ]
+          },
+          {
+            "id": "tencent-tokenplan",
+            "name": "Tencent TokenPlan",
+            "docs": "/providers/tencent",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TOKENPLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "tokenplan-api-key",
+                "choiceLabel": "Tencent TokenPlan",
+                "choiceHint": "Hy via Tencent TokenPlan Gateway",
+                "groupId": "tencent",
+                "groupLabel": "Tencent Cloud",
+                "groupHint": "Tencent TokenPlan",
+                "optionKey": "tokenplanApiKey",
+                "cliFlag": "--tokenplan-api-key",
+                "cliOption": "--tokenplan-api-key <key>",
+                "cliDescription": "Tencent TokenPlan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
           }
         ],
         "install": {

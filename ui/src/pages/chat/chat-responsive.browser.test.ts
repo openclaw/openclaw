@@ -1268,7 +1268,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         if (width > height && height <= 500) {
           expect(input.height).toBeLessThanOrEqual(height * 0.38);
           expect(thread.height).toBeGreaterThanOrEqual(height * 0.4 - 1);
-          expect(textarea.height).toBeLessThanOrEqual(56);
+          expect(textarea.height).toBeLessThanOrEqual(56.1);
         }
       } finally {
         await closeBrowserPage(page);

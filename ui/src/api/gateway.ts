@@ -581,12 +581,15 @@ export class GatewayBrowserClient {
         errorCode: connectError?.code ?? "SOCKET_CLOSED",
       });
       this.ws = null;
+      const closeError = connectError
+        ? new GatewayRequestError(connectError)
+        : new Error(`gateway closed (${ev.code}): ${reason}`);
       if (this.pendingStartupReconnectDelayMs !== null) {
-        this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+        this.flushPending(closeError);
         this.scheduleReconnect();
         return;
       }
-      this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+      this.flushPending(closeError);
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       // willRetry drives both the reconnect scheduling below and the app
       // layer's "still reconnecting vs gave up" rendering; keep them in sync.

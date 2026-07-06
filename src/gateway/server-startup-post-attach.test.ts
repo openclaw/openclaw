@@ -1911,6 +1911,7 @@ describe("startGatewayPostAttachRuntime", () => {
       healthInterval: setInterval(() => {}, 1 << 30),
       dedupeCleanup: setInterval(() => {}, 1 << 30),
       mediaCleanup: null,
+      worktreeCleanup: null,
       agentUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,

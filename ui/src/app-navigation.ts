@@ -5,6 +5,11 @@ import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
+type SidebarSection = {
+  label: string;
+  routes: readonly NavigationRouteId[];
+};
+
 type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
@@ -16,6 +21,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "overview",
   "activity",
   "workboard",
+  "worktrees",
   "instances",
   "sessions",
   "usage",
@@ -61,6 +67,25 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
+export const SIDEBAR_SECTIONS = [
+  { label: "chat", routes: ["chat"] },
+  {
+    label: "control",
+    routes: [
+      "overview",
+      "activity",
+      "workboard",
+      "worktrees",
+      "instances",
+      "sessions",
+      "usage",
+      "cron",
+    ],
+  },
+  { label: "agent", routes: ["agents", "skills", "skill-workshop", "nodes", "dreams"] },
+  { label: "settings", routes: ["config"] },
+] as const satisfies readonly SidebarSection[];
+
 export const SETTINGS_NAVIGATION_ROUTES = [
   "config",
   "channels",
@@ -79,6 +104,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   activity: "activity",
   overview: "barChart",
   workboard: "folder",
+  worktrees: "folder",
   channels: "link",
   instances: "radio",
   sessions: "fileText",
@@ -103,6 +129,16 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
+}
+
+export function isRouteInSidebarSection(
+  section: SidebarSection,
+  routeId: NavigationRouteId,
+): boolean {
+  if (section.label === "settings") {
+    return isSettingsNavigationRoute(routeId);
+  }
+  return section.routes.includes(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -162,6 +198,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
+  worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
   instances: { titleKey: "tabs.instances", subtitleKey: "subtitles.instances" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },

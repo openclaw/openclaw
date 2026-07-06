@@ -359,8 +359,11 @@ final class NodeAppModel {
 
     private var chatTranscriptCacheGeneration = 0
 
-    /// Offline transcript cache scoped to the paired gateway identity.
-    func makeChatTranscriptCache() -> (any OpenClawChatTranscriptCache)? {
+    /// Offline transcript cache plus durable command outbox, both scoped to
+    /// the paired gateway identity (one SQLite file per gateway, memoized so
+    /// retire/purge can close every open handle). Nil for fixture/unpaired
+    /// transports: no cache and no outbox.
+    func makeChatOfflineStore() -> OpenClawChatSQLiteTranscriptCache? {
         guard let gatewayID = self.chatTranscriptCacheGatewayID else { return nil }
         if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
             return cache
@@ -372,17 +375,19 @@ final class NodeAppModel {
     }
 
     func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
-        guard let cache = self.makeChatTranscriptCache() else { return [] }
+        guard let cache = self.makeChatOfflineStore() else { return [] }
         return await cache.loadSessions()
     }
 
     func storeCachedChatSessions(_ sessions: [OpenClawChatSessionEntry]) async {
-        guard let cache = self.makeChatTranscriptCache() else { return }
+        guard let cache = self.makeChatOfflineStore() else { return }
         await cache.storeSessions(sessions)
     }
 
     /// Delete one gateway's cache during bootstrap replacement, or the whole
-    /// disposable database during a full onboarding reset.
+    /// disposable database during a full onboarding reset. The offline command
+    /// outbox shares each gateway's database file, so purging a cache also
+    /// drops that gateway's queued commands.
     func purgeChatTranscriptCache(gatewayID: String? = nil) async {
         if let gatewayID, !gatewayID.isEmpty {
             guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
