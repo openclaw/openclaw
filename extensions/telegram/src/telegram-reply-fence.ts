@@ -20,7 +20,7 @@ type TelegramReplyFenceState = {
   laneKeys?: Set<string>;
 };
 
-export type TelegramReplyFenceKey = {
+type TelegramReplyFenceKey = {
   activeKey: string;
   roomEventKey: string;
 };
