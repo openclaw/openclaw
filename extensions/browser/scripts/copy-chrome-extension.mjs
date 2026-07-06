@@ -37,14 +37,16 @@ async function main() {
   }
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(outDir), { recursive: true });
-  // Ship only the runtime extension; colocated *.test.ts stays out of dist.
+  // Ship only the runtime extension; colocated *.test.ts and *.d.ts stay out.
   await fs.cp(srcDir, outDir, {
     recursive: true,
-    filter: (source) => !source.endsWith(".test.ts"),
+    filter: (source) => !source.endsWith(".test.ts") && !source.endsWith(".d.ts"),
   });
 }
 
-main().catch((err) => {
+try {
+  await main();
+} catch (err) {
   console.error(`[copy-chrome-extension] ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
-});
+}

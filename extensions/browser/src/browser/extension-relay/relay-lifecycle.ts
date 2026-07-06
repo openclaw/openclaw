@@ -23,10 +23,10 @@ function relays(state: BrowserServerState): Map<string, ExtensionRelayHandle> {
 /**
  * Start the relay server for one extension-driver profile, reconciling any
  * existing one. Idempotency is keyed on profile name, but the desired (port,
- * token) can drift when gateway auth rotates or the profile's cdpPort changes —
- * a stale relay would then authenticate the extension against the old token or
- * listen on the wrong port. When the desired config differs, the old relay is
- * closed and a fresh one bound.
+ * token) can drift when the host-local relay secret is rotated or the profile's
+ * cdpPort changes — a stale relay would then authenticate the extension against
+ * the old token or listen on the wrong port. When the desired config differs,
+ * the old relay is closed and a fresh one bound.
  */
 export async function ensureExtensionRelayForProfile(
   state: BrowserServerState,
@@ -43,7 +43,7 @@ export async function ensureExtensionRelayForProfile(
       return existing;
     }
     // Port or token changed under this profile; rebind against the new config.
-    await existing.close().catch((err) => {
+    await existing.close().catch((err: unknown) => {
       log.warn(
         `stale extension relay for profile "${profile.name}" failed to stop: ${String(err)}`,
       );
@@ -71,12 +71,12 @@ export async function pruneRemovedExtensionRelays(
   if (!map) {
     return;
   }
-  for (const [name, handle] of [...map]) {
+  for (const [name, handle] of map) {
     if (isActiveExtensionProfile(name)) {
       continue;
     }
     map.delete(name);
-    await handle.close().catch((err) => {
+    await handle.close().catch((err: unknown) => {
       log.warn(`removed extension relay for profile "${name}" failed to stop: ${String(err)}`);
     });
   }

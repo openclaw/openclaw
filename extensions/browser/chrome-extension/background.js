@@ -118,7 +118,7 @@ async function syncTabsToRelay() {
   // Detach tabs the user pulled out of the group; leaving the group revokes
   // agent access immediately (and clears the per-tab debugger state).
   const sharedIds = new Set(shared.map((tab) => tab.id));
-  for (const tabId of [...attachedTabs]) {
+  for (const tabId of attachedTabs) {
     if (!sharedIds.has(tabId)) {
       void detachDebugger(tabId);
     }
@@ -263,7 +263,6 @@ async function handleRelayCommand(msg) {
         if (typeof seq === "number") {
           send({ type: "error", seq, message: `unknown relay command: ${msg.type}` });
         }
-        return;
     }
   } catch (err) {
     if (typeof seq === "number") {
@@ -306,12 +305,12 @@ async function connectRelay() {
     return;
   }
   relayWs = ws;
-  ws.onopen = () => {
+  ws.addEventListener("open", () => {
     reconnectAttempt = 0;
     setBadge("on");
     void sendHello();
-  };
-  ws.onmessage = (event) => {
+  });
+  ws.addEventListener("message", (event) => {
     let msg;
     try {
       msg = JSON.parse(String(event.data));
@@ -319,17 +318,15 @@ async function connectRelay() {
       return;
     }
     void handleRelayCommand(msg);
-  };
-  ws.onclose = () => {
+  });
+  ws.addEventListener("close", () => {
     if (relayWs === ws) {
       relayWs = null;
       setBadge("error");
       scheduleReconnect();
     }
-  };
-  ws.onerror = () => {
-    // onclose follows and drives the reconnect.
-  };
+  });
+  // onclose follows onerror and drives the reconnect, so no error handler needed.
 }
 
 function scheduleReconnect() {
@@ -349,7 +346,7 @@ function scheduleReconnect() {
 // ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  (async () => {
+  void (async () => {
     switch (msg?.type) {
       case "getStatus": {
         const { relayUrl } = await getConfig();

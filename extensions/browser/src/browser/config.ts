@@ -389,7 +389,7 @@ function resolveExtensionRelayPorts(
   const names = Object.entries(profiles)
     .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
     .map(([name]) => name)
-    .sort();
+    .toSorted();
   const ports: Record<string, number> = {};
   names.forEach((name, index) => {
     ports[name] = defaultPort - index;

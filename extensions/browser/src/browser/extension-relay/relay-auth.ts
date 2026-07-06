@@ -37,6 +37,12 @@ export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): s
  * Read the host-local relay token, creating it on first use. Called from relay
  * startup and `openclaw browser extension pair` — both run on the machine that
  * hosts the browser, so they resolve the same per-host secret.
+ *
+ * The create is atomic (O_CREAT|O_EXCL): the gateway service and the pair CLI
+ * are separate processes that can race on a fresh host, and a non-atomic
+ * read-then-write would let each mint a distinct token (relay expects one, the
+ * printed pairing string carries the other → 401). On EEXIST the winner's token
+ * is re-read.
  */
 export function ensureExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string {
   const secretPath = resolveExtensionRelaySecretPath(env);
@@ -45,9 +51,21 @@ export function ensureExtensionRelayToken(env: NodeJS.ProcessEnv = process.env):
     return existing;
   }
   const token = crypto.randomBytes(32).toString("hex");
-  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
-  fs.writeFileSync(secretPath, `${token}\n`, { mode: 0o600 });
-  return token;
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
+  try {
+    fs.writeFileSync(secretPath, `${token}\n`, { mode: 0o600, flag: "wx" });
+    return token;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw err;
+    }
+    // Another process created it first; adopt its token.
+    const winner = readExtensionRelayToken(env);
+    if (!winner) {
+      throw new Error("extension relay secret exists but is unreadable/malformed", { cause: err });
+    }
+    return winner;
+  }
 }
 
 /** Resolve the relay token for config (read-only; null until first ensured). */

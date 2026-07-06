@@ -204,12 +204,23 @@ function toBridgeSocket(ws: WebSocket) {
   };
 }
 
+/** Decode a ws frame (string | Buffer | Buffer[] | ArrayBuffer) to text. */
+function decodeWsData(data: import("ws").RawData | string): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data as ArrayBuffer).toString("utf8");
+}
+
 function bindSocket(
   ws: WebSocket,
   handlers: { onMessage: (raw: string) => void; onClose: () => void },
 ): void {
   ws.on("message", (data) => {
-    handlers.onMessage(typeof data === "string" ? data : data.toString("utf8"));
+    handlers.onMessage(decodeWsData(data));
   });
   ws.on("close", handlers.onClose);
   ws.on("error", (err) => {

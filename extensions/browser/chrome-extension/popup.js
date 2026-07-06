@@ -43,7 +43,7 @@ async function refresh() {
   shareButton.dataset.tabId = String(tab.id);
 }
 
-pairButton.addEventListener("click", async () => {
+async function onPair() {
   errorLine.classList.add("hidden");
   const result = await chrome.runtime.sendMessage({
     type: "pair",
@@ -55,20 +55,24 @@ pairButton.addEventListener("click", async () => {
     return;
   }
   await refresh();
-});
+}
 
-unpairButton.addEventListener("click", async () => {
+async function onUnpair() {
   await chrome.runtime.sendMessage({ type: "unpair" });
   await refresh();
-});
+}
 
-shareButton.addEventListener("click", async () => {
+async function onToggleShare() {
   const tabId = Number.parseInt(shareButton.dataset.tabId ?? "", 10);
   if (Number.isFinite(tabId)) {
     await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
   }
   await refresh();
-});
+}
+
+pairButton.addEventListener("click", () => void onPair());
+unpairButton.addEventListener("click", () => void onUnpair());
+shareButton.addEventListener("click", () => void onToggleShare());
 
 void refresh();
 setInterval(() => void refresh(), 2000);

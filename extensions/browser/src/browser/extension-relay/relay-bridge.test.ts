@@ -79,7 +79,10 @@ function defaultTabs() {
   return [{ tabId: 1, url: "https://example.com", title: "Example", active: true }];
 }
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+const flush = () =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 describe("ExtensionRelayBridge", () => {
   it("reports the paired browser identity through Browser.getVersion", async () => {
@@ -131,7 +134,8 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
     const attached = client.frames().find((frame) => frame.method === "Target.attachedToTarget");
-    const sessionId = (attached?.params as { sessionId: string }).sessionId;
+    expect(attached).toBeTruthy();
+    const sessionId = (attached?.params as { sessionId: string })?.sessionId;
 
     cdp.onMessage(
       JSON.stringify({

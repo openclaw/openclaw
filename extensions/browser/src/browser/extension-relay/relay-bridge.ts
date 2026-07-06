@@ -202,7 +202,7 @@ export class ExtensionRelayBridge {
       }
       case "pong":
       case "hello":
-        return;
+        break;
     }
   }
 
@@ -292,7 +292,7 @@ export class ExtensionRelayBridge {
             .then(({ targetId, sessionId }) => {
               this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
             })
-            .catch((err) => {
+            .catch((err: unknown) => {
               log.warn(`auto-attach of shared tab ${info.tabId} failed: ${String(err)}`);
             });
         }
@@ -391,8 +391,9 @@ export class ExtensionRelayBridge {
     }
     // Reap this tab's child sessions (iframes/workers) by owner tabId. Callers
     // clear tab.attached before/around this, so matching on the root sessionId
-    // would miss every child and leak the childSessions map.
-    for (const [childSessionId, ownerTabId] of [...this.childSessions]) {
+    // would miss every child and leak the childSessions map. Deleting the
+    // current key during Map iteration is safe.
+    for (const [childSessionId, ownerTabId] of this.childSessions) {
       if (ownerTabId !== tabId) {
         continue;
       }
@@ -627,8 +628,8 @@ export class ExtensionRelayBridge {
         if (autoAttach) {
           const attachResults = await Promise.allSettled(
             [...this.tabs.keys()].map(async (tabId) => {
-              const attached = await this.ensureTabAttached(tabId);
-              return { tabId, ...attached };
+              const { targetId, sessionId } = await this.ensureTabAttached(tabId);
+              return { tabId, targetId, sessionId };
             }),
           );
           for (const settled of attachResults) {
@@ -754,7 +755,6 @@ export class ExtensionRelayBridge {
       }
       default: {
         this.respondError(client, request, `'${request.method}' wasn't found`, -32601);
-        return;
       }
     }
   }

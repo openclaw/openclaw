@@ -8985,7 +8985,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Plugin control
   - H2: Agent guidance
   - H2: Missing browser command or tool
-  - H2: Profiles: openclaw vs user
+  - H2: Profiles: openclaw, user, chrome
   - H2: Configuration
   - H3: Screenshot vision (text-only model support)
   - H2: Use Brave or another Chromium-based browser
@@ -9024,6 +9024,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/capability-cookbook
 - Headings:
   - H2: Related
+
+## tools/chrome-extension.md
+
+- Route: /tools/chrome-extension
+- Headings:
+  - H1: Chrome extension
+  - H2: How it works
+  - H2: Install and pair
+  - H2: Use it
+  - H2: Remote browser nodes
+  - H2: Diagnostics
+  - H2: Security model
 
 ## tools/clawhub.md
 

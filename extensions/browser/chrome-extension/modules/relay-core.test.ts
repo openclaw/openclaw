@@ -22,7 +22,9 @@ describe("parsePairingString", () => {
     const token = "abc123";
     const pairing = `ws://127.0.0.1:${port}/extension#${token}`;
     const parsed = parsePairingString(pairing);
-    expect(parsed).not.toBeNull();
+    if (!parsed) {
+      throw new Error("expected pairing string to parse");
+    }
     expect(buildRelayWsUrl(parsed.relayUrl, parsed.token)).toBe(
       `ws://127.0.0.1:${port}/extension?token=${token}`,
     );
