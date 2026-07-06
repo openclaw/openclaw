@@ -580,6 +580,7 @@ export async function processGatewayAllowlist(
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
+    requiresExplicitApproval ||
     requiresSecurityAuditSuppressionApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(

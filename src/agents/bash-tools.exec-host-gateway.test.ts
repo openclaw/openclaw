@@ -1448,6 +1448,41 @@ EOF`,
     expect(result).toEqual({ execCommandOverride: undefined });
   });
 
+  it("requires explicit approval for Windows PowerShell expansion despite durable exact-command trust", async () => {
+    const command = 'powershell -NoProfile -Command "$env:USERPROFILE"';
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [{ pattern: "powershell.exe", source: "allow-always" }],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [
+        {
+          raw: command,
+          resolution: null,
+          argv: ["powershell", "-NoProfile", "-Command", "$env:USERPROFILE"],
+          requiresExplicitApproval: "windows-shell-expansion",
+        },
+      ],
+      segmentAllowlistEntries: [{ pattern: "powershell.exe", source: "allow-always" }],
+      segmentSatisfiedBy: ["allowlist"],
+    });
+    hasDurableExecApprovalMock.mockReturnValue(true);
+    requiresExecApprovalMock.mockReturnValue(false);
+    buildEnforcedShellCommandMock.mockReturnValue({
+      ok: true,
+      command,
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: true,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
   it("keeps denying allowlist misses when durable trust does not match", async () => {
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
