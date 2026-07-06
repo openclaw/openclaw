@@ -77,10 +77,11 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
-  it("selects native approval scenarios by id without changing standard scenario coverage", () => {
+  it("selects opt-in native scenarios by id without changing standard scenario coverage", () => {
     expect(
       testing
         .findScenario([
+          "slack-reaction-glyph-native",
           "slack-approval-exec-native",
           "slack-approval-plugin-native",
           "slack-codex-approval-exec-native",
@@ -88,12 +89,14 @@ describe("Slack live QA runtime helpers", () => {
         ])
         .map((scenario) => scenario.id),
     ).toEqual([
+      "slack-reaction-glyph-native",
       "slack-approval-exec-native",
       "slack-approval-plugin-native",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
     ]);
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-reaction-glyph-native");
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
       "slack-codex-approval-exec-native",
     );
@@ -269,6 +272,92 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.resolveCodexFileApprovalTargetPath("MARKER")).toMatch(
       /\.openclaw-qa-codex-file-approval-marker\.txt$/u,
     );
+  });
+
+  it("instructs the live reaction scenario to preserve the exact emoji glyph", () => {
+    const scenario = testing.findScenario(["slack-reaction-glyph-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+
+    expect(run).toMatchObject({ expectReply: true });
+    expect(run && "input" in run ? run.input : "").toContain('emoji to exactly "✅"');
+    expect(run && "input" in run ? run.input : "").toContain("Do not substitute a shortcode");
+  });
+
+  it("enables the message tool for the live reaction scenario", () => {
+    const scenario = testing.findScenario(["slack-reaction-glyph-native"])[0];
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: scenario?.configOverrides,
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    expect(cfg.tools?.alsoAllow).toContain("message");
+  });
+
+  it("adds the message tool to an explicit allowlist without mixing tool policies", () => {
+    const scenario = testing.findScenario(["slack-reaction-glyph-native"])[0];
+    const cfg = testing.buildSlackQaConfig(
+      { tools: { allow: ["read"] } },
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: scenario?.configOverrides,
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    expect(cfg.tools?.allow).toEqual(["read", "message"]);
+    expect(cfg.tools?.alsoAllow).toBeUndefined();
+  });
+
+  it("preserves an empty allowlist as allow-all when enabling the message tool", () => {
+    const scenario = testing.findScenario(["slack-reaction-glyph-native"])[0];
+    const cfg = testing.buildSlackQaConfig(
+      { tools: { allow: [] } },
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: scenario?.configOverrides,
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    expect(cfg.tools?.allow).toEqual([]);
+    expect(cfg.tools?.alsoAllow).toEqual(["message"]);
+  });
+
+  it("requires the SUT-owned normalized Slack reaction", async () => {
+    const get = vi.fn(async () => ({
+      message: {
+        reactions: [{ count: 1, name: "white_check_mark", users: ["U999999999"] }],
+      },
+    }));
+
+    await expect(
+      testing.waitForSlackReaction({
+        channelId: "C123456789",
+        client: { reactions: { get } } as never,
+        expectedReactionName: "white_check_mark",
+        messageId: "123.456",
+        sutUserId: "U999999999",
+        timeoutMs: 0,
+      }),
+    ).resolves.toMatchObject({ name: "white_check_mark" });
+    expect(get).toHaveBeenCalledWith({
+      channel: "C123456789",
+      full: true,
+      timestamp: "123.456",
+    });
   });
 
   it("reads the accepted asynchronous Gateway agent run id", () => {

@@ -865,11 +865,13 @@ openclaw-chat-page {
   margin: 0;
 }
 
+/* Composer controls span the header so model and quota stay left while the
+   settings control can use its auto margin to remain right-aligned. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 6px;
   flex: 1 1 100%;
   width: 100%;
@@ -955,7 +957,7 @@ openclaw-chat-page {
 
 .chat-settings-chip:hover,
 .chat-settings-chip--open {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
 }
 
@@ -1143,14 +1145,44 @@ openclaw-chat-page {
   cursor: not-allowed;
 }
 
-.agent-chat__input-btn--active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+/* Selected/open states stay a quiet neutral wash; only live recording gets a
+   (soft) danger tint so "active" chrome never competes with the send button. */
+.agent-chat__input-btn--active,
+.agent-chat__input-btn--open {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 .agent-chat__input-btn--talk {
   color: var(--danger, #ef4444);
-  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
+  background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent);
+}
+
+/* Split talk control: mic toggles Talk, the narrow caret opens Talk settings
+   (mirrors a mic-with-dropdown control; negative margin keeps the pair reading
+   as one unit without a wrapper border). */
+.agent-chat__talk-group {
+  display: inline-flex;
+  align-items: center;
+}
+
+.agent-chat__talk-group .agent-chat__talk-toggle {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.agent-chat__talk-group .agent-chat__talk-caret {
+  min-width: 20px;
+  width: 20px;
+  margin-left: -2px;
+  padding: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.agent-chat__talk-group .agent-chat__talk-caret svg {
+  width: 13px;
+  height: 13px;
 }
 
 .agent-chat__talk-status {
@@ -1496,9 +1528,11 @@ openclaw-chat-page {
   text-overflow: ellipsis;
 }
 
+/* Status chips keep their semantic hue in the text/icon only; borders stay
+   near-neutral so the row reads as quiet metadata, not alerts. */
 .agent-chat__run-status--in-progress {
   color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 32%, transparent);
+  border-color: color-mix(in srgb, var(--info) 18%, transparent);
 }
 
 .agent-chat__run-status--in-progress svg {
@@ -1507,12 +1541,12 @@ openclaw-chat-page {
 
 .agent-chat__run-status--done {
   color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 32%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
 .agent-chat__run-status--interrupted {
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 36%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 22%, transparent);
 }
 
 @keyframes chat-run-status-spin {
@@ -2437,7 +2471,7 @@ openclaw-chat-page {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 6px;
   width: 100%;
   height: 30px;
@@ -2478,10 +2512,37 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
+/* Effort chip inside the model trigger: shows the effective thinking level as
+   a muted pill (accent-washed when the session overrides the default). It is
+   decorative (aria-hidden); the trigger aria-label carries the full state. */
+.chat-controls__effort-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.chat-controls__effort-chip--override {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+}
+
+/* Chevron pins right so label+chip stay grouped when the trigger stretches
+   (mobile grid cell); on desktop the trigger is content-sized so this is a
+   no-op vs the old space-between layout. */
 .chat-controls__inline-select-icon {
   display: inline-flex;
   width: 14px;
   height: 14px;
+  margin-left: auto;
   color: var(--muted);
   flex: 0 0 auto;
 }
@@ -2545,6 +2606,8 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+/* The combined picker contains provider, model, and reasoning controls in one
+   bounded surface instead of opening a second flyout. */
 .chat-controls__inline-select-menu--combined {
   display: flex;
   flex-direction: column;

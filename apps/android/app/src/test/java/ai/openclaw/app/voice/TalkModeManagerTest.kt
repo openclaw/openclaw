@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -81,6 +82,20 @@ class TalkModeManagerTest {
 
       assertEquals("capture-1", payload.captureId)
     }
+
+  @Test
+  fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
+    val manager = createManager()
+    setPrivateField(manager, "activePttCaptureId", "capture-1")
+    setMutableStateFlow(manager, "_isListening", true)
+
+    manager.stopAllCapture()
+
+    assertNull(readPrivateField(manager, "activePttCaptureId"))
+    assertFalse(manager.isEnabled.value)
+    assertFalse(manager.isListening.value)
+    assertEquals("Off", manager.statusText.value)
+  }
 
   @Test
   fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {

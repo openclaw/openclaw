@@ -1209,6 +1209,14 @@ export const fa: TranslationMap = {
       byType: "بر اساس نوع",
       tokensTitle: "مصرف روزانه توکن",
       costTitle: "هزینه روزانه",
+      compressedScaleHint: "مقیاس ریشهٔ دوم، روزهای با استفادهٔ کم را قابل مشاهده نگه می‌دارد.",
+    },
+    costWindows: {
+      title: "بازه‌های هزینه",
+      subtitle: "بازه‌های تقویمی منتهی به {date}",
+      selectedRange: "بازهٔ انتخاب‌شده",
+      lastDays: "{count} روز گذشته",
+      perDay: "/ روز",
     },
     breakdown: {
       output: "خروجی",
@@ -1256,6 +1264,7 @@ export const fa: TranslationMap = {
       cached: "کش‌شده",
       prompt: "پرامپت",
       calls: "فراخوانی‌ها",
+      costShare: "{percent}٪ از هزینه",
       topModels: "مدل‌های برتر",
       topProviders: "ارائه‌دهنده‌های برتر",
       topTools: "ابزارهای برتر",
@@ -1518,7 +1527,7 @@ export const fa: TranslationMap = {
       badge: "منقضی‌شده",
     },
     composer: {
-      placeholder: "Message {name} (Enter to send)",
+      placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",

@@ -2339,7 +2339,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Currently documented flags
   - H2: Local model lean mode
-  - H3: Why these three tools
+  - H3: Why these tools
   - H3: When to turn it on
   - H3: When to leave it off
   - H3: Enable

@@ -307,7 +307,6 @@ function renderChatModelReasoningSelect(params: {
   const triggerModel = formatCombinedPickerModelLabel(selectedModelLabel);
   const triggerThinking = formatCombinedPickerThinkingLabel(selectedThinkingLabel);
   const triggerTitle = `${triggerModel} · ${triggerThinking}`;
-  const triggerLabel = triggerTitle;
   const thinkingStops = thinkingOptions.filter((option) => option.value !== "");
   const hasThinkingOverride = selectedThinkingValue !== "";
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
@@ -349,7 +348,16 @@ function renderChatModelReasoningSelect(params: {
           }
         }}
       >
-        <span class="chat-controls__inline-select-label">${triggerLabel}</span>
+        <span class="chat-controls__inline-select-label">${triggerModel}</span>
+        ${showReasoning || hasThinkingOverride
+          ? html`<span
+              class="chat-controls__effort-chip ${hasThinkingOverride
+                ? "chat-controls__effort-chip--override"
+                : ""}"
+              aria-hidden="true"
+              >${triggerThinking}</span
+            >`
+          : ""}
         <span class="chat-controls__inline-select-icon" aria-hidden="true">
           ${icons.chevronDown}
         </span>
