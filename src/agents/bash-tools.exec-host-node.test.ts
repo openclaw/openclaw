@@ -190,7 +190,9 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   ),
 );
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
+  vi.fn(async (_target: unknown, _resultText: string) => undefined),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -683,11 +685,7 @@ describe("executeNodeHostCommand", () => {
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
     });
-    const followupCalls = sendExecApprovalFollowupResultMock.mock.calls as unknown as [
-      unknown,
-      string,
-    ][];
-    const message = followupCalls[0]?.[1];
+    const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
     if (typeof message !== "string") {
       throw new Error("expected follow-up message");
     }
