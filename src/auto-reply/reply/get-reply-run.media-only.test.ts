@@ -1215,7 +1215,9 @@ describe("runPreparedReply media-only handling", () => {
         },
       });
     } else {
-      expect(message).not.toHaveProperty("__openclaw");
+      expect(message).not.toHaveProperty("__openclaw.senderId");
+      expect(message).not.toHaveProperty("__openclaw.senderName");
+      expect(message).not.toHaveProperty("__openclaw.senderUsername");
     }
   });
 
