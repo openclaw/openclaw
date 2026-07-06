@@ -80,6 +80,14 @@ import {
   ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
+  AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFileSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+} from "./agents-workspace.js";
+import {
   ArtifactSummarySchema,
   ArtifactsDownloadParamsSchema,
   ArtifactsDownloadResultSchema,
@@ -552,6 +560,12 @@ export const ProtocolSchemas = {
   AgentsFilesGetResult: AgentsFilesGetResultSchema,
   AgentsFilesSetParams: AgentsFilesSetParamsSchema,
   AgentsFilesSetResult: AgentsFilesSetResultSchema,
+  AgentsWorkspaceEntry: AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFile: AgentsWorkspaceFileSchema,
+  AgentsWorkspaceListParams: AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResult: AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceGetParams: AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResult: AgentsWorkspaceGetResultSchema,
   ArtifactSummary: ArtifactSummarySchema,
   ArtifactsListParams: ArtifactsListParamsSchema,
   ArtifactsListResult: ArtifactsListResultSchema,

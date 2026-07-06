@@ -427,6 +427,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.list` returns a bounded metadata-only ledger of agent run and tool action events.
+    - `agents.workspace.list` and `agents.workspace.get` expose read-only, paginated browsing of an agent's workspace directory for operator clients. Paths are confined to the realpathed workspace root (symlink and hardlink escapes rejected), reads are size-capped, and content is limited to UTF-8 text plus common image types (base64). There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
     - `environments.list` and `environments.status` expose read-only gateway-local and node environment discovery for SDK clients.
