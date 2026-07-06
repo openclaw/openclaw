@@ -22,11 +22,37 @@ private actor AttachmentSendCapture {
     }
 }
 
+private actor AttachmentHealthGate {
+    private var entered = false
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        self.entered = true
+        guard !self.released else { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func hasEntered() -> Bool {
+        self.entered
+    }
+
+    func release() {
+        self.released = true
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+}
+
 private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let capture: AttachmentSendCapture?
+    let healthGate: AttachmentHealthGate?
 
-    init(capture: AttachmentSendCapture? = nil) {
+    init(capture: AttachmentSendCapture? = nil, healthGate: AttachmentHealthGate? = nil) {
         self.capture = capture
+        self.healthGate = healthGate
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
@@ -45,6 +71,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        await self.healthGate?.wait()
         true
     }
 
@@ -205,6 +232,50 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
         XCTAssertEqual(optimisticAudio?.type, "file")
         XCTAssertEqual(optimisticAudio?.mimeType, "audio/mp4")
+        XCTAssertEqual(optimisticAudio?.durationSeconds, 21.2)
+    }
+
+    func testVoiceNoteSendKeepsCapturedDurationWhenDraftChangesDuringHealthCheck() async throws {
+        let capture = AttachmentSendCapture()
+        let healthGate = AttachmentHealthGate()
+        let transport = AttachmentProcessingTransport(capture: capture, healthGate: healthGate)
+        let draftAttachment = OpenClawPendingAttachment(
+            url: nil,
+            data: Data("draft-audio".utf8),
+            fileName: "draft.m4a",
+            mimeType: "audio/mp4",
+            preview: nil,
+            durationSeconds: 21.2)
+        let replacementAttachment = OpenClawPendingAttachment(
+            url: nil,
+            data: Data("replacement-audio".utf8),
+            fileName: "replacement.m4a",
+            mimeType: "audio/mp4",
+            preview: nil,
+            durationSeconds: 99)
+        let viewModel = await MainActor.run {
+            let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+            viewModel.attachments = [draftAttachment]
+            return viewModel
+        }
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("health check started") {
+            await healthGate.hasEntered()
+        }
+        await MainActor.run {
+            viewModel.removeAttachment(draftAttachment.id)
+            viewModel.attachments.append(replacementAttachment)
+        }
+        await healthGate.release()
+        try await waitUntil("voice note sent") {
+            await capture.count() == 1
+        }
+
+        let optimisticAudio = await MainActor.run {
+            viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }
+        }
+        XCTAssertEqual(optimisticAudio?.fileName, "draft.m4a")
         XCTAssertEqual(optimisticAudio?.durationSeconds, 21.2)
     }
 

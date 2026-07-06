@@ -1232,7 +1232,7 @@ public final class OpenClawChatViewModel {
                 fileName: att.fileName,
                 content: att.data.base64EncodedString())
         }
-        for (attachment, att) in zip(self.attachments, encodedAttachments) {
+        for (attachment, att) in zip(draftAttachments, encodedAttachments) {
             userContent.append(
                 OpenClawChatMessageContent(
                     type: att.type,
