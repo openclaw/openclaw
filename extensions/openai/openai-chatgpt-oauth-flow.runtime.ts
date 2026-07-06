@@ -7,6 +7,10 @@
 
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
@@ -38,6 +42,8 @@ const CALLBACK_HOST = resolveCallbackHost();
 const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+const TOKEN_BODY_LIMIT_BYTES = 1024 * 1024;
+const TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const SCOPE = "openid profile email offline_access";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
@@ -178,8 +184,22 @@ async function postTokenForm(
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
-    const responseBody = await response.arrayBuffer();
-    return new Response(responseBody, {
+    if (response.ok) {
+      const json = await readProviderJsonResponse<TokenResponseJson>(
+        response,
+        "OpenAI Codex token exchange",
+        { maxBytes: TOKEN_BODY_LIMIT_BYTES },
+      );
+      return new Response(JSON.stringify(json), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+    const text = await readResponseTextLimited(response, TOKEN_ERROR_BODY_LIMIT_BYTES).catch(
+      () => "",
+    );
+    return new Response(text, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,

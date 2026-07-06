@@ -143,6 +143,26 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("fails token exchange when the JSON response exceeds the byte cap", async () => {
+    const hugeBody = JSON.stringify({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expires_in: 3600,
+      padding: "x".repeat(1024 * 1024),
+    });
+    mockTokenResponseText(hugeBody);
+
+    const result = await testing.exchangeAuthorizationCode(
+      "code",
+      "verifier",
+      testing.resolveRedirectUri("localhost"),
+      { timeoutMs: 5 },
+    );
+
+    expect(result.type).toBe("failed");
+    expect(result.message).toMatch(/exceeds\s+\d+\s+bytes/);
+  });
+
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
