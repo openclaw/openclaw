@@ -1533,6 +1533,20 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
     }
     props.onSend();
   };
+  const abortAction = props.canAbort
+    ? html`
+        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+          <button
+            class="chat-send-btn chat-send-btn--stop"
+            @click=${props.onAbort}
+            aria-label=${t("chat.runControls.stopGenerating")}
+          >
+            ${icons.stop}
+            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
 
   return html`
     <div class="agent-chat__toolbar-right">
@@ -1578,6 +1592,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
                 <span class="agent-chat__control-label">${t("chat.composer.stopVoiceInput")}</span>
               </button>
             </openclaw-tooltip>
+            ${abortAction}
           `
         : props.canAbort
           ? html`
@@ -1598,16 +1613,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
                     </openclaw-tooltip>
                   `
                 : nothing}
-              <openclaw-tooltip .content=${t("chat.runControls.stop")}>
-                <button
-                  class="chat-send-btn chat-send-btn--stop"
-                  @click=${props.onAbort}
-                  aria-label=${t("chat.runControls.stopGenerating")}
-                >
-                  ${icons.stop}
-                  <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
-                </button>
-              </openclaw-tooltip>
+              ${abortAction}
             `
           : hasComposedContent || !props.onToggleVoice
             ? html`

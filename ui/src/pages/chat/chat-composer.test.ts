@@ -122,6 +122,34 @@ describe("chat run controls", () => {
     expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
   });
 
+  it("keeps voice and generation stop actions available when both are active", () => {
+    const container = document.createElement("div");
+    const onAbort = vi.fn();
+    const onToggleVoice = vi.fn();
+    render(
+      renderChatRunControls(
+        createProps({
+          canAbort: true,
+          onAbort,
+          onToggleVoice,
+          voiceActive: true,
+        }),
+      ),
+      container,
+    );
+
+    const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
+    const stopGenerationButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
+    );
+
+    stopVoiceButton.click();
+    stopGenerationButton.click();
+    expect(onToggleVoice).toHaveBeenCalledTimes(1);
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
   it("switches between idle and abort actions", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
