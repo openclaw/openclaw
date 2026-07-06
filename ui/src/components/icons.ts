@@ -385,8 +385,8 @@ export const icons = {
   `,
   send: html`
     <svg viewBox="0 0 24 24">
-      <path d="m22 2-7 20-4-9-9-4Z" />
-      <path d="M22 2 11 13" />
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
     </svg>
   `,
   stop: html` <svg viewBox="0 0 24 24"><rect width="14" height="14" x="5" y="5" rx="1" /></svg> `,

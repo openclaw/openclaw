@@ -616,8 +616,7 @@
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg,
-  .chat-send-btn svg {
+  .agent-chat__toolbar .btn--ghost svg {
     width: 16px;
     height: 16px;
   }

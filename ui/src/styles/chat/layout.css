@@ -932,12 +932,13 @@ openclaw-chat-page {
   min-height: 36px;
   max-height: calc(7em + 24px);
   resize: none;
-  padding: var(--chat-box-inset);
+  padding: calc(var(--chat-box-inset) - 2px) var(--chat-box-inset)
+    var(--chat-box-inset);
   padding-left: calc(var(--chat-box-inset) - 4px);
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: var(--control-ui-text-md);
+  font-size: var(--control-ui-input-text-size);
   font-family: inherit;
   line-height: 1.4;
   outline: none;
@@ -2685,7 +2686,31 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
-/* Keep the chevron pinned right when the mobile trigger stretches. */
+/* Effort chip inside the model trigger is decorative; the trigger aria-label
+   carries the full model + thinking state. */
+.chat-controls__effort-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.chat-controls__effort-chip--override {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+}
+
+/* Chevron pins right so label+chip stay grouped when the trigger stretches
+   (mobile grid cell); on desktop the trigger is content-sized so this is a
+   no-op vs the old space-between layout. */
 .chat-controls__inline-select-icon {
   display: inline-flex;
   width: 14px;

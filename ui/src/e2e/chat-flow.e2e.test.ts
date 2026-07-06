@@ -1674,6 +1674,57 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps composer controls from focusing the textarea", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseSessions = chatSessionListResponse();
+    const thinkingLevels = [
+      { id: "low", label: "low" },
+      { id: "medium", label: "medium" },
+      { id: "high", label: "high" },
+    ];
+    const sessions = {
+      ...baseSessions,
+      defaults: {
+        ...baseSessions.defaults,
+        thinkingDefault: "low",
+        thinkingLevels,
+      },
+      sessions: baseSessions.sessions.map((session, index) =>
+        index === 0 ? { ...session, thinkingLevel: "high", thinkingLevels } : session,
+      ),
+    };
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessions,
+      },
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      await textarea.fill("sixteen px");
+      expect(await textarea.evaluate((el) => getComputedStyle(el).fontSize)).toBe("16px");
+
+      const trigger = page.getByRole("main").locator('[data-chat-model-select="true"]').first();
+      await trigger.click();
+      expect(
+        await page.evaluate(
+          () => document.activeElement?.matches(".agent-chat__composer-combobox textarea") ?? false,
+        ),
+      ).toBe(false);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("restores the selected agent model after clearing a session override", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
