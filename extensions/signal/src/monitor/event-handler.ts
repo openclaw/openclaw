@@ -88,6 +88,22 @@ import type {
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions } from "./mentions.js";
 
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
+  /reply session initialization conflicted for \S+/u;
+
+function isRetryableSignalInboundError(error: unknown): boolean {
+  const candidates: unknown[] = [];
+  let current: any = error;
+  while (current) {
+    if (current.cause) candidates.push(current.cause);
+    if (current.error) candidates.push(current.error);
+    current = current.cause || current.error;
+  }
+  return candidates.some((candidate) =>
+    REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(candidate)),
+  );
+}
+
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
     return `${count} file${count > 1 ? "s" : ""}`;
@@ -651,36 +667,68 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
+      const retryEntries = (sourceError: unknown): boolean => {
+        if (!isRetryableSignalInboundError(sourceError)) {
+          return false;
+        }
+        const nextEntries = entries.filter((_entry, index) => {
+          // Limit retries to 3 attempts per entry
+          return index < 3;
+        });
+        if (nextEntries.length === 0) {
+          return false;
+        }
+        // Schedule retry with 1 second delay
+        const retryTimer = setTimeout(() => {
+          for (const entry of nextEntries) {
+            void inboundDebouncer.enqueue(entry).catch((err: unknown) => {
+              logVerbose(`signal retry enqueue failed: ${String(err)}`);
+            });
+          }
+        }, 1000);
+        retryTimer.unref?.();
+        return true;
+      };
+
+      try {
+        const last = entries.at(-1);
+        if (!last) {
+          return;
+        }
+        if (entries.length === 1) {
+          await handleSignalInboundMessage(last);
+          return;
+        }
+        const combinedText = entries
+          .map((entry) => entry.bodyText)
+          .filter(Boolean)
+          .join("\\n");
+        const combinedCommandBody = entries
+          .map((entry) => entry.commandBody)
+          .filter(Boolean)
+          .join("\\n");
+        if (!combinedText.trim()) {
+          return;
+        }
+        await handleSignalInboundMessage({
+          ...last,
+          bodyText: combinedText,
+          commandBody: combinedCommandBody,
+          mediaPath: undefined,
+          mediaType: undefined,
+          mediaPaths: undefined,
+          mediaTypes: undefined,
+        });
+      } catch (error) {
+        if (!retryEntries(error)) {
+          // Non-retryable error or exhausted retries - log and move on
+          deps.runtime.error?.(`signal debounce flush failed: ${String(error)}`);
+        }
+        throw error;
       }
-      if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
-      });
     },
-    onError: (err) => {
+    onError: (err, entries) => {
+      // Final error handler for exhausted retries or non-retryable errors
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
     },
   });
