@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Source build portability:** keep tsdown configuration self-contained so builds do not depend on resolving the tsdown package from unrun's temporary module directory.
 - **Diffs rendering:** render viewer and image output from one SSR preload, preserve language-pack highlighting through hydration, normalize language hints case-insensitively, skip identical before/after inputs with an explicit `changed` result, report truthful file-render and input errors, cache hash-pinned viewer runtimes, and prefer canonical file settings over stale aliases. (#100487)
 - **Remote browser reliability:** bound persistent Playwright tab enumeration by the existing remote CDP timeout budget and retire timed-out connection attempts so late completions cannot restore a stuck connection. (#80147, #58968) Thanks @HemantSudarshan and @KeaneYan.
 - **MCP OAuth response bounds:** reject body-less foreign error bodies without calling their inherently unbounded `text()` fallback, while preserving HTTP status and headers for safe SDK diagnostics. (#98143) Thanks @Pick-cat.
