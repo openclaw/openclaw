@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   readWindowsProcessArgsSync: vi.fn(),
+  readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
   note: vi.fn(),
 }));
 
@@ -95,6 +96,10 @@ vi.mock("../daemon/service.js", () => ({
     install: mocks.install,
     restart: mocks.restart,
   }),
+}));
+
+vi.mock("../daemon/schtasks.js", () => ({
+  readWindowsStartupFallbackRuntimeForUpdate: mocks.readWindowsStartupFallbackRuntimeForUpdate,
 }));
 
 vi.mock("../daemon/systemd.js", () => ({
@@ -348,6 +353,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
     mocks.readRuntime.mockResolvedValue({ status: "unknown" });
+    mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue(null);
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
@@ -1052,6 +1058,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR = "1";
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "0";
     mocks.readCommand.mockResolvedValue({
@@ -1223,6 +1230,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
           },
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
+        mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue({
+          status: "running",
+          pid: 4242,
+        });
 
         await runNonInteractiveRepair({
           updateInProgress: true,
@@ -1248,8 +1259,34 @@ describe("maybeRepairGatewayServiceConfig", () => {
         expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
+        expect(mocks.install).toHaveBeenCalledWith(
+          expect.objectContaining({
+            startupFallbackTakeoverRuntime: { status: "running", pid: 4242 },
+          }),
+        );
         expect(mocks.restart).not.toHaveBeenCalled();
       },
+    );
+  });
+
+  it("does not use Scheduled Task runtime as Startup-fallback takeover evidence", async () => {
+    mockProcessPlatform("win32");
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "1";
+    setupGatewayTokenRepairScenario();
+    mocks.readRuntime.mockResolvedValue({ status: "running" });
+    mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue(null);
+
+    await runNonInteractiveRepair({ updateInProgress: true });
+
+    expect(mocks.install).toHaveBeenCalledWith(
+      expect.objectContaining({ startupFallbackTakeoverRuntime: undefined }),
     );
   });
 

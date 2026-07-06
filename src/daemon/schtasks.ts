@@ -1008,6 +1008,52 @@ async function resolveFallbackRuntime(
   };
 }
 
+export async function readWindowsStartupFallbackRuntimeForUpdate(
+  env: GatewayServiceEnv,
+): Promise<GatewayServiceRuntime | null> {
+  if (!(await isStartupEntryInstalled(env))) {
+    return null;
+  }
+  const taskExists = probeScheduledTaskExists(resolveTaskName(env));
+  if (taskExists === null) {
+    throw new Error("Could not verify whether the Windows Scheduled Task exists.");
+  }
+  if (taskExists) {
+    return null;
+  }
+  return await resolveFallbackRuntime(env);
+}
+
+const FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS = 5_000;
+const FALLBACK_TAKEOVER_REPROBE_INTERVAL_MS = 250;
+
+async function waitForFallbackTakeoverRuntime(
+  env: GatewayServiceEnv,
+  installedCommand: GatewayServiceCommandConfig | null,
+  initialRuntime: GatewayServiceRuntime,
+  previousRuntime: GatewayServiceRuntime,
+): Promise<GatewayServiceRuntime> {
+  let runtime = initialRuntime;
+  const deadline = Date.now() + FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS;
+  while (runtime.status !== "running" && Date.now() < deadline) {
+    await sleep(FALLBACK_TAKEOVER_REPROBE_INTERVAL_MS);
+    runtime = await resolveFallbackRuntime(env, installedCommand).catch((err) => ({
+      status: "unknown",
+      detail: `Could not re-inspect the existing Windows login item: ${String(err)}`,
+    }));
+  }
+  if (runtime.status === "stopped" && previousRuntime.status === "running") {
+    const previousPid = previousRuntime.pid;
+    if (!previousPid || probeProcessState(previousPid) !== "missing") {
+      return {
+        status: "unknown",
+        detail: "The previously running Windows login item has not exited cleanly.",
+      };
+    }
+  }
+  return runtime;
+}
+
 async function resolveControllableFallbackRuntime(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
@@ -1476,9 +1522,21 @@ export async function installScheduledTask(
   // Capture fallback ownership from installed metadata before replacing the
   // script. A repair can change the port or profile that locates the old process.
   const startupEntryInstalled = await isStartupEntryInstalled(fallbackEnv);
-  const startupRuntime = startupEntryInstalled
+  let startupRuntime = startupEntryInstalled
     ? await resolveFallbackRuntime(fallbackEnv, installedCommand).catch(() => null)
     : null;
+  if (
+    startupEntryInstalled &&
+    args.startupFallbackTakeoverRuntime?.status === "running" &&
+    startupRuntime?.status !== "running"
+  ) {
+    startupRuntime = await waitForFallbackTakeoverRuntime(
+      fallbackEnv,
+      installedCommand,
+      startupRuntime ?? { status: "unknown" },
+      args.startupFallbackTakeoverRuntime,
+    );
+  }
   if (startupEntryInstalled && (!startupRuntime || startupRuntime.status === "unknown")) {
     throw new Error(
       startupRuntime?.detail ??

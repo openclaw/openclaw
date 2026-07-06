@@ -8,6 +8,7 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import "./test-helpers/schtasks-base-mocks.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   inspectPortUsage,
   killProcessTree,
@@ -71,6 +72,7 @@ const {
   installScheduledTask,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
+  readWindowsStartupFallbackRuntimeForUpdate,
   restartScheduledTask,
   resolveTaskScriptPath,
   stopScheduledTask,
@@ -219,12 +221,14 @@ function installGatewayScheduledTask(
   env: Record<string, string>,
   stdout = new PassThrough(),
   port = "18789",
+  startupFallbackTakeoverRuntime?: GatewayServiceRuntime,
 ) {
   return installScheduledTask({
     env,
     stdout,
     programArguments: ["node", "gateway.js", "--port", port],
     environment: { OPENCLAW_GATEWAY_PORT: port },
+    startupFallbackTakeoverRuntime,
   });
 }
 
@@ -340,6 +344,13 @@ afterEach(() => {
 });
 
 describe("Windows startup fallback", () => {
+  it("skips task ownership probes when no Startup fallback exists", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await expect(readWindowsStartupFallbackRuntimeForUpdate(env)).resolves.toBeNull();
+      expect(spawnSync).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to a Startup-folder launcher when schtasks create is denied", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([
@@ -721,7 +732,7 @@ describe("Windows startup fallback", () => {
           return { port, status: "free", listeners: [], hints: [] };
         }
         oldPortProbes += 1;
-        return oldPortProbes === 1
+        return oldPortProbes < 3
           ? { port, status: "free", listeners: [], hints: [] }
           : {
               port,
@@ -746,11 +757,32 @@ describe("Windows startup fallback", () => {
       ]);
       addSuccessfulScheduledTaskRestartResponses();
 
-      await installGatewayScheduledTask(env, new PassThrough(), "19433");
+      await installGatewayScheduledTask(env, new PassThrough(), "19433", {
+        status: "running",
+        pid: 4242,
+      });
 
-      expect(oldPortProbes).toBeGreaterThanOrEqual(2);
+      expect(oldPortProbes).toBeGreaterThanOrEqual(3);
       expectGatewayTermination(4242);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("keeps the fallback when a previously running process cannot be proven gone", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      await writeGatewayScript(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "free",
+        listeners: [],
+        hints: [],
+      });
+
+      await expect(
+        installGatewayScheduledTask(env, new PassThrough(), "18789", { status: "running" }),
+      ).rejects.toThrow("previously running Windows login item has not exited cleanly");
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });
 

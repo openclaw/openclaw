@@ -19,6 +19,7 @@ import {
 } from "../daemon/inspect.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import { readWindowsStartupFallbackRuntimeForUpdate } from "../daemon/schtasks.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -27,6 +28,7 @@ import {
 } from "../daemon/service-audit.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-managed-env.js";
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
   isSystemdUnitActive,
@@ -239,15 +241,14 @@ function shouldDeferUpdateModeSystemdServiceRepair(params: {
   );
 }
 
-async function isWindowsGatewayRunningForUpdateRepair(params: {
+async function readWindowsGatewayRuntimeForUpdateRepair(params: {
   service: ReturnType<typeof resolveGatewayService>;
   env: NodeJS.ProcessEnv;
-}): Promise<boolean> {
+}): Promise<GatewayServiceRuntime | null> {
   if (process.platform !== "win32") {
-    return false;
+    return null;
   }
-  const runtime = await params.service.readRuntime(params.env).catch(() => null);
-  return runtime?.status === "running";
+  return await params.service.readRuntime(params.env).catch(() => null);
 }
 
 async function suppressRunningSystemdExecStartRepairs(params: {
@@ -725,12 +726,32 @@ export async function maybeRepairGatewayServiceConfig(
     updateRepairWillRewriteWindowsTask && updateParentAllowsGatewayActivation(process.env);
   // Config writes can make the live gateway reload between audit and repair.
   // Preserve its initial state so a transient reload does not strand a fallback.
-  const updateRepairShouldInstall =
-    updateRepairCanActivateGateway &&
-    (await isWindowsGatewayRunningForUpdateRepair({
-      service,
-      env: serviceRuntimeEnv,
-    }));
+  const updateRepairRuntime = updateRepairCanActivateGateway
+    ? await readWindowsGatewayRuntimeForUpdateRepair({
+        service,
+        env: serviceRuntimeEnv,
+      })
+    : null;
+  const updateRepairShouldInstall = updateRepairRuntime?.status === "running";
+  let startupFallbackTakeoverRuntime: GatewayServiceRuntime | undefined;
+  if (updateRepairShouldInstall) {
+    try {
+      const fallbackRuntime = await readWindowsStartupFallbackRuntimeForUpdate(serviceRuntimeEnv);
+      if (fallbackRuntime && (fallbackRuntime.status !== "running" || !fallbackRuntime.pid)) {
+        note(
+          "Could not verify the running Windows login item before service repair; leaving it unchanged.",
+          "Gateway",
+        );
+        return cfg;
+      }
+      startupFallbackTakeoverRuntime = fallbackRuntime ?? undefined;
+    } catch (err) {
+      runtime.error(
+        `Could not inspect the Windows login item before service repair: ${String(err)}`,
+      );
+      return cfg;
+    }
+  }
   if (
     (!updateRepairMode || updateRepairWillRewriteWindowsTask) &&
     !tokenRefConfigured &&
@@ -806,6 +827,7 @@ export async function maybeRepairGatewayServiceConfig(
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
       environmentValueSources: updatedPlan.environmentValueSources,
+      startupFallbackTakeoverRuntime,
     });
     if (
       updateRepairShouldInstall &&
