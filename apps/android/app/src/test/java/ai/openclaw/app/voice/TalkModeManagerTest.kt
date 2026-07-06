@@ -5,8 +5,9 @@ import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.ResolveInfo
+import android.content.IntentFilter
 import android.os.SystemClock
 import android.speech.RecognitionService
 import kotlinx.coroutines.CompletableDeferred
@@ -98,8 +99,10 @@ class TalkModeManagerTest {
     runTest {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
-      shadowOf(app.packageManager)
-        .setResolveInfosForIntent(Intent(RecognitionService.SERVICE_INTERFACE), listOf(ResolveInfo()))
+      val packageManager = shadowOf(app.packageManager)
+      val speechService = ComponentName(app, "TestSpeechRecognitionService")
+      packageManager.addServiceIfNotPresent(speechService)
+      packageManager.addIntentFilterForService(speechService, IntentFilter(RecognitionService.SERVICE_INTERFACE))
       val manager = createManager()
       Dispatchers.setMain(StandardTestDispatcher(testScheduler))
       try {
