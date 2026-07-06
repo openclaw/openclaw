@@ -96,7 +96,9 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
 
       const failure = page.locator(".login-gate__failure-summary");
       await failure.waitFor({ timeout: 10_000 });
-      expect((await failure.textContent())?.toLowerCase()).toContain("protocol mismatch");
+      expect((await failure.textContent())?.toLowerCase()).toContain(
+        "supported connection protocol",
+      );
       await page.waitForTimeout(1_600);
       expect(await gateway.getSocketCount()).toBe(1);
     } finally {
