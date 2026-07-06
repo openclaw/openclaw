@@ -100,7 +100,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
         "supported connection protocol",
       );
       await page.waitForTimeout(1_600);
-      expect(await gateway.getSocketCount()).toBe(1);
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {
       await closeContext(context);
     }
