@@ -110,6 +110,11 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   const opusStream = createDiscordOpusEncodeStream();
   let stderr = "";
   let ffmpegClosed = false;
+  const killFfmpeg = () => {
+    if (!ffmpegClosed && !ffmpeg.killed) {
+      ffmpeg.kill();
+    }
+  };
 
   ffmpeg.stderr.setEncoding("utf8");
   ffmpeg.stderr.on("data", (chunk: string) => {
@@ -135,7 +140,10 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 
   // Both readable child pipes need listeners; an unhandled stream error terminates Node.
   for (const readable of [ffmpeg.stdout, ffmpeg.stderr]) {
-    readable.on("error", (err) => opusStream.destroy(err));
+    readable.on("error", (err) => {
+      killFfmpeg();
+      opusStream.destroy(err);
+    });
   }
   ffmpeg.stdin.on("error", (err) => {
     if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
@@ -144,8 +152,8 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   });
   ffmpeg.stdout.pipe(opusStream);
   opusStream.once("close", () => {
-    if (!ffmpegClosed && !opusStream.readableEnded) {
-      ffmpeg.kill();
+    if (!opusStream.readableEnded) {
+      killFfmpeg();
     }
   });
   if (typeof input !== "string") {
