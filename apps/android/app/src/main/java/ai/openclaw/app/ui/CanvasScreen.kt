@@ -1,7 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.node.CanvasController
+import ai.openclaw.app.node.CanvasNavigationPolicy
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.util.Log
@@ -25,6 +25,7 @@ import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicReference
 
 /** Hosts the gateway canvas WebView and attaches it to the runtime canvas controller. */
@@ -92,14 +93,25 @@ fun CanvasScreen(
             request: WebResourceRequest,
           ): Boolean {
             if (!request.isForMainFrame) return false
-            return blockLoopbackCanvasNavigation(viewModel, currentPageUrlRef, request.url.toString())
+            return blockUnsafeCanvasNavigation(viewModel, currentPageUrlRef, request.url.toString())
           }
 
-          @Suppress("OVERRIDE_DEPRECATION")
-          override fun shouldOverrideUrlLoading(
+          override fun shouldInterceptRequest(
             view: WebView,
-            url: String?,
-          ): Boolean = blockLoopbackCanvasNavigation(viewModel, currentPageUrlRef, url)
+            request: WebResourceRequest,
+          ): WebResourceResponse? {
+            val shouldBlock =
+              CanvasNavigationPolicy.shouldBlockNonGetMainFrame(
+                method = request.method,
+                isForMainFrame = request.isForMainFrame,
+              )
+            if (!shouldBlock) return null
+            // shouldOverrideUrlLoading excludes POST navigations and their redirects. WebView does
+            // not expose those redirect targets, so non-GET main-frame loads fail closed here.
+            currentPageUrlRef.set(null)
+            view.post { viewModel.canvas.navigate("") }
+            return blockedCanvasResponse()
+          }
 
           override fun onPageStarted(
             view: WebView,
@@ -202,17 +214,27 @@ fun CanvasScreen(
   )
 }
 
-private fun blockLoopbackCanvasNavigation(
+private fun blockUnsafeCanvasNavigation(
   viewModel: MainViewModel,
   currentPageUrlRef: AtomicReference<String?>,
-  rawUrl: String?,
+  rawUrl: String,
 ): Boolean {
-  val url = rawUrl?.trim().orEmpty()
-  if (!CanvasController.shouldBlockNavigateUrl(url)) return false
+  val url = rawUrl.trim()
+  if (!CanvasNavigationPolicy.shouldBlock(url)) return false
   currentPageUrlRef.set(null)
   viewModel.canvas.navigate("")
   return true
 }
+
+private fun blockedCanvasResponse(): WebResourceResponse =
+  WebResourceResponse(
+    "text/plain",
+    "UTF-8",
+    403,
+    "Blocked",
+    mapOf("Cache-Control" to "no-store"),
+    ByteArrayInputStream(ByteArray(0)),
+  )
 
 /** Filters WebView postMessage payloads before they enter the A2UI action handler. */
 internal class CanvasA2UIActionBridge(

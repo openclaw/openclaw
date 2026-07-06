@@ -1,7 +1,6 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Looper
@@ -22,7 +21,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.net.URI
 import kotlin.coroutines.resume
 
 /**
@@ -84,7 +82,7 @@ class CanvasController {
 
   /** Navigates the canvas to a remote URL or back to the bundled scaffold for blank/root input. */
   fun navigate(url: String) {
-    this.url = normalizeNavigateUrl(url).ifBlank { null }
+    this.url = CanvasNavigationPolicy.normalize(url).ifBlank { null }
     _currentUrl.value = this.url
     reload()
   }
@@ -258,147 +256,6 @@ class CanvasController {
     fun parseNavigateUrl(paramsJson: String?): String {
       val obj = parseParamsObject(paramsJson) ?: return ""
       return obj.string("url").trim()
-    }
-
-    /** Keeps remote canvas navigation from reaching loopback services on the Android device. */
-    fun normalizeNavigateUrl(rawUrl: String): String {
-      val trimmed = rawUrl.trim()
-      if (trimmed.isBlank() || trimmed == "/") return ""
-      val parsed = runCatching { URI(trimmed) }.getOrNull()
-      val scheme = parsed?.scheme?.trim()?.lowercase().orEmpty().ifBlank { rawUrlScheme(trimmed) }
-      val host =
-        parsed
-          ?.host
-          ?.trim()
-          .orEmpty()
-          .ifBlank {
-            rawAuthorityHost(parsed?.rawAuthority ?: rawUrlAuthority(trimmed))
-          }
-      if (shouldBlockNavigateTarget(scheme = scheme, host = host)) return ""
-      return trimmed
-    }
-
-    fun shouldBlockNavigateUrl(rawUrl: String): Boolean {
-      val trimmed = rawUrl.trim()
-      if (trimmed.isBlank() || trimmed == "/") return false
-      val parsed = runCatching { URI(trimmed) }.getOrNull()
-      val scheme = parsed?.scheme?.trim()?.lowercase().orEmpty().ifBlank { rawUrlScheme(trimmed) }
-      val host =
-        parsed
-          ?.host
-          ?.trim()
-          .orEmpty()
-          .ifBlank {
-            rawAuthorityHost(parsed?.rawAuthority ?: rawUrlAuthority(trimmed))
-          }
-      return shouldBlockNavigateTarget(scheme = scheme, host = host)
-    }
-
-    private fun shouldBlockNavigateTarget(
-      scheme: String,
-      host: String,
-    ): Boolean {
-      if (scheme in setOf("http", "https") && host.isEmpty()) return true
-      return scheme != "file" && host.isNotEmpty() && isCanvasNavigateLoopbackHost(host)
-    }
-
-    private fun rawUrlScheme(rawUrl: String): String {
-      val schemeSeparator = rawUrl.indexOf("://")
-      val colonSeparator = rawUrl.indexOf(':')
-      val end =
-        when {
-          schemeSeparator > 0 -> schemeSeparator
-          colonSeparator > 0 -> colonSeparator
-          else -> return ""
-        }
-      val candidate = rawUrl.substring(0, end).trim().lowercase()
-      return candidate.takeIf { it.all { char -> char in 'a'..'z' || char in '0'..'9' || char == '+' || char == '-' || char == '.' } }.orEmpty()
-    }
-
-    private fun rawUrlAuthority(rawUrl: String): String? {
-      val schemeSeparator = rawUrl.indexOf("://")
-      if (schemeSeparator < 0) return null
-      val authorityStart = schemeSeparator + 3
-      val authorityEnd =
-        rawUrl.indexOfAny(charArrayOf('/', '\\', '?', '#'), startIndex = authorityStart)
-          .takeIf { it >= 0 }
-          ?: rawUrl.length
-      return rawUrl.substring(authorityStart, authorityEnd)
-    }
-
-    private fun rawAuthorityHost(rawAuthority: String?): String {
-      val authority = rawAuthority?.trim().orEmpty()
-      if (authority.isEmpty()) return ""
-      val hostPort = authority.substringAfterLast('@')
-      if (hostPort.startsWith("[")) {
-        return hostPort.substringAfter('[').substringBefore(']')
-      }
-      return if (hostPort.count { it == ':' } == 1) hostPort.substringBefore(':') else hostPort
-    }
-
-    private fun isCanvasNavigateLoopbackHost(rawHost: String): Boolean {
-      val host = percentDecodeAsciiHost(rawHost)
-      if (isLoopbackGatewayHost(host)) return true
-      val address = parseWebViewIpv4Address(host) ?: return false
-      return ((address ushr 24) and 0xffL) == 127L
-    }
-
-    private fun percentDecodeAsciiHost(rawHost: String): String {
-      if (!rawHost.contains('%')) return rawHost
-      val out = StringBuilder(rawHost.length)
-      var index = 0
-      while (index < rawHost.length) {
-        val char = rawHost[index]
-        if (char == '%' && index + 2 < rawHost.length) {
-          val hex = rawHost.substring(index + 1, index + 3)
-          val value = hex.toIntOrNull(16)
-          if (value != null) {
-            out.append(value.toChar())
-            index += 3
-            continue
-          }
-        }
-        out.append(char)
-        index += 1
-      }
-      return out.toString()
-    }
-
-    private fun parseWebViewIpv4Address(rawHost: String): Long? {
-      val host = rawHost.trim().lowercase().trim('[', ']').trimEnd('.')
-      if (host.isEmpty() || host.contains(':') || host.contains('%')) return null
-      val parts = host.split('.')
-      if (parts.size !in 1..4 || parts.any { it.isEmpty() }) return null
-      val numbers = parts.map { parseWebViewIpv4Number(it) ?: return null }
-      if (numbers.dropLast(1).any { it > 255L }) return null
-      val lastMax =
-        when (numbers.size) {
-          1 -> 0xffffffffL
-          2 -> 0x00ffffffL
-          3 -> 0x0000ffffL
-          else -> 0xffL
-        }
-      val last = numbers.last()
-      if (last > lastMax) return null
-      return when (numbers.size) {
-        1 -> last
-        2 -> (numbers[0] shl 24) or last
-        3 -> (numbers[0] shl 24) or (numbers[1] shl 16) or last
-        else -> (numbers[0] shl 24) or (numbers[1] shl 16) or (numbers[2] shl 8) or last
-      }
-    }
-
-    private fun parseWebViewIpv4Number(raw: String): Long? {
-      val normalized = raw.trim().lowercase()
-      if (normalized.isEmpty()) return null
-      val (digits, radix) =
-        when {
-          normalized.startsWith("0x") -> normalized.drop(2) to 16
-          normalized.length > 1 && normalized.startsWith("0") -> normalized.drop(1) to 8
-          else -> normalized to 10
-        }
-      if (digits.isEmpty()) return 0L
-      return digits.toLongOrNull(radix)
     }
 
     /** Parses non-blank JavaScript from canvas.eval params. */

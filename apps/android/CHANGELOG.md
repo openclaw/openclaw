@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Canvas navigation now blocks device-local loopback and unspecified web targets, including encoded and redirected forms, while preserving remote and emulator-host canvases.
+
 ## 2026.6.11 - 2026-07-01
 
 Improves Android gateway setup with localized onboarding, QR pairing fixes, and support for local mDNS gateway hosts.
