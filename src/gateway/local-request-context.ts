@@ -36,6 +36,7 @@ const unavailableCron: CronServiceContract = {
   listPage: async () => cronUnavailable(),
   add: async () => cronUnavailable(),
   update: async () => cronUnavailable(),
+  updateWithPrecondition: async () => cronUnavailable(),
   remove: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),

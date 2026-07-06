@@ -6249,6 +6249,9 @@ public struct SkillsUploadCommitParams: Codable, Sendable {
 
 public struct CronJob: Codable, Sendable {
     public let id: String
+    public let declarationkey: String?
+    public let displayname: String?
+    public let owner: [String: AnyCodable]?
     public let agentid: String?
     public let sessionkey: String?
     public let name: String
@@ -6264,9 +6267,22 @@ public struct CronJob: Codable, Sendable {
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
     public let state: [String: AnyCodable]
+    public let nextrunatms: Int?
+    public let lastrunatms: Int?
+    public let lastrunstatus: AnyCodable?
+    public let lastrunerror: String?
+    public let lastdelivered: Bool?
+    public let lastdeliverystatus: AnyCodable?
+    public let lastdeliveryerror: String?
+    public let lastfailurenotificationdelivered: Bool?
+    public let lastfailurenotificationdeliverystatus: AnyCodable?
+    public let lastfailurenotificationdeliveryerror: String?
 
     public init(
         id: String,
+        declarationkey: String? = nil,
+        displayname: String? = nil,
+        owner: [String: AnyCodable]? = nil,
         agentid: String? = nil,
         sessionkey: String?,
         name: String,
@@ -6281,9 +6297,22 @@ public struct CronJob: Codable, Sendable {
         payload: AnyCodable,
         delivery: AnyCodable?,
         failurealert: AnyCodable?,
-        state: [String: AnyCodable])
+        state: [String: AnyCodable],
+        nextrunatms: Int? = nil,
+        lastrunatms: Int? = nil,
+        lastrunstatus: AnyCodable? = nil,
+        lastrunerror: String? = nil,
+        lastdelivered: Bool? = nil,
+        lastdeliverystatus: AnyCodable? = nil,
+        lastdeliveryerror: String? = nil,
+        lastfailurenotificationdelivered: Bool? = nil,
+        lastfailurenotificationdeliverystatus: AnyCodable? = nil,
+        lastfailurenotificationdeliveryerror: String? = nil)
     {
         self.id = id
+        self.declarationkey = declarationkey
+        self.displayname = displayname
+        self.owner = owner
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.name = name
@@ -6299,10 +6328,23 @@ public struct CronJob: Codable, Sendable {
         self.delivery = delivery
         self.failurealert = failurealert
         self.state = state
+        self.nextrunatms = nextrunatms
+        self.lastrunatms = lastrunatms
+        self.lastrunstatus = lastrunstatus
+        self.lastrunerror = lastrunerror
+        self.lastdelivered = lastdelivered
+        self.lastdeliverystatus = lastdeliverystatus
+        self.lastdeliveryerror = lastdeliveryerror
+        self.lastfailurenotificationdelivered = lastfailurenotificationdelivered
+        self.lastfailurenotificationdeliverystatus = lastfailurenotificationdeliverystatus
+        self.lastfailurenotificationdeliveryerror = lastfailurenotificationdeliveryerror
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case declarationkey = "declarationKey"
+        case displayname = "displayName"
+        case owner
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case name
@@ -6318,6 +6360,16 @@ public struct CronJob: Codable, Sendable {
         case delivery
         case failurealert = "failureAlert"
         case state
+        case nextrunatms = "nextRunAtMs"
+        case lastrunatms = "lastRunAtMs"
+        case lastrunstatus = "lastRunStatus"
+        case lastrunerror = "lastRunError"
+        case lastdelivered = "lastDelivered"
+        case lastdeliverystatus = "lastDeliveryStatus"
+        case lastdeliveryerror = "lastDeliveryError"
+        case lastfailurenotificationdelivered = "lastFailureNotificationDelivered"
+        case lastfailurenotificationdeliverystatus = "lastFailureNotificationDeliveryStatus"
+        case lastfailurenotificationdeliveryerror = "lastFailureNotificationDeliveryError"
     }
 }
 
@@ -6379,6 +6431,9 @@ public struct CronStatusParams: Codable, Sendable {}
 
 public struct CronAddParams: Codable, Sendable {
     public let name: String
+    public let declarationkey: String?
+    public let displayname: String?
+    public let owner: [String: AnyCodable]?
     public let agentid: AnyCodable?
     public let sessionkey: AnyCodable?
     public let description: String?
@@ -6393,6 +6448,9 @@ public struct CronAddParams: Codable, Sendable {
 
     public init(
         name: String,
+        declarationkey: String? = nil,
+        displayname: String? = nil,
+        owner: [String: AnyCodable]? = nil,
         agentid: AnyCodable? = nil,
         sessionkey: AnyCodable?,
         description: String?,
@@ -6406,6 +6464,9 @@ public struct CronAddParams: Codable, Sendable {
         failurealert: AnyCodable?)
     {
         self.name = name
+        self.declarationkey = declarationkey
+        self.displayname = displayname
+        self.owner = owner
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.description = description
@@ -6421,6 +6482,9 @@ public struct CronAddParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case name
+        case declarationkey = "declarationKey"
+        case displayname = "displayName"
+        case owner
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case description
@@ -6432,6 +6496,28 @@ public struct CronAddParams: Codable, Sendable {
         case payload
         case delivery
         case failurealert = "failureAlert"
+    }
+}
+
+public struct CronDeclarativeAddResult: Codable, Sendable {
+    public let created: Bool
+    public let updated: Bool?
+    public let job: CronJob
+
+    public init(
+        created: Bool,
+        updated: Bool?,
+        job: CronJob)
+    {
+        self.created = created
+        self.updated = updated
+        self.job = job
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case created
+        case updated
+        case job
     }
 }
 
