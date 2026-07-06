@@ -34,10 +34,7 @@ import type {
 } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
-import {
-  canonicalizeRealtimeTranscriptionProviderId,
-  listRealtimeTranscriptionProviders,
-} from "../../realtime-transcription/provider-registry.js";
+import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
@@ -63,6 +60,7 @@ import {
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   configuredOrFalse,
+  listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -286,12 +284,19 @@ function buildTalkCatalog(config: OpenClawConfig) {
     transcription: {
       ready: transcriptionSelection.ready,
       ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
-      providers: listRealtimeTranscriptionProviders(config).map((provider) => {
+      providers: listTalkTranscriptionProviders(config, [
+        transcriptionConfig.provider,
+        ...Object.keys(transcriptionConfig.providers),
+      ]).map((provider) => {
         const rawConfig = getVoiceProviderConfig({
           providerConfigs: transcriptionConfig.providers,
           provider,
           configuredProviderId:
-            provider.id === activeTranscriptionProvider ? transcriptionConfig.provider : undefined,
+            activeTranscriptionProvider &&
+            normalizeOptionalLowercaseString(provider.id) ===
+              normalizeOptionalLowercaseString(activeTranscriptionProvider)
+              ? transcriptionConfig.provider
+              : undefined,
         });
         const rawConfigWithModel =
           transcriptionConfig.model && rawConfig.model === undefined

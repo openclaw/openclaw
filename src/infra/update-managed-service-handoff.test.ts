@@ -135,6 +135,7 @@ async function runHelperWithExistingSentinel(params: {
   await startManagedServiceUpdateHandoff({
     root: tmpDir,
     timeoutMs: 1_800_000,
+    restartDrainTimeoutMs: 300_000,
     restartDelayMs: 500,
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
@@ -232,6 +233,8 @@ async function spawnExitedPid(): Promise<number> {
 
 async function runHelperWithCommand(params: {
   commandArgv: string[];
+  parentPid?: number;
+  parentExitTimeoutMs?: number | null;
   serviceRecovery?: Record<string, unknown>;
   pathPrepend?: string;
 }): Promise<{ code: number }> {
@@ -244,6 +247,7 @@ async function runHelperWithCommand(params: {
   await startManagedServiceUpdateHandoff({
     root: tmpDir,
     timeoutMs: 1_800_000,
+    restartDrainTimeoutMs: 300_000,
     restartDelayMs: 0,
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
@@ -266,8 +270,9 @@ async function runHelperWithCommand(params: {
     `${JSON.stringify(
       {
         ...baseParams,
-        parentPid: await spawnExitedPid(),
-        parentExitTimeoutMs: 5000,
+        parentPid: params.parentPid ?? (await spawnExitedPid()),
+        parentExitTimeoutMs:
+          params.parentExitTimeoutMs === undefined ? 5000 : params.parentExitTimeoutMs,
         cwd: tmpDir,
         commandArgv: params.commandArgv,
         stateDatabasePath: resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tmpDir }),
@@ -359,6 +364,7 @@ describe("managed service update handoff", () => {
     const result = await startManagedServiceUpdateHandoff({
       root: "/tmp/openclaw",
       timeoutMs: 1_800_000,
+      restartDrainTimeoutMs: 300_000,
       restartDelayMs: 500,
       parentPid: 12345,
       execPath: "/usr/local/bin/node",
@@ -419,6 +425,7 @@ describe("managed service update handoff", () => {
     const result = await startManagedServiceUpdateHandoff({
       root: "/tmp/openclaw",
       timeoutMs: 1_800_000,
+      restartDrainTimeoutMs: 300_000,
       restartDelayMs: 500,
       parentPid: 12345,
       execPath: "/usr/local/bin/node",
@@ -493,6 +500,7 @@ describe("managed service update handoff", () => {
 
     const result = await startManagedServiceUpdateHandoff({
       root: "/tmp/openclaw",
+      restartDrainTimeoutMs: 300_000,
       channel: "extended-stable",
       parentPid: 12345,
       execPath: "/usr/local/bin/node",
@@ -598,6 +606,7 @@ describe("managed service update handoff", () => {
       const result = await startManagedServiceUpdateHandoff({
         root: "/tmp/openclaw",
         timeoutMs: 1_800_000,
+        restartDrainTimeoutMs: 300_000,
         restartDelayMs: 500,
         parentPid: 12345,
         execPath: "/usr/local/bin/node",
@@ -729,5 +738,79 @@ describe("managed service update handoff", () => {
     await expect(pathExists(staleDir)).resolves.toBe(false);
     await expect(pathExists(freshDir)).resolves.toBe(true);
     await expect(pathExists(unrelatedDir)).resolves.toBe(true);
+  });
+
+  it("waits for the configured restart drain and shutdown reserve (#99666)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-timeout-test-"));
+    tempDirs.add(tmpDir);
+
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    await startManagedServiceUpdateHandoff({
+      root: tmpDir,
+      timeoutMs: 1_800_000,
+      restartDrainTimeoutMs: 60_000,
+      restartDelayMs: 2_000,
+      parentPid: process.pid,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+    });
+
+    const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
+      string,
+      unknown
+    >;
+
+    expect(helperParams.parentExitTimeoutMs).toBe(92_000);
+  });
+
+  it("waits indefinitely when restart draining has no deadline", async () => {
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-handoff-default-timeout-test-"),
+    );
+    tempDirs.add(tmpDir);
+
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    await startManagedServiceUpdateHandoff({
+      root: tmpDir,
+      restartDrainTimeoutMs: undefined,
+      restartDelayMs: 0,
+      parentPid: process.pid,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+    });
+
+    const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
+      string,
+      unknown
+    >;
+
+    expect(helperParams.parentExitTimeoutMs).toBeNull();
+  });
+
+  it("runs the handoff after an indefinitely awaited parent exits", async () => {
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const parent = spawn(process.execPath, ["-e", "setTimeout(() => {}, 750)"], {
+      stdio: "ignore",
+    });
+
+    try {
+      const result = await runHelperWithCommand({
+        commandArgv: [process.execPath, "-e", ""],
+        parentPid: parent.pid,
+        parentExitTimeoutMs: null,
+      });
+      expect(result.code).toBe(0);
+    } finally {
+      parent.kill();
+    }
   });
 });
