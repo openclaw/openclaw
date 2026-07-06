@@ -117,6 +117,7 @@ export function startGatewayConfigReloader(opts: {
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onNoopConfigCommit: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
@@ -287,6 +288,9 @@ export function startGatewayConfigReloader(opts: {
     }
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       await opts.onConfigChange?.(plan, nextConfig);
+      // No-op plans still change the runtime config snapshot. Commit before
+      // marking applied so getRuntimeConfig() readers do not stay stale until restart.
+      await opts.onNoopConfigCommit(plan, nextConfig);
       await opts.onConfigApplied?.(plan, nextConfig);
       return;
     }

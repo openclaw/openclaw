@@ -1233,4 +1233,25 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
-  ON backup_runs(created_at DESC, id);\n`;
+  ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS worktrees (
+  id TEXT NOT NULL PRIMARY KEY,
+  repo_fingerprint TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_ref TEXT NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
+  owner_id TEXT,
+  snapshot_ref TEXT,
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  removed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
+  ON worktrees(repo_fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
+  ON worktrees(removed_at);\n`;

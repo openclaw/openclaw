@@ -7813,7 +7813,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Non-interactive setup
   - H2: Built-in catalog
-  - H2: Tiered pricing
   - H2: Advanced configuration
   - H2: Related
 
@@ -9205,6 +9204,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Statuses
   - H2: Token budgets
   - H2: Model tools
+  - H2: Goal context on every turn
   - H2: TUI
   - H2: Channel behavior
   - H2: Troubleshooting
@@ -9475,6 +9475,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Lifecycle
   - H2: Chat
+  - H3: Learn from recent work
   - H2: CLI
   - H2: Proposal content
   - H2: Support files

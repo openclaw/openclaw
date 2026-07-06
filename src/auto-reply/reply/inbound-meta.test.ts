@@ -1,10 +1,15 @@
 // Tests inbound metadata normalization before prompt injection.
 import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+  refreshActiveGoalContext,
+} from "./inbound-meta.js";
 
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginById: (channelId: string) =>
@@ -81,6 +86,28 @@ function parseHistoryLines(text: string): string[] {
 
 function parseLocationPayload(text: string): Record<string, unknown> {
   return parseUntrustedJsonBlock(text, "Location (untrusted metadata):") as Record<string, unknown>;
+}
+
+function createGoalSessionEntry(
+  status: SessionGoalStatus,
+  objective = "Publish the release evidence",
+): SessionEntry {
+  return {
+    sessionId: "goal-context-session",
+    updatedAt: 1,
+    goal: {
+      schemaVersion: 1,
+      id: "goal-context",
+      objective,
+      status,
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokenStartFresh: true,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    },
+  };
 }
 
 describe("buildInboundMetaSystemPrompt", () => {
@@ -267,6 +294,120 @@ describe("buildInboundMetaSystemPrompt", () => {
 });
 
 describe("buildInboundUserContextPrefix", () => {
+  it("injects an active goal into the current user-role context", () => {
+    const text = buildInboundUserContextPrefix(
+      {} as TemplateContext,
+      undefined,
+      createGoalSessionEntry("active"),
+    );
+
+    expect(text).toBe(
+      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
+    );
+  });
+
+  it.each(["paused", "blocked", "usage_limited", "budget_limited", "complete"] as const)(
+    "does not inject a %s goal",
+    (status) => {
+      expect(
+        buildInboundUserContextPrefix(
+          {} as TemplateContext,
+          undefined,
+          createGoalSessionEntry(status),
+        ),
+      ).toBe("");
+    },
+  );
+
+  it("bounds and normalizes the active goal objective", () => {
+    const text = buildInboundUserContextPrefix(
+      {} as TemplateContext,
+      undefined,
+      createGoalSessionEntry("active", `${"x".repeat(205)}\nmore`),
+    );
+
+    expect(text).toBe(
+      `Active goal: ${"x".repeat(199)}… — advance it or update its status (get_goal/update_goal).`,
+    );
+    expect(text).not.toContain("\n");
+  });
+
+  it("projects a budget limit without mutating the stored goal", () => {
+    const entry = createGoalSessionEntry("active");
+    entry.totalTokens = 10;
+    entry.totalTokensFresh = true;
+    entry.goal = { ...entry.goal!, tokenBudget: 10 };
+
+    expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");
+    expect(entry.goal.status).toBe("active");
+  });
+
+  it("removes a captured goal line when a queued turn is admitted after completion", () => {
+    const goalContext =
+      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+    const context = {
+      text: [
+        "Conversation info (untrusted metadata):",
+        goalContext,
+        "Current message:\nmessage_id=next-turn",
+      ].join("\n\n"),
+      injectedGoalContexts: [goalContext],
+    };
+
+    const refreshed = refreshActiveGoalContext(context, createGoalSessionEntry("complete"));
+
+    expect(refreshed?.text).toContain("Conversation info (untrusted metadata):");
+    expect(refreshed?.text).toContain("Current message:\nmessage_id=next-turn");
+    expect(refreshed?.text).not.toContain("Active goal:");
+  });
+
+  it("adds a goal activated while a queued turn waited for admission", () => {
+    const refreshed = refreshActiveGoalContext(
+      { text: "Current message:\nmessage_id=queued-turn" },
+      createGoalSessionEntry("active"),
+    );
+
+    expect(refreshed?.text).toBe(
+      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).\n\nCurrent message:\nmessage_id=queued-turn",
+    );
+  });
+
+  it("keeps the current-message anchor last when refreshing a queued goal", () => {
+    const goalContext =
+      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+    const refreshed = refreshActiveGoalContext(
+      {
+        text: `${goalContext}\n\nCurrent message:\n#34975 obviyus:`,
+        promptJoiner: " ",
+        injectedGoalContexts: [goalContext],
+      },
+      createGoalSessionEntry("active"),
+    );
+
+    expect(refreshed?.text).toBe(`${goalContext}\n\nCurrent message:\n#34975 obviyus:`);
+    expect(refreshed?.promptJoiner).toBe(" ");
+  });
+
+  it("does not remove a user event that matches the generated goal wording", () => {
+    const goalContext =
+      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+    const refreshed = refreshActiveGoalContext(
+      {
+        text: `${goalContext}\n\nCurrent event:\n${goalContext}`,
+        injectedGoalContexts: [goalContext],
+      },
+      createGoalSessionEntry("complete"),
+    );
+
+    expect(refreshed?.text).toBe(`Current event:\n${goalContext}`);
+  });
+
+  it("leaves the inbound context unchanged when the session has no goal", () => {
+    const entry: SessionEntry = { sessionId: "no-goal", updatedAt: 1 };
+
+    expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");
+  });
+
   it("omits conversation label block for direct chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",

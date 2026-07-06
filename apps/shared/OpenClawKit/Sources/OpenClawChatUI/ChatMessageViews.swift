@@ -618,6 +618,57 @@ struct ChatTypingIndicatorBubble: View {
     }
 }
 
+/// Status footer for a user bubble backed by the durable offline outbox.
+@MainActor
+struct ChatOutboxStatusLabel: View {
+    let state: OpenClawChatOutboxMessageState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: self.iconName)
+                .font(.system(size: 10, weight: .semibold))
+            Text(self.title)
+                .font(OpenClawChatTypography.caption)
+        }
+        .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(self.accessibilityText)
+    }
+
+    private var title: String {
+        switch self.state {
+        case .queued:
+            "Queued"
+        case .sending:
+            "Sending…"
+        case .failed:
+            "Not sent"
+        }
+    }
+
+    private var iconName: String {
+        switch self.state {
+        case .queued:
+            "clock"
+        case .sending:
+            "arrow.up.circle"
+        case .failed:
+            "exclamationmark.circle"
+        }
+    }
+
+    private var accessibilityText: String {
+        switch self.state {
+        case .queued:
+            "Queued, sends when reconnected"
+        case .sending:
+            "Sending"
+        case .failed:
+            "Not sent, touch and hold to retry or delete"
+        }
+    }
+}
+
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.style == rhs.style &&

@@ -1269,6 +1269,9 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.userTurnTranscriptRecorder
+          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
+          : {}),
       },
     );
     if (steerOutcome.queued) {

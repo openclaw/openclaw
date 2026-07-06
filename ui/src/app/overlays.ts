@@ -191,6 +191,7 @@ type UpdateRunResponse = {
     after?: { version?: string | null } | null;
   };
   handoff?: { status?: string };
+  restart?: { coalesced?: boolean } | null;
 };
 
 export function createApplicationOverlays(gateway: ApplicationGateway): ApplicationOverlays {
@@ -521,6 +522,15 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
         if (response.ok === true && status === "ok") {
           pendingUpdateExpectedVersion = expectedVersion;
           pendingUpdateHandoff = false;
+          if (response.restart?.coalesced === true) {
+            snapshot = {
+              ...snapshot,
+              updateStatusBanner: {
+                tone: "info",
+                text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+              },
+            };
+          }
           return;
         }
         pendingUpdateExpectedVersion = null;

@@ -761,9 +761,9 @@ async function requestPluginToolApproval(params: {
       }
       return {
         blocked: true,
-        kind: "failure",
+        kind: approval.timeoutReason ? "veto" : "failure",
         deniedReason: "plugin-approval",
-        reason: "Approval timed out",
+        reason: approval.timeoutReason ?? "Approval timed out",
         params: params.baseParams,
       };
     }
@@ -901,16 +901,17 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
+    const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
     const timeoutReason =
       requestResult?.deliveryRoute === "turn-source"
         ? buildPluginApprovalFailureReason({
-            fallbackReason: "Approval timed out",
+            fallbackReason: fallbackTimeoutReason,
             ctx: params.ctx,
           })
-        : "Approval timed out";
+        : fallbackTimeoutReason;
     return {
       blocked: true,
-      kind: "failure",
+      kind: approval.timeoutReason ? "veto" : "failure",
       deniedReason: "plugin-approval",
       reason: timeoutReason,
       params: params.baseParams,
@@ -1033,10 +1034,11 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   ctx?: HookContext;
   signal?: AbortSignal;
 }): Promise<HookOutcome | undefined> {
-  const result = resolveSkillWorkshopToolApproval({
+  const result = await resolveSkillWorkshopToolApproval({
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
     ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+    ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({
     result,
@@ -1266,10 +1268,11 @@ export async function runBeforeToolCallHook(args: {
     const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
-    const initialCorePolicyResult = resolveSkillWorkshopToolApproval({
+    const initialCorePolicyResult = await resolveSkillWorkshopToolApproval({
       toolName,
       toolParams: normalizedParams,
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+      ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };

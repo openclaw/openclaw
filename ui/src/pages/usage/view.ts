@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { getUsageCacheRefreshTitle } from "./cache-status.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -132,6 +133,138 @@ function renderUsageEmptyState(onRefresh: () => void) {
       </div>
       <div class="usage-empty-state__actions">
         <button class="btn primary" @click=${onRefresh}>${t("common.refresh")}</button>
+      </div>
+    </section>
+  `;
+}
+
+type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
+
+function formatProviderAmount(amount: number, unit: string): string {
+  const normalizedUnit = unit.trim().toUpperCase();
+  if (["USD", "EUR", "GBP", "CNY", "JPY"].includes(normalizedUnit)) {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: normalizedUnit,
+      maximumFractionDigits: normalizedUnit === "JPY" ? 0 : 2,
+    }).format(amount);
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(amount)} ${unit}`;
+}
+
+function formatProviderReset(resetAt: number | undefined): string | null {
+  if (!resetAt || !Number.isFinite(resetAt)) {
+    return null;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(resetAt));
+}
+
+function renderProviderBilling(snapshot: ProviderUsageSnapshot) {
+  return (snapshot.billing ?? []).map((entry) => {
+    const label =
+      entry.label ??
+      (entry.type === "balance"
+        ? t("usage.providerUsage.balance")
+        : entry.type === "spend"
+          ? t("usage.providerUsage.spend")
+          : t("usage.providerUsage.budget"));
+    const value =
+      entry.type === "budget"
+        ? `${formatProviderAmount(entry.used, entry.unit)} / ${formatProviderAmount(entry.limit, entry.unit)}`
+        : formatProviderAmount(entry.amount, entry.unit);
+    return html`
+      <div class="provider-usage-billing-row">
+        <span>${label}</span>
+        <strong>${value}</strong>
+      </div>
+    `;
+  });
+}
+
+function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
+  if (providers.length === 0) {
+    return nothing;
+  }
+  return html`
+    <section class="card provider-usage-section">
+      <div class="provider-usage-heading">
+        <div>
+          <div class="card-title usage-section-title">${t("usage.providerUsage.title")}</div>
+          <div class="card-sub">${t("usage.providerUsage.subtitle")}</div>
+        </div>
+        <span class="provider-usage-count">${providers.length}</span>
+      </div>
+      <div class="provider-usage-grid">
+        ${providers.map(
+          (provider) => html`
+            <article class="provider-usage-card">
+              <div class="provider-usage-card__header">
+                <div>
+                  <div class="provider-usage-card__name">${provider.displayName}</div>
+                  <div class="provider-usage-card__id">${provider.provider}</div>
+                </div>
+                ${provider.plan
+                  ? html`<span class="provider-usage-plan">${provider.plan}</span>`
+                  : nothing}
+              </div>
+              ${provider.error
+                ? html`<div class="provider-usage-error">${provider.error}</div>`
+                : html`
+                    ${provider.windows.length > 0
+                      ? html`
+                          <div class="provider-usage-windows">
+                            ${provider.windows.map((window) => {
+                              const used = Math.max(0, Math.min(100, window.usedPercent));
+                              const remaining = Math.max(0, 100 - used);
+                              const reset = formatProviderReset(window.resetAt);
+                              return html`
+                                <div class="provider-usage-window">
+                                  <div class="provider-usage-window__meta">
+                                    <span>${window.label}</span>
+                                    <strong
+                                      >${t("usage.providerUsage.remaining", {
+                                        percent: remaining.toFixed(0),
+                                      })}</strong
+                                    >
+                                  </div>
+                                  <div
+                                    class="provider-usage-progress"
+                                    role="progressbar"
+                                    aria-label=${window.label}
+                                    aria-valuemin="0"
+                                    aria-valuemax="100"
+                                    aria-valuenow=${used.toFixed(0)}
+                                  >
+                                    <span style=${`width: ${used}%`}></span>
+                                  </div>
+                                  ${reset
+                                    ? html`<div class="provider-usage-reset">
+                                        ${t("usage.providerUsage.resets", { date: reset })}
+                                      </div>`
+                                    : nothing}
+                                </div>
+                              `;
+                            })}
+                          </div>
+                        `
+                      : nothing}
+                    ${provider.billing && provider.billing.length > 0
+                      ? html`<div class="provider-usage-billing">
+                          ${renderProviderBilling(provider)}
+                        </div>`
+                      : nothing}
+                    ${provider.summary
+                      ? html`<div class="provider-usage-summary">${provider.summary}</div>`
+                      : nothing}
+                  `}
+            </article>
+          `,
+        )}
       </div>
     </section>
   `;
@@ -789,6 +922,7 @@ export function renderUsage(props: UsageProps) {
           : nothing}
       </section>
 
+      ${renderProviderUsage(data.providerUsage)}
       ${isEmpty
         ? renderUsageEmptyState(filterActions.onRefresh)
         : html`

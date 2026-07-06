@@ -19,6 +19,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       aggregates: null,
       costDaily: [],
       cacheStatus: undefined,
+      providerUsage: [],
     },
     filters: {
       startDate: "2026-05-14",
@@ -143,6 +144,51 @@ describe("renderUsage", () => {
 
     expect(agentFilter?.textContent).toContain("main");
     expect(agentFilter?.textContent).toContain("research");
+  });
+
+  it("renders provider plans, quotas, and billing independently of session usage", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [
+              {
+                provider: "openrouter",
+                displayName: "OpenRouter",
+                plan: "Production",
+                windows: [{ label: "API key budget", usedPercent: 25 }],
+                billing: [
+                  {
+                    type: "balance",
+                    label: "Account balance",
+                    amount: 64.5,
+                    unit: "USD",
+                  },
+                  {
+                    type: "budget",
+                    label: "API key budget",
+                    used: 5,
+                    limit: 20,
+                    unit: "USD",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const card = container.querySelector(".provider-usage-card");
+    expect(card?.textContent).toContain("OpenRouter");
+    expect(card?.textContent).toContain("Production");
+    expect(card?.textContent).toContain("75% left");
+    expect(card?.textContent).toContain("$64.50");
+    expect(card?.textContent).toContain("$5.00 / $20.00");
   });
 
   it("filters visible sessions when an agent scope is selected", () => {

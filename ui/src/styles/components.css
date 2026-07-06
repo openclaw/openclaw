@@ -2965,6 +2965,25 @@
   }
 }
 
+.worktrees-table .table-head,
+.worktrees-table .table-row {
+  grid-template-columns: 1fr 1fr 1.4fr 0.8fr 0.9fr 0.9fr;
+}
+
+@media (max-width: 1100px) {
+  .worktrees-table .table-head,
+  .worktrees-table .table-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (max-width: 1100px) {
+  .worktrees-table .table-head,
+  .worktrees-table .table-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .session-link {
   text-decoration: none;
   color: var(--accent);

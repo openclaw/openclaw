@@ -1064,6 +1064,7 @@ export async function startGatewayServer(
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
       mediaCleanup: runtimeState.mediaCleanup,
+      worktreeCleanup: runtimeState.worktreeCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
@@ -1815,12 +1816,14 @@ export async function startGatewayServer(
             if (maintenance.mediaCleanup) {
               clearInterval(maintenance.mediaCleanup);
             }
+            clearInterval(maintenance.worktreeCleanup);
             return;
           }
           runtimeState.tickInterval = maintenance.tickInterval;
           runtimeState.healthInterval = maintenance.healthInterval;
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
+          runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
         },
         shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,
         markCronStartHandled: () => {

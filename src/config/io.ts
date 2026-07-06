@@ -167,6 +167,7 @@ type ShippedPluginInstallConfigReadMigration = {
 };
 
 const loggedInvalidConfigs = new Set<string>();
+const loggedConfigWarningFingerprints = new Map<string, string>();
 const warnedFutureTouchedVersions = new Set<string>();
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
@@ -961,6 +962,31 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
+function logConfigWarningsOnce(params: {
+  configPath: string;
+  warnings: Array<{ path: string; message: string }>;
+  logger: Pick<typeof console, "warn">;
+}): void {
+  if (params.warnings.length === 0) {
+    // A later recurrence should be visible after the config becomes clean.
+    loggedConfigWarningFingerprints.delete(params.configPath);
+    return;
+  }
+
+  const details = params.warnings
+    .map(
+      (warning) =>
+        `- ${sanitizeTerminalText(warning.path || "<root>")}: ${sanitizeTerminalText(warning.message)}`,
+    )
+    .join("\n");
+  const fingerprint = hashConfigRaw(details);
+  if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
+    return;
+  }
+  loggedConfigWarningFingerprints.set(params.configPath, fingerprint);
+  params.logger.warn(`Config warnings:\n${details}`);
+}
+
 function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
   return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
 }
@@ -1687,6 +1713,7 @@ export function createConfigIO(
       maybeLoadDotEnvForConfig(deps.env);
       const envBeforeRead = snapshotEnv(deps.env);
       if (!deps.fs.existsSync(configPath)) {
+        loggedConfigWarningFingerprints.delete(configPath);
         if (
           overrides.shellEnvFallback !== "defer" &&
           shouldEnableShellEnvFallback(deps.env) &&
@@ -1726,6 +1753,7 @@ export function createConfigIO(
       }
       warnOnConfigMiskeys(validationConfigRaw, deps.logger);
       if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
+        loggedConfigWarningFingerprints.delete(configPath);
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({
             path: configPath,
@@ -1787,14 +1815,12 @@ export function createConfigIO(
           loggedConfigPaths: loggedInvalidConfigs,
         });
       }
-      if (validated.warnings.length > 0) {
-        const details = validated.warnings
-          .map(
-            (iss) =>
-              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
-          )
-          .join("\n");
-        deps.logger.warn(`Config warnings:\n${details}`);
+      if (overrides.pluginValidation !== "skip") {
+        logConfigWarningsOnce({
+          configPath,
+          warnings: validated.warnings,
+          logger: deps.logger,
+        });
       }
       if (!deps.suppressFutureVersionWarning) {
         warnIfConfigFromFuture(validated.config, deps.logger);
@@ -2396,12 +2422,7 @@ export function createConfigIO(
       const issueMessage = issue?.message ?? "invalid";
       throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
-    if (validated.warnings.length > 0) {
-      const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
-        .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
-    }
+    const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
 
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
@@ -2668,13 +2689,27 @@ export function createConfigIO(
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      if (!options.skipPluginValidation) {
+        // Only successful full-validation commits can advance warning state.
+        // The outer runtime refresh may still roll back this commit and state.
+        logConfigWarningsOnce({
+          configPath,
+          warnings: validated.warnings,
+          logger: deps.logger,
+        });
+      }
       return {
         persistedHash: nextHash,
         persistedConfig: stampedOutputConfig,
-        ...(pluginInstallConfigMigration.migrated
+        ...(pluginInstallConfigMigration.migrated || !options.skipPluginValidation
           ? {
               [configWritePostCommitRollback]: () => {
                 rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
+                if (previousWarningFingerprint === undefined) {
+                  loggedConfigWarningFingerprints.delete(configPath);
+                } else {
+                  loggedConfigWarningFingerprints.set(configPath, previousWarningFingerprint);
+                }
               },
             }
           : {}),
