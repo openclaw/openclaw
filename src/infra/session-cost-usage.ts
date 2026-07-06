@@ -1227,12 +1227,20 @@ async function* readJsonlRecords(
         // Ignore malformed lines
       }
     }
-  } catch {
-    // Mid-stream read errors are swallowed so callers see a truncated but
-    // stable iterator, matching the behavior for missing/empty transcript files.
   } finally {
     rl.close();
     fileStream.destroy();
+  }
+}
+
+async function* readJsonlRecordsBestEffort(
+  filePath: string,
+): AsyncGenerator<Record<string, unknown>> {
+  try {
+    yield* readJsonlRecords(filePath);
+  } catch {
+    // Diagnostic readers return the records available before a stream failure.
+    // Durable cache scans use the strict reader so partial data is never marked fresh.
   }
 }
 
@@ -2654,7 +2662,7 @@ export async function loadSessionLogs(params: {
   const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
-  for await (const parsed of readJsonlRecords(sessionFile)) {
+  for await (const parsed of readJsonlRecordsBestEffort(sessionFile)) {
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {

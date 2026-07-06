@@ -1,11 +1,11 @@
-// Real behavior proof: session-cost usage readline stream errors are swallowed
-// so callers get a truncated but stable result instead of an unhandled rejection.
+// Real behavior proof: session log readline errors are swallowed at the
+// diagnostic boundary so callers get a truncated but stable result.
 //
 // The proof creates a real transcript session directory where the session file
 // is a directory instead of a file. `fs.createReadStream` on a directory emits
 // an EISDIR error on the stream. With the fix, `loadSessionLogs` returns an
 // empty array after the stream closes. Before the fix the unhandled stream error
-// rejected the `for await` loop in `readJsonlRecords`.
+// rejected `loadSessionLogs`.
 
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -20,7 +20,7 @@ const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
 await fs.mkdir(sessionsDir, { recursive: true });
 
 // Make the session file a directory. createReadStream on a directory emits
-// EISDIR, which exercises the stream error handler in readJsonlRecords.
+// EISDIR, which exercises the best-effort error handler in loadSessionLogs.
 const sessionFile = path.join(sessionsDir, "proof-session.jsonl");
 await fs.mkdir(sessionFile);
 
@@ -40,7 +40,7 @@ try {
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
   console.log(`\nFAIL: loadSessionLogs threw: ${message}`);
-  console.log("The stream error should have been swallowed by readJsonlRecords.");
+  console.log("The stream error should have been swallowed by loadSessionLogs.");
   process.exitCode = 1;
 } finally {
   await fs.rm(tmpDir, { recursive: true, force: true });
