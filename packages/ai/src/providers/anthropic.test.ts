@@ -1966,4 +1966,65 @@ describe("Anthropic provider", () => {
       },
     ]);
   });
+
+  it("preserves thinking blocks in history assistant turns containing tool calls even when replayThinkingEnabled is false", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [
+          { role: "user", content: "call tool please", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal thought block",
+                thinkingSignature: "sig_tool",
+              },
+              { type: "toolCall", name: "some_tool", id: "call_1", args: {} },
+            ],
+            timestamp: 1,
+          },
+          {
+            role: "tool",
+            toolCallId: "call_1",
+            content: [{ type: "text", text: "tool output" }],
+            timestamp: 2,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "final answer" }],
+            timestamp: 3,
+          },
+          { role: "user", content: "next question", timestamp: 4 },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "off",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+
+    const payload = capturedPayload as { messages: Array<{ role: string; content: any[] }> };
+    const historicalAssistantMessage = payload.messages.find(
+      (m) => m.role === "assistant" && m.content.some((b) => b.type === "tool_use"),
+    );
+
+    expect(historicalAssistantMessage).toBeDefined();
+    const hasThinking = historicalAssistantMessage?.content.some(
+      (b) => b.type === "thinking" || b.type === "redacted_thinking",
+    );
+    expect(hasThinking).toBe(true);
+  });
 });
