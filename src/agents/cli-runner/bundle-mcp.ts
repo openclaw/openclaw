@@ -182,6 +182,12 @@ export async function prepareCliBundleMcpConfig(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   additionalConfig?: BundleMcpConfig;
+  /**
+   * Serve exactly these servers, skipping user/plugin/additional merges.
+   * Ring-zero Crestodian runs use this so the CLI harness sees only the
+   * crestodian MCP server instead of the normal openclaw tool surface.
+   */
+  exclusiveConfig?: BundleMcpConfig;
   env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
@@ -190,6 +196,14 @@ export async function prepareCliBundleMcpConfig(params: {
   }
 
   const mode = resolveBundleMcpMode(params.mode);
+  if (params.exclusiveConfig) {
+    return await prepareModeSpecificBundleMcpConfig({
+      mode,
+      backend: params.backend,
+      mergedConfig: params.exclusiveConfig,
+      env: params.env,
+    });
+  }
   const resumeMcpConfigPaths =
     mode === "claude-config-file" ? findClaudeMcpConfigPaths(params.backend.resumeArgs) : [];
   const existingMcpConfigPaths =

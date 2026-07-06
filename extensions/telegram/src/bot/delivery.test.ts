@@ -1333,6 +1333,32 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
   });
 
+  it("uses table-aware plain text when rich reply fallback sends", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("URL"));
+    const text = "| Rank | Model | Score |\n| --- | --- | --- |\n| 4 | Claude Opus | 78.16% |";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Rank | Model | Score\n4 | Claude Opus | 78.16%");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+    );
+  });
+
   it("falls back to plain text for other invalid rich entity validation errors", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

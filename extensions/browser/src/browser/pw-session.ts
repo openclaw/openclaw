@@ -196,8 +196,13 @@ const MAX_NETWORK_REQUESTS = 500;
 const MAX_RECENT_DIALOGS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
+type PendingBrowserConnection = {
+  attempt: { cancelled: boolean };
+  promise: Promise<ConnectedBrowser>;
+};
+
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
-const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
+const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
 let cdpConnectRetryDelayMsForTests: number | undefined;
@@ -479,6 +484,12 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   const normalized = normalizeCdpUrl(cdpUrl);
   const cur = cachedByCdpUrl.get(normalized);
   cachedByCdpUrl.delete(normalized);
+  const pending = connectingByCdpUrl.get(normalized);
+  if (pending) {
+    // Invalidation must also retire an in-flight connect. Otherwise it can
+    // resolve after cleanup and repopulate the cache with the stale pipe.
+    pending.attempt.cancelled = true;
+  }
   connectingByCdpUrl.delete(normalized);
   if (!cur) {
     return null;
@@ -489,7 +500,11 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   return cur;
 }
 
-function evictStalePlaywrightBrowserConnection(cdpUrl: string): void {
+function evictStalePlaywrightBrowserConnection(cdpUrl: string, expectedBrowser?: Browser): void {
+  const current = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
+  if (expectedBrowser && current?.browser !== expectedBrowser) {
+    return;
+  }
   const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
   cur?.browser.close().catch(() => {});
 }
@@ -928,12 +943,16 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
   await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
-    return await connecting;
+    return await connecting.promise;
   }
 
+  const connectionAttempt = { cancelled: false };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (connectionAttempt.cancelled) {
+        break;
+      }
       try {
         const timeout = 5000 + attempt * 2000;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
@@ -956,6 +975,10 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           }
           browser = await connectEndpoint(normalized);
         }
+        if (connectionAttempt.cancelled) {
+          browser.close().catch(() => {});
+          throw new Error("Playwright connection attempt was superseded.");
+        }
         const onDisconnected = () => {
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
@@ -969,6 +992,9 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         return connected;
       } catch (err) {
         lastErr = err;
+        if (connectionAttempt.cancelled) {
+          break;
+        }
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = formatErrorMessage(err);
         if (errMsg.includes("rate limit")) {
@@ -988,9 +1014,11 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
   };
 
   const pending = connectWithRetry().finally(() => {
-    connectingByCdpUrl.delete(normalized);
+    if (connectingByCdpUrl.get(normalized)?.attempt === connectionAttempt) {
+      connectingByCdpUrl.delete(normalized);
+    }
   });
-  connectingByCdpUrl.set(normalized, pending);
+  connectingByCdpUrl.set(normalized, { attempt: connectionAttempt, promise: pending });
 
   return await pending;
 }
@@ -1494,6 +1522,9 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   }
 
   const connections = Array.from(cachedByCdpUrl.values());
+  for (const pending of connectingByCdpUrl.values()) {
+    pending.attempt.cancelled = true;
+  }
   clearBlockedTargetsForCdpUrl();
   clearBlockedPageRefsForCdpUrl();
   cachedByCdpUrl.clear();
@@ -1601,7 +1632,7 @@ async function tryTerminateExecutionViaCdp(opts: {
  * instance, preventing reconnection.
  *
  * Instead we:
- * 1. Null out `cached` so the next call triggers a fresh connectOverCDP
+ * 1. Retire the scoped cached or in-flight connection so the next call reconnects
  * 2. Fire-and-forget browser.close() — it may hang but won't block us
  * 3. The next connectBrowser() creates a completely new CDP WebSocket connection
  *
@@ -1637,18 +1668,95 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
 }
 
 async function withPlaywrightSafeReadReconnect<T>(
-  cdpUrl: string,
-  run: () => Promise<T>,
+  opts: {
+    cdpUrl: string;
+    ssrfPolicy?: SsrFPolicy;
+    attempt?: { cancelled: boolean };
+  },
+  run: (browser: Browser) => Promise<T>,
 ): Promise<T> {
+  const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   try {
-    return await run();
+    return await run(connected.browser);
   } catch (err) {
-    if (!isRecoverablePlaywrightDisconnectError(err)) {
+    if (!isRecoverablePlaywrightDisconnectError(err) || opts.attempt?.cancelled) {
       throw err;
     }
-    evictStalePlaywrightBrowserConnection(cdpUrl);
-    return await run();
+    evictStalePlaywrightBrowserConnection(opts.cdpUrl, connected.browser);
+    if (opts.attempt?.cancelled) {
+      throw err;
+    }
+    const retry = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+    return await run(retry.browser);
   }
+}
+
+async function readPagesViaPlaywright(
+  opts: { cdpUrl: string; ssrfPolicy?: SsrFPolicy },
+  attempt?: { cancelled: boolean },
+): Promise<
+  Array<{
+    targetId: string;
+    title: string;
+    url: string;
+    type: string;
+  }>
+> {
+  return await withPlaywrightSafeReadReconnect(
+    { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, attempt },
+    async (browser) => {
+      const pages = await getAllPages(browser);
+      const results: Array<{
+        targetId: string;
+        title: string;
+        url: string;
+        type: string;
+      }> = [];
+
+      for (const page of pages) {
+        if (isBlockedPageRef(opts.cdpUrl, page)) {
+          continue;
+        }
+        let tid: string | null;
+        try {
+          tid = await pageTargetId(page);
+        } catch (err) {
+          if (isRecoverablePlaywrightDisconnectError(err)) {
+            throw err;
+          }
+          tid = null;
+        }
+        if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
+          let title = "";
+          try {
+            title = await page.title();
+          } catch (err) {
+            if (isRecoverablePlaywrightDisconnectError(err)) {
+              throw err;
+            }
+          }
+          let url = "";
+          try {
+            url = page.url();
+          } catch (err) {
+            if (isRecoverablePlaywrightDisconnectError(err)) {
+              throw err;
+            }
+          }
+          if (!isSelectableCdpBrowserTarget({ url })) {
+            continue;
+          }
+          results.push({
+            targetId: tid,
+            title,
+            url,
+            type: "page",
+          });
+        }
+      }
+      return results;
+    },
+  );
 }
 
 /**
@@ -1659,67 +1767,43 @@ async function withPlaywrightSafeReadReconnect<T>(
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<
-  Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    type: string;
-  }>
-> {
-  return await withPlaywrightSafeReadReconnect(opts.cdpUrl, async () => {
-    const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-    const pages = await getAllPages(browser);
-    const results: Array<{
-      targetId: string;
-      title: string;
-      url: string;
-      type: string;
-    }> = [];
+  timeoutMs?: number;
+}) {
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1, Math.floor(opts.timeoutMs))
+      : undefined;
+  if (timeoutMs === undefined) {
+    return await readPagesViaPlaywright(opts);
+  }
 
-    for (const page of pages) {
-      if (isBlockedPageRef(opts.cdpUrl, page)) {
-        continue;
-      }
-      let tid: string | null;
-      try {
-        tid = await pageTargetId(page);
-      } catch (err) {
-        if (isRecoverablePlaywrightDisconnectError(err)) {
-          throw err;
-        }
-        tid = null;
-      }
-      if (tid && !isBlockedTarget(opts.cdpUrl, tid)) {
-        let title = "";
-        try {
-          title = await page.title();
-        } catch (err) {
-          if (isRecoverablePlaywrightDisconnectError(err)) {
-            throw err;
-          }
-        }
-        let url = "";
-        try {
-          url = page.url();
-        } catch (err) {
-          if (isRecoverablePlaywrightDisconnectError(err)) {
-            throw err;
-          }
-        }
-        if (!isSelectableCdpBrowserTarget({ url })) {
-          continue;
-        }
-        results.push({
-          targetId: tid,
-          title,
-          url,
-          type: "page",
-        });
-      }
-    }
-    return results;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timeoutError: Error | undefined;
+  const attempt = { cancelled: false };
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      attempt.cancelled = true;
+      timeoutError = new Error(`Playwright page enumeration timed out after ${timeoutMs}ms`);
+      reject(timeoutError);
+    }, timeoutMs);
+    timer.unref?.();
   });
+  try {
+    return await Promise.race([readPagesViaPlaywright(opts, attempt), timeout]);
+  } catch (err) {
+    if (err === timeoutError) {
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        ssrfPolicy: opts.ssrfPolicy,
+        reason: "Playwright page enumeration",
+      }).catch(() => {});
+    }
+    throw err;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /**

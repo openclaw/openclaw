@@ -1,9 +1,12 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.deleteChatTranscriptCacheDatabase
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -11,6 +14,8 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.ui.GatewayConnectPlan
+import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -110,9 +115,11 @@ class MainViewModel(
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
+    runtimeState(initial = null) { it.gatewayControlPage }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
-  val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> =
-    runtimeState(initial = GatewayNodeApprovalState.Loading) { it.nodeCapabilityApprovalState }
+  val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
+    runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
@@ -125,6 +132,8 @@ class MainViewModel(
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
+    runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
   val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
@@ -206,6 +215,8 @@ class MainViewModel(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+  val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
@@ -279,10 +290,6 @@ class MainViewModel(
     prefs.setManualTls(value)
   }
 
-  fun setGatewayToken(value: String) {
-    prefs.setGatewayToken(value)
-  }
-
   fun setGatewayBootstrapToken(value: String) {
     prefs.setGatewayBootstrapToken(value)
   }
@@ -292,7 +299,7 @@ class MainViewModel(
   }
 
   /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
-  private fun resetGatewaySetupAuth() {
+  private suspend fun resetGatewaySetupAuth() {
     runtimeRef.value?.resetGatewaySetupAuth() ?: resetGatewaySetupAuthWithoutRuntime()
   }
 
@@ -302,39 +309,48 @@ class MainViewModel(
     val deviceAuthStore = DeviceAuthStore(prefs)
     deviceAuthStore.clearToken(deviceId, "node")
     deviceAuthStore.clearToken(deviceId, "operator")
+    // No runtime means no open Room handle, so the cache file can be deleted directly.
+    deleteChatTranscriptCacheDatabase(nodeApp)
   }
 
-  fun saveGatewayConfigAndConnect(
-    host: String,
-    port: Int,
-    tls: Boolean,
-    token: String,
-    bootstrapToken: String,
-    password: String,
-    resetSetupAuth: Boolean,
-  ) {
+  internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
     viewModelScope.launch(Dispatchers.Default) {
-      if (resetSetupAuth) {
+      val config = plan.config
+      val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE
+      val hasExplicitAuth =
+        config.token.isNotEmpty() || config.bootstrapToken.isNotEmpty() || config.password.isNotEmpty()
+      if (replacesSavedAuth) {
         resetGatewaySetupAuth()
       }
       prefs.setManualEnabled(true)
-      prefs.setManualHost(host)
-      prefs.setManualPort(port)
-      prefs.setManualTls(tls)
-      prefs.setGatewayBootstrapToken(bootstrapToken)
-      prefs.setGatewayToken(token)
-      prefs.setGatewayPassword(password)
-      ensureRuntime()
-        .connect(
-          GatewayEndpoint.manual(host = host, port = port),
+      prefs.setManualHost(config.host)
+      prefs.setManualPort(config.port)
+      prefs.setManualTls(config.tls)
+
+      // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
+      // including password-only setups that Compose deliberately cannot read back.
+      if (replacesSavedAuth || hasExplicitAuth) {
+        prefs.setGatewayBootstrapToken(config.bootstrapToken)
+        prefs.setGatewayToken(config.token)
+        prefs.setGatewayPassword(config.password)
+      }
+
+      val runtime = ensureRuntime()
+      val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+      if (replacesSavedAuth || hasExplicitAuth) {
+        runtime.connect(
+          endpoint,
           NodeRuntime.GatewayConnectAuth(
-            token = token.ifEmpty { null },
-            bootstrapToken = bootstrapToken.ifEmpty { null },
-            password = password.ifEmpty { null },
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
           ),
         )
+      } else {
+        runtime.connect(endpoint)
+      }
     }
   }
 
@@ -522,6 +538,10 @@ class MainViewModel(
     ensureRuntime().refreshModelCatalog()
   }
 
+  fun refreshTalkSetupReadiness() {
+    ensureRuntime().refreshTalkSetupReadiness()
+  }
+
   fun refreshAgents() {
     ensureRuntime().refreshAgents()
   }
@@ -587,6 +607,22 @@ class MainViewModel(
 
   fun abortChat() {
     ensureRuntime().abortChat()
+  }
+
+  fun startNewChat() {
+    ensureRuntime().startNewChat()
+  }
+
+  fun refreshChatCommands() {
+    ensureRuntime().refreshChatCommands()
+  }
+
+  fun retryChatOutboxCommand(id: String) {
+    ensureRuntime().retryChatOutboxCommand(id)
+  }
+
+  fun deleteChatOutboxCommand(id: String) {
+    ensureRuntime().deleteChatOutboxCommand(id)
   }
 
   fun sendChat(

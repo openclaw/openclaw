@@ -5,9 +5,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
@@ -650,35 +647,14 @@ internal class MicCaptureManager(
       }
     transcriptionCaptureJob =
       scope.launch(Dispatchers.IO) {
-        var audioRecord: AudioRecord? = null
+        var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = transcriptionSampleRateHz * 2 * transcriptionAudioFrameMs / 1000
-          val minBuffer =
-            AudioRecord.getMinBufferSize(
-              transcriptionSampleRateHz,
-              AudioFormat.CHANNEL_IN_MONO,
-              AudioFormat.ENCODING_PCM_16BIT,
-            )
-          if (minBuffer <= 0) {
-            throw IllegalStateException("AudioRecord buffer unavailable")
-          }
-          audioRecord =
-            AudioRecord
-              .Builder()
-              .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-              .setAudioFormat(
-                AudioFormat
-                  .Builder()
-                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(transcriptionSampleRateHz)
-                  .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                  .build(),
-              ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
-              .build()
+          audioInput = AndroidAudioInputSession.open(context, transcriptionSampleRateHz, frameBytes)
           val buffer = ByteArray(frameBytes)
-          audioRecord.startRecording()
+          audioInput.startRecording()
           while (coroutineContext.isActive && _micEnabled.value && transcriptionSessionId == sessionId) {
-            val read = audioRecord.read(buffer, 0, buffer.size)
+            val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             _inputLevel.value = pcm16Level(buffer, read)
             audioFrames.trySend(buffer.copyOf(read))
@@ -688,13 +664,7 @@ internal class MicCaptureManager(
           failTranscription(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
         } finally {
           audioFrames.close()
-          audioRecord?.let { record ->
-            try {
-              record.stop()
-            } catch (_: Throwable) {
-            }
-            record.release()
-          }
+          audioInput?.close()
         }
       }
   }

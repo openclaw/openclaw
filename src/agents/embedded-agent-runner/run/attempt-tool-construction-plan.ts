@@ -21,6 +21,7 @@ const SHELL_CODING_TOOL_FACTORY_NAMES = new Set(["apply_patch", "exec", "process
 // out of this set so narrow allowlists still materialize plugin tools.
 const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "agents_list",
+  "crestodian",
   "canvas",
   "cron",
   "gateway",

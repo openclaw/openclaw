@@ -626,3 +626,22 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
   ws.close();
 });
+
+test("sessions.create rejects replacing its parent key", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
+
+  const created = await directSessionReq("sessions.create", {
+    key: "main",
+    parentSessionKey: "agent:main:main",
+    emitCommandHooks: true,
+    task: "hello after replacing parent",
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "sessions.create key must differ from parentSessionKey",
+  });
+});

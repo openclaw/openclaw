@@ -2,7 +2,7 @@
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
 import crypto from "node:crypto";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -11,13 +11,13 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import { readResponseWithLimit } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
 import { stableStringify } from "../stable-stringify.js";
-import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";

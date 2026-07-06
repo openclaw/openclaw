@@ -1,8 +1,3 @@
-/**
- * Bash exec runtime.
- * Spawns host/sandbox processes, manages session updates/backgrounding,
- * approval messaging constants, environment safety, and exit outcome shaping.
- */
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -22,6 +17,12 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+/**
+ * Bash exec runtime.
+ * Spawns host/sandbox processes, manages session updates/backgrounding,
+ * approval messaging constants, environment safety, and exit outcome shaping.
+ */
+import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -377,11 +378,7 @@ export function buildApprovalPendingMessage(params: {
   host: "gateway" | "node";
   nodeId?: string;
 }) {
-  let fence = "```";
-  while (params.command.includes(fence)) {
-    fence += "`";
-  }
-  const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
+  const commandBlock = formatFencedCodeBlock(params.command, "sh");
   const lines: string[] = [];
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   const decisionText = allowedDecisions.join("|");

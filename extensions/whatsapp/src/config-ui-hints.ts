@@ -22,6 +22,10 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Config Writes",
     help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   },
+  "actions.calls": {
+    label: "WhatsApp Voice Calls",
+    help: "Expose the experimental requester-bound WhatsApp voice-call tool. Default: false. Requires a separately paired MeowCaller CLI.",
+  },
   mentionPatterns: {
     label: "WhatsApp Mention Pattern Policy",
     help: "Scopes configured groupChat mentionPatterns to selected WhatsApp conversation IDs such as 123@g.us.",

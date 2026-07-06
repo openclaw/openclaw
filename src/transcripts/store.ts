@@ -4,6 +4,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
@@ -39,13 +40,6 @@ async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
     }
     throw err;
   }
-}
-
-function normalizeMaxUtterances(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
 }
 
 function sameSessionIdentity(
@@ -192,7 +186,7 @@ export class TranscriptsStore {
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     const transcriptPath = path.join(dir, "transcript.jsonl");
-    const maxUtterances = normalizeMaxUtterances(options.maxUtterances);
+    const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
     if (maxUtterances !== undefined) {
       const utterances: TranscriptUtterance[] = [];
       try {

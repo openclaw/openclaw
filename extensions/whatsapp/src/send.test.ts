@@ -299,6 +299,33 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
+  it("reports the accepted voice send before a caption failure", async () => {
+    const buf = Buffer.from("audio");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/ogg",
+      kind: "audio",
+    });
+    sendMessage
+      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "voice-accepted"))
+      .mockRejectedValueOnce(new Error("caption failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageWhatsApp("+1555", "voice note", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: "/tmp/voice.ogg",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("caption failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "voice-accepted" }),
+    );
+  });
+
   it.each([
     { name: "mp3", contentType: "audio/mpeg", fileName: "voice.mp3" },
     { name: "webm", contentType: "audio/webm", fileName: "voice.webm" },

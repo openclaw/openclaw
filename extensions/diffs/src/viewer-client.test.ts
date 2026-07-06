@@ -192,6 +192,16 @@ describe("hydrateViewer", () => {
   });
 });
 
+describe("resolveViewerLanguagePackAvailability", () => {
+  it("resolves defined and undefined build flags", async () => {
+    const { resolveViewerLanguagePackAvailability } = await import("./viewer-client.js");
+
+    expect(resolveViewerLanguagePackAvailability(true)).toBe(true);
+    expect(resolveViewerLanguagePackAvailability(false)).toBe(false);
+    expect(resolveViewerLanguagePackAvailability(undefined)).toBe(false);
+  });
+});
+
 describe("viewerState initialization", () => {
   beforeEach(() => {
     document.body.innerHTML = "";

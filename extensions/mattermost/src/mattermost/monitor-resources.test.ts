@@ -20,9 +20,33 @@ vi.mock("./interactions.js", () => ({
 
 describe("mattermost monitor resources", () => {
   let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
+  let formatMattermostInboundMediaText: typeof import("./monitor-resources.js").formatMattermostInboundMediaText;
 
   beforeAll(async () => {
-    ({ createMattermostMonitorResources } = await import("./monitor-resources.js"));
+    ({ createMattermostMonitorResources, formatMattermostInboundMediaText } =
+      await import("./monitor-resources.js"));
+  });
+
+  it("keeps media-only download failures visible to the agent", () => {
+    expect(
+      formatMattermostInboundMediaText({
+        body: "",
+        mediaPlaceholder: "",
+        expectedCount: 1,
+        mediaCount: 0,
+      }),
+    ).toBe("[mattermost attachment unavailable]");
+  });
+
+  it("preserves successful media placeholders on partial failures", () => {
+    expect(
+      formatMattermostInboundMediaText({
+        body: "<media:document> (2 files)",
+        mediaPlaceholder: "<media:document> (2 files)",
+        expectedCount: 2,
+        mediaCount: 1,
+      }),
+    ).toBe("<media:document> (2 files)\n\n[mattermost attachment unavailable]");
   });
 
   beforeEach(() => {

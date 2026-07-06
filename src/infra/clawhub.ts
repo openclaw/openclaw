@@ -3,16 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  readResponseTextSnippet,
-  readResponseWithLimit,
-} from "@openclaw/media-core/read-response-with-limit";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
+import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
@@ -978,12 +976,11 @@ function buildGitHubZipUrl(repo: string, commit: string): string {
 }
 
 function formatSha256Integrity(bytes: Uint8Array): string {
-  const digest = createHash("sha256").update(bytes).digest("base64");
-  return `sha256-${digest}`;
+  return `sha256-${sha256Base64(bytes)}`;
 }
 
 function formatSha256Hex(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return digestSha256Hex(bytes);
 }
 
 function formatSha512Integrity(bytes: Uint8Array): string {
@@ -1596,7 +1593,7 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     json: {
       roots: [
         {
-          rootId: createHash("sha256").update(path.resolve(params.root)).digest("hex"),
+          rootId: digestSha256Hex(path.resolve(params.root)),
           label: formatTelemetryRootLabel(params.root),
           skills,
         },

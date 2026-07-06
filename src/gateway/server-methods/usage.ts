@@ -31,7 +31,6 @@ import type {
 import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
-  loadSessionCostSummaryFromCache,
   loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
@@ -65,7 +64,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
-const SESSIONS_USAGE_CACHE_READ_CONCURRENCY = 12;
+const SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY = 12;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -236,6 +235,13 @@ const resolveDateInterpretation = (params: {
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
   return { mode: "utc" };
 };
+
+const resolveDayBucketUtcOffsetMinutes = (interpretation: DateInterpretation) =>
+  interpretation.mode === "gateway"
+    ? undefined
+    : interpretation.mode === "specific"
+      ? interpretation.utcOffsetMinutes
+      : 0;
 
 /**
  * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
@@ -743,11 +749,13 @@ function mergeDailyModelRows(
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   config: OpenClawConfig;
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}`;
+  const dailyOffsetKey = params.dailyUtcOffsetMinutes ?? "gateway";
+  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dailyOffsetKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (
@@ -772,11 +780,13 @@ async function loadCostUsageSummaryCached(params: {
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
           config: params.config,
         })
       : loadCostUsageSummaryFromCache({
           startMs: params.startMs,
           endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
           config: params.config,
           agentId: params.agentId,
           requestRefresh: true,
@@ -817,6 +827,7 @@ async function loadCostUsageSummaryCached(params: {
 async function loadAllAgentCostUsageSummary(params: {
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
   const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
@@ -827,6 +838,7 @@ async function loadAllAgentCostUsageSummary(params: {
       loadCostUsageSummaryFromCache({
         startMs: params.startMs,
         endMs: params.endMs,
+        dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
         config: params.config,
         agentId,
         requestRefresh: true,
@@ -909,6 +921,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
+    const dateInterpretation = resolveDateInterpretation({
+      mode: params?.mode,
+      utcOffset: params?.utcOffset,
+    });
     const dateRange = resolveDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
@@ -928,6 +944,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
+      dailyUtcOffsetMinutes: resolveDayBucketUtcOffsetMinutes(dateInterpretation),
       config,
       agentId,
       agentScope,
@@ -961,6 +978,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = dateRange.value;
+    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(
+      resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset }),
+    );
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1143,8 +1163,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    const limitedEntries = mergedEntries.slice(0, limit);
-
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
     const aggregateTotals = createEmptyCostUsageTotals();
@@ -1190,112 +1208,68 @@ export const usageHandlers: GatewayRequestHandlers = {
       { length: mergedEntries.length },
       () => null,
     );
-    const usageLoadTasks: Array<
-      () => Promise<{
-        entryIndex: number;
-        cacheStatus: UsageCacheStatus;
-        summary: SessionCostSummary | null;
-      }>
-    > = [];
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
-      const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
-      for (const includedSessionId of includedSessionIds) {
-        const isCurrentSession = includedSessionId === merged.sessionId;
-        const includedSessionFile = isCurrentSession
-          ? merged.sessionFile
-          : resolveExistingUsageSessionFile({
-              sessionId: includedSessionId,
-              agentId: merged.agentId,
-            });
-        if (!includedSessionFile) {
-          continue;
-        }
-        usageLoadTasks.push(async () => {
-          const cachedUsage = await loadSessionCostSummaryFromCache({
-            sessionId: includedSessionId,
-            sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
-            sessionFile: includedSessionFile,
-            config,
-            agentId: merged.agentId,
-            startMs,
-            endMs,
-            refreshMode: "background",
-          });
-          return {
-            entryIndex,
-            cacheStatus: cachedUsage.cacheStatus,
-            summary: cachedUsage.summary,
-          };
-        });
-      }
-    }
-
-    const usageLoadResult = await runTasksWithConcurrency({
-      tasks: usageLoadTasks,
-      limit: SESSIONS_USAGE_CACHE_READ_CONCURRENCY,
-      errorMode: "stop",
-    });
-    if (usageLoadResult.hasError) {
-      throw usageLoadResult.firstError;
-    }
-    for (const loaded of usageLoadResult.results) {
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
-      if (!loaded.summary) {
-        continue;
-      }
-      const merged = mergedEntries[loaded.entryIndex];
-      const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
-      usage.sessionId = merged.sessionId;
-      usage.sessionFile = merged.sessionFile;
-      mergeSessionUsageInto(usage, loaded.summary);
-      usageByEntryIndex[loaded.entryIndex] = usage;
-    }
-
-    const hiddenSessionsByAgent = new Map<
+    // Group every included session (visible + hidden) by agent so the usage-cost
+    // cache is read and parsed at most once per agent. Loading each session
+    // individually re-reads and re-parses the whole cache file, so RSS spikes
+    // in proportion to `limit` on every dashboard connect (issue #100041).
+    const sessionsByAgent = new Map<
       string | undefined,
       Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
     >();
     for (const [entryIndex, merged] of mergedEntries.entries()) {
-      if (entryIndex < limitedEntries.length) {
-        continue;
-      }
-      const hiddenSessions = hiddenSessionsByAgent.get(merged.agentId) ?? [];
       for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
-        const sessionFile =
+        const includedSessionFile =
           includedSessionId === merged.sessionId
             ? merged.sessionFile
             : resolveExistingUsageSessionFile({
                 sessionId: includedSessionId,
                 agentId: merged.agentId,
               });
-        if (sessionFile) {
-          hiddenSessions.push({ entryIndex, sessionId: includedSessionId, sessionFile });
+        if (!includedSessionFile) {
+          continue;
         }
+        const agentSessions = sessionsByAgent.get(merged.agentId) ?? [];
+        agentSessions.push({
+          entryIndex,
+          sessionId: includedSessionId,
+          sessionFile: includedSessionFile,
+        });
+        sessionsByAgent.set(merged.agentId, agentSessions);
       }
-      hiddenSessionsByAgent.set(merged.agentId, hiddenSessions);
     }
-    for (const [agentId, hiddenSessions] of hiddenSessionsByAgent) {
-      const hiddenUsage = await loadSessionCostSummariesFromCache({
-        sessions: hiddenSessions,
-        config,
-        agentId,
-        startMs,
-        endMs,
-      });
-      cacheStatus = mergeUsageCacheStatus(cacheStatus, hiddenUsage.cacheStatus);
-      for (const [hiddenIndex, summary] of hiddenUsage.summaries.entries()) {
+
+    const agentLoadResult = await runTasksWithConcurrency({
+      tasks: Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => ({
+        agentSessions,
+        loaded: await loadSessionCostSummariesFromCache({
+          sessions: agentSessions,
+          config,
+          agentId,
+          startMs,
+          endMs,
+          dailyUtcOffsetMinutes,
+        }),
+      })),
+      limit: SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY,
+      errorMode: "stop",
+    });
+    if (agentLoadResult.hasError) {
+      throw agentLoadResult.firstError;
+    }
+    for (const { agentSessions, loaded } of agentLoadResult.results) {
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+      for (const [index, summary] of loaded.summaries.entries()) {
         if (!summary) {
           continue;
         }
-        const hiddenSession = hiddenSessions[hiddenIndex];
-        const merged = mergedEntries[hiddenSession.entryIndex];
-        const usage =
-          usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        const session = agentSessions[index];
+        const merged = mergedEntries[session.entryIndex];
+        const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
         mergeSessionUsageInto(usage, summary);
-        usageByEntryIndex[hiddenSession.entryIndex] = usage;
+        usageByEntryIndex[session.entryIndex] = usage;
       }
     }
 

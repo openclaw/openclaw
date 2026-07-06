@@ -108,6 +108,9 @@ export const pluginSdkDocMetadata = {
   "message-tool-delivery-hints": {
     category: "runtime",
   },
+  "tool-results": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },

@@ -131,6 +131,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs runtime postbuild before plugin SDK strict export checks", () => {
+    expect(readPackageJson().scripts["build:plugin-sdk:strict-smoke"]).toBe(
+      "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/run-with-env.mjs OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --experimental-strip-types scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });

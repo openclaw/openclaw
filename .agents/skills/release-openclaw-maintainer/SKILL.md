@@ -13,7 +13,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
-- Ask permission before any npm publish or release step.
+- Obtain explicit operator approval before the first irreversible publish
+  action. Instructions to cut, ship, publish, or get a named release out carry
+  through that release's validated publish and verification steps; do not ask
+  again at final dispatch. Reconfirm only if the target version, tag, channel,
+  publish scope, or a material risk changes.
 - This skill should be sufficient to drive the normal release flow end-to-end.
 - Use the private maintainer release docs for credentials, recovery steps, and mac signing/notary specifics, and use `docs/reference/RELEASING.md` for public policy.
 - Core `openclaw` publish is manual `workflow_dispatch`; creating or pushing a tag does not publish by itself.
@@ -758,7 +762,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 
 ## Run the release sequence
 
-1. Confirm the operator explicitly wants to cut a release.
+1. Confirm release intent once. Treat prior explicit instructions to cut, ship,
+   publish, or complete the named release as continuing authorization through
+   publish and verification. Reconfirm only if the release identity, channel,
+   publish scope, or material risk changes.
 2. Choose the exact target version and git tag.
 3. Commit any dirty files in coherent groups, push, pull/rebase, and verify the
    worktree is clean.
