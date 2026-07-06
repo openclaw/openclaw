@@ -25,6 +25,7 @@ import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
+  type RealtimeVoiceAudioClearReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
   type RealtimeVoiceToolResultOptions,
@@ -72,7 +73,7 @@ type TalkRealtimeRelayEventPayload =
       responseId?: string;
     }
   | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
-  | { relaySessionId: string; type: "clear" }
+  | { relaySessionId: string; type: "clear"; reason?: RealtimeVoiceAudioClearReason }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
       relaySessionId: string;
@@ -680,14 +681,14 @@ export function createTalkRealtimeRelaySession(
           },
         );
       },
-      clearAudio: () => {
+      clearAudio: (reason) => {
         const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
-          { relaySessionId, type: "clear" },
+          { relaySessionId, type: "clear", ...(reason ? { reason } : {}) },
           {
             type: "output.audio.done",
             turnId,
-            payload: { reason: "clear" },
+            payload: { reason: reason ?? "clear" },
             final: true,
           },
         );

@@ -641,6 +641,113 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("releases delayed final tool results when playback is cleared normally", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: zeroPcmBase64(24000),
+      },
+    });
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    emitGatewayFrame({
+      event: "chat",
+      payload: { runId: "run-1", state: "final", message: { text: "ready" } },
+    });
+    await Promise.resolve();
+
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: { relaySessionId: "relay-1", type: "clear" },
+    });
+
+    await vi.waitFor(() =>
+      expect(client["request"]).toHaveBeenCalledWith("talk.session.submitToolResult", {
+        sessionId: "relay-1",
+        callId: "call-1",
+        result: { result: "ready" },
+      }),
+    );
+    transport.stop();
+  });
+
+  it("drops delayed final tool results on provider barge-in clears", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: zeroPcmBase64(24000),
+      },
+    });
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    emitGatewayFrame({
+      event: "chat",
+      payload: { runId: "run-1", state: "final", message: { text: "ready" } },
+    });
+    await Promise.resolve();
+
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: { relaySessionId: "relay-1", type: "clear", reason: "barge-in" },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    transport.stop();
+  });
+
   it("does not start a forced consult when the working result is terminally cancelled", async () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {

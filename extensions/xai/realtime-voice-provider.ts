@@ -456,13 +456,13 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
         },
         `reason=barge-in audioEndMs=${audioEndMs}`,
       );
-      this.config.onClearAudio();
+      this.config.onClearAudio("barge-in");
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
       return;
     }
-    this.config.onClearAudio();
+    this.config.onClearAudio("barge-in");
     this.markQueue = [];
   }
 
