@@ -1079,6 +1079,7 @@ function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
 
 export const testing = {
   resolveSideDynamicToolCallTimeoutMs,
+  handleSideDynamicToolCallWithTimeout,
 } as const;
 
 async function forkCodexSideThread(
