@@ -860,7 +860,9 @@ describe("signal setup parsing", () => {
 
   it("parses e164, uuid and wildcard entries", () => {
     expect(
-      parseSignalAllowFromEntries("+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000, *"),
+      parseSignalAllowFromEntries(
+        "signal:+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000, *",
+      ),
     ).toEqual({
       entries: ["+15555550123", "uuid:123e4567-e89b-12d3-a456-426614174000", "*"],
     });
