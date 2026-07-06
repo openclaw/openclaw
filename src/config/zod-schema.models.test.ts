@@ -80,3 +80,50 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 });
+
+import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
+
+describe("AgentModelSchema nullable fallbacks", () => {
+  it("accepts null fallbacks (clear-to-inherit)", () => {
+    const result = AgentModelSchema.safeParse({ primary: "openai/gpt-5", fallbacks: null });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.fallbacks).toBeNull();
+  });
+  it("accepts fallbacks as array", () => {
+    const result = AgentModelSchema.safeParse({
+      primary: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-haiku-3-5"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.fallbacks).toEqual(["anthropic/claude-haiku-3-5"]);
+  });
+  it("rejects non-array non-null fallbacks", () => {
+    const result = AgentModelSchema.safeParse({
+      primary: "openai/gpt-5",
+      fallbacks: "not-an-array",
+    });
+    expect(result.success).toBe(false);
+  });
+  it("accepts string-only model (no fallbacks field)", () => {
+    const result = AgentModelSchema.safeParse("openai/gpt-5");
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toBe("openai/gpt-5");
+  });
+});
+
+describe("AgentToolModelSchema nullable fallbacks", () => {
+  it("accepts null fallbacks", () => {
+    const result = AgentToolModelSchema.safeParse({ primary: "openai/gpt-5", fallbacks: null });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.fallbacks).toBeNull();
+  });
+  it("accepts fallbacks as array", () => {
+    const result = AgentToolModelSchema.safeParse({
+      primary: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-haiku-3-5"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.fallbacks).toEqual(["anthropic/claude-haiku-3-5"]);
+  });
+});
+
