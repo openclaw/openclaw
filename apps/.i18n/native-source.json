@@ -8307,7 +8307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 27,
+      "line": 28,
       "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
       "source": "System",
       "surface": "apple",
@@ -8315,7 +8315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 28,
+      "line": 29,
       "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
       "source": "Light",
       "surface": "apple",
@@ -8323,19 +8323,11 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 29,
+      "line": 30,
       "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
       "source": "Dark",
       "surface": "apple",
       "id": "native.apple.e3576faef11c7eba"
-    },
-    {
-      "kind": "ui-call",
-      "line": 227,
-      "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
-      "source": "OC",
-      "surface": "apple",
-      "id": "native.apple.7f5a8ef53cb1fd8f"
     },
     {
       "kind": "ui-modifier",
