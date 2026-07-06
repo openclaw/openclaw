@@ -20,6 +20,18 @@ export function getUtf8JsonByteLength(value: unknown): number {
 }
 
 export function getLineFlexContainerSize(contents: FlexContainer): LineFlexContainerSize {
+  if (contents.type === "carousel") {
+    for (const bubble of contents.contents) {
+      const bubbleBytes = getUtf8JsonByteLength(bubble);
+      if (bubbleBytes > LINE_FLEX_BUBBLE_MAX_BYTES) {
+        return {
+          byteSize: bubbleBytes,
+          maxBytes: LINE_FLEX_BUBBLE_MAX_BYTES,
+        };
+      }
+    }
+  }
+
   return {
     byteSize: getUtf8JsonByteLength(contents),
     maxBytes: getLineFlexContainerMaxBytes(contents),

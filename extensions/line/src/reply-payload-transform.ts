@@ -31,15 +31,15 @@ import type { LineChannelData } from "./types.js";
  * - [[appletv_remote: name | status]]
  */
 export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
-  let text = payload.text;
-  if (!text) {
-    return payload;
-  }
-
   const result: ReplyPayload = { ...payload };
   const lineData: LineChannelData = {
     ...(result.channelData?.line as LineChannelData | undefined),
   };
+  let text = payload.text ?? "";
+  const shouldParseDirectives = Boolean(text && hasLineDirectives(text));
+  if (!text && !lineData.flexMessage) {
+    return payload;
+  }
   const toSlug = (value: string): string =>
     normalizeLowercaseStringOrEmpty(value)
       .replace(/[^a-z0-9]+/g, "_")
@@ -305,7 +305,9 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     text = text.replace(deviceMatch[0], "").trim();
   }
 
-  text = text.replace(/\n{3,}/g, "\n\n").trim();
+  if (shouldParseDirectives) {
+    text = text.replace(/\n{3,}/g, "\n\n").trim();
+  }
 
   // Validate Flex container byte size before send so oversized LINE content
   // falls back to text instead of being rejected by the Messaging API.
@@ -326,6 +328,10 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
   result.text = text || undefined;
   if (Object.keys(lineData).length > 0) {
     result.channelData = { ...result.channelData, line: lineData };
+  } else if (result.channelData?.line !== undefined) {
+    const nextChannelData = { ...result.channelData };
+    delete nextChannelData.line;
+    result.channelData = Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined;
   }
   return result;
 }

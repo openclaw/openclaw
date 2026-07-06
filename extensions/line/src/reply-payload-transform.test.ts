@@ -450,5 +450,33 @@ describe("parseLineDirectives", () => {
       const flexMessage = getLineData(result).flexMessage;
       expect(flexMessage).toEqual({ altText: "Carousel", contents: carouselContents });
     });
+
+    it("falls back when a carousel child bubble exceeds the bubble limit", () => {
+      const carouselContents = {
+        type: "carousel",
+        contents: [
+          {
+            type: "bubble",
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [{ type: "text", text: "A".repeat(31 * 1024) }],
+            },
+          },
+        ],
+      };
+
+      const result = parseLineDirectives({
+        text: "Carousel",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: carouselContents },
+          },
+        },
+      });
+
+      expect(getLineData(result).flexMessage).toBeUndefined();
+      expect(result.text).toContain("內容過長");
+    });
   });
 });

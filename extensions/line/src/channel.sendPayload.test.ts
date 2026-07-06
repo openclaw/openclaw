@@ -697,6 +697,74 @@ describe("linePlugin config.formatAllowFrom", () => {
   });
 });
 
+describe("linePlugin messaging.transformReplyPayload", () => {
+  const createOversizedCarousel = () => ({
+    type: "carousel",
+    contents: [
+      {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          contents: [{ type: "text", text: "A".repeat(31 * 1024) }],
+        },
+      },
+    ],
+  });
+
+  it("validates prebuilt LINE Flex payloads without directive syntax", () => {
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        text: "plain text",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: createOversizedCarousel() },
+          },
+        },
+      },
+    });
+
+    expect(result?.channelData?.line).toBeUndefined();
+    expect(result?.text).toContain("內容過長");
+  });
+
+  it("preserves valid prebuilt LINE Flex payloads without directive syntax", () => {
+    const text = "  plain text\n\n\nwith spacing  ";
+    const flexMessage = {
+      altText: "Card",
+      contents: { type: "bubble", body: { type: "box", layout: "vertical", contents: [] } },
+    };
+
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        text,
+        channelData: { line: { flexMessage } },
+      },
+    });
+
+    expect(result?.text).toBe(text);
+    expect(result?.channelData?.line).toEqual({ flexMessage });
+  });
+
+  it("validates flex-only prebuilt LINE Flex payloads", () => {
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: createOversizedCarousel() },
+          },
+        },
+      },
+    });
+
+    expect(result?.channelData).toBeUndefined();
+    expect(result?.text).toContain("內容過長");
+  });
+});
+
 describe("linePlugin groups.resolveRequireMention", () => {
   it("uses account-level group settings when provided", () => {
     const { runtime } = createRuntime();
