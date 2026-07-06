@@ -52,7 +52,7 @@ Recommended workflow:
 6. Run `ANDROID_SCREENSHOT_AVD=<avd-name> pnpm android:screenshots` to refresh raw Google Play screenshots with a script-managed emulator, or run `pnpm android:screenshots` when exactly one ADB device is already connected.
 7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
 8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to the configured Google Play track.
-9. For a regular final or correction OpenClaw release, let `OpenClaw Release Publish` dispatch the protected `Android Release` workflow. It builds the signed third-party APK from the exact tag and attaches the verified APK, checksum manifest, and GitHub provenance before the release draft can publish. Before tagging a correction, increment the pinned `versionCode`; the workflow verifies it is higher than the preceding final or correction APK.
+9. For a regular final or correction OpenClaw release, let `OpenClaw Release Publish` dispatch the protected `Android Release` workflow. It builds the signed third-party APK from the exact tag and attaches the verified APK, checksum manifest, and GitHub provenance before the release draft can publish. Before tagging a correction with its own package version, increment the pinned `versionCode`; the workflow verifies it is higher than the preceding final or correction APK. A same-commit fallback correction reuses the base release's verified APK and adds provenance for the correction tag.
 10. Complete production rollout manually in Google Play Console when needed.
 
 If `pnpm android:release:upload` fails, stop at that failure. Do not continue by

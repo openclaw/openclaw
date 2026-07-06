@@ -124,6 +124,7 @@ jobs:
           fi
 
       - name: Verify release source and Android version
+        id: release_source
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
@@ -132,14 +133,29 @@ jobs:
           android_release_version="${release_version%%-*}"
           package_version="$(node -p 'require("./package.json").version')"
           android_version="$(node -p 'require("./apps/android/version.json").version')"
-          if [[ "${package_version}" != "${release_version}" ]]; then
-            echo "Release tag version ${release_version} does not match package.json ${package_version}." >&2
+          fallback_base_tag=""
+          fallback_base_sha=""
+          if [[ "${package_version}" == "${release_version}" ]]; then
+            :
+          elif [[ "${RELEASE_TAG}" =~ -[1-9][0-9]*$ && "${package_version}" == "${android_release_version}" ]]; then
+            fallback_base_tag="v${package_version}"
+            fallback_base_sha="$(git rev-parse "${fallback_base_tag}^{commit}")"
+            release_sha="$(git rev-parse HEAD)"
+            if [[ "${fallback_base_sha}" != "${release_sha}" ]]; then
+              echo "Fallback correction ${RELEASE_TAG} must resolve to the same source commit as ${fallback_base_tag}." >&2
+              exit 1
+            fi
+          else
+            echo "Release tag version ${release_version} does not match package.json ${package_version} or a same-commit fallback correction." >&2
             exit 1
           fi
           if [[ "${android_version}" != "${android_release_version}" ]]; then
             echo "Android version ${android_version} does not match release train ${android_release_version}." >&2
             exit 1
           fi
+          echo "fallback_base_tag=${fallback_base_tag}" >> "${GITHUB_OUTPUT}"
+          echo "FALLBACK_ANDROID_BASE_TAG=${fallback_base_tag}" >> "${GITHUB_ENV}"
+          echo "FALLBACK_ANDROID_BASE_SHA=${fallback_base_sha}" >> "${GITHUB_ENV}"
           git diff --exit-code
 
       - name: Setup Node environment
@@ -197,6 +213,7 @@ jobs:
             "build-tools;36.0.0"
 
       - name: Create apps-signing read token
+        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
         id: apps-signing-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -207,6 +224,7 @@ jobs:
           permission-contents: read
 
       - name: Checkout encrypted Android signing assets
+        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: openclaw/apps-signing
@@ -216,6 +234,7 @@ jobs:
           persist-credentials: false
 
       - name: Materialize Android release signing
+        if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
         env:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         run: |
@@ -226,13 +245,36 @@ jobs:
           fi
           node scripts/android-release-signing.mjs --mode materialize
 
-      - name: Build and verify signed Android APK
+      - name: Prepare and verify signed Android APK
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
+          mkdir -p dist
+          if [[ -n "${FALLBACK_ANDROID_BASE_TAG}" ]]; then
+            base_dir="${RUNNER_TEMP}/fallback-android-release"
+            mkdir -p "${base_dir}"
+            gh release download "${FALLBACK_ANDROID_BASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --pattern OpenClaw-Android.apk \
+              --pattern OpenClaw-Android-SHA256SUMS.txt \
+              --dir "${base_dir}"
+            (
+              cd "${base_dir}"
+              sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
+            )
+            gh attestation verify "${base_dir}/OpenClaw-Android.apk" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
+              --source-ref "refs/tags/${FALLBACK_ANDROID_BASE_TAG}" \
+              --source-digest "${FALLBACK_ANDROID_BASE_SHA}" \
+              --deny-self-hosted-runners
+            bun apps/android/scripts/build-release-artifacts.ts \
+              --verify-apk "${base_dir}/OpenClaw-Android.apk"
+            cp "${base_dir}/OpenClaw-Android.apk" dist/OpenClaw-Android.apk
+            cp "${base_dir}/OpenClaw-Android-SHA256SUMS.txt" dist/OpenClaw-Android-SHA256SUMS.txt
+          else
+            node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
           import { spawnSync } from "node:child_process";
 
@@ -264,17 +306,17 @@ jobs:
           process.exit(result.status ?? 1);
           NODE
 
-          version="$(node -p 'require("./apps/android/version.json").version')"
-          source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
-          source_checksum="${source_apk}.sha256"
-          test -s "${source_apk}"
-          test -s "${source_checksum}"
-          mkdir -p dist
-          cp "${source_apk}" dist/OpenClaw-Android.apk
-          (
-            cd dist
-            sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
-          )
+            version="$(node -p 'require("./apps/android/version.json").version')"
+            source_apk="apps/android/build/release-artifacts/openclaw-${version}-third-party-release.apk"
+            source_checksum="${source_apk}.sha256"
+            test -s "${source_apk}"
+            test -s "${source_checksum}"
+            cp "${source_apk}" dist/OpenClaw-Android.apk
+            (
+              cd dist
+              sha256sum OpenClaw-Android.apk > OpenClaw-Android-SHA256SUMS.txt
+            )
+          fi
 
           expected_version_name="${RELEASE_TAG#v}"
           expected_version_name="${expected_version_name%%-*}"
@@ -291,7 +333,9 @@ jobs:
             exit 1
           fi
 
-          if [[ "${RELEASE_TAG}" =~ -([1-9][0-9]*)$ ]]; then
+          if [[ -n "${FALLBACK_ANDROID_BASE_TAG}" ]]; then
+            echo "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG} for same-commit fallback correction ${RELEASE_TAG}."
+          elif [[ "${RELEASE_TAG}" =~ -([1-9][0-9]*)$ ]]; then
             correction_number="${BASH_REMATCH[1]}"
             releases_json="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
             previous_tag="$(printf '%s' "${releases_json}" | jq -r \
