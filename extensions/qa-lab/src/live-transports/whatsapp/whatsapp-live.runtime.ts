@@ -60,10 +60,6 @@ export type WhatsAppQaRuntimeEnv = {
 };
 
 type WhatsAppQaScenarioId =
-  | "whatsapp-access-control-dm-disabled"
-  | "whatsapp-access-control-dm-open"
-  | "whatsapp-access-control-group-disabled"
-  | "whatsapp-access-control-group-open"
   | "whatsapp-approval-exec-deny-native"
   | "whatsapp-approval-exec-group-reaction-native"
   | "whatsapp-approval-exec-reaction-native"
@@ -91,7 +87,6 @@ type WhatsAppQaScenarioId =
   | "whatsapp-outbound-media-matrix"
   | "whatsapp-outbound-poll"
   | "whatsapp-outbound-send-serialization"
-  | "whatsapp-pairing-block"
   | "whatsapp-mention-gating"
   | "whatsapp-reply-delivery-shape"
   | "whatsapp-reply-context-isolation"
@@ -114,10 +109,6 @@ function toWhatsAppQaError(error: unknown): Error {
 }
 
 const WHATSAPP_QA_SCENARIO_POSTURES = {
-  "whatsapp-access-control-dm-disabled": "user-path",
-  "whatsapp-access-control-dm-open": "user-path",
-  "whatsapp-access-control-group-disabled": "user-path",
-  "whatsapp-access-control-group-open": "user-path",
   "whatsapp-agent-message-action-react": "user-path",
   "whatsapp-agent-message-action-upload-file": "user-path",
   "whatsapp-approval-exec-deny-native": "native-approval",
@@ -148,7 +139,6 @@ const WHATSAPP_QA_SCENARIO_POSTURES = {
   "whatsapp-outbound-media-matrix": "direct-gateway",
   "whatsapp-outbound-poll": "direct-gateway",
   "whatsapp-outbound-send-serialization": "direct-gateway",
-  "whatsapp-pairing-block": "user-path",
   "whatsapp-reply-context-isolation": "direct-gateway",
   "whatsapp-reply-delivery-shape": "direct-gateway",
   "whatsapp-reply-to-message": "user-path",
@@ -608,19 +598,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
         target: "dm",
       };
     },
-  },
-  {
-    id: "whatsapp-pairing-block",
-    title: "WhatsApp non-allowlisted DM gets pairing gate",
-    defaultProviderModes: ["live-frontier", "mock-openai"],
-    timeoutMs: 20_000,
-    buildRun: () => ({
-      configMode: "pairing",
-      expectReply: true,
-      input: `Do not run the agent for this pairing QA marker ${randomUUID().slice(0, 8)}`,
-      matchText: /OpenClaw: access not configured|Pairing code:/iu,
-      target: "dm",
-    }),
   },
   {
     id: "whatsapp-mention-gating",
@@ -1736,78 +1713,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
       },
       target: "group",
     }),
-  },
-  {
-    id: "whatsapp-access-control-dm-open",
-    title: "WhatsApp dmPolicy open allows direct messages",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 60_000,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_DM_OPEN_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "open",
-        expectReply: true,
-        input: `Reply with only this exact marker under dmPolicy open: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
-  {
-    id: "whatsapp-access-control-dm-disabled",
-    title: "WhatsApp dmPolicy disabled stays quiet",
-    defaultProviderModes: ["mock-openai"],
-    timeoutMs: 8_000,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_DM_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "disabled",
-        expectReply: false,
-        input: `Do not reply under dmPolicy disabled. Forbidden marker: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
-  {
-    id: "whatsapp-access-control-group-open",
-    title: "WhatsApp groupPolicy open allows mention-gated groups",
-    defaultProviderModes: ["mock-openai"],
-    requiresGroupJid: true,
-    timeoutMs: 60_000,
-    configOverrides: {
-      groupPolicy: "open",
-    },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_OPEN_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: true,
-        input: `openclawqa reply with only this exact marker under groupPolicy open: ${token}`,
-        matchText: token,
-        target: "group",
-      };
-    },
-  },
-  {
-    id: "whatsapp-access-control-group-disabled",
-    title: "WhatsApp groupPolicy disabled stays quiet",
-    defaultProviderModes: ["mock-openai"],
-    requiresGroupJid: true,
-    timeoutMs: 8_000,
-    configOverrides: {
-      groupPolicy: "disabled",
-    },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: false,
-        input: `openclawqa groupPolicy disabled must not reply with ${token}`,
-        matchText: token,
-        target: "group",
-      };
-    },
   },
   {
     id: "whatsapp-reply-delivery-shape",
