@@ -689,6 +689,9 @@ describe("qa scenario catalog", () => {
       expect(config?.requiredProvider).toBe("mock-openai");
       expect(config?.prompt).toContain("check");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+      const flowText = JSON.stringify(scenario.execution.flow);
+      expect(flowText).toContain('"call":"runAgentPrompt"');
+      expect(flowText).not.toContain("agent.wait");
     }
   });
 

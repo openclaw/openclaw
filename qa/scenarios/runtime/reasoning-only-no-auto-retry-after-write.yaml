@@ -47,8 +47,8 @@ flow:
         - set: sessionKey
           value:
             expr: "`agent:qa:reasoning-only-write:${randomUUID().slice(0, 8)}`"
-        - call: startAgentRun
-          saveAs: started
+        - call: runAgentPrompt
+          saveAs: run
           args:
             - ref: env
             - sessionKey:
@@ -57,13 +57,6 @@ flow:
                 expr: config.prompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 45000)
-        - set: waited
-          value:
-            expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
-        - assert:
-            expr: "waited?.status === 'ok'"
-            message:
-              expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
         - call: fs.readFile
           saveAs: sideEffect
           args:
