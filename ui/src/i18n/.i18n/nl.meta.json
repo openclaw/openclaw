@@ -1,13 +1,11 @@
 {
-  "fallbackKeys": [
-    "nav.chats"
-  ],
-  "generatedAt": "2026-07-06T00:16:34.245Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-05T23:26:56.730Z",
   "locale": "nl",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "43c26e41202a3768a97e4823c050b05119f3d7e083902f31e5c6f3997980432f",
   "totalKeys": 1536,
-  "translatedKeys": 1535,
+  "translatedKeys": 1536,
   "workflow": 1
 }
