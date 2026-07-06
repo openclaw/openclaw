@@ -211,6 +211,34 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(result.media).toHaveLength(0);
   });
 
+  it("skips hosted content when the Graph collection response exceeds the byte cap", async () => {
+    const fetchCalls: string[] = [];
+    const hugeBody = JSON.stringify({
+      value: [{ id: "hosted-huge", contentType: "image/png", contentBytes: null }],
+      padding: "x".repeat(16 * 1024 * 1024),
+    });
+
+    mockGraphMediaFetch({
+      messageId: "msg-huge",
+      valueResponses: {
+        "/hostedContents": new Response(hugeBody, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      fetchCalls,
+    });
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-huge",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result.media).toHaveLength(0);
+    expect(result.hostedCount).toBe(0);
+  });
+
   it("uses inline contentBytes when available instead of $value", async () => {
     const fetchCalls: string[] = [];
     const base64Png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
