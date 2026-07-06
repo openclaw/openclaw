@@ -683,9 +683,15 @@ export async function runSshSandboxCommand(
     const stderrChunks: Buffer[] = [];
 
     child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stdout.on("error", reject);
+    child.stdout.on("error", (error) => {
+      child.kill();
+      reject(error);
+    });
     child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.stderr.on("error", reject);
+    child.stderr.on("error", (error) => {
+      child.kill();
+      reject(error);
+    });
     child.on("error", reject);
     child.on("close", (code) => {
       const stdout = Buffer.concat(stdoutChunks);
@@ -704,7 +710,10 @@ export async function runSshSandboxCommand(
       resolve({ stdout, stderr, code: exitCode });
     });
 
-    child.stdin?.on("error", reject);
+    child.stdin?.on("error", (error) => {
+      child.kill();
+      reject(error);
+    });
     if (params.stdin !== undefined) {
       child.stdin.end(params.stdin);
       return;

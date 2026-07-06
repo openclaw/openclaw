@@ -21,7 +21,12 @@ function createMockSpawnChild() {
   child.stdout = stdout;
   child.stderr = stderr;
   child.stdin = stdin;
-  child.kill = vi.fn();
+  const kill = vi.fn(() => true);
+  child.kill = kill;
+  kill.mockImplementation(() => {
+    (child as { killed?: boolean }).killed = true;
+    return true;
+  });
   return { child, stdout, stderr, stdin };
 }
 
@@ -62,9 +67,11 @@ describe("ssh sandbox stream errors", () => {
   });
 
   it("rejects when stdout emits an error", async () => {
+    let capturedChild: MockSpawnChild | undefined;
     spawnMock.mockImplementationOnce(
       (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
         const { child, stdout } = createMockSpawnChild();
+        capturedChild = child;
         process.nextTick(() => {
           stdout?.emit("error", new Error("stdout read failed"));
         });
@@ -79,12 +86,15 @@ describe("ssh sandbox stream errors", () => {
         allowFailure: false,
       }),
     ).rejects.toThrow("stdout read failed");
+    expect(capturedChild?.kill).toHaveBeenCalled();
   });
 
   it("rejects when stderr emits an error", async () => {
+    let capturedChild: MockSpawnChild | undefined;
     spawnMock.mockImplementationOnce(
       (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
         const { child, stderr } = createMockSpawnChild();
+        capturedChild = child;
         process.nextTick(() => {
           stderr?.emit("error", new Error("stderr read failed"));
         });
@@ -99,12 +109,15 @@ describe("ssh sandbox stream errors", () => {
         allowFailure: false,
       }),
     ).rejects.toThrow("stderr read failed");
+    expect(capturedChild?.kill).toHaveBeenCalled();
   });
 
   it("rejects when stdin emits an error", async () => {
+    let capturedChild: MockSpawnChild | undefined;
     spawnMock.mockImplementationOnce(
       (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
         const { child, stdin } = createMockSpawnChild();
+        capturedChild = child;
         process.nextTick(() => {
           stdin?.emit("error", new Error("stdin write failed"));
         });
@@ -119,5 +132,6 @@ describe("ssh sandbox stream errors", () => {
         allowFailure: false,
       }),
     ).rejects.toThrow("stdin write failed");
+    expect(capturedChild?.kill).toHaveBeenCalled();
   });
 });
