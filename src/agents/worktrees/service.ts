@@ -19,6 +19,7 @@ import {
 import {
   deleteRegistryWorktree,
   findRegistryWorktreeByPath,
+  findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   insertRegistryWorktree,
@@ -28,6 +29,7 @@ import {
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeGcResult,
+  ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
 } from "./types.js";
@@ -44,6 +46,10 @@ const log = createSubsystemLogger("agents/worktrees");
 type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+};
+
+export type ManagedWorktreeGcParams = {
+  isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
 };
 
 type LockState =
@@ -405,7 +411,9 @@ export class ManagedWorktreeService {
     }
     try {
       await copyIncludedFiles(repository.sourceRoot, worktreePath);
-      await runSetupScript(repository.sourceRoot, worktreePath);
+      if (params.runSetupScript !== false) {
+        await runSetupScript(repository.sourceRoot, worktreePath);
+      }
     } catch (error) {
       try {
         await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
@@ -442,6 +450,13 @@ export class ManagedWorktreeService {
       }
     }
     return records.filter((record) => record.removedAt === undefined || record.snapshotRef);
+  }
+
+  findLiveByOwner(
+    ownerKind: ManagedWorktreeOwnerKind,
+    ownerId: string,
+  ): ManagedWorktreeRecord | undefined {
+    return findLiveRegistryWorktreeByOwner(this.env, ownerKind, ownerId);
   }
 
   async acquire(id: string): Promise<ManagedWorktreeRecord> {
@@ -614,7 +629,7 @@ export class ManagedWorktreeService {
     }
   }
 
-  async gc(): Promise<ManagedWorktreeGcResult> {
+  async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
     const removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
@@ -631,6 +646,12 @@ export class ManagedWorktreeService {
           expiresWhenIdle &&
           now - record.lastActiveAt > IDLE_GC_MS
         ) {
+          if (
+            record.ownerId !== undefined &&
+            params.isOwnerActive?.(record.ownerKind, record.ownerId) === true
+          ) {
+            continue;
+          }
           const state = await lockState(record);
           if (state.kind === "live" || state.kind === "foreign") {
             continue;

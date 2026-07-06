@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Bu ağ geçidine güvenilsin mi?</string>
     <string name="trust_and_continue">Güven ve devam et</string>
     <string name="cancel">İptal</string>
+    <string name="new_chat_in_worktree">Worktree\'de yeni sohbet</string>
     <string name="endpoint">Uç nokta</string>
     <string name="status">Durum</string>
     <string name="connected_gateway_ready">Ağ geçidiniz etkin ve hazır.</string>

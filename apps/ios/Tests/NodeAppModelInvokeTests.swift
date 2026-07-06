@@ -381,6 +381,7 @@ private actor WatchSnapshotSendGate {
                 name: "Joshtimus Prime",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
             AgentSummary(
@@ -388,6 +389,7 @@ private actor WatchSnapshotSendGate {
                 name: "Rust Claw",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]
@@ -410,6 +412,7 @@ private actor WatchSnapshotSendGate {
                 name: "Rust Claw",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]
@@ -1015,6 +1018,7 @@ private actor WatchSnapshotSendGate {
                     "emoji": AnyCodable("OC"),
                 ],
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]

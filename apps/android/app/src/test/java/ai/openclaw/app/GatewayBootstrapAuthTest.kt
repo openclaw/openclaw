@@ -984,7 +984,7 @@ class GatewayBootstrapAuthTest {
     ownershipEpoch.set(41L)
 
     runtime.setMicEnabled(true)
-    val cleanup = runtime.javaClass.getDeclaredMethod("finishTalkCaptureIfIdle", Long::class.javaPrimitiveType)
+    val cleanup = runtime.javaClass.getDeclaredMethod("cleanupFailedTalkCapture", Long::class.javaPrimitiveType)
     cleanup.isAccessible = true
     cleanup.invoke(runtime, 41L)
 

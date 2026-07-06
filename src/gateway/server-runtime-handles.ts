@@ -3,12 +3,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service
 // cleanup hooks that shutdown/reload code must stop exactly once.
-type GatewayConfigReloaderHandle = {
+// `hotReloadStatus` is omitted (not defaulted to "active") when no real
+// watcher is running, so health can distinguish "no reloader" from "reloader
+// active" instead of guessing.
+export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
+  hotReloadStatus?: () => GatewayHotReloadStatus;
 };
 
 /** Mutable handles owned by a running gateway server process. */

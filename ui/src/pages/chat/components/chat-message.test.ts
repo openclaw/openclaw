@@ -2074,6 +2074,94 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
+  it("renders canonical inbound transcript images through the authenticated media route", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const mediaUrl = new URL(url, "http://control.test");
+      expect(mediaUrl.pathname).toBe("/openclaw/__openclaw__/assistant-media");
+      expect([...mediaUrl.searchParams.keys()].toSorted()).toEqual(["meta", "source"]);
+      expect(mediaUrl.searchParams.get("meta")).toBe("1");
+      expect(mediaUrl.searchParams.get("source")).toBe("media://inbound/telegram-photo.png");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+      return {
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-inbound"),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderGroupedMessage(
+        container,
+        {
+          id: "user-inbound-media-ref",
+          role: "user",
+          content: "",
+          MediaPath: "media://inbound/telegram-photo.png",
+          MediaType: "image/png",
+          timestamp: Date.now(),
+        },
+        "user",
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=media%3A%2F%2Finbound%2Ftelegram-photo.png&mediaTicket=ticket-inbound",
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    "media://outbound/photo.png",
+    "media://inbound/",
+    "media://inbound/nested%2Fphoto.png",
+    "media://inbound/%00.png",
+    "media://inbound/nested/../photo.png",
+    "media://inbound/%2e%2e/photo.png",
+    "media://inbound/..",
+    "media://inbound/photo.png?raw=1",
+    "media://inbound/photo.png#preview",
+  ])("does not proxy non-canonical inbound media ref %s", (source) => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-invalid-inbound-media-ref",
+        role: "user",
+        content: "",
+        MediaPath: source,
+        MediaType: "image/png",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: [],
+      },
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("fetches managed chat images with auth and renders blob previews", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const managedChatImageUrl =

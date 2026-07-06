@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">이 게이트웨이를 신뢰하시겠습니까?</string>
     <string name="trust_and_continue">신뢰하고 계속</string>
     <string name="cancel">취소</string>
+    <string name="new_chat_in_worktree">worktree에서 새 채팅</string>
     <string name="endpoint">엔드포인트</string>
     <string name="status">상태</string>
     <string name="connected_gateway_ready">게이트웨이가 활성화되어 준비되었습니다.</string>

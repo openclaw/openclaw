@@ -31,6 +31,7 @@ write_secret_file() {
 for env_key in \
   OPENAI_API_KEY \
   OPENAI_BASE_URL \
+  ANTHROPIC_OAUTH_TOKEN \
   ANTHROPIC_API_KEY \
   ANTHROPIC_API_KEY_OLD \
   ANTHROPIC_API_TOKEN \

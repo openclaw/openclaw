@@ -46,6 +46,43 @@ struct IOSGatewayChatTransportTests {
         #expect(params["limit"] as? Int == 12)
     }
 
+    @Test func `session model patch params include model and selected agent`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
+                sessionKey: "global",
+                agentId: "reviewer",
+                model: "anthropic/claude-opus-4"))
+        #expect(params["key"] as? String == "global")
+        #expect(params["agentId"] as? String == "reviewer")
+        #expect(params["model"] as? String == "anthropic/claude-opus-4")
+    }
+
+    @Test func `session model patch params encode default model as null`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
+                sessionKey: "agent:main:main",
+                model: nil))
+        #expect(params["key"] as? String == "agent:main:main")
+        #expect(params["agentId"] == nil)
+        #expect(params["model"] is NSNull)
+    }
+
+    @Test func `models list response decodes choices and falls back blank names`() throws {
+        let data = Data(
+            #"{"models":[{"id":"claude-opus-4","name":"Claude Opus 4","provider":"anthropic","contextWindow":200000,"reasoning":true},{"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"}]}"#.utf8)
+        let choices = try IOSGatewayChatTransport.decodeModelChoices(data)
+
+        #expect(choices.count == 2)
+        #expect(choices[0].modelID == "claude-opus-4")
+        #expect(choices[0].name == "Claude Opus 4")
+        #expect(choices[0].provider == "anthropic")
+        #expect(choices[0].contextWindow == 200_000)
+        #expect(choices[1].modelID == "gpt-5")
+        #expect(choices[1].name == "gpt-5")
+        #expect(choices[1].provider == "openai")
+        #expect(choices[1].contextWindow == nil)
+    }
+
     @Test func `commands list params request text scope with args`() throws {
         let params = try self.object(from: IOSGatewayChatTransport.makeCommandsListParamsJSON())
         #expect(params["scope"] as? String == "text")
@@ -75,10 +112,12 @@ struct IOSGatewayChatTransportTests {
                 key: "agent:reviewer:ios-new",
                 agentId: "reviewer",
                 label: nil,
-                parentSessionKey: "global"))
+                parentSessionKey: "global",
+                worktree: true))
         #expect(params["key"] as? String == "agent:reviewer:ios-new")
         #expect(params["agentId"] as? String == "reviewer")
         #expect(params["parentSessionKey"] as? String == "global")
+        #expect(params["worktree"] as? Bool == true)
     }
 
     @Test func `chat send params omit empty attachments and keep session fields`() throws {

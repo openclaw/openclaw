@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.R
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -55,6 +57,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -74,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,6 +108,8 @@ fun ChatScreen(
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
@@ -121,6 +128,8 @@ fun ChatScreen(
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
+  val activeAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
+  val workspaceGit = gatewayAgents.firstOrNull { it.id == activeAgentId }?.workspaceGit == true
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -181,9 +190,9 @@ fun ChatScreen(
       gatewayReady = healthOk && !gatewayOffline,
     )
 
-  val startNewChat = {
+  val startNewChat: (Boolean) -> Unit = { worktree ->
     if (newChatEnabled) {
-      viewModel.startNewChat()
+      viewModel.startNewChat(worktree = worktree)
       viewModel.refreshChatSessions(limit = 100)
       viewModel.refreshChatCommands()
     }
@@ -201,9 +210,11 @@ fun ChatScreen(
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
+      workspaceGit = workspaceGit,
       onNewChat = {
-        startNewChat()
+        startNewChat(false)
       },
+      onNewChatInWorktree = { startNewChat(true) },
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
@@ -407,9 +418,13 @@ private fun ChatHeader(
   healthOk: Boolean,
   pendingRunCount: Int,
   newChatEnabled: Boolean,
+  workspaceGit: Boolean,
   onNewChat: () -> Unit,
+  onNewChatInWorktree: () -> Unit,
   onMore: () -> Unit,
 ) {
+  var newChatMenuExpanded by remember { mutableStateOf(false) }
+  val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -440,6 +455,25 @@ private fun ChatHeader(
           },
       )
       HeaderIcon(icon = Icons.Default.Add, contentDescription = "New chat", enabled = newChatEnabled, onClick = onNewChat)
+      if (workspaceGit) {
+        Box {
+          HeaderIcon(
+            icon = Icons.Default.MoreHoriz,
+            contentDescription = "More new chat options",
+            enabled = newChatEnabled,
+            onClick = { newChatMenuExpanded = true },
+          )
+          DropdownMenu(expanded = newChatMenuExpanded, onDismissRequest = { newChatMenuExpanded = false }) {
+            DropdownMenuItem(
+              text = { Text(newChatInWorktreeLabel) },
+              onClick = {
+                newChatMenuExpanded = false
+                onNewChatInWorktree()
+              },
+            )
+          }
+        }
+      }
       HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {

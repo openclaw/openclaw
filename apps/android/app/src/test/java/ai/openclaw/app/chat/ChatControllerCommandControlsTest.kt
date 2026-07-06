@@ -189,6 +189,36 @@ class ChatControllerCommandControlsTest {
       assertTrue(requests.any { it.first == "sessions.list" })
     }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun startNewChatInWorktreeIncludesWorktreeFlag() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.create" -> """{"ok":true,"key":"agent:main:dashboard:worktree"}"""
+              "chat.history" -> """{"sessionId":"worktree-session","messages":[]}"""
+              "health" -> "{}"
+              "sessions.list" -> """{"sessions":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertTrue(controller.startNewChatAwait(worktree = true))
+
+      val create = requests.first { it.first == "sessions.create" }
+      assertTrue(create.second.orEmpty().contains("\"worktree\":true"))
+    }
+
   @Test
   fun startNewChatWithoutLoadedParentCreatesFirstSession() =
     runTest {

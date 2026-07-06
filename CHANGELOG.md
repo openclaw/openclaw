@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Android cron job details:** add a read-only Settings detail view with schedule, payload, delivery state, job ID copy, refresh, and nested back navigation. (#95107) Thanks @Tosko4.
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
@@ -22,26 +21,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Agent helper downloads:** bound fd and ripgrep archive downloads and extraction with declared and streamed byte caps, extraction limits, timeouts, traversal-safe unpacking, and partial-file cleanup. (#98988) Thanks @LeonidasLux.
-- **Control UI cron actions:** localize the overflow-menu label and due-only run action across all supported locales.
-- **OpenAI Realtime Codex auth:** reuse external Codex OAuth profiles for Realtime voice sessions when no explicit OpenAI API key is configured.
-- **OpenAI-compatible TTS voice notes:** route configured MP3 speech output through native voice-message delivery when the channel supports it, while keeping WAV output on the audio-file path. (#83227, #80317) Thanks @HemantSudarshan.
-- **Talk transcription providers:** cold-load explicitly configured Voice Call streaming providers, including runtime aliases, when another provider registry is already active, keeping catalog and session selection aligned. (#97170, #97738) Thanks @solavrc.
-- **Android Canvas navigation:** block device-local loopback and unspecified main-frame web targets across direct, user, JavaScript, and redirect navigation while preserving remote, LAN, emulator-host, and bundled canvases. (#99874) Thanks @ly85206559.
-- **Android network recovery:** reconnect Gateway sessions immediately when Android regains a validated network instead of waiting for the current reconnect backoff. (#100347) Thanks @ly85206559.
-- **Android Voice layout:** keep Voice settings controls within their intended width so nested cards do not overflow or clip on constrained screens. (#100491) Thanks @IWhatsskill.
-- **Android camera logging:** remove release-path camera clip diagnostics that exposed temporary file details and added noisy invoke logs. (#99484) Thanks @NianJiuZst.
-- **Agent final replies:** prefer the current attempt's terminal assistant across incomplete-turn classification and success metadata so a stale pre-tool snapshot cannot replace a completed post-tool answer with an error. (#94637) Thanks @LiuwqGit.
+- **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
+- **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
+- **Detail-less provider failures:** keep opaque upstream failures from cooling API-key auth profiles while preserving WHAM-backed OpenAI OAuth health checks and configured model fallback. (#100600, #100617) Thanks @fengjikui.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
-- **Session usage logs:** normalize malformed transcript timestamps before sorting and Gateway serialization so invalid dates cannot surface as null usage-log times. (#99418) Thanks @sheyanmin.
 - **Config size-drop guard:** compare writes against canonical bytes for parseable object configs instead of raw BOM and indentation overhead, while preserving raw audit telemetry and the conservative malformed-input fallback. (#100591, #71865) Thanks @vincentkoc.
-- **Managed update handoffs:** keep detached update helpers alive for the configured Gateway restart-drain window, including indefinite drains, before applying the bounded shutdown reserve. (#99695) Thanks @ZOOWH.
 - **Control UI coalesced updates:** show a clear queued-restart completion banner when an update joins an already-running Gateway restart. (#93082) Thanks @goutamadwant.
 - **Control UI connection errors:** preserve structured pairing and authentication failures for pending RPC callers while keeping generic disconnect behavior unchanged. (#54758) Thanks @ruanrrn.
+- **iOS embedded terminal:** open the terminal-only Control surface directly while native Gateway authentication connects instead of exposing the Web UI login screen.
 - **TUI startup status:** show `starting up` during post-connect initialization without overwriting active-run or reconnect state. (#93999) Thanks @ml12580.
-- **Exec output Unicode safety:** preserve complete Unicode scalar values across bounded exec output, background completion notifications, polls, and node/gateway approval follow-ups. (#98721) Thanks @ZengWen-DT.
 - **Control UI restart recovery:** recover stale bundle pages through a bounded whole-document refresh after Gateway updates or restarts. (#99111) Thanks @ZengWen-DT.
 - **TUI active Gateway ports:** follow the verified active local Gateway port when no explicit URL, port, or remote target is configured. (#73338, #42461) Thanks @haishmg and @vincentkoc.
 - **Apple chat run recovery:** restore active responses from canonical Gateway history after reconnects, foreground resumes, and event gaps, while preserving gateway user-turn identity across Codex and Copilot transcript mirrors to prevent duplicate rows. (#100277)
@@ -70,6 +60,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI autonomous tool failures:** preserve an earlier Tool error outcome across later autonomous recovery turns. (#100514, #98888) Thanks @qingminglong.
 - **Agent empty replies:** surface a visible failure when a completed interactive turn has no deliverable reply, including queued follow-ups, while preserving explicit silence, pending continuations, and committed side effects, honoring queued send policies, and treating compaction notices as progress. (#100456) Thanks @mushuiyu886.
 - **Child process output safety:** prevent stdout/stderr pipe failures from crashing agent exec sessions, local TUI shell commands, and bounded process execution. (#100407, #100406, #100410) Thanks @cxbAsDev.
+- **Docker sandbox command output:** fail and terminate Docker sandbox operations when stdout/stderr capture breaks instead of returning success with incomplete output. (#100523) Thanks @cxbAsDev.
 - **Background refresh isolation:** keep remote skill-bin refreshes running when one node fails, and contain periodic subagent-sweeper failures without hiding errors from direct callers. (#100393, #100390) Thanks @cxbAsDev.
 - **Skill scan diagnostics:** report directory enumeration failures through the existing resource diagnostics instead of silently dropping affected skills. (#100380) Thanks @wendy-chsy.
 - **Exec output sanitization:** remove complete ANSI sequences and render residual C0/C1 controls as visible escapes instead of silently discarding output bytes. (#100327) Thanks @LavyaTandel.

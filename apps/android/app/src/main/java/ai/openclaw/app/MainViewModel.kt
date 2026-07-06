@@ -167,7 +167,6 @@ class MainViewModel(
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 
   val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
-  val cameraFlashToken: StateFlow<Long> = runtimeState(initial = 0L) { it.cameraFlashToken }
 
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
@@ -629,8 +628,8 @@ class MainViewModel(
     ensureRuntime().abortChat()
   }
 
-  fun startNewChat() {
-    ensureRuntime().startNewChat()
+  fun startNewChat(worktree: Boolean = false) {
+    ensureRuntime().startNewChat(worktree = worktree)
   }
 
   fun refreshChatCommands() {

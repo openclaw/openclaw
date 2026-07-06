@@ -1062,7 +1062,7 @@ type MemoryFlushResult = {
   outcome: MemoryFlushOutcome;
 };
 
-/** Runs post-turn memory flush when transcript state warrants it. */
+/** Runs pre-compaction memory flush when transcript state warrants it. */
 export async function runMemoryFlushIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;

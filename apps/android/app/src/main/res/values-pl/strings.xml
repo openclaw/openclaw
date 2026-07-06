@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Ufać tej bramie?</string>
     <string name="trust_and_continue">Zaufaj i kontynuuj</string>
     <string name="cancel">Anuluj</string>
+    <string name="new_chat_in_worktree">Nowy czat w worktree</string>
     <string name="endpoint">Punkt końcowy</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Twoja brama jest aktywna i gotowa.</string>

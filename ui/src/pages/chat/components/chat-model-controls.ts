@@ -24,6 +24,7 @@ import {
 
 export type ChatModelControlsProps = {
   activeRunId: string | null;
+  agentDefaultModel?: string;
   connected: boolean;
   gatewayAvailable: boolean;
   loading: boolean;
@@ -396,6 +397,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     defaultLabel,
     options: selectOptions,
   } = resolveChatModelSelectState({
+    agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
     sessionKey: props.sessionKey,

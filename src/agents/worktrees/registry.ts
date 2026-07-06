@@ -109,6 +109,24 @@ export function findLiveRegistryWorktreeByPath(
   return row ? rowToRecord(row) : undefined;
 }
 
+export function findLiveRegistryWorktreeByOwner(
+  env: NodeJS.ProcessEnv,
+  ownerKind: ManagedWorktreeOwnerKind,
+  ownerId: string,
+): ManagedWorktreeRecord | undefined {
+  const db = dbFor(env);
+  const query = kyselyFor(db)
+    .selectFrom("worktrees")
+    .selectAll()
+    .where("owner_kind", "=", ownerKind)
+    .where("owner_id", "=", ownerId)
+    .where("removed_at", "is", null)
+    .orderBy("created_at", "desc")
+    .limit(1);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
 export function findRegistryWorktreeByPath(
   env: NodeJS.ProcessEnv,
   worktreePath: string,
