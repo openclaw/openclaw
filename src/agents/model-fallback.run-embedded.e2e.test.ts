@@ -141,6 +141,43 @@ function makeConfig(): OpenClawConfig {
   } satisfies OpenClawConfig;
 }
 
+function makeAzureFoundryPrimaryConfig(): OpenClawConfig {
+  const apiKeyField = ["api", "Key"].join("");
+  const cfg = makeConfig();
+  return {
+    ...cfg,
+    agents: {
+      defaults: {
+        model: {
+          primary: "azure-foundry/mock-1",
+          fallbacks: ["groq/mock-2"],
+        },
+      },
+    },
+    models: {
+      providers: {
+        ...cfg.models?.providers,
+        "azure-foundry": {
+          api: "openai-responses",
+          [apiKeyField]: "azure-foundry-test-key", // pragma: allowlist secret
+          baseUrl: "https://example.com/azure-foundry",
+          models: [
+            {
+              id: "mock-1",
+              name: "Azure Foundry Mock 1",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 16_000,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+}
+
 async function withAgentWorkspace<T>(
   fn: (ctx: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
@@ -189,6 +226,27 @@ async function writeAuthStore(
   );
 }
 
+async function writeAzureFoundryAuthStore(agentDir: string) {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "azure-foundry:p1": {
+          type: "api_key",
+          provider: "azure-foundry",
+          key: "sk-azure-foundry",
+        },
+        "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+      },
+      usageStats: {
+        "azure-foundry:p1": { lastUsed: 1 },
+        "groq:p1": { lastUsed: 2 },
+      },
+    },
+    agentDir,
+  );
+}
+
 async function readUsageStats(agentDir: string) {
   return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
@@ -229,6 +287,8 @@ async function runEmbeddedFallback(params: {
   workspaceDir: string;
   sessionKey: string;
   runId: string;
+  provider?: string;
+  model?: string;
   sessionId?: string;
   lane?: string;
   abortSignal?: AbortSignal;
@@ -240,8 +300,8 @@ async function runEmbeddedFallback(params: {
   const sessionId = params.sessionId ?? `session:${params.runId}`;
   return await runWithModelFallback({
     cfg,
-    provider: "openai",
-    model: "mock-1",
+    provider: params.provider ?? "openai",
+    model: params.model ?? "mock-1",
     runId: params.runId,
     sessionId: params.sessionId,
     lane: params.lane,
@@ -290,10 +350,12 @@ function mockPrimaryFailureThenFallbackSuccess(
   makePrimaryAttempt: (
     attemptParams: EmbeddedAttemptParams,
   ) => EmbeddedRunAttemptResult | Promise<EmbeddedRunAttemptResult>,
+  options?: { primaryProvider?: string },
 ) {
+  const primaryProvider = options?.primaryProvider ?? "openai";
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as EmbeddedAttemptParams;
-    if (attemptParams.provider === "openai") {
+    if (attemptParams.provider === primaryProvider) {
       return await makePrimaryAttempt(attemptParams);
     }
     if (attemptParams.provider === "groq") {
@@ -325,17 +387,22 @@ function mockPrimarySuspendingPromptErrorThenFallbackSuccess(sessionId: string) 
   );
 }
 
-function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
-  mockPrimaryFailureThenFallbackSuccess(() =>
-    makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: buildEmbeddedRunnerAssistant({
-        provider: "openai",
-        model: "mock-1",
-        stopReason: "error",
-        errorMessage,
+function mockPrimaryErrorThenFallbackSuccess(
+  errorMessage: string,
+  options?: { primaryProvider?: string },
+) {
+  mockPrimaryFailureThenFallbackSuccess(
+    (attemptParams) =>
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: attemptParams.provider,
+          model: attemptParams.modelId ?? "mock-1",
+          stopReason: "error",
+          errorMessage,
+        }),
       }),
-    }),
+    options,
   );
 }
 
@@ -485,16 +552,21 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("falls back after missing provider error details without cooling down the profile", async () => {
+  it("falls back after non-OpenAI missing provider error details without cooling down the profile", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeAuthStore(agentDir);
-      mockPrimaryErrorThenFallbackSuccess(NO_ERROR_DETAILS_MESSAGE);
+      await writeAzureFoundryAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(NO_ERROR_DETAILS_MESSAGE, {
+        primaryProvider: "azure-foundry",
+      });
 
       const result = await runEmbeddedFallback({
         agentDir,
         workspaceDir,
         sessionKey: "agent:test:no-error-details-no-cooldown",
         runId: "run:no-error-details-no-cooldown",
+        config: makeAzureFoundryPrimaryConfig(),
+        provider: "azure-foundry",
+        model: "mock-1",
       });
 
       expect(result.provider).toBe("groq");
@@ -503,11 +575,12 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       const usageStats = await readUsageStats(agentDir);
-      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-      expect(usageStats["openai:p1"]?.failureCounts?.no_error_details).toBeUndefined();
+      expect(usageStats["azure-foundry:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["azure-foundry:p1"]?.failureCounts?.no_error_details).toBeUndefined();
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
-      expect(countProviderAttempts("openai")).toBeGreaterThan(0);
+      expect(countProviderAttempts("azure-foundry")).toBeGreaterThan(0);
+      expect(countProviderAttempts("openai")).toBe(0);
       expect(countProviderAttempts("groq")).toBe(1);
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();

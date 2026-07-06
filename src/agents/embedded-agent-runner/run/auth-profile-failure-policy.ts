@@ -1,6 +1,7 @@
 /**
  * Resolves why an auth profile failed during provider auth selection.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
 import type { FailoverReason } from "../../embedded-agent-helpers/types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -13,6 +14,7 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
  */
 export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
+  provider?: string;
   providerStarted?: boolean;
   transientRateLimit?: boolean;
   policy?: AuthProfileFailurePolicy;
@@ -35,7 +37,8 @@ export function resolveAuthProfileFailureReason(params: {
         (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
     params.failoverReason === "server_error" ||
     params.failoverReason === "empty_response" ||
-    params.failoverReason === "no_error_details" ||
+    (params.failoverReason === "no_error_details" &&
+      normalizeProviderId(params.provider ?? "") !== "openai") ||
     params.failoverReason === "context_overflow" ||
     params.failoverReason === "format"
   ) {
