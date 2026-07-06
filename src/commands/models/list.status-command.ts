@@ -45,7 +45,7 @@ import {
 } from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import { exitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
+import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -1024,7 +1024,7 @@ export async function modelsStatusCommand(
       if (opts.check) {
         runtime.exit(checkStatus);
       }
-      exitAfterOneShotOutput(runtime);
+      requestExitAfterOneShotOutput(runtime);
       return;
     }
 
@@ -1033,7 +1033,7 @@ export async function modelsStatusCommand(
       if (opts.check) {
         runtime.exit(checkStatus);
       }
-      exitAfterOneShotOutput(runtime);
+      requestExitAfterOneShotOutput(runtime);
       return;
     }
 
@@ -1392,5 +1392,5 @@ export async function modelsStatusCommand(
   } finally {
     cleanupPluginMetadataSnapshot();
   }
-  exitAfterOneShotOutput(runtime);
+  requestExitAfterOneShotOutput(runtime);
 }
