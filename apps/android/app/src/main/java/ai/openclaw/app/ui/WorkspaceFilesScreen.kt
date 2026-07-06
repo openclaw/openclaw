@@ -63,6 +63,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
+import java.util.UUID
 
 /**
  * Read-only workspace browser for the active agent, backed by the
@@ -383,7 +384,9 @@ private fun shareWorkspaceFile(
   context: Context,
   file: GatewayWorkspaceFile,
 ) {
-  val directory = File(context.cacheDir, "workspace-files").apply { mkdirs() }
+  // A FileProvider grant can outlive the share sheet. Unique directories keep
+  // a later same-basename export from replacing bytes behind an older grant.
+  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}").apply { mkdirs() }
   // Server names are plain basenames; keep the guard so a hostile gateway
   // cannot steer the temp write outside the export directory.
   val safeName = file.name.substringAfterLast('/').ifEmpty { "file" }
