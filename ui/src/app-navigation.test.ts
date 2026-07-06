@@ -177,12 +177,16 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
-    expect(pathForRoute("worktrees")).toBe("/worktrees");
+    expect(pathForRoute("worktrees")).toBe("/settings/worktrees");
+    expect(pathForRoute("config")).toBe("/settings/general");
+    expect(pathForRoute("appearance")).toBe("/settings/appearance");
+    expect(pathForRoute("logs")).toBe("/settings/logs");
   });
 
   it("prepends base path", () => {
     expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
     expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+    expect(pathForRoute("config", "/ui")).toBe("/ui/settings/general");
   });
 });
 
@@ -192,9 +196,20 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/worktrees")).toBe("worktrees");
+    expect(routeIdFromPath("/settings/worktrees")).toBe("worktrees");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
+    expect(routeIdFromPath("/settings/general")).toBe("config");
+    expect(routeIdFromPath("/settings/appearance")).toBe("appearance");
+    expect(routeIdFromPath("/settings/logs")).toBe("logs");
+  });
+
+  it("keeps legacy top-level settings paths routed", () => {
+    expect(routeIdFromPath("/config")).toBe("config");
+    expect(routeIdFromPath("/appearance")).toBe("appearance");
+    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
+    expect(routeIdFromPath("/logs")).toBe("logs");
   });
 
   it("leaves root fallback to application startup", () => {
@@ -204,11 +219,14 @@ describe("routeIdFromPath", () => {
   it("handles base paths", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
+    expect(routeIdFromPath("/ui/settings/general", "/ui")).toBe("config");
+    expect(routeIdFromPath("/ui/appearance", "/ui")).toBe("appearance");
   });
 
   it("rejects route-shaped paths outside the configured base path", () => {
     expect(routeIdFromPath("/xx/chat", "/ui")).toBeNull();
     expect(routeIdFromPath("/other/sessions", "/apps/openclaw")).toBeNull();
+    expect(routeIdFromPath("/xx/settings/general", "/ui")).toBeNull();
   });
 
   it("returns null for unknown path", () => {
@@ -229,6 +247,9 @@ describe("inferBasePathFromPathname", () => {
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
     expect(inferBasePathFromPathname("/overview")).toBe("");
+    expect(inferBasePathFromPathname("/settings/general")).toBe("");
+    expect(inferBasePathFromPathname("/settings/appearance")).toBe("");
+    expect(inferBasePathFromPathname("/appearance")).toBe("");
     expect(inferBasePathFromPathname("/dreaming")).toBe("");
     expect(inferBasePathFromPathname("/dreams")).toBe("");
   });
@@ -236,6 +257,8 @@ describe("inferBasePathFromPathname", () => {
   it("infers base path from nested paths", () => {
     expect(inferBasePathFromPathname("/ui/chat")).toBe("/ui");
     expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe("/apps/openclaw");
+    expect(inferBasePathFromPathname("/ui/settings/general")).toBe("/ui");
+    expect(inferBasePathFromPathname("/ui/appearance")).toBe("/ui");
   });
 
   it("preserves mount roots without a route suffix", () => {

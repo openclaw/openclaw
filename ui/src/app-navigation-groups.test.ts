@@ -55,6 +55,17 @@ describe("sidebar pinned routes", () => {
   });
 
   it("routes every published settings slice", () => {
+    expect(routeIdFromPath("/settings/communications")).toBe("communications");
+    expect(routeIdFromPath("/settings/appearance")).toBe("appearance");
+    expect(routeIdFromPath("/settings/automation")).toBe("automation");
+    expect(routeIdFromPath("/settings/infrastructure")).toBe("infrastructure");
+    expect(routeIdFromPath("/settings/ai-agents")).toBe("ai-agents");
+    expect(routeIdFromPath("/settings/general")).toBe("config");
+    expect(routeIdFromPath("/settings/channels")).toBe("channels");
+    expect(routeIdFromPath("/settings/worktrees")).toBe("worktrees");
+  });
+
+  it("keeps old settings paths as aliases", () => {
     expect(routeIdFromPath("/communications")).toBe("communications");
     expect(routeIdFromPath("/appearance")).toBe("appearance");
     expect(routeIdFromPath("/automation")).toBe("automation");
