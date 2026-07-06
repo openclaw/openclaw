@@ -25,9 +25,6 @@ import {
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 
-const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
-const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
-
 const assignIf = (
   target: Record<string, unknown>,
   key: string,
@@ -38,33 +35,6 @@ const assignIf = (
     target[key] = value;
   }
 };
-
-async function loadCronJobForEditSchedulePatch(
-  opts: Record<string, unknown>,
-  id: string,
-): Promise<CronJob | undefined> {
-  // Schedule patches need the existing job; page defensively because gateway stores can be large.
-  let offset = 0;
-  for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
-    const listed = (await callGatewayFromCli("cron.list", opts, {
-      includeDisabled: true,
-      limit: CRON_EDIT_LOOKUP_PAGE_SIZE,
-      offset,
-    })) as { jobs?: CronJob[]; hasMore?: boolean; nextOffset?: number | null } | null;
-    const existing = (listed?.jobs ?? []).find((job) => job.id === id);
-    if (existing) {
-      return existing;
-    }
-    if (!listed?.hasMore || typeof listed.nextOffset !== "number") {
-      return undefined;
-    }
-    if (listed.nextOffset <= offset) {
-      throw new Error("cron.list pagination did not advance while looking up cron job");
-    }
-    offset = listed.nextOffset;
-  }
-  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
-}
 
 async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Promise<CronJob> {
   return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
@@ -277,10 +247,7 @@ export function registerCronEditCommand(cron: Command) {
               patch.schedule = scheduleRequest.schedule;
             }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
-            if (!existing) {
-              throw new Error(`unknown cron job id: ${id}`);
-            }
+            const existing = await readCronJobForEdit(opts, String(id));
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
           }
 
@@ -384,8 +351,8 @@ export function registerCronEditCommand(cron: Command) {
             !Array.isArray(opts.tools) &&
             !opts.clearTools
           ) {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
-            timeoutOnlyPayloadKind = existing?.payload.kind === "command" ? "command" : "agentTurn";
+            const existing = await readCronJobForEdit(opts, String(id));
+            timeoutOnlyPayloadKind = existing.payload.kind === "command" ? "command" : "agentTurn";
           }
           const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||

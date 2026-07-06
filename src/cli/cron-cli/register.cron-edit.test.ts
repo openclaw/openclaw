@@ -171,14 +171,10 @@ describe("cron edit command", () => {
 
   it("preserves command payload kind for timeout-only edits", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
+      if (method === "cron.get") {
         return {
-          jobs: [
-            {
-              id: "job-1",
-              payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
-            },
-          ],
+          id: "job-1",
+          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
         };
       }
       return { ok: true };
