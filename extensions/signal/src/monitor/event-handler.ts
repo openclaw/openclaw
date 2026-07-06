@@ -93,11 +93,16 @@ const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
 
 function isRetryableSignalInboundError(error: unknown): boolean {
   const candidates: unknown[] = [];
-  let current: any = error;
+  let current: unknown = error;
   while (current) {
-    if (current.cause) candidates.push(current.cause);
-    if (current.error) candidates.push(current.error);
-    current = current.cause || current.error;
+    if ((current as { cause?: unknown }).cause) {
+      candidates.push((current as { cause: unknown }).cause);
+    }
+    if ((current as { error?: unknown }).error) {
+      candidates.push((current as { error: unknown }).error);
+    }
+    const next = (current as { cause?: unknown; error?: unknown }).cause || (current as { cause?: unknown; error?: unknown }).error;
+    current = next;
   }
   return candidates.some((candidate) =>
     REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(String(candidate)),
@@ -727,7 +732,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         throw error;
       }
     },
-    onError: (err, entries) => {
+    onError: (err, _entries) => {
       // Final error handler for exhausted retries or non-retryable errors
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
     },
