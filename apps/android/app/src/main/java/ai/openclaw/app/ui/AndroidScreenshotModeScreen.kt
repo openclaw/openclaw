@@ -7,12 +7,14 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +40,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+private val ScreenshotScreenHorizontalPadding = 20.dp
+private val ScreenshotScreenVerticalPadding = 26.dp
+private val ScreenshotBodyVerticalPadding = 20.dp
+private val ScreenshotBodyGap = 14.dp
+private val ScreenshotCardRadius = 8.dp
+private val ScreenshotCardPadding = 16.dp
+private val ScreenshotIconBoxSize = 44.dp
+private val ScreenshotFeatureIconSize = 22.dp
+private val ScreenshotTabIconSize = 20.dp
+private val ScreenshotTabIconRadius = 6.dp
+private val ScreenshotVoiceOrbMaxSize = 196.dp
+private val ScreenshotVoiceIconSize = 72.dp
+private val ScreenshotVoiceIconCompactSize = 60.dp
+private val ScreenshotContextPanelMinHeight = 160.dp
+private val ScreenshotContextBarHeight = 7.dp
+private val ScreenshotContextBarRadius = 4.dp
+
 @Composable
 fun AndroidScreenshotModeScreen(scene: AndroidScreenshotScene) {
   ClawDesignTheme(dark = true) {
@@ -46,7 +65,10 @@ fun AndroidScreenshotModeScreen(scene: AndroidScreenshotScene) {
         Modifier
           .fillMaxSize()
           .background(ClawTheme.colors.canvas)
-          .padding(horizontal = 20.dp, vertical = 26.dp),
+          .padding(
+            horizontal = ScreenshotScreenHorizontalPadding,
+            vertical = ScreenshotScreenVerticalPadding,
+          ),
       verticalArrangement = Arrangement.SpaceBetween,
     ) {
       ScreenshotHeader(scene)
@@ -81,8 +103,8 @@ private fun ScreenshotSceneBody(
   modifier: Modifier = Modifier,
 ) {
   Column(
-    modifier = modifier.fillMaxWidth().padding(vertical = 20.dp),
-    verticalArrangement = Arrangement.spacedBy(14.dp),
+    modifier = modifier.fillMaxWidth().padding(vertical = ScreenshotBodyVerticalPadding),
+    verticalArrangement = Arrangement.spacedBy(ScreenshotBodyGap),
   ) {
     when (scene) {
       AndroidScreenshotScene.Connect -> ConnectScene()
@@ -124,9 +146,20 @@ private fun ChatScene() {
 
 @Composable
 private fun VoiceScene() {
-  Box(modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
+  BoxWithConstraints(
+    modifier = Modifier.fillMaxWidth().padding(vertical = ScreenshotBodyVerticalPadding),
+    contentAlignment = Alignment.Center,
+  ) {
+    val orbSize = minOf(maxWidth, ScreenshotVoiceOrbMaxSize)
+    val iconSize =
+      if (orbSize < ScreenshotVoiceOrbMaxSize) {
+        ScreenshotVoiceIconCompactSize
+      } else {
+        ScreenshotVoiceIconSize
+      }
+
     Surface(
-      modifier = Modifier.size(196.dp),
+      modifier = Modifier.size(orbSize),
       shape = CircleShape,
       color = ClawTheme.colors.surfaceRaised,
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
@@ -136,7 +169,7 @@ private fun VoiceScene() {
           imageVector = Icons.Default.Mic,
           contentDescription = null,
           tint = ClawTheme.colors.primary,
-          modifier = Modifier.size(72.dp),
+          modifier = Modifier.size(iconSize),
         )
       }
     }
@@ -155,12 +188,12 @@ private fun ScreenScene() {
     MetricRow(label = "Location", value = "On request")
   }
   Surface(
-    modifier = Modifier.fillMaxWidth().height(168.dp),
-    shape = RoundedCornerShape(8.dp),
+    modifier = Modifier.fillMaxWidth().heightIn(min = ScreenshotContextPanelMinHeight),
+    shape = RoundedCornerShape(ScreenshotCardRadius),
     color = ClawTheme.colors.surfaceRaised,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = Modifier.padding(ScreenshotCardPadding), verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Text(text = "Live context", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       ContextBar(label = "Camera", fraction = 0.74f)
       ContextBar(label = "Screen", fraction = 0.58f)
@@ -190,11 +223,11 @@ private fun FeaturePanel(
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(8.dp),
+    shape = RoundedCornerShape(ScreenshotCardRadius),
     color = ClawTheme.colors.surface,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier = Modifier.padding(ScreenshotCardPadding), verticalArrangement = Arrangement.spacedBy(ScreenshotBodyGap)) {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         IconBox(icon = icon)
         Column {
@@ -214,11 +247,11 @@ private fun CompactList(
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(8.dp),
+    shape = RoundedCornerShape(ScreenshotCardRadius),
     color = ClawTheme.colors.surfaceRaised,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier = Modifier.padding(ScreenshotCardPadding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
       Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
       rows.forEach { row ->
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -239,11 +272,11 @@ private fun ChatBubble(
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(8.dp),
+    shape = RoundedCornerShape(ScreenshotCardRadius),
     color = if (raised) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     border = BorderStroke(1.dp, if (raised) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = Modifier.padding(ScreenshotCardPadding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       Text(text = text, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     }
@@ -278,15 +311,15 @@ private fun ContextBar(
       modifier =
         Modifier
           .fillMaxWidth()
-          .height(7.dp)
-          .clip(RoundedCornerShape(4.dp))
+          .height(ScreenshotContextBarHeight)
+          .clip(RoundedCornerShape(ScreenshotContextBarRadius))
           .background(ClawTheme.colors.surfacePressed),
     ) {
       Box(
         modifier =
           Modifier
             .fillMaxWidth(fraction)
-            .height(7.dp)
+            .height(ScreenshotContextBarHeight)
             .background(ClawTheme.colors.primary),
       )
     }
@@ -297,7 +330,7 @@ private fun ContextBar(
 private fun ScreenshotTabBar(activeScene: AndroidScreenshotScene) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(8.dp),
+    shape = RoundedCornerShape(ScreenshotCardRadius),
     color = ClawTheme.colors.surface,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
@@ -322,8 +355,8 @@ private fun TabIcon(
   Box(
     modifier =
       Modifier
-        .size(42.dp)
-        .clip(RoundedCornerShape(6.dp))
+        .size(ScreenshotIconBoxSize)
+        .clip(RoundedCornerShape(ScreenshotTabIconRadius))
         .background(if (active) ClawTheme.colors.surfacePressed else Color.Transparent),
     contentAlignment = Alignment.Center,
   ) {
@@ -331,7 +364,7 @@ private fun TabIcon(
       imageVector = icon,
       contentDescription = null,
       tint = if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
-      modifier = Modifier.size(20.dp),
+      modifier = Modifier.size(ScreenshotTabIconSize),
     )
   }
 }
@@ -341,8 +374,8 @@ private fun IconBox(icon: ImageVector) {
   Box(
     modifier =
       Modifier
-        .size(42.dp)
-        .clip(RoundedCornerShape(8.dp))
+        .size(ScreenshotIconBoxSize)
+        .clip(RoundedCornerShape(ScreenshotCardRadius))
         .background(ClawTheme.colors.surfacePressed),
     contentAlignment = Alignment.Center,
   ) {
@@ -350,7 +383,7 @@ private fun IconBox(icon: ImageVector) {
       imageVector = icon,
       contentDescription = null,
       tint = ClawTheme.colors.primary,
-      modifier = Modifier.size(22.dp),
+      modifier = Modifier.size(ScreenshotFeatureIconSize),
     )
   }
 }
@@ -361,7 +394,7 @@ private fun StatusPill(
   color: Color,
 ) {
   Surface(
-    shape = RoundedCornerShape(8.dp),
+    shape = RoundedCornerShape(ScreenshotCardRadius),
     color = ClawTheme.colors.surfaceRaised,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
