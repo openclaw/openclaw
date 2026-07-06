@@ -36,6 +36,41 @@ export type HookMappingConfig = {
   transform?: HookMappingTransform;
 };
 
+export type HookQueueSessionTarget = "isolated" | `session:${string}`;
+
+export type HookQueueConfig = {
+  enabled?: boolean;
+  /**
+   * Relative path under hooks.path, or an absolute hooks path. Defaults to
+   * `queue/<queue id>`.
+   */
+  path?: string;
+  /** Maximum number of queued messages to process concurrently. Default: 1. */
+  parallelism?: number;
+  /** Queue execution target. Defaults to isolated sessions per item. */
+  sessionTarget?: HookQueueSessionTarget;
+  /** Static session key used for isolated queue runs when request/default keys are absent. */
+  sessionKey?: string;
+  /** Optional default display name for queued agent runs. */
+  name?: string;
+  /** Route this queue to a specific agent (unknown ids fall back to the default agent). */
+  agentId?: string;
+  wakeMode?: "now" | "next-heartbeat";
+  deliver?: boolean;
+  /** DANGEROUS: Disable external content safety wrapping for this queue. */
+  allowUnsafeExternalContent?: boolean;
+  /**
+   * "last" or any runtime channel id (including plugin channels).
+   * Validation against configured/registered channels happens in gateway hooks runtime.
+   */
+  channel?: "last" | (string & {});
+  to?: string;
+  /** Override model for this queue (provider/model or alias). */
+  model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
+};
+
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";
 
 export type HooksGmailConfig = {
@@ -120,6 +155,7 @@ export type HooksConfig = {
   presets?: string[];
   transformsDir?: string;
   mappings?: HookMappingConfig[];
+  queues?: Record<string, HookQueueConfig>;
   gmail?: HooksGmailConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;

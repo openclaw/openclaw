@@ -420,6 +420,13 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         },
       },
     ],
+    queues: {
+      imports: {
+        parallelism: 10,
+        sessionTarget: "isolated",
+        agentId: "main",
+      },
+    },
     gmail: {
       account: "openclaw@gmail.com",
       label: "INBOX",

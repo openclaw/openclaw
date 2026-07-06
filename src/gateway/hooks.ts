@@ -8,6 +8,8 @@ import {
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertSafeCronSessionTargetId } from "../cron/session-target.js";
+import type { CronSessionTarget } from "../cron/types.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
@@ -23,6 +25,9 @@ import type { HookMessageChannel } from "./hooks.types.js";
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
+const DEFAULT_HOOK_QUEUE_PARALLELISM = 1;
+const MAX_HOOK_QUEUE_PARALLELISM = 100;
+const HOOK_QUEUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 /** Fully resolved hooks config used by gateway hook request handling. */
 export type HooksConfigResolved = {
@@ -30,8 +35,27 @@ export type HooksConfigResolved = {
   token: string;
   maxBodyBytes: number;
   mappings: HookMappingResolved[];
+  queues: HookQueueResolved[];
   agentPolicy: HookAgentPolicyResolved;
   sessionPolicy: HookSessionPolicyResolved;
+};
+
+export type HookQueueResolved = {
+  id: string;
+  path: string;
+  parallelism: number;
+  sessionTarget: Extract<CronSessionTarget, "isolated" | `session:${string}`>;
+  sessionKey?: string;
+  name?: string;
+  agentId?: string;
+  wakeMode?: "now" | "next-heartbeat";
+  deliver?: boolean;
+  allowUnsafeExternalContent?: boolean;
+  channel?: string;
+  to?: string;
+  model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
 };
 
 type HookAgentPolicyResolved = {
@@ -68,6 +92,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       ? cfg.hooks.maxBodyBytes
       : DEFAULT_HOOKS_MAX_BODY_BYTES;
   const mappings = resolveHookMappings(cfg.hooks);
+  const queues = resolveHookQueues(cfg, trimmed);
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const knownAgentIds = resolveKnownAgentIds(cfg, defaultAgentId);
   const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
@@ -101,6 +126,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     token,
     maxBodyBytes,
     mappings,
+    queues,
     agentPolicy: {
       defaultAgentId,
       knownAgentIds,
@@ -112,6 +138,120 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
+}
+
+function normalizeHookQueueId(raw: string): string {
+  const value = raw.trim();
+  if (!HOOK_QUEUE_ID_PATTERN.test(value)) {
+    throw new Error(
+      "hooks.queues keys must start with a letter or number and contain only letters, numbers, '.', '_', or '-'",
+    );
+  }
+  return value;
+}
+
+function resolveHookQueuePath(params: {
+  queueId: string;
+  basePath: string;
+  path?: string;
+}): string {
+  const rawPath = normalizeOptionalString(params.path) ?? `queue/${params.queueId}`;
+  let relativePath = rawPath;
+  if (rawPath.startsWith("/")) {
+    if (rawPath === params.basePath) {
+      throw new Error(`hooks.queues.${params.queueId}.path must not equal hooks.path`);
+    }
+    if (!rawPath.startsWith(`${params.basePath}/`)) {
+      throw new Error(`hooks.queues.${params.queueId}.path must be under hooks.path`);
+    }
+    relativePath = rawPath.slice(params.basePath.length + 1);
+  }
+  const normalized = relativePath.replace(/^\/+|\/+$/gu, "");
+  if (
+    !normalized ||
+    normalized.includes("?") ||
+    normalized.includes("#") ||
+    normalized.split("/").some((part) => !part)
+  ) {
+    throw new Error(`hooks.queues.${params.queueId}.path must be a non-empty URL path`);
+  }
+  if (normalized === "agent" || normalized === "wake") {
+    throw new Error(`hooks.queues.${params.queueId}.path conflicts with a built-in hook path`);
+  }
+  return normalized;
+}
+
+function resolveHookQueueParallelism(raw: number | undefined): number {
+  if (!Number.isFinite(raw) || raw === undefined) {
+    return DEFAULT_HOOK_QUEUE_PARALLELISM;
+  }
+  return Math.max(1, Math.min(MAX_HOOK_QUEUE_PARALLELISM, Math.floor(raw)));
+}
+
+function resolveHookQueueSessionTarget(
+  queueId: string,
+  raw: string | undefined,
+): Extract<CronSessionTarget, "isolated" | `session:${string}`> {
+  const value = normalizeOptionalString(raw);
+  if (!value || value === "isolated") {
+    return "isolated";
+  }
+  if (value.startsWith("session:")) {
+    return `session:${assertSafeCronSessionTargetId(value.slice("session:".length))}`;
+  }
+  throw new Error(`hooks.queues.${queueId}.sessionTarget must be "isolated" or "session:<id>"`);
+}
+
+function resolveHookQueues(cfg: OpenClawConfig, basePath: string): HookQueueResolved[] {
+  const rawQueues = cfg.hooks?.queues;
+  if (!rawQueues || typeof rawQueues !== "object" || Array.isArray(rawQueues)) {
+    return [];
+  }
+  const paths = new Set<string>();
+  const queues: HookQueueResolved[] = [];
+  for (const [rawQueueId, rawQueue] of Object.entries(rawQueues)) {
+    if (rawQueue?.enabled === false) {
+      continue;
+    }
+    const id = normalizeHookQueueId(rawQueueId);
+    const queuePath = resolveHookQueuePath({ queueId: id, basePath, path: rawQueue?.path });
+    if (paths.has(queuePath)) {
+      throw new Error(`hooks.queues.${id}.path duplicates another hook queue path`);
+    }
+    paths.add(queuePath);
+    const sessionTarget = resolveHookQueueSessionTarget(id, rawQueue?.sessionTarget);
+    const sessionKey = resolveSessionKey(rawQueue?.sessionKey);
+    const name = normalizeOptionalString(rawQueue?.name);
+    const agentId = normalizeOptionalString(rawQueue?.agentId);
+    const channel = normalizeOptionalString(rawQueue?.channel);
+    const to = normalizeOptionalString(rawQueue?.to);
+    const model = normalizeOptionalString(rawQueue?.model);
+    const thinking = normalizeOptionalString(rawQueue?.thinking);
+    queues.push({
+      id,
+      path: queuePath,
+      parallelism: resolveHookQueueParallelism(rawQueue?.parallelism),
+      sessionTarget,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(name ? { name } : {}),
+      ...(agentId ? { agentId } : {}),
+      wakeMode: rawQueue?.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now",
+      ...(rawQueue?.deliver !== undefined ? { deliver: rawQueue.deliver } : {}),
+      ...(rawQueue?.allowUnsafeExternalContent === true
+        ? { allowUnsafeExternalContent: true }
+        : {}),
+      ...(channel ? { channel } : {}),
+      ...(to ? { to } : {}),
+      ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(typeof rawQueue?.timeoutSeconds === "number" &&
+      Number.isFinite(rawQueue.timeoutSeconds) &&
+      rawQueue.timeoutSeconds > 0
+        ? { timeoutSeconds: Math.floor(rawQueue.timeoutSeconds) }
+        : {}),
+    });
+  }
+  return queues.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 function resolveKnownAgentIds(cfg: OpenClawConfig, defaultAgentId: string): Set<string> {

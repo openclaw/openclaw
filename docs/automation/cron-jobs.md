@@ -408,6 +408,43 @@ Query-string tokens are rejected.
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
 
   </Accordion>
+  <Accordion title="POST /hooks/queue/{id}">
+    Enqueue an agent turn into a configured webhook queue. Use this for bursty
+    producers that may send hundreds or thousands of events faster than the
+    agent should process them.
+
+    ```json5
+    {
+      hooks: {
+        enabled: true,
+        token: "shared-secret",
+        queues: {
+          imports: {
+            parallelism: 10,
+            sessionTarget: "isolated",
+            agentId: "main",
+          },
+        },
+      },
+    }
+    ```
+
+    ```bash
+    curl -X POST http://127.0.0.1:18789/hooks/queue/imports \
+      -H 'Authorization: Bearer SECRET' \
+      -H 'Content-Type: application/json' \
+      -d '{"message":"Import customer 42","name":"Customer import"}'
+    ```
+
+    Queue requests return `202 Accepted` with `queueId`, `itemId`, and `runId`.
+    The queue drains in FIFO order up to `parallelism` active items. The default
+    `sessionTarget` is `isolated`; set `sessionTarget: "session:<key>"` only
+    when all queued items should continue one configured session.
+
+    The Control UI Automation tab shows configured webhook queues, counts by
+    status, active parallelism, and recent queued/running/completed items.
+
+  </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms.
   </Accordion>

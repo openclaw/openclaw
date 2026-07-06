@@ -15,6 +15,8 @@ import {
   getCronJobPayload,
   getVisibleCronJobs,
   hasCronFormErrors,
+  loadHookQueueItems,
+  loadHookQueues,
   loadCronJobsPage,
   loadCronModelSuggestions,
   loadCronRuns,
@@ -169,6 +171,7 @@ class CronPage extends LitElement {
       this.runCronTask((current) =>
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
+      this.runCronTask((current) => loadHookQueues(current)),
     ]);
   }
 
@@ -357,6 +360,13 @@ class CronPage extends LitElement {
             runsStatusFilter: this.cron.cronRunsStatusFilter,
             runsQuery: this.cron.cronRunsQuery,
             runsSortDir: this.cron.cronRunsSortDir,
+            hookQueuesLoading: this.cron.hookQueuesLoading,
+            hookQueues: this.cron.hookQueues,
+            selectedHookQueueId: this.cron.selectedHookQueueId,
+            hookQueueItems: this.cron.hookQueueItems,
+            hookQueueItemsTotal: this.cron.hookQueueItemsTotal,
+            hookQueueItemsHasMore: this.cron.hookQueueItemsHasMore,
+            hookQueueItemsLoadingMore: this.cron.hookQueueItemsLoadingMore,
             fieldErrors: this.cron.cronFieldErrors,
             canSubmit: !hasCronFormErrors(this.cron.cronFieldErrors),
             agentSuggestions: suggestions.agentSuggestions,
@@ -421,6 +431,15 @@ class CronPage extends LitElement {
                 await loadCronJobsPage(cronState, { append: false, tableFilters: true });
               }),
             onLoadMoreRuns: () => void this.runCronTask((cronState) => loadMoreCronRuns(cronState)),
+            onSelectHookQueue: (queueId) =>
+              void this.runCronTask(async (cronState) => {
+                cronState.selectedHookQueueId = queueId;
+                await loadHookQueueItems(cronState, queueId);
+              }),
+            onLoadMoreHookQueueItems: () =>
+              void this.runCronTask((cronState) =>
+                loadHookQueueItems(cronState, cronState.selectedHookQueueId, { append: true }),
+              ),
             onRunsFiltersChange: (patch) =>
               void this.runCronTask(async (cronState) => {
                 updateCronRunsFilter(cronState, patch);

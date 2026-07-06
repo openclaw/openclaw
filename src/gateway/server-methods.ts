@@ -142,6 +142,10 @@ const loadHealthHandlers = lazyHandlerModule(
   () => import("./server-methods/health.js"),
   (module) => module.healthHandlers,
 );
+const loadHooksHandlers = lazyHandlerModule(
+  () => import("./server-methods/hooks.js"),
+  (module) => module.hooksHandlers,
+);
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
@@ -364,6 +368,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "cron.runs",
     ],
     loadHandlers: loadCronHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["hooks.queues", "hooks.queue.items"],
+    loadHandlers: loadHooksHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

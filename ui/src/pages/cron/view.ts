@@ -9,6 +9,9 @@ import type {
   CronJob,
   CronRunLogEntry,
   CronStatus,
+  HookQueueItem,
+  HookQueueStatus,
+  HookQueueSummary,
 } from "../../api/types.ts";
 import type {
   CronDeliveryStatus,
@@ -73,6 +76,13 @@ export type CronProps = {
   runsStatusFilter: CronRunsStatusFilter;
   runsQuery: string;
   runsSortDir: CronSortDir;
+  hookQueuesLoading: boolean;
+  hookQueues: HookQueueSummary[];
+  selectedHookQueueId: string | null;
+  hookQueueItems: HookQueueItem[];
+  hookQueueItemsTotal: number;
+  hookQueueItemsHasMore: boolean;
+  hookQueueItemsLoadingMore: boolean;
   agentSuggestions: string[];
   modelSuggestions: string[];
   thinkingSuggestions: string[];
@@ -103,6 +113,8 @@ export type CronProps = {
   }) => void | Promise<void>;
   onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
+  onSelectHookQueue: (queueId: string) => void | Promise<void>;
+  onLoadMoreHookQueueItems: () => void;
   onRunsFiltersChange: (patch: {
     cronRunsScope?: CronRunScope;
     cronRunsStatuses?: CronRunsStatusValue[];
@@ -358,6 +370,154 @@ function focusFormField(id: string) {
   el.focus();
 }
 
+function hookQueueStatusClass(status: HookQueueStatus): string {
+  if (status === "ok") {
+    return "chip-ok";
+  }
+  if (status === "error") {
+    return "chip-danger";
+  }
+  if (status === "running") {
+    return "chip-warn";
+  }
+  return "";
+}
+
+function hookQueueTotal(queue: HookQueueSummary): number {
+  return queue.counts.queued + queue.counts.running + queue.counts.ok + queue.counts.error;
+}
+
+function renderHookQueueCounts(queue: HookQueueSummary) {
+  return html`
+    <div class="chip-row hook-queue-counts">
+      <span class="chip">${queue.counts.queued} queued</span>
+      <span class="chip chip-warn">${queue.counts.running} running</span>
+      <span class="chip chip-ok">${queue.counts.ok} ok</span>
+      <span class="chip chip-danger">${queue.counts.error} error</span>
+    </div>
+  `;
+}
+
+function renderHookQueueItem(item: HookQueueItem) {
+  const duration =
+    item.startedAtMs && item.finishedAtMs && item.finishedAtMs >= item.startedAtMs
+      ? formatMs(item.finishedAtMs - item.startedAtMs)
+      : null;
+  return html`
+    <details class="list-item hook-queue-item">
+      <summary class="hook-queue-item__summary">
+        <span class=${`chip ${hookQueueStatusClass(item.status)}`}>${item.status}</span>
+        <span class="hook-queue-item__title">${item.name}</span>
+        <span class="muted">${formatRelativeTimestamp(item.createdAtMs)}</span>
+      </summary>
+      <div class="hook-queue-item__body">
+        <div class="hook-queue-item__meta">
+          <span><strong>Run</strong> ${item.runId}</span>
+          <span><strong>Session</strong> ${item.sessionTarget}</span>
+          ${item.agentId ? html`<span><strong>Agent</strong> ${item.agentId}</span>` : nothing}
+          ${duration ? html`<span><strong>Duration</strong> ${duration}</span>` : nothing}
+        </div>
+        <pre class="hook-queue-item__message">${item.message}</pre>
+        ${item.summary ? html`<div class="muted">${item.summary}</div>` : nothing}
+        ${item.error ? html`<div class="cron-help cron-error">${item.error}</div>` : nothing}
+      </div>
+    </details>
+  `;
+}
+
+function renderHookQueues(props: CronProps) {
+  const selected =
+    props.hookQueues.find((queue) => queue.id === props.selectedHookQueueId) ??
+    props.hookQueues[0] ??
+    null;
+  return html`
+    <section class="card hook-queues-panel">
+      <div class="hook-queues-panel__header">
+        <div>
+          <div class="card-title">Webhook queues</div>
+          <div class="card-sub">
+            ${props.hookQueues.length === 0
+              ? "No hook queues configured."
+              : `${props.hookQueues.length} configured queue${
+                  props.hookQueues.length === 1 ? "" : "s"
+                }`}
+          </div>
+        </div>
+        ${props.hookQueuesLoading ? html`<span class="chip">refreshing</span>` : nothing}
+      </div>
+      ${props.hookQueues.length === 0
+        ? nothing
+        : html`
+            <div class="hook-queue-tabs" role="tablist" aria-label="Webhook queues">
+              ${props.hookQueues.map(
+                (queue) => html`
+                  <button
+                    type="button"
+                    class=${`btn hook-queue-tab ${
+                      selected?.id === queue.id ? "hook-queue-tab--active" : ""
+                    }`}
+                    @click=${() => props.onSelectHookQueue(queue.id)}
+                  >
+                    <span>${queue.id}</span>
+                    <span class="muted">${queue.counts.queued}/${queue.parallelism}</span>
+                  </button>
+                `,
+              )}
+            </div>
+            ${selected
+              ? html`
+                  <div class="hook-queue-detail">
+                    <div class="hook-queue-detail__main">
+                      <div class="list-title">${selected.id}</div>
+                      <div class="list-sub">${selected.path}</div>
+                      <div class="muted">
+                        ${hookQueueTotal(selected)} total - ${selected.sessionTarget}
+                      </div>
+                    </div>
+                    ${renderHookQueueCounts(selected)}
+                  </div>
+                  <div class="hook-queue-items-head">
+                    <div class="card-sub">
+                      ${t("cron.jobs.shownOf", {
+                        shown: String(props.hookQueueItems.length),
+                        total: String(props.hookQueueItemsTotal),
+                      })}
+                    </div>
+                    ${selected.oldestQueuedAtMs
+                      ? html`
+                          <div class="muted">
+                            Oldest queued ${formatRelativeTimestamp(selected.oldestQueuedAtMs)}
+                          </div>
+                        `
+                      : nothing}
+                  </div>
+                  ${props.hookQueueItems.length === 0
+                    ? html`<div class="muted hook-queue-empty">No queued items to show.</div>`
+                    : html`<div class="list hook-queue-items">
+                        ${props.hookQueueItems.map(renderHookQueueItem)}
+                      </div>`}
+                  ${props.hookQueueItemsHasMore
+                    ? html`
+                        <div class="row" style="margin-top: 12px">
+                          <button
+                            class="btn"
+                            ?disabled=${props.hookQueueItemsLoadingMore}
+                            @click=${props.onLoadMoreHookQueueItems}
+                          >
+                            ${props.hookQueueItemsLoadingMore
+                              ? t("cron.jobs.loading")
+                              : "Load more queue items"}
+                          </button>
+                        </div>
+                      `
+                    : nothing}
+                `
+              : nothing}
+          `}
+    </section>
+  `;
+}
+
 function renderFieldLabel(text: string, required = false) {
   return html`<span>
     ${text}
@@ -471,6 +631,8 @@ export function renderCron(props: CronProps) {
         ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
       </div>
     </section>
+
+    ${renderHookQueues(props)}
 
     <section class=${`cron-workspace ${formCollapsed ? "cron-workspace--form-collapsed" : ""}`}>
       <div class="cron-workspace-main">

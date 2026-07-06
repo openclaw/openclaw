@@ -741,6 +741,13 @@ See [Multiple Gateways](/gateway/multiple-gateways).
         model: "openai/gpt-5.4-mini",
       },
     ],
+    queues: {
+      imports: {
+        parallelism: 10,
+        sessionTarget: "isolated",
+        agentId: "main",
+      },
+    },
   },
 }
 ```
@@ -756,14 +763,28 @@ Validation and safety notes:
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
+- Use `hooks.queues` for high-volume producers that need persisted backlog visibility and bounded parallelism.
 
 **Endpoints:**
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+- `POST /hooks/queue/<id>` → queue-backed agent trigger for configured `hooks.queues.<id>`
+  - Returns `202 Accepted` with `queueId`, `itemId`, and `runId`.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
+
+<Accordion title="Queue details">
+
+- Queue path defaults to `/hooks/queue/<id>`. Set `hooks.queues.<id>.path` to use a custom subpath under `hooks.path`.
+- `parallelism` defaults to `1` and is capped at `100`.
+- `sessionTarget` defaults to `"isolated"`. With the isolated target, every active item runs as its own isolated agent turn, while `sessionKey` can still choose the parent/source session used for routing and delivery context.
+- `sessionTarget: "session:<key>"` sends every queued item to one configured session key. Request payload `sessionKey` overrides are rejected for this mode.
+- Queue entries persist in the shared OpenClaw SQLite state database with `queued`, `running`, `ok`, or `error` status. The Control UI Automation tab shows queue depth, running count, and recent items.
+- Queue payload fields match `/hooks/agent`: `message` is required after queue defaults are merged; `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, and `timeoutSeconds` may come from either the queue config or the request body.
+
+</Accordion>
 
 <Accordion title="Mapping details">
 

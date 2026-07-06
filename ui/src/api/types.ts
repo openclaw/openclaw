@@ -689,6 +689,58 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type HookQueueStatus = "queued" | "running" | "ok" | "error";
+
+export type HookQueueCounts = Record<HookQueueStatus, number>;
+
+export type HookQueueSummary = {
+  id: string;
+  path: string;
+  parallelism: number;
+  sessionTarget: CronSessionTarget;
+  agentId?: string | null;
+  counts: HookQueueCounts;
+  oldestQueuedAtMs?: number | null;
+  newestQueuedAtMs?: number | null;
+};
+
+export type HookQueueItem = {
+  itemId: string;
+  queueId: string;
+  status: HookQueueStatus;
+  runId: string;
+  sourcePath: string;
+  name: string;
+  message: string;
+  messagePreview: string;
+  agentId?: string | null;
+  sessionKey: string;
+  sessionTarget: CronSessionTarget;
+  model?: string | null;
+  thinking?: string | null;
+  timeoutSeconds?: number | null;
+  createdAtMs: number;
+  claimedAtMs?: number | null;
+  startedAtMs?: number | null;
+  finishedAtMs?: number | null;
+  updatedAtMs: number;
+  error?: string | null;
+  summary?: string | null;
+};
+
+export type HookQueuesResult = {
+  queues: HookQueueSummary[];
+};
+
+export type HookQueueItemsResult = {
+  items: HookQueueItem[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  nextOffset?: number | null;
+  hasMore?: boolean;
+};
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;

@@ -69,6 +69,27 @@ export const HookMappingSchema = z
   .strict()
   .optional();
 
+export const HookQueueSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    path: z.string().optional(),
+    parallelism: z.number().int().positive().max(100).optional(),
+    sessionTarget: z.union([z.literal("isolated"), z.string().regex(/^session:.+/u)]).optional(),
+    sessionKey: z.string().optional().register(sensitive),
+    name: z.string().optional(),
+    agentId: z.string().optional(),
+    wakeMode: z.union([z.literal("now"), z.literal("next-heartbeat")]).optional(),
+    deliver: z.boolean().optional(),
+    allowUnsafeExternalContent: z.boolean().optional(),
+    // Keep this open-ended for runtime channel plugins, matching mappings.
+    channel: z.string().trim().min(1).optional(),
+    to: z.string().optional(),
+    model: z.string().optional(),
+    thinking: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const InternalHookHandlerSchema = z
   .object({
     event: z.string(),

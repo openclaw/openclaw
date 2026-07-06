@@ -9,6 +9,8 @@ import {
   createAuthRateLimiter,
   normalizeRateLimitClientIp,
 } from "../auth-rate-limit.js";
+import type { HookQueueEnqueueResult } from "../hook-queue-runtime.js";
+import type { QueuedHookAgentPayload } from "../hook-queue-store.js";
 import { applyHookMappings } from "../hooks-mapping.js";
 import {
   extractHookToken,
@@ -16,6 +18,7 @@ import {
   getHookChannelError,
   getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
+  type HookQueueResolved,
   type HooksConfigResolved,
   isHookAgentAllowed,
   isSessionKeyAllowedByPrefix,
@@ -50,11 +53,17 @@ export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) =>
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  enqueueAgentHook: (value: {
+    queueId: string;
+    sourcePath: string;
+    payload: QueuedHookAgentPayload;
+  }) => HookQueueEnqueueResult;
 };
 
 type HookReplayEntry = {
   ts: number;
   runId: string;
+  itemId?: string;
 };
 
 type HookReplayScope = {
@@ -77,6 +86,25 @@ function resolveMappedHookExternalContentSource(params: {
   return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
 }
 
+function buildQueueAgentPayload(
+  queue: HookQueueResolved,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    name: queue.name ?? `Hook queue ${queue.id}`,
+    agentId: queue.agentId,
+    sessionKey: queue.sessionTarget === "isolated" ? queue.sessionKey : undefined,
+    wakeMode: queue.wakeMode,
+    deliver: queue.deliver,
+    channel: queue.channel,
+    to: queue.to,
+    model: queue.model,
+    thinking: queue.thinking,
+    timeoutSeconds: queue.timeoutSeconds,
+    ...payload,
+  };
+}
+
 export function createHooksRequestHandler(
   opts: {
     getHooksConfig: () => HooksConfigResolved | null;
@@ -86,7 +114,14 @@ export function createHooksRequestHandler(
     getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
+  const {
+    getHooksConfig,
+    logHooks,
+    dispatchAgentHook,
+    dispatchWakeHook,
+    enqueueAgentHook,
+    getClientIpConfig,
+  } = opts;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
@@ -145,7 +180,10 @@ export function createHooksRequestHandler(
     return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
   };
 
-  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
+  const resolveCachedHookReplay = (
+    key: string | undefined,
+    now: number,
+  ): HookReplayEntry | undefined => {
     if (!key) {
       return undefined;
     }
@@ -156,15 +194,19 @@ export function createHooksRequestHandler(
     }
     hookReplayCache.delete(key);
     hookReplayCache.set(key, cached);
-    return cached.runId;
+    return cached;
   };
 
-  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
+  const rememberHookReplay = (
+    key: string | undefined,
+    entry: Omit<HookReplayEntry, "ts">,
+    now: number,
+  ) => {
     if (!key) {
       return;
     }
     hookReplayCache.delete(key);
-    hookReplayCache.set(key, { ts: now, runId });
+    hookReplayCache.set(key, { ts: now, ...entry });
     pruneHookReplayCache(now);
   };
 
@@ -261,6 +303,7 @@ export function createHooksRequestHandler(
       }
       return dispatchSessionKey;
     };
+    const queue = hooksConfig.queues.find((candidate) => candidate.path === subPath);
 
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
@@ -316,9 +359,9 @@ export function createHooksRequestHandler(
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
         },
       });
-      const cachedRunId = resolveCachedHookRunId(replayKey, now);
-      if (cachedRunId) {
-        sendJson(res, 200, { ok: true, runId: cachedRunId });
+      const cachedReplay = resolveCachedHookReplay(replayKey, now);
+      if (cachedReplay) {
+        sendJson(res, 200, { ok: true, runId: cachedReplay.runId });
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -336,8 +379,121 @@ export function createHooksRequestHandler(
         agentId: targetAgentId,
         externalContentSource: "webhook",
       });
-      rememberHookRunId(replayKey, runId, now);
+      rememberHookReplay(replayKey, { runId }, now);
       sendJson(res, 200, { ok: true, runId });
+      return true;
+    }
+
+    if (queue) {
+      const mergedPayload = buildQueueAgentPayload(queue, payload as Record<string, unknown>);
+      // Queue config and request payload share the /hooks/agent field surface;
+      // normalize the merged shape before enqueue so channel/plugin policy fails at ingress.
+      const normalized = normalizeAgentPayload(mergedPayload);
+      if (!normalized.ok) {
+        sendJson(res, 400, { ok: false, error: normalized.error });
+        return true;
+      }
+      if (queue.sessionTarget !== "isolated" && normalized.value.sessionKey) {
+        sendJson(res, 400, {
+          ok: false,
+          error: "sessionKey cannot override configured hook queue sessionTarget",
+        });
+        return true;
+      }
+      if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
+        sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+        return true;
+      }
+      const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
+      const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
+        hooksConfig,
+        normalized.value.agentId,
+      );
+      const requestSessionKey =
+        typeof (payload as Record<string, unknown>).sessionKey === "string"
+          ? ((payload as Record<string, unknown>).sessionKey as string).trim()
+          : "";
+      const queueSessionKey =
+        queue.sessionTarget === "isolated"
+          ? resolveHookSessionKey({
+              hooksConfig,
+              source: requestSessionKey ? "request" : "mapping-static",
+              sessionKey: normalized.value.sessionKey,
+            })
+          : ({
+              ok: true,
+              value: queue.sessionTarget.slice("session:".length),
+            } as const);
+      if (!queueSessionKey.ok) {
+        sendJson(res, 400, { ok: false, error: queueSessionKey.error });
+        return true;
+      }
+      const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
+        queueSessionKey.value,
+        effectiveTargetAgentId,
+      );
+      if (dispatchSessionKey === null) {
+        return true;
+      }
+      const replayKey = buildHookReplayCacheKey({
+        pathKey: `queue:${queue.id}`,
+        token,
+        idempotencyKey,
+        dispatchScope: {
+          queueId: queue.id,
+          agentId: effectiveTargetAgentId,
+          sessionKey: queueSessionKey.value,
+          sessionTarget: queue.sessionTarget,
+          message: normalized.value.message,
+          name: normalized.value.name,
+          wakeMode: normalized.value.wakeMode,
+          deliver: normalized.value.deliver,
+          channel: normalized.value.channel,
+          to: normalized.value.to ?? null,
+          model: normalized.value.model ?? null,
+          thinking: normalized.value.thinking ?? null,
+          timeoutSeconds: normalized.value.timeoutSeconds ?? null,
+        },
+      });
+      const cachedReplay = resolveCachedHookReplay(replayKey, now);
+      if (cachedReplay?.itemId) {
+        sendJson(res, 202, {
+          ok: true,
+          queueId: queue.id,
+          itemId: cachedReplay.itemId,
+          runId: cachedReplay.runId,
+        });
+        return true;
+      }
+      const queuedPayload: QueuedHookAgentPayload = {
+        ...normalized.value,
+        idempotencyKey,
+        sessionKey: dispatchSessionKey,
+        sourcePath: `${basePath}/${queue.path}`,
+        agentId: targetAgentId,
+        allowUnsafeExternalContent: queue.allowUnsafeExternalContent,
+        externalContentSource: "webhook",
+        sessionTarget: queue.sessionTarget,
+      };
+      const queued = enqueueAgentHook({
+        queueId: queue.id,
+        sourcePath: `${basePath}/${queue.path}`,
+        payload: queuedPayload,
+      });
+      rememberHookReplay(
+        replayKey,
+        {
+          runId: queued.runId,
+          itemId: queued.itemId,
+        },
+        now,
+      );
+      sendJson(res, 202, {
+        ok: true,
+        queueId: queue.id,
+        itemId: queued.itemId,
+        runId: queued.runId,
+      });
       return true;
     }
 
@@ -417,9 +573,9 @@ export function createHooksRequestHandler(
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
             },
           });
-          const cachedRunId = resolveCachedHookRunId(replayKey, now);
-          if (cachedRunId) {
-            sendJson(res, 200, { ok: true, runId: cachedRunId });
+          const cachedReplay = resolveCachedHookReplay(replayKey, now);
+          if (cachedReplay) {
+            sendJson(res, 200, { ok: true, runId: cachedReplay.runId });
             return true;
           }
           const runId = dispatchAgentHook({
@@ -443,7 +599,7 @@ export function createHooksRequestHandler(
               sessionKey: sessionKey.value,
             }),
           });
-          rememberHookRunId(replayKey, runId, now);
+          rememberHookReplay(replayKey, { runId }, now);
           sendJson(res, 200, { ok: true, runId });
           return true;
         }

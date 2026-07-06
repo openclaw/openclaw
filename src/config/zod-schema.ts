@@ -24,7 +24,12 @@ import {
   SecretInputSchema,
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
-import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import {
+  HookMappingSchema,
+  HookQueueSchema,
+  HooksGmailSchema,
+  InternalHooksSchema,
+} from "./zod-schema.hooks.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -1029,6 +1034,7 @@ export const OpenClawSchema = z
         presets: z.array(z.string()).optional(),
         transformsDir: z.string().optional(),
         mappings: z.array(HookMappingSchema).optional(),
+        queues: z.record(z.string(), HookQueueSchema).optional(),
         gmail: HooksGmailSchema,
         internal: InternalHooksSchema,
       })

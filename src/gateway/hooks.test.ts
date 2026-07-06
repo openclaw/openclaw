@@ -110,6 +110,60 @@ describe("gateway hooks helpers", () => {
     expect(resolved?.sessionPolicy.allowRequestSessionKey).toBe(false);
   });
 
+  test("resolveHooksConfig resolves hook queues with defaults and stable paths", () => {
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        queues: {
+          batch: {
+            parallelism: 10,
+            agentId: "hooks",
+          },
+          disabled: {
+            enabled: false,
+          },
+          shared: {
+            path: "shared/work",
+            sessionTarget: "session:hook:shared",
+            parallelism: 250,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(resolved.queues.map((queue) => queue.id)).toEqual(["batch", "shared"]);
+    expect(resolved.queues[0]).toMatchObject({
+      id: "batch",
+      path: "queue/batch",
+      parallelism: 10,
+      sessionTarget: "isolated",
+      agentId: "hooks",
+    });
+    expect(resolved.queues[1]).toMatchObject({
+      id: "shared",
+      path: "shared/work",
+      parallelism: 100,
+      sessionTarget: "session:hook:shared",
+    });
+  });
+
+  test("resolveHooksConfig rejects hook queue path conflicts", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          queues: {
+            bad: {
+              path: "agent",
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toThrow("hooks.queues.bad.path conflicts with a built-in hook path");
+  });
+
   test("resolveHooksConfig rejects root path", () => {
     const cfg = {
       hooks: { enabled: true, token: "x", path: "/" },

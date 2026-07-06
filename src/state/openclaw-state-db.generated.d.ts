@@ -574,6 +574,29 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
+export interface HookQueueItems {
+  agent_id: string | null;
+  claimed_at_ms: number | null;
+  created_at_ms: number;
+  error: string | null;
+  finished_at_ms: number | null;
+  item_id: string;
+  job_id: string;
+  message_preview: string;
+  name: string;
+  payload_json: string;
+  queue_id: string;
+  run_id: string;
+  sequence: Generated<number>;
+  session_key: string;
+  session_target: string;
+  source_path: string;
+  started_at_ms: number | null;
+  status: string;
+  summary: string | null;
+  updated_at_ms: number;
+}
+
 export interface InstalledPluginIndex {
   compat_registry_version: string;
   diagnostics_json: string;
@@ -1041,6 +1064,7 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  hook_queue_items: HookQueueItems;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;

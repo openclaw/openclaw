@@ -14,6 +14,10 @@ import type {
   CronSortDir,
   CronStatus,
   CronPayload,
+  HookQueueItem,
+  HookQueueItemsResult,
+  HookQueuesResult,
+  HookQueueSummary,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
@@ -194,6 +198,15 @@ export type CronState = {
   cronRunsStatusFilter: CronRunsStatusFilter;
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
+  hookQueuesLoading: boolean;
+  hookQueueItemsLoadingMore: boolean;
+  hookQueues: HookQueueSummary[];
+  selectedHookQueueId: string | null;
+  hookQueueItems: HookQueueItem[];
+  hookQueueItemsTotal: number;
+  hookQueueItemsHasMore: boolean;
+  hookQueueItemsNextOffset: number | null;
+  hookQueueItemsLimit: number;
   cronBusy: boolean;
 };
 
@@ -243,6 +256,15 @@ export function createInitialCronState(
     cronRunsStatusFilter: "all",
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
+    hookQueuesLoading: false,
+    hookQueueItemsLoadingMore: false,
+    hookQueues: [],
+    selectedHookQueueId: null,
+    hookQueueItems: [],
+    hookQueueItemsTotal: 0,
+    hookQueueItemsHasMore: false,
+    hookQueueItemsNextOffset: null,
+    hookQueueItemsLimit: 25,
     cronBusy: false,
   };
 }
@@ -355,6 +377,88 @@ export async function loadCronStatus(state: CronState) {
     } else {
       state.cronError = String(err);
     }
+  }
+}
+
+export async function loadHookQueueItems(
+  state: CronState,
+  queueId: string | null,
+  opts?: { append?: boolean },
+) {
+  if (!state.client || !state.connected || !queueId) {
+    return;
+  }
+  const append = opts?.append === true;
+  if (append && !state.hookQueueItemsHasMore) {
+    return;
+  }
+  try {
+    if (append) {
+      state.hookQueueItemsLoadingMore = true;
+    }
+    const offset = append
+      ? Math.max(0, state.hookQueueItemsNextOffset ?? state.hookQueueItems.length)
+      : 0;
+    const res = await state.client.request<HookQueueItemsResult>("hooks.queue.items", {
+      queueId,
+      limit: state.hookQueueItemsLimit,
+      offset,
+    });
+    const items = Array.isArray(res.items) ? res.items : [];
+    state.hookQueueItems = append ? [...state.hookQueueItems, ...items] : items;
+    const meta = normalizeCronPageMeta({
+      totalRaw: res.total,
+      offsetRaw: res.offset,
+      nextOffsetRaw: res.nextOffset,
+      hasMoreRaw: res.hasMore,
+      pageCount: items.length,
+    });
+    state.hookQueueItemsTotal = Math.max(meta.total, state.hookQueueItems.length);
+    state.hookQueueItemsHasMore = meta.hasMore;
+    state.hookQueueItemsNextOffset = meta.nextOffset;
+  } catch (err) {
+    if (isMissingOperatorReadScopeError(err)) {
+      state.cronError = formatMissingOperatorReadScopeMessage("hook queues");
+    } else {
+      state.cronError = String(err);
+    }
+  } finally {
+    if (append) {
+      state.hookQueueItemsLoadingMore = false;
+    }
+  }
+}
+
+export async function loadHookQueues(state: CronState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.hookQueuesLoading = true;
+  try {
+    const res = await state.client.request<HookQueuesResult>("hooks.queues", {});
+    const queues = Array.isArray(res.queues) ? res.queues : [];
+    state.hookQueues = queues;
+    const selectedStillExists =
+      state.selectedHookQueueId && queues.some((queue) => queue.id === state.selectedHookQueueId);
+    state.selectedHookQueueId = selectedStillExists
+      ? state.selectedHookQueueId
+      : (queues[0]?.id ?? null);
+    if (state.selectedHookQueueId) {
+      await loadHookQueueItems(state, state.selectedHookQueueId);
+    } else {
+      state.hookQueueItems = [];
+      state.hookQueueItemsTotal = 0;
+      state.hookQueueItemsHasMore = false;
+      state.hookQueueItemsNextOffset = null;
+    }
+  } catch (err) {
+    if (isMissingOperatorReadScopeError(err)) {
+      state.cronError = formatMissingOperatorReadScopeMessage("hook queues");
+    } else {
+      state.cronError = String(err);
+    }
+  } finally {
+    state.hookQueuesLoading = false;
   }
 }
 

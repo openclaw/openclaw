@@ -297,6 +297,38 @@ CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
 CREATE INDEX IF NOT EXISTS idx_native_hook_relay_bridges_expires
   ON native_hook_relay_bridges(expires_at_ms, relay_id);
 
+CREATE TABLE IF NOT EXISTS hook_queue_items (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id TEXT NOT NULL UNIQUE,
+  queue_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  name TEXT NOT NULL,
+  message_preview TEXT NOT NULL,
+  agent_id TEXT,
+  session_key TEXT NOT NULL,
+  session_target TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  claimed_at_ms INTEGER,
+  started_at_ms INTEGER,
+  finished_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL,
+  error TEXT,
+  summary TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_hook_queue_items_queue_status_created
+  ON hook_queue_items(queue_id, status, created_at_ms, sequence);
+
+CREATE INDEX IF NOT EXISTS idx_hook_queue_items_status_updated
+  ON hook_queue_items(status, updated_at_ms, sequence);
+
+CREATE INDEX IF NOT EXISTS idx_hook_queue_items_queue_created
+  ON hook_queue_items(queue_id, created_at_ms DESC, sequence DESC);
+
 CREATE TABLE IF NOT EXISTS model_capability_cache (
   provider_id TEXT NOT NULL,
   model_id TEXT NOT NULL,

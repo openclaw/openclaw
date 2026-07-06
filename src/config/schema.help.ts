@@ -1806,6 +1806,38 @@ export const FIELD_HELP: Record<string, string> = {
     "Base directory for hook transform modules referenced by mapping transform.module paths. Use a controlled repo directory so dynamic imports remain reviewable and predictable.",
   "hooks.mappings":
     "Ordered mapping rules that match inbound hook requests and choose wake or agent actions with optional delivery routing. Use specific mappings first to avoid broad pattern rules capturing everything.",
+  "hooks.queues":
+    "Named webhook queues that accept high-volume agent hook messages and process them with bounded parallelism. Use queues for bursty integrations where operators need backlog visibility and controlled concurrency instead of immediate fire-and-forget dispatch.",
+  "hooks.queues.*.enabled":
+    "Enables or disables one named hook queue without removing its configuration. Disabled queues reject inbound queue requests while keeping existing persisted item history visible for inspection.",
+  "hooks.queues.*.path":
+    "Relative path under hooks.path for this queue, or an absolute hooks path beginning with hooks.path. Omit it to expose the queue at /hooks/queue/<queue id>.",
+  "hooks.queues.*.parallelism":
+    "Maximum number of queued messages from this queue that may run concurrently. Keep this aligned with provider limits and local machine capacity so bursty webhook sources drain steadily without overwhelming OpenClaw.",
+  "hooks.queues.*.sessionTarget":
+    "Queue execution target. Omit or set isolated to give each item its own session; set session:<session key> only when queued items are intentionally continuing a shared automation thread.",
+  "hooks.queues.*.sessionKey":
+    "Static session key used as the base key for isolated queue items when the request and hooks.defaultSessionKey do not provide one. Use scoped hook-specific keys to keep automation runs auditable.",
+  "hooks.queues.*.name":
+    "Default human-readable run name for items accepted by this queue. Request payload names override it, so use a queue default that identifies the integration source.",
+  "hooks.queues.*.agentId":
+    "Default target agent ID for queued execution. Use dedicated automation agents for high-volume queues so burst processing does not share interactive operator agent policy.",
+  "hooks.queues.*.wakeMode":
+    'Wake scheduling mode after queued run status notifications: "now" wakes immediately, while "next-heartbeat" defers until the next heartbeat cycle.',
+  "hooks.queues.*.deliver":
+    "Default queued-run delivery behavior. Disable delivery for background batch queues that should only be inspected through Control UI or run logs.",
+  "hooks.queues.*.allowUnsafeExternalContent":
+    "When true, queued hook content may include less-sanitized external payload data in generated messages. Keep false by default and enable only for trusted sources with reviewed payload handling.",
+  "hooks.queues.*.channel":
+    'Default delivery channel for queued outputs (for example "last", "telegram", "discord", "slack", "signal", "imessage", or "msteams"). Request payloads may override it when trusted.',
+  "hooks.queues.*.to":
+    "Default destination identifier inside the selected channel for queued output delivery. Verify provider-specific destination formats before enabling production queues.",
+  "hooks.queues.*.model":
+    "Optional model override for queued runs. Use latency- and cost-appropriate models for high-volume queues unless individual request payloads must override them.",
+  "hooks.queues.*.thinking":
+    "Optional thinking-effort override for queued runs to tune latency versus reasoning depth. Keep low or minimal for large backlogs unless deeper reasoning is required.",
+  "hooks.queues.*.timeoutSeconds":
+    "Maximum runtime allowed for each queued item before timeout handling applies. Use tighter limits on high-volume queues so stuck items do not block concurrency slots for long periods.",
   "hooks.mappings[].id":
     "Optional stable identifier for a hook mapping entry used for auditing, troubleshooting, and targeted updates. Use unique IDs so logs and config diffs can reference mappings unambiguously.",
   "hooks.mappings[].match":

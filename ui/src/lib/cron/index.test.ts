@@ -6,6 +6,8 @@ import {
   cancelCronEdit,
   loadCronModelSuggestions,
   loadCronJobsPage,
+  loadHookQueueItems,
+  loadHookQueues,
   loadCronRuns,
   loadMoreCronRuns,
   normalizeCronFormState,
@@ -55,6 +57,15 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronRunsStatusFilter: "all",
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
+    hookQueuesLoading: false,
+    hookQueueItemsLoadingMore: false,
+    hookQueues: [],
+    selectedHookQueueId: null,
+    hookQueueItems: [],
+    hookQueueItemsTotal: 0,
+    hookQueueItemsHasMore: false,
+    hookQueueItemsNextOffset: null,
+    hookQueueItemsLimit: 25,
     cronBusy: false,
     ...overrides,
   };
@@ -1778,6 +1789,128 @@ describe("cron controller", () => {
     await expect(loadCronRuns(state, null)).resolves.toBe("error");
 
     expect(state.cronError).toBe("Error: cron.runs unavailable");
+  });
+
+  it("loads hook queues and the selected queue item page", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "hooks.queues") {
+        return {
+          queues: [
+            {
+              id: "bulk",
+              path: "/hooks/queue/bulk",
+              parallelism: 10,
+              sessionTarget: "isolated",
+              counts: { queued: 2, running: 1, ok: 3, error: 0 },
+              oldestQueuedAtMs: 100,
+              newestQueuedAtMs: 200,
+            },
+          ],
+        };
+      }
+      if (method === "hooks.queue.items") {
+        expectRecordFields(requireRecord(payload, "hooks.queue.items payload"), {
+          queueId: "bulk",
+          limit: 25,
+          offset: 0,
+        });
+        return {
+          items: [
+            {
+              itemId: "item-1",
+              queueId: "bulk",
+              status: "queued",
+              runId: "run-1",
+              sourcePath: "/hooks/queue/bulk",
+              name: "Import",
+              message: "Process import row",
+              messagePreview: "Process import row",
+              sessionKey: "isolated:run-1",
+              sessionTarget: "isolated",
+              createdAtMs: 100,
+              updatedAtMs: 100,
+            },
+          ],
+          total: 1,
+          hasMore: false,
+          nextOffset: null,
+        };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    await loadHookQueues(state);
+
+    expect(state.hookQueues.map((queue) => queue.id)).toEqual(["bulk"]);
+    expect(state.selectedHookQueueId).toBe("bulk");
+    expect(state.hookQueueItems.map((item) => item.itemId)).toEqual(["item-1"]);
+    expect(state.hookQueueItemsTotal).toBe(1);
+  });
+
+  it("appends hook queue items using the next queue offset", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method !== "hooks.queue.items") {
+        return {};
+      }
+      expectRecordFields(requireRecord(payload, "hooks.queue.items append payload"), {
+        queueId: "bulk",
+        limit: 25,
+        offset: 1,
+      });
+      return {
+        items: [
+          {
+            itemId: "item-2",
+            queueId: "bulk",
+            status: "ok",
+            runId: "run-2",
+            sourcePath: "/hooks/queue/bulk",
+            name: "Import",
+            message: "Process import row 2",
+            messagePreview: "Process import row 2",
+            sessionKey: "isolated:run-2",
+            sessionTarget: "isolated",
+            createdAtMs: 90,
+            updatedAtMs: 110,
+            finishedAtMs: 110,
+          },
+        ],
+        total: 2,
+        hasMore: false,
+        nextOffset: null,
+      };
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      hookQueueItems: [
+        {
+          itemId: "item-1",
+          queueId: "bulk",
+          status: "queued",
+          runId: "run-1",
+          sourcePath: "/hooks/queue/bulk",
+          name: "Import",
+          message: "Process import row 1",
+          messagePreview: "Process import row 1",
+          sessionKey: "isolated:run-1",
+          sessionTarget: "isolated",
+          createdAtMs: 100,
+          updatedAtMs: 100,
+        },
+      ],
+      hookQueueItemsHasMore: true,
+      hookQueueItemsNextOffset: 1,
+    });
+
+    await loadHookQueueItems(state, "bulk", { append: true });
+
+    expect(state.hookQueueItems.map((item) => item.itemId)).toEqual(["item-1", "item-2"]);
+    expect(state.hookQueueItemsTotal).toBe(2);
+    expect(state.hookQueueItemsHasMore).toBe(false);
+    expect(state.hookQueueItemsLoadingMore).toBe(false);
   });
 
   it("runs cron job in due mode when requested", async () => {

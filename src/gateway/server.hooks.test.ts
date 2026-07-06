@@ -13,6 +13,8 @@ import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   cronIsolatedRun,
   installGatewayTestHooks,
+  rpcReq,
+  startConnectedServerWithClient,
   testState,
   withGatewayServer,
   waitForSystemEvent,
@@ -98,6 +100,7 @@ type HookCronRunCall = {
   job?: {
     agentId?: string;
     createdAtMs?: number;
+    sessionTarget?: string;
     payload?: {
       externalContentSource?: string;
       model?: string;
@@ -118,6 +121,16 @@ function cronRunCall(index = 0): HookCronRunCall {
     throw new Error(`expected cron isolated run call ${index + 1}`);
   }
   return call as HookCronRunCall;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 async function postAgentHookWithIdempotency(
@@ -323,6 +336,245 @@ describe("gateway server hooks", () => {
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
       drainSystemEvents(resolveMainKey());
     });
+  });
+
+  test("queues agent hooks and drains them within configured parallelism", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      queues: {
+        batch: {
+          parallelism: 1,
+          agentId: "hooks",
+          sessionKey: "hook:batch",
+        },
+      },
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const firstRun = createDeferred<{ status: "ok"; summary: string }>();
+      const secondRun = createDeferred<{ status: "ok"; summary: string }>();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun
+        .mockImplementationOnce(async () => await firstRun.promise)
+        .mockImplementationOnce(async () => await secondRun.promise);
+
+      const first = await postHook(port, "/hooks/queue/batch", {
+        message: "Import customer 1",
+        name: "Import",
+      });
+      expect(first.status).toBe(202);
+      const firstBody = (await first.json()) as {
+        queueId?: string;
+        itemId?: string;
+        runId?: string;
+      };
+      expect(firstBody.queueId).toBe("batch");
+      requireNonEmptyString(firstBody.itemId, "first queue item id");
+      requireNonEmptyString(firstBody.runId, "first queue run id");
+      await waitForCronIsolatedRuns(1);
+
+      const second = await postHook(port, "/hooks/queue/batch", {
+        message: "Import customer 2",
+        name: "Import",
+      });
+      expect(second.status).toBe(202);
+      const secondBody = (await second.json()) as {
+        queueId?: string;
+        itemId?: string;
+        runId?: string;
+      };
+      expect(secondBody.queueId).toBe("batch");
+      expect(secondBody.itemId).not.toBe(firstBody.itemId);
+      await expect
+        .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 150, interval: 10 })
+        .toBe(1);
+
+      const firstCall = cronRunCall();
+      expect(firstCall.job?.agentId).toBe("hooks");
+      expect(firstCall.job?.sessionTarget).toBe("isolated");
+      expect(firstCall.sessionKey).toBe("hook:batch");
+
+      firstRun.resolve({ status: "ok", summary: "first done" });
+      await waitForCronIsolatedRuns(2);
+      const secondCall = cronRunCall(1);
+      expect(secondCall.job?.agentId).toBe("hooks");
+      expect(secondCall.job?.sessionTarget).toBe("isolated");
+      expect(secondCall.sessionKey).toBe("hook:batch");
+
+      secondRun.resolve({ status: "ok", summary: "second done" });
+      await expect
+        .poll(
+          () =>
+            peekSystemEventEntries(HOOKS_MAIN_SESSION_KEY)
+              .map((event) => event.text)
+              .join("\n"),
+          { timeout: 2_000, interval: 10 },
+        )
+        .toContain("Hook Import: second done");
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+    });
+  });
+
+  test("uses configured queue session targets without request overrides", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      queues: {
+        shared: {
+          path: "shared",
+          sessionTarget: "session:hook:shared",
+          parallelism: 2,
+          agentId: "hooks",
+        },
+      },
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const accepted = await postHook(port, "/hooks/shared", {
+        message: "Use shared queue session",
+      });
+      expect(accepted.status).toBe(202);
+      await waitForCronIsolatedRuns(1);
+      const call = cronRunCall();
+      expect(call.job?.sessionTarget).toBe("session:hook:shared");
+      expect(call.sessionKey).toBe("hook:shared");
+      await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+
+      const denied = await postHook(port, "/hooks/shared", {
+        message: "Bad override",
+        sessionKey: "hook:other",
+      });
+      expect(denied.status).toBe(400);
+      const deniedBody = (await denied.json()) as { error?: string };
+      expect(deniedBody.error).toContain("sessionKey cannot override");
+    });
+  });
+
+  test("validates queued hook channels before accepting work", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      queues: {
+        batch: {
+          parallelism: 1,
+        },
+        badDefault: {
+          path: "bad-default",
+          channel: "sms",
+        },
+      },
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const badRequest = await postHook(port, "/hooks/queue/batch", {
+        message: "Bad request channel",
+        channel: "sms",
+      });
+      expect(badRequest.status).toBe(400);
+      const badRequestBody = (await badRequest.json()) as { error?: string };
+      expect(badRequestBody.error).toContain("channel must be");
+
+      const badDefault = await postHook(port, "/hooks/bad-default", {
+        message: "Bad default channel",
+      });
+      expect(badDefault.status).toBe(400);
+      const badDefaultBody = (await badDefault.json()) as { error?: string };
+      expect(badDefaultBody.error).toContain("channel must be");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
+  test("exposes hook queue summaries and items over gateway RPC", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      queues: {
+        batch: {
+          parallelism: 1,
+          sessionKey: "hook:batch",
+        },
+      },
+    };
+    setMainAndHooksAgents();
+
+    const started = await startConnectedServerWithClient();
+    try {
+      const run = createDeferred<{ status: "ok"; summary: string }>();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async () => await run.promise);
+
+      const response = await postHook(started.port, "/hooks/queue/batch", {
+        message: "Inspect queued work",
+        name: "Inspection",
+      });
+      expect(response.status).toBe(202);
+      await waitForCronIsolatedRuns(1);
+
+      const queues = await rpcReq(started.ws, "hooks.queues");
+      expect(queues.ok).toBe(true);
+      const queueList = ((queues.payload as { queues?: unknown[] } | undefined)?.queues ??
+        []) as Array<{
+        id?: string;
+        path?: string;
+        parallelism?: number;
+        sessionTarget?: string;
+        counts?: { queued?: number; running?: number; ok?: number; error?: number };
+      }>;
+      expect(queueList).toHaveLength(1);
+      expect(queueList[0]).toMatchObject({
+        id: "batch",
+        path: "/hooks/queue/batch",
+        parallelism: 1,
+        sessionTarget: "isolated",
+        counts: { queued: 0, running: 1, ok: 0, error: 0 },
+      });
+
+      const items = await rpcReq(started.ws, "hooks.queue.items", {
+        queueId: "batch",
+        limit: 5,
+      });
+      expect(items.ok).toBe(true);
+      const payload = items.payload as
+        | {
+            total?: number;
+            items?: Array<{
+              queueId?: string;
+              status?: string;
+              message?: string;
+              sessionKey?: string;
+            }>;
+          }
+        | undefined;
+      expect(payload?.total).toBe(1);
+      expect(payload?.items?.[0]).toMatchObject({
+        queueId: "batch",
+        status: "running",
+        message: "Inspect queued work",
+        sessionKey: "hook:batch",
+      });
+
+      run.resolve({ status: "ok", summary: "inspected" });
+      await expect
+        .poll(
+          () =>
+            peekSystemEventEntries(resolveMainKey())
+              .map((event) => event.text)
+              .join("\n"),
+          { timeout: 2_000, interval: 10 },
+        )
+        .toContain("Hook Inspection: inspected");
+      drainSystemEvents(resolveMainKey());
+    } finally {
+      started.ws.close();
+      await started.server.close();
+    }
   });
 
   test("routes explicit-agent hook completion events to the target agent main session", async () => {
