@@ -4,6 +4,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
@@ -11,6 +12,7 @@ import {
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -217,6 +219,47 @@ function buildHealthProbeHeaders(
   return [...headers].length > 0 ? headers : undefined;
 }
 
+/**
+ * Build the SSRF policy for a provider local-service health probe.
+ *
+ * The local-service `healthUrl` is operator-controlled, so the guard must
+ * accept the configured URL. But because the URL is operator-supplied and
+ * not a hardened provider origin, we must NOT use target-derived
+ * `allowedHostnames` — that would make every configured hostname bypass
+ * private-network checks and accept DNS rebinding to RFC1918/LAN. Instead:
+ *
+ * - For loopback literal hosts (`127.0.0.1`, `::1`, `localhost`), include
+ *   the literal in `allowedHostnames` so the guard skips private-network
+ *   checks for that loopback literal (the dispatcher's DNS pin still
+ *   verifies the resolved address is actually loopback).
+ * - For any other hostname, only include `hostnameAllowlist`. The hostname
+ *   check passes, but the guard still validates resolved IPs against the
+ *   private-network block, so a public-looking healthUrl that DNS-resolves
+ *   to a private IP is blocked.
+ */
+export function resolveLocalServiceProbePolicy(url: string): SsrFPolicy | undefined {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  if (!hostname) {
+    return undefined;
+  }
+  // Strip the brackets `URL` wraps around IPv6 literals so the loopback check
+  // and allowlist entries compare against the canonical `::1` form.
+  const unwrapped = hostname.replace(/^\[(.*)\]$/, "$1");
+  const isLoopbackLiteral = unwrapped === "localhost" || isLoopbackIpAddress(unwrapped);
+  if (isLoopbackLiteral) {
+    return {
+      allowedHostnames: [unwrapped],
+      hostnameAllowlist: [unwrapped],
+    };
+  }
+  return { hostnameAllowlist: [hostname] };
+}
+
 async function probeHealth(
   url: string,
   headers: HeadersInit | undefined,
@@ -235,7 +278,7 @@ async function probeHealth(
       url,
       init: { headers, signal: controller.signal },
       mode: GUARDED_FETCH_MODE.STRICT,
-      policy: { allowedHostnames: [new URL(url).hostname] },
+      policy: resolveLocalServiceProbePolicy(url),
       auditContext: "local-service-probe",
     });
     response = guarded.response;

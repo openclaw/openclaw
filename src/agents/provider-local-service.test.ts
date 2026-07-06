@@ -6,12 +6,15 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { LookupFn } from "../infra/net/ssrf.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
+  resolveLocalServiceProbePolicy,
   stopManagedProviderLocalServicesForTest,
 } from "./provider-local-service.js";
 
@@ -488,5 +491,63 @@ describe("provider local service", () => {
     ).rejects.toThrow("request aborted");
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     await waitForProbeFailure(healthUrl);
+  });
+
+  describe("resolveLocalServiceProbePolicy", () => {
+    it("includes allowedHostnames for IPv4 loopback literals so the guard skips private-network checks for that literal", () => {
+      expect(resolveLocalServiceProbePolicy("http://127.0.0.1:11434/v1/models")).toEqual({
+        allowedHostnames: ["127.0.0.1"],
+        hostnameAllowlist: ["127.0.0.1"],
+      });
+    });
+
+    it("includes allowedHostnames for IPv6 loopback literals", () => {
+      expect(resolveLocalServiceProbePolicy("http://[::1]:11434/v1/models")).toEqual({
+        allowedHostnames: ["::1"],
+        hostnameAllowlist: ["::1"],
+      });
+    });
+
+    it("includes allowedHostnames for the `localhost` hostname", () => {
+      expect(resolveLocalServiceProbePolicy("http://localhost:11434/v1/models")).toEqual({
+        allowedHostnames: ["localhost"],
+        hostnameAllowlist: ["localhost"],
+      });
+    });
+
+    it("does NOT include allowedHostnames for public hostnames (preserves private-network block)", () => {
+      const policy = resolveLocalServiceProbePolicy("http://api.example.com/v1/models");
+      expect(policy).toEqual({ hostnameAllowlist: ["api.example.com"] });
+      expect(policy?.allowedHostnames).toBeUndefined();
+    });
+
+    it("does NOT include allowedHostnames for hostnames that look local but are not loopback literals", () => {
+      const policy = resolveLocalServiceProbePolicy("http://my-service.internal/v1/models");
+      expect(policy?.allowedHostnames).toBeUndefined();
+      expect(policy?.hostnameAllowlist).toEqual(["my-service.internal"]);
+    });
+  });
+
+  it("blocks health probe when public-looking healthUrl resolves to a private IP via DNS rebind", async () => {
+    // The narrow policy built by `resolveLocalServiceProbePolicy` for a
+    // non-loopback URL must NOT include `allowedHostnames`, so the guard's
+    // private-network check rejects resolved RFC1918 addresses even when the
+    // configured hostname looks public.
+    const url = "http://api.example.com/v1/models";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    const lookupFn = vi.fn(async () => [
+      { address: "192.168.1.1", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      fetchWithSsrFGuard({
+        url,
+        fetchImpl,
+        lookupFn,
+        policy: resolveLocalServiceProbePolicy(url),
+        auditContext: "test-rebind-defense",
+      }),
+    ).rejects.toThrow(/resolves to private/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
