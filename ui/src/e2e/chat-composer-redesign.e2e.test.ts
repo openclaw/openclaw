@@ -273,8 +273,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         throw new Error("expected composer controls to have layout boxes");
       }
       expect(Math.abs(chatMainBox.x - chatContentBox.x)).toBeLessThanOrEqual(1);
-      expect(composerShellBox.width).toBeGreaterThanOrEqual(1099);
-      expect(composerShellBox.width).toBeLessThanOrEqual(1101);
+      expect(composerShellBox.width).toBeGreaterThanOrEqual(767);
+      expect(composerShellBox.width).toBeLessThanOrEqual(769);
       expect(
         Math.abs(
           composerShellBox.x + composerShellBox.width / 2 - (chatMainBox.x + chatMainBox.width / 2),
@@ -311,8 +311,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       if (!compactChatMainBox || !compactComposerShellBox) {
         throw new Error("expected compact composer layout boxes");
       }
-      expect(compactChatMainBox.width - compactComposerShellBox.width).toBeGreaterThanOrEqual(35);
-      expect(compactChatMainBox.width - compactComposerShellBox.width).toBeLessThanOrEqual(37);
+      expect(compactComposerShellBox.width).toBeGreaterThanOrEqual(767);
+      expect(compactComposerShellBox.width).toBeLessThanOrEqual(769);
       expect(
         Math.abs(
           compactComposerShellBox.x +

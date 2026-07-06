@@ -746,7 +746,7 @@ openclaw-chat-page {
   align-items: end;
   gap: 6px;
   width: calc(100% - 36px);
-  max-width: 1100px;
+  max-width: 48rem;
   margin: 8px auto 14px;
 }
 
