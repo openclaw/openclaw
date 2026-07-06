@@ -51,6 +51,12 @@ enum ChatSessionSidebarModel {
         return self.displayName(forKey: session.key)
     }
 
+    static func canDeleteSession(key: String, mainSessionKey: String) -> Bool {
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedMain = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized != "main" && normalized != "global" && normalized != normalizedMain
+    }
+
     /// Session keys read as routing ids ("agent:main:main"); show the human
     /// part and keep the owning agent as a suffix only when it disambiguates.
     static func displayName(forKey key: String) -> String {

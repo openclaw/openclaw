@@ -410,9 +410,14 @@ private struct ChatSessionSidebar: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(session.key, forType: .string)
             }
-            Divider()
-            Button("Delete Session…", role: .destructive) {
-                self.sessionPendingDeletion = session
+            if ChatSessionSidebarModel.canDeleteSession(
+                key: session.key,
+                mainSessionKey: self.viewModel.resolvedMainSessionKey)
+            {
+                Divider()
+                Button("Delete Session…", role: .destructive) {
+                    self.sessionPendingDeletion = session
+                }
             }
         }
     }

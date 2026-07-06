@@ -2,7 +2,6 @@ import Foundation
 import Testing
 @testable import OpenClawChatUI
 
-@Suite
 struct ChatSessionSidebarModelTests {
     private func entry(
         key: String,
@@ -107,5 +106,17 @@ struct ChatSessionSidebarModelTests {
 
         let unnamed = self.entry(key: "agent:main:x")
         #expect(ChatSessionSidebarModel.displayName(for: unnamed) == "x")
+    }
+
+    @Test func `delete excludes main aliases and allows ordinary or selected global sessions`() {
+        let mainKey = "agent:default:main"
+
+        #expect(!ChatSessionSidebarModel.canDeleteSession(key: "main", mainSessionKey: mainKey))
+        #expect(!ChatSessionSidebarModel.canDeleteSession(key: "GLOBAL", mainSessionKey: mainKey))
+        #expect(!ChatSessionSidebarModel.canDeleteSession(key: mainKey, mainSessionKey: mainKey))
+        #expect(ChatSessionSidebarModel.canDeleteSession(key: "scratch", mainSessionKey: mainKey))
+        #expect(ChatSessionSidebarModel.canDeleteSession(
+            key: "agent:other:global",
+            mainSessionKey: mainKey))
     }
 }
