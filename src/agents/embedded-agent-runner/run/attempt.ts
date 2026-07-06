@@ -508,6 +508,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
+import { installToolResultImageSanitizerHook } from "./tool-result-image-guard.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -2517,6 +2518,12 @@ export async function runEmbeddedAttempt(
         onDeliveredSourceReply: () => {
           didDeliverSourceReplyViaMessageTool = true;
         },
+      });
+      // Installed last so it sanitizes the final tool-result content,
+      // including extension-hook modifications.
+      installToolResultImageSanitizerHook({
+        agent: activeSession.agent,
+        imageSanitization: resolveImageSanitizationLimits(params.config),
       });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
