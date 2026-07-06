@@ -305,14 +305,13 @@ function applyChatModelPickerDraft(params: {
     ...sessionsResult,
     sessions: sessionsResult.sessions.map((row) =>
       row.key === params.sessionKey
-        ? {
-            ...row,
+        ? Object.assign({}, row, {
             model: target.model,
             modelProvider: target.provider,
             thinkingLevel: draft.thinkingValue || undefined,
             fastMode,
             effectiveFastMode: fastMode,
-          }
+          })
         : row,
     ),
   };

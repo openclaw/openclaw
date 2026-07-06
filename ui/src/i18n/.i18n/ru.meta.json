@@ -1,11 +1,15 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-06T04:48:59.615Z",
+  "fallbackKeys": [
+    "chat.modelPicker.discard",
+    "chat.modelPicker.faster",
+    "chat.modelPicker.smarter"
+  ],
+  "generatedAt": "2026-07-06T07:32:58.466Z",
   "locale": "ru",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "f7cbb896400a85e7b1caf6d9258a4a351e47195b8ab30422b4647bd9248b5ba2",
   "totalKeys": 1569,
-  "translatedKeys": 1569,
+  "translatedKeys": 1566,
   "workflow": 1
 }

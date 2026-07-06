@@ -610,9 +610,9 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
         const group = document.querySelector<HTMLElement>(".chat-group")!;
         const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
-        const context = document.querySelector<HTMLElement>(".msg-meta__details")!;
+        const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
         return {
-          contextBottom: context.getBoundingClientRect().bottom,
+          contextBottom: detailsOverlay.getBoundingClientRect().bottom,
           footerHeight: footer.getBoundingClientRect().height,
           groupHeight: group.getBoundingClientRect().height,
           summaryTop: summary.getBoundingClientRect().top,
