@@ -40,6 +40,8 @@ import type {
 } from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
+const TELEGRAM_QA_DRIVER_ID = "100001";
+const TELEGRAM_QA_OBSERVER_ID = "100002";
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -275,7 +277,20 @@ function createCrablineState(params: {
       }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
-      const providerInbound = params.adapter.createInbound({ input });
+      const providerSenderId =
+        params.adapter.channel === "telegram"
+          ? input.senderId === "driver"
+            ? TELEGRAM_QA_DRIVER_ID
+            : input.senderId === "observer"
+              ? TELEGRAM_QA_OBSERVER_ID
+              : input.senderId
+          : input.senderId;
+      const providerInbound = params.adapter.createInbound({
+        input: {
+          ...input,
+          senderId: providerSenderId,
+        },
+      });
       targetByProviderTarget.set(providerInbound.providerTargetKey, providerInbound.qaTarget);
       const providerMessageId = await postCrablineInbound({
         adapter: params.adapter,
@@ -351,10 +366,14 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig => {
     const config = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
-    if (
-      this.#selection.channel !== "telegram" ||
-      !this.#scenarioIds.has("channel-mention-gating")
-    ) {
+    if (this.#selection.channel !== "telegram") {
+      return config as QaTransportGatewayConfig;
+    }
+    const requiresMention = this.#scenarioIds.has("channel-mention-gating");
+    const enforcesSenderAllowlist =
+      this.#scenarioIds.has("channel-sender-allowlist") ||
+      this.#scenarioIds.has("channel-multi-actor-ordering");
+    if (!requiresMention && !enforcesSenderAllowlist) {
       return config as QaTransportGatewayConfig;
     }
     return {
@@ -363,11 +382,18 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
         ...config.channels,
         telegram: {
           ...config.channels?.telegram,
+          ...(enforcesSenderAllowlist
+            ? {
+                allowFrom: [TELEGRAM_QA_DRIVER_ID],
+                groupAllowFrom: [TELEGRAM_QA_DRIVER_ID],
+                groupPolicy: "allowlist" as const,
+              }
+            : {}),
           groups: {
             ...config.channels?.telegram?.groups,
             "*": {
               ...config.channels?.telegram?.groups?.["*"],
-              requireMention: true,
+              ...(requiresMention ? { requireMention: true } : {}),
             },
           },
         },
