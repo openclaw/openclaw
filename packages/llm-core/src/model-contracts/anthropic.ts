@@ -54,7 +54,7 @@ export function resolveClaudeFable5ModelIdentity(ref: ClaudeModelRef): string | 
 /** Return whether a Claude model supports adaptive thinking. */
 export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
-  return /(?:^|-)claude-(?:fable-5|mythos-preview|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(
+  return /(?:^|-)claude-(?:fable-5|mythos-preview|opus-4-(?:6|7|8)|sonnet-(?:4-6|5))(?=$|[^a-z0-9])/.test(
     modelId,
   );
 }
@@ -62,7 +62,7 @@ export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
 /** Return whether a Claude model supports native max effort. */
 export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
-  return /(?:^|-)claude-(?:fable-5|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(modelId);
+  return /(?:^|-)claude-(?:fable-5|opus-4-(?:6|7|8)|sonnet-(?:4-6|5))(?=$|[^a-z0-9])/.test(modelId);
 }
 
 /** Return whether a Claude model supports native xhigh effort. */

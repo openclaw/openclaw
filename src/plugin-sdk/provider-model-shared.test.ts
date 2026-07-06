@@ -44,6 +44,9 @@ describe("Claude model contracts", () => {
       "claude-fable-5@20260601",
     );
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-6@20260301" })).toBe(true);
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-5" })).toBe(true);
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-5@20260701" })).toBe(true);
+    expect(supportsClaudeNativeMaxEffort({ id: "claude-sonnet-5" })).toBe(true);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
   });
 
