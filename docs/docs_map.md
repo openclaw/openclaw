@@ -9064,6 +9064,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Syntax highlighting
   - H2: Output details contract
   - H3: Collapsed unchanged sections
+  - H3: Multi-file navigation
   - H2: Plugin defaults
   - H3: Persistent viewer URL config
   - H2: Security config
