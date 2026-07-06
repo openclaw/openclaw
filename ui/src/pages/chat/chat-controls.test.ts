@@ -4,7 +4,9 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { renderChatControls, type ChatControlsProps } from "./components/chat-controls.ts";
+import { renderChatControls } from "./components/chat-controls.ts";
+
+type ChatControlsProps = Parameters<typeof renderChatControls>[0];
 
 vi.mock("../../components/icons.ts", () => ({
   icons: {},
