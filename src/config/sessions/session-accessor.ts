@@ -408,11 +408,6 @@ export type SessionLifecycleTranscriptInfo = {
   transcriptArchived?: boolean;
 };
 
-export type SessionLifecycleRolloverResult = {
-  previousSessionTranscript: SessionLifecycleTranscriptInfo;
-  sessionEntry: SessionEntry;
-};
-
 export type ReplySessionInitializationSnapshot = {
   currentEntry?: SessionEntry;
   readEntry: (sessionKey: string) => SessionEntry | undefined;
@@ -1759,54 +1754,6 @@ export async function persistSessionResetLifecycle(params: {
     throw persistError;
   }
   return { replayedMessages };
-}
-
-/**
- * Persists a reply session rollover and returns stable previous-transcript
- * data for lifecycle hooks. Non-storage runtime cleanup remains with callers.
- */
-export async function persistSessionRolloverLifecycle(params: {
-  activeSessionKey: string;
-  agentId: string;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  onArchiveError?: (error: unknown, sourcePath: string) => void;
-  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  previousEntry?: SessionEntry;
-  retiredEntry?: SessionEntryRetirement;
-  sessionEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<SessionLifecycleRolloverResult> {
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      store[params.sessionKey] = {
-        ...store[params.sessionKey],
-        ...params.sessionEntry,
-      };
-      if (params.retiredEntry) {
-        store[params.retiredEntry.key] = params.retiredEntry.entry;
-      }
-      return store[params.sessionKey] ?? params.sessionEntry;
-    },
-    {
-      activeSessionKey: params.activeSessionKey,
-      maintenanceConfig: params.maintenanceConfig,
-      onWarn: params.onMaintenanceWarning,
-    },
-  );
-
-  const previousSessionTranscript = await archivePreviousSessionTranscript({
-    agentId: params.agentId,
-    onArchiveError: params.onArchiveError,
-    previousEntry: params.previousEntry,
-    storePath: params.storePath,
-  });
-
-  return {
-    previousSessionTranscript,
-    sessionEntry: params.sessionEntry,
-  };
 }
 
 /** Loads the reply-session initialization rows without exposing a mutable store. */

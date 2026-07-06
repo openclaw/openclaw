@@ -306,7 +306,7 @@ class ShellScreenLogicTest {
         sessionCount = 4,
       )
 
-    assertEquals(listOf("Gateway", "Nodes", "Approvals", "Sessions"), cards.map { it.title })
+    assertEquals(listOf("Gateway", "Nodes", "Approvals", "Sessions", "Files"), cards.map { it.title })
     assertEquals("Online", cards.single { it.title == "Gateway" }.value)
     assertEquals("Review highlighted items", cards.single { it.title == "Gateway" }.subtitle)
     assertEquals("1/1", cards.single { it.title == "Nodes" }.value)
@@ -315,6 +315,8 @@ class ShellScreenLogicTest {
     assertEquals(1f, cards.single { it.title == "Nodes" }.progressFraction ?: 0f, 0.001f)
     assertEquals("2", cards.single { it.title == "Approvals" }.value)
     assertEquals("4", cards.single { it.title == "Sessions" }.value)
+    assertEquals("Browse", cards.single { it.title == "Files" }.value)
+    assertEquals(Tab.Files, cards.single { it.title == "Files" }.tab)
   }
 
   @Test

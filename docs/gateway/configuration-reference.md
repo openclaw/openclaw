@@ -441,7 +441,8 @@ See [Inferred commitments](/concepts/commitments).
   when your provider gives you a direct DevTools WebSocket URL.
 - `remoteCdpTimeoutMs` and `remoteCdpHandshakeTimeoutMs` apply to remote and
   `attachOnly` CDP reachability plus tab-opening requests. Managed loopback
-  profiles keep local CDP defaults.
+  profiles keep local CDP defaults. Persistent remote Playwright tab
+  enumeration uses the larger value as its operation deadline.
 - If an externally managed CDP service is reachable through loopback, set that
   profile's `attachOnly: true`; otherwise OpenClaw treats the loopback port as a
   local managed browser profile and may report local port ownership errors.
@@ -1058,6 +1059,31 @@ Notes:
 - `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`). Provider-busy shapes such as `ModelNotReadyException` land here.
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
 - `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`). That rate-limit bucket includes provider-shaped text such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, and `resource exhausted`.
+
+---
+
+## Audit
+
+```json5
+{
+  audit: {
+    enabled: true,
+  },
+}
+```
+
+The Gateway records **metadata-only** audit events for agent runs and tool
+actions into the shared state database: identity, timing, tool names, and
+terminal outcomes — never prompts, messages, tool arguments, results, or raw
+error text. Records expire after 30 days and the ledger is capped at 100,000
+rows. Query them with [`openclaw audit`](/cli/audit) or the
+[`audit.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC.
+
+- `enabled`: record new audit events (default: `true`). The ledger is on by
+  default because an audit trail enabled only after an incident cannot explain
+  the incident. Setting `false` stops new writes immediately; existing records
+  stay readable until they expire. Turning it back on resumes recording from
+  that point — the gap is not backfilled.
 
 ---
 

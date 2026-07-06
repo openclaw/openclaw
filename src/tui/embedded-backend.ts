@@ -25,6 +25,7 @@ import {
   createSessionGoal,
   formatSessionGoalStatus,
   getSessionGoal,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
@@ -812,6 +813,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
         });
         return { text: `Goal started: ${goal.objective}` };
       }
+      case "edit": {
+        const objective = parsed.text.trim();
+        if (!objective) {
+          return { text: "Usage: /goal edit <objective>" };
+        }
+        const goal = await updateSessionGoalObjective({ sessionKey, storePath, objective });
+        return { text: `Goal updated: ${goal.objective}` };
+      }
       case "pause": {
         const goal = await updateSessionGoalStatus({
           sessionKey,
@@ -856,7 +865,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       default:
         return {
-          text: "Usage: /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          text: "Usage: /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
         };
     }
   }

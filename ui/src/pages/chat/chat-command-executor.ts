@@ -28,6 +28,7 @@ import {
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -644,7 +645,7 @@ async function resolveSteerTarget(
 }
 
 function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
-  return session?.status === "running" && session.endedAt == null;
+  return Boolean(session && isSessionRunActive(session));
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";

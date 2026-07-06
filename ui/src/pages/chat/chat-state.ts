@@ -54,6 +54,7 @@ import {
 import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
+  createDefaultRealtimeTalkOptions,
   createInitialChatRealtimeState,
   resetChatRealtimeConversation,
   type ChatRealtimeState,
@@ -95,6 +96,7 @@ import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
+  reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -346,6 +348,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarReason = null;
   state.realtimeTalkTranscript = null;
   resetChatRealtimeConversation(state);
+  state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -358,7 +361,9 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
     clearRunStatus: true,
   });
   state.resetChatScroll();
-  saveRouteSessionSettings(state, sessionKey);
+  // Deliberately no saveRouteSessionSettings here: this runs for every split
+  // pane, and only the active pane may write the global sessionKey /
+  // lastActiveSessionKey settings (chat-pane applyActiveSessionBindings).
 }
 
 export async function refreshRouteSessionOptions(state: ChatPageHost) {
@@ -712,6 +717,7 @@ function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionCh
     state.sessionsResult = state.sessions.state.result;
     state.sessionsResultAgentId = state.sessions.state.agentId;
     state.sessionsError = state.sessions.state.error;
+    reconcileStaleChatRunAfterSessionStatePublication(state);
   }
   return reconciled;
 }
@@ -1002,6 +1008,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatAutoScroll: next.chatAutoScroll,
+      chatSendShortcut: next.chatSendShortcut,
       splitRatio: next.splitRatio,
     });
     state.splitRatio = state.settings.splitRatio;
@@ -1162,7 +1169,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   readonly requestUpdate = () => {
-    this.composerPersistence.persistQueueIfChanged();
+    this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
     this.host.requestUpdate();
   };

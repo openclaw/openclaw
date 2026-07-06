@@ -25,6 +25,10 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("skills.skillCard");
   });
 
+  it("advertises Control UI GitHub previews", () => {
+    expect(listGatewayMethods()).toContain("controlUi.githubPreview");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");

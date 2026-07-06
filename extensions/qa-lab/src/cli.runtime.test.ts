@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
@@ -10,6 +10,7 @@ const {
   runQaSuite,
   runQaCharacterEval,
   runQaMultipass,
+  listLiveTransportQaAdapterFactories,
   listTelegramQaScenarioCatalog,
   runTelegramQaLive,
   startQaLabServer,
@@ -23,6 +24,7 @@ const {
   runQaSuite: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
+  listLiveTransportQaAdapterFactories: vi.fn(),
   listTelegramQaScenarioCatalog: vi.fn(),
   runTelegramQaLive: vi.fn(),
   startQaLabServer: vi.fn(),
@@ -48,6 +50,10 @@ vi.mock("./character-eval.js", () => ({
 
 vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
+}));
+
+vi.mock("./live-transports/cli.js", () => ({
+  listLiveTransportQaAdapterFactories,
 }));
 
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
@@ -89,6 +95,7 @@ import {
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
+import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
@@ -221,6 +228,7 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
+    listLiveTransportQaAdapterFactories.mockReset();
     listTelegramQaScenarioCatalog.mockReset();
     runTelegramQaLive.mockReset();
     startQaLabServer.mockReset();
@@ -279,6 +287,14 @@ describe("qa cli runtime", () => {
         defaultEnabled: true,
         rationale: "status rationale",
         regressionRefs: ["openclaw/openclaw#74698"],
+      },
+    ]);
+    listLiveTransportQaAdapterFactories.mockReturnValue([
+      {
+        id: "telegram",
+        scenarioIds: ["channel-chat-baseline"],
+        matches: vi.fn(),
+        create: vi.fn(),
       },
     ]);
     startQaLabServer.mockResolvedValue({
@@ -641,6 +657,77 @@ describe("qa cli runtime", () => {
       thinkingDefault: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
+  });
+
+  it("runs canonical scenarios through a discovered live adapter factory", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa/telegram-live",
+      channelDriver: "live",
+      channel: "telegram",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories: listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+        channelDriver: "live",
+        channelId: "telegram",
+        concurrency: 1,
+        adapterOptions: expect.objectContaining({
+          repoRoot: path.resolve("/tmp/openclaw-repo"),
+        }),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+  });
+
+  it("uses the selected live adapter's declared scenarios by default", async () => {
+    await runQaSuiteCommand({
+      channelDriver: "live",
+      channel: "telegram",
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+  });
+
+  it("rejects live adapter selection under Multipass", async () => {
+    await expect(
+      runQaSuiteCommand({
+        runner: "multipass",
+        channelDriver: "live",
+        channel: "telegram",
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    ).rejects.toThrow("--channel-driver live with --channel requires --runner host.");
+    expect(runQaMultipass).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime-pair execution for live adapters", async () => {
+    await expect(
+      runQaSuiteCommand({
+        channelDriver: "live",
+        channel: "telegram",
+        runtimePair: "openclaw,codex",
+      }),
+    ).rejects.toThrow("--runtime-pair is not supported with a live QA adapter.");
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("keeps live taxonomy metadata unchanged without an explicit adapter channel", async () => {
+    await runQaSuiteCommand({
+      channelDriver: "live",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.not.objectContaining({ adapterFactories: expect.anything() }),
+    );
   });
 
   it("uses the Crabline default channel when selected scenarios do not request one", async () => {
@@ -1636,11 +1723,18 @@ describe("qa cli runtime", () => {
     ).rejects.toThrow("--token-efficiency requires --runtime-axis.");
   });
 
-  it("prints a markdown coverage report from scenario metadata", async () => {
-    await runQaCoverageReportCommand({ repoRoot: process.cwd() });
+  describe("coverage inventory command", () => {
+    beforeAll(async () => {
+      listTelegramQaScenarioCatalog.mockReturnValue([]);
+      await loadNonYamlScenarioRefs();
+    });
 
-    expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
-    expectWriteContains(stdoutWrite, "memory.recall");
+    it("prints a markdown report from scenario metadata", async () => {
+      await runQaCoverageReportCommand({ repoRoot: process.cwd() });
+
+      expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
+      expectWriteContains(stdoutWrite, "memory.recall");
+    });
   });
 
   it("prints a focused scenario match report from coverage metadata", async () => {

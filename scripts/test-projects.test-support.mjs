@@ -44,6 +44,7 @@ import {
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import {
   getUnitFastTestFiles,
+  getUnitFastTimerTestFiles,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -289,6 +290,8 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
+const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
@@ -2353,6 +2356,21 @@ function listBroadToolingScriptTestTargets(pattern, cwd) {
   );
 }
 
+function listToolingFullSuiteTestTargets(cwd) {
+  return uniqueOrdered(
+    [path.join(cwd, "test"), path.join(cwd, "src", "scripts")].flatMap((root) =>
+      fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
+    ),
+  )
+    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function listUnitFastFullSuiteTestTargets() {
+  const timerTargets = new Set(getUnitFastTimerTestFiles());
+  return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+}
+
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
   if (watchMode || config !== TOOLING_VITEST_CONFIG || !includePatterns) {
     return null;
@@ -3711,6 +3729,13 @@ function createVitestArgs(params) {
   ];
 }
 
+export function createVitestPreflightPnpmArgs(config) {
+  if (config !== UI_E2E_VITEST_CONFIG) {
+    return null;
+  }
+  return ["exec", "node", "scripts/ensure-playwright-chromium.mjs"];
+}
+
 export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
@@ -4018,11 +4043,26 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
-      if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
-        const chunks = splitTargetChunks(
-          resolveGatewayServerFullSuiteTargets(cwd),
-          GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
-        );
+      if (expandShard && targetArgs.length === 0) {
+        let chunks = [];
+        if (config === UNIT_FAST_VITEST_CONFIG) {
+          const targets = listUnitFastFullSuiteTestTargets();
+          const chunkCount = Math.ceil(
+            targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,
+          );
+          chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === TOOLING_VITEST_CONFIG) {
+          // Tooling tests spawn package managers and native helpers. Keep native
+          // process lifetime short enough that unrelated files cannot crash together.
+          const targets = listToolingFullSuiteTestTargets(cwd);
+          const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
+          chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
+          chunks = splitTargetChunks(
+            resolveGatewayServerFullSuiteTargets(cwd),
+            GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+          );
+        }
         if (chunks.length > 0) {
           return chunks.map((targets) => ({
             config,
@@ -4221,6 +4261,7 @@ export function createVitestRunSpecs(args, params = {}) {
       includeFilePath,
       includePatterns: plan.includePatterns,
       pnpmArgs: createVitestArgs(plan),
+      preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };
   });

@@ -359,6 +359,17 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     tempRoots.add(rootDir);
     const descendantPidPath = path.join(rootDir, "descendant.pid");
     let descendantPid = 0;
+    const nativeSetTimeout = globalThis.setTimeout;
+    let triggerStepTimeout: (() => void) | undefined;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, timeout, ...args) => {
+        if (timeout === 2_000 && !triggerStepTimeout) {
+          triggerStepTimeout = () => callback(...args);
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, timeout, ...args);
+      });
     const descendantScript = [
       "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
@@ -372,17 +383,20 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     ].join("\n");
 
     try {
-      // The parent records the descendant pid immediately after spawn, so this
-      // needs headroom for only one Node boot under parallel-suite load.
+      // The parent records the descendant pid at spawn time, before it
+      // boots; fire the captured production timeout after that readiness proof.
       const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 2_000);
       const expectedFailure = expect(command).rejects.toThrow(
         "hung-group-prep timed out after 2000ms",
       );
       descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 4_000), 10);
+      expect(triggerStepTimeout).toBeDefined();
+      triggerStepTimeout?.();
 
       await expectedFailure;
       await waitForDead(descendantPid, 2_000);
     } finally {
+      setTimeoutSpy.mockRestore();
       if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }

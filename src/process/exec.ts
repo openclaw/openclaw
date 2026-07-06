@@ -612,6 +612,10 @@ export async function runCommandWithTimeout(
       child.stdin.end();
     }
 
+    // Output pipes may fail independently; child exit/close remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    child.stdout?.on("error", ignoreOutputStreamError);
+    child.stderr?.on("error", ignoreOutputStreamError);
     child.stdout?.on("data", (d) => {
       appendPreservedOutputLines({
         capture: stdoutCapture,

@@ -24,7 +24,7 @@ const TELEGRAM_RICH_NESTING_LIMIT = 16;
 
 export type TelegramRichHtmlDegradationReason = "table-ascii";
 
-export type TelegramOutboundRichHtmlNormalization = {
+type TelegramOutboundRichHtmlNormalization = {
   html: string;
   degradationReasons: readonly TelegramRichHtmlDegradationReason[];
 };
@@ -803,7 +803,7 @@ function normalizeTelegramLegacyHtmlTables(html: string): string {
   });
 }
 
-export function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
+function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
   const normalizedMaxDepth = Math.max(1, Math.floor(maxDepth));
   const stack: Array<{ name: string; kept: boolean }> = [];
   let keptDepth = 0;

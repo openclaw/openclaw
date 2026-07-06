@@ -76,6 +76,7 @@ export type SessionPatch = {
   reasoningLevel?: string | null;
   archived?: boolean;
   pinned?: boolean;
+  unread?: boolean;
 };
 
 export type SessionDeleteOptions = {
@@ -182,6 +183,7 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
 };
@@ -273,7 +275,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   return params;
 }
 
-export async function requestSessionList(
+async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
@@ -284,7 +286,7 @@ export async function requestSessionList(
   return result ?? null;
 }
 
-export function requestSessionPatch(
+function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
@@ -307,7 +309,7 @@ export function requestSessionDelete(
   });
 }
 
-export function requestSessionReset(
+function requestSessionReset(
   client: SessionRequestClient,
   key: string,
   options: SessionResetOptions = {},
@@ -319,7 +321,7 @@ export function requestSessionReset(
     .then(() => undefined);
 }
 
-export function requestSessionCompact(
+function requestSessionCompact(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -329,7 +331,7 @@ export function requestSessionCompact(
   });
 }
 
-export function requestSessionSteer(
+function requestSessionSteer(
   client: SessionRequestClient,
   key: string,
   message: string,
@@ -341,7 +343,7 @@ export function requestSessionSteer(
   });
 }
 
-export function requestSessionFilesList(
+function requestSessionFilesList(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null; path?: string; search?: string } = {},
@@ -354,7 +356,7 @@ export function requestSessionFilesList(
   });
 }
 
-export function requestSessionFile(
+function requestSessionFile(
   client: SessionRequestClient,
   key: string,
   path: string,
@@ -367,11 +369,11 @@ export function requestSessionFile(
   });
 }
 
-export function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
+function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
 
-export async function subscribeSessionMessages(
+async function subscribeSessionMessages(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -401,7 +403,7 @@ export function unsubscribeSessionMessages(
     .then(() => undefined);
 }
 
-export async function listSessionCheckpoints(
+async function listSessionCheckpoints(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -412,7 +414,7 @@ export async function listSessionCheckpoints(
   );
 }
 
-export function branchSessionCheckpoint(
+function branchSessionCheckpoint(
   client: SessionRequestClient,
   key: string,
   checkpointId: string,
@@ -424,7 +426,7 @@ export function branchSessionCheckpoint(
   });
 }
 
-export function restoreSessionCheckpoint(
+function restoreSessionCheckpoint(
   client: SessionRequestClient,
   key: string,
   checkpointId: string,
@@ -495,6 +497,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   const listeners = new Set<(next: SessionState) => void>();
+  const createdListeners = new Set<(key: string) => void>();
 
   const requestList = async (
     options: SessionListOptions = {},
@@ -647,6 +650,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return null;
       }
       await refresh({ agentId: params.agentId, force: true });
+      // Creation can originate outside the sidebar. Notify presentation owners
+      // after refresh so they can reconcile the new row without guessing from list churn.
+      for (const listener of createdListeners) {
+        listener(key);
+      }
       return key;
     } catch (error) {
       publish({ ...state, error: String(error) });
@@ -1018,6 +1026,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    subscribeCreated(listener) {
+      createdListeners.add(listener);
+      return () => createdListeners.delete(listener);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1026,6 +1038,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       disposed = true;
       stopGateway();
       stopEvents();
+      createdListeners.clear();
       listeners.clear();
       inFlight = null;
       queuedRefresh = null;

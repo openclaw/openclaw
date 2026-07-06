@@ -29,6 +29,7 @@ import {
   shouldSkipNodeApprovalPrepare,
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { tail } from "./bash-process-registry.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -430,7 +431,7 @@ export async function executeNodeHostCommand(
             const combined = [payload.stdout, payload.stderr, payload.error]
               .filter(Boolean)
               .join("\n");
-            const output = normalizeNotifyOutput(combined.slice(-DEFAULT_NOTIFY_TAIL_CHARS));
+            const output = normalizeNotifyOutput(tail(combined, DEFAULT_NOTIFY_TAIL_CHARS));
             const exitLabel = payload.timedOut ? "timeout" : `code ${payload.exitCode ?? "?"}`;
             const summary = output
               ? `Exec finished (node=${target.nodeId} id=${approvalId}, ${exitLabel})\n${output}`

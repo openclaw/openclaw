@@ -20,7 +20,7 @@ export type AgentEventPayload = {
   data: Record<string, unknown>;
 };
 
-export type SessionOperationEventPayload = {
+type SessionOperationEventPayload = {
   operationId?: string;
   operation?: string;
   phase?: string;
@@ -289,7 +289,7 @@ export function flushToolStreamSync(host: ToolStreamHost) {
   syncToolStreamMessages(host);
 }
 
-export function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
+function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
   if (force) {
     flushToolStreamSync(host);
     return;
@@ -427,7 +427,7 @@ export function handleSessionOperationEvent(
   compactionHost.compactionStatus = null;
 }
 
-export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
   const completed = data.completed === true;

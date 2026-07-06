@@ -43,8 +43,9 @@ import {
   type JsonlReplayInput,
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
-import { runQaManualLane } from "./manual-lane.runtime.js";
+import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
+import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
@@ -899,10 +900,23 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
-  if (opts.channel?.trim() && channelDriver !== "crabline") {
-    throw new Error(
-      "--channel override is currently only supported with --channel-driver crabline.",
-    );
+  if (opts.channel?.trim() && channelDriver !== "crabline" && channelDriver !== "live") {
+    throw new Error("--channel override requires --channel-driver crabline or live.");
+  }
+  const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
+  const liveAdapterFactories = liveChannelId ? listLiveTransportQaAdapterFactories() : undefined;
+  const liveAdapterFactory = liveChannelId
+    ? liveAdapterFactories?.find((factory) => factory.id === liveChannelId)
+    : undefined;
+  if (liveChannelId && !liveAdapterFactory) {
+    throw new Error(`unknown live QA adapter: ${liveChannelId}`);
+  }
+  const liveScenarioIds =
+    liveAdapterFactory && scenarioIds.length === 0
+      ? [...(liveAdapterFactory.scenarioIds ?? [])]
+      : scenarioIds;
+  if (liveAdapterFactory && liveScenarioIds.length === 0) {
+    throw new Error(`live QA adapter ${liveChannelId} does not declare default scenarios`);
   }
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
@@ -937,6 +951,12 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   }
   if (runner === "multipass" && opts.cliAuthMode !== undefined) {
     throw new Error("--cli-auth-mode requires --runner host.");
+  }
+  if (runner === "multipass" && liveChannelId) {
+    throw new Error("--channel-driver live with --channel requires --runner host.");
+  }
+  if (runtimePair && liveChannelId) {
+    throw new Error("--runtime-pair is not supported with a live QA adapter.");
   }
   if (runner === "multipass") {
     rejectNonFlowScenarioIdsForMultipass(scenarioIds);
@@ -997,6 +1017,15 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       evidenceMode: opts.evidenceMode,
       transportId,
       channelDriver,
+      ...(liveChannelId
+        ? {
+            adapterFactories: liveAdapterFactories,
+            channelId: liveChannelId,
+            adapterOptions: {
+              repoRoot,
+            },
+          }
+        : {}),
       channelDriverSelection,
       ...(opts.providerMode !== undefined ? { providerMode } : {}),
       primaryModel,
@@ -1004,11 +1033,13 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       fastMode: opts.fastMode,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-      scenarioIds,
+      scenarioIds: liveChannelId ? liveScenarioIds : scenarioIds,
       ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
-      ...(opts.concurrency !== undefined
-        ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
-        : {}),
+      ...(liveChannelId
+        ? { concurrency: 1 }
+        : opts.concurrency !== undefined
+          ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+          : {}),
       ...(runtimePair ? { runtimePair } : {}),
     }),
   );

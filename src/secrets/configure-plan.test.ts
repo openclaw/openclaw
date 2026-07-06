@@ -17,6 +17,7 @@ import { resolveConfigSecretTargetByPath } from "./target-registry.js";
 describe("secrets configure plan helpers", () => {
   beforeAll(() => {
     resolveConfigSecretTargetByPath(["channels", "telegram", "botToken"]);
+    buildConfigureCandidates({} as OpenClawConfig);
   });
 
   it("builds configure candidates from supported configure targets", () => {

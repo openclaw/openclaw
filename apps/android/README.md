@@ -240,6 +240,9 @@ More details: `docs/platforms/android.md`.
 - Discovery:
   - Android 13+ (`API 33+`): `NEARBY_WIFI_DEVICES`
   - Android 12 and below: `ACCESS_FINE_LOCATION` (required for NSD scanning)
+- Location:
+  - Both flavors: `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` for foreground checks.
+  - Third-party flavor only: `ACCESS_BACKGROUND_LOCATION` plus `FOREGROUND_SERVICE_LOCATION` for user-enabled `Always` checks.
 - Foreground service notification (Android 13+): `POST_NOTIFICATIONS`
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
@@ -265,9 +268,9 @@ Current OpenClaw Android implication:
 - APK / sideload build can keep SMS, Call Log, and recent-photo features.
 - Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, `READ_EXTERNAL_STORAGE`, and background location; hides SMS, Call Log, Photos, and `Always` location surfaces.
   - Installed-app listing is user controlled. `device.apps` is advertised only after the user enables **Settings > Phone Capabilities > Installed Apps**. The command defaults to launcher-visible apps and does not require `QUERY_ALL_PACKAGES`.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality, and offers explicit `Always` location opt-in through Android settings.
 
 Policy links:
 

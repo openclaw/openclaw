@@ -242,7 +242,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   return displayLookup;
 }
 
-export function formatCatalogEntryDisplay(
+function formatCatalogEntryDisplay(
   entry: ModelCatalogEntry,
   displayLookup: ChatModelDisplayLookup,
 ): string {

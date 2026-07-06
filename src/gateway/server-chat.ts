@@ -299,6 +299,12 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     summary: string | undefined;
   }) => void;
+  resolveSessionActiveRunState?: (params: {
+    requestedKey: string;
+    canonicalKey: string;
+    sessionId?: string;
+    agentId?: string;
+  }) => { active: boolean; runIds: string[] };
 };
 
 function roundedChatSendTimingMs(value: number): number {
@@ -324,6 +330,7 @@ export function createAgentEventHandler({
   trackTrackedRunTerminalPersistence,
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
+  resolveSessionActiveRunState,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = {
     skipChatErrorFinal?: boolean;
@@ -414,6 +421,7 @@ export function createAgentEventHandler({
     sessionKey: string,
     evt?: AgentEventPayload,
     agentId?: string,
+    includeActiveRunState = false,
   ) => {
     const row = loadGatewaySessionRowForSnapshot(sessionKey, agentId ? { agentId } : undefined);
     const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
@@ -437,7 +445,20 @@ export function createAgentEventHandler({
             event: evt,
           })
         : {};
-    const session = row ? { ...row, ...lifecyclePatch } : undefined;
+    const activeRunState = includeActiveRunState
+      ? resolveSessionActiveRunState?.({
+          requestedKey: sessionKey,
+          canonicalKey: row?.key ?? sessionKey,
+          ...(row?.sessionId ? { sessionId: row.sessionId } : {}),
+          ...(agentId ? { agentId } : {}),
+        })
+      : undefined;
+    // Agent lifecycle broadcasts merge into cached session rows in the UI.
+    // Always replace run identity so a newer start cannot inherit a completed run.
+    const activeRunFields = activeRunState
+      ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
+      : {};
+    const session = row ? { ...row, ...lifecyclePatch, ...activeRunFields } : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
     }
@@ -490,6 +511,7 @@ export function createAgentEventHandler({
       effectiveResponseUsage: row?.effectiveResponseUsage,
       modelProvider: row?.modelProvider,
       model: row?.model,
+      ...activeRunFields,
       status: snapshotSource.status,
       startedAt: snapshotSource.startedAt,
       endedAt: snapshotSource.endedAt,
@@ -715,7 +737,7 @@ export function createAgentEventHandler({
               runId: evt.runId,
               ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
               ts: evt.ts,
-              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId),
+              ...buildSessionEventSnapshot(sessionKey, snapshotEvent, sessionAgentId, true),
             },
             sessionEventConnIds,
             { dropIfSlow: true },
@@ -1475,7 +1497,14 @@ export function createAgentEventHandler({
         sessionKey,
         agentId: sessionAgentId,
         event: evt,
-      }).catch(() => undefined);
+      }).catch((err: unknown) => {
+        // Surface the swallowed start-phase persistence failure: a silent write
+        // failure drops the run's start marker from restart-recovery accounting
+        // with no operator trace, matching the terminal-phase log below.
+        logError(
+          `gateway: start session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
+        );
+      });
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
@@ -1487,7 +1516,7 @@ export function createAgentEventHandler({
             runId: evt.runId,
             ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
             ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId),
+            ...buildSessionEventSnapshot(sessionKey, evt, sessionAgentId, true),
           },
           sessionEventConnIds,
           { dropIfSlow: true },
