@@ -268,6 +268,29 @@ describe("qa credential admin runtime", () => {
     });
   });
 
+  it("rejects oversized credential admin responses before buffering them", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("x".repeat(2 * 1024 * 1024), { status: 200 }),
+    );
+
+    const error = await listQaCredentialSets({
+      siteUrl: "https://first-schnauzer-821.convex.site",
+      env: {
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+      },
+      fetchImpl,
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(QaCredentialAdminError);
+    const adminError = error as QaCredentialAdminError;
+    expect(adminError.code).toBe("BROKER_REQUEST_FAILED");
+    expect(adminError.message).toMatch(/Convex credential admin response exceeds/);
+  });
+
   it("doctors credential broker env without exposing secret values", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonResponse({
