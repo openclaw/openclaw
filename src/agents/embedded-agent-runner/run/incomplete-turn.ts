@@ -689,7 +689,12 @@ export const IDLE_MODEL_TIMEOUT_NOTICE =
  *   `yieldDetected`): the shared terminal path encodes those as `stopReason`,
  *   `pendingToolCalls`, `yielded`, and `paused` metadata that OpenAI-compatible
  *   callers use to continue tool rounds — replacing them with an error payload
- *   would break that contract even when the attempt also timed out.
+ *   would break that contract even when the attempt also timed out,
+ * - a `message_tool_only` source reply was already delivered
+ *   (`didDeliverSourceReplyViaMessageTool`): payload building treats that flag as
+ *   the delivered visible reply and suppresses assistant artifacts even when no
+ *   mirror payload made `payloadCount` nonzero, so appending a timeout notice
+ *   here would double-reply after the source reply already reached the channel.
  */
 export function resolveTurnBudgetTimeoutNotice(params: {
   timedOut: boolean;
@@ -701,6 +706,7 @@ export function resolveTurnBudgetTimeoutNotice(params: {
   hasDeterministicApprovalPrompt: boolean;
   hasClientToolCalls: boolean;
   yieldDetected: boolean;
+  hasSourceReplyDelivery: boolean;
 }): string | null {
   if (
     !params.timedOut ||
@@ -710,7 +716,8 @@ export function resolveTurnBudgetTimeoutNotice(params: {
     params.hasMessagingDelivery ||
     params.hasDeterministicApprovalPrompt ||
     params.hasClientToolCalls ||
-    params.yieldDetected
+    params.yieldDetected ||
+    params.hasSourceReplyDelivery
   ) {
     return null;
   }

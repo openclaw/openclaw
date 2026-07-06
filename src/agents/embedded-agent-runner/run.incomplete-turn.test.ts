@@ -3498,6 +3498,7 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     hasDeterministicApprovalPrompt: false,
     hasClientToolCalls: false,
     yieldDetected: false,
+    hasSourceReplyDelivery: false,
   };
 
   it("returns the turn-budget notice when a real turn times out with no visible reply", () => {
@@ -3555,5 +3556,15 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     // A yielded attempt terminates as paused with `yielded: true`; the notice
     // would override that resumable state with an abandoned error payload.
     expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, yieldDetected: true })).toBeNull();
+  });
+
+  it("returns null when a message_tool_only source reply was already delivered (no double-reply)", () => {
+    // `didDeliverSourceReplyViaMessageTool` means the visible response already
+    // reached the channel via the message tool; payload building suppresses
+    // assistant artifacts even with no mirror payload (payloadCount stays 0), so
+    // the timeout notice must not fire and append a second, error-flagged reply.
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasSourceReplyDelivery: true }),
+    ).toBeNull();
   });
 });
