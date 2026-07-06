@@ -13,6 +13,7 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
+  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -271,7 +272,9 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
-  registerProcessExitClose();
+  // Safety net for processes that end without an orderly close; mirrors the
+  // shared state DB cache. Closing unregisters it.
+  unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
   registerAgentDatabase({ agentId, path: pathname, env: options.env });
   return database;
 }
@@ -287,27 +290,12 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
-let exitCloseRegistered = false;
-
-// Same contract as the shared state DB cache: cached per-agent handles have no
-// other end-of-life owner, so close them on normal process exit; unclean exits
-// rely on SQLite WAL recovery on the next open.
-function registerProcessExitClose(): void {
-  if (exitCloseRegistered) {
-    return;
-  }
-  exitCloseRegistered = true;
-  process.once("exit", () => {
-    try {
-      closeOpenClawAgentDatabases();
-    } catch {
-      // Exit-time close is best-effort and must never mask the exit path.
-    }
-  });
-}
+let unregisterExitClose: (() => void) | null = null;
 
 /** Close all cached agent database handles. */
 export function closeOpenClawAgentDatabases(): void {
+  unregisterExitClose?.();
+  unregisterExitClose = null;
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(database.db);
