@@ -13,6 +13,7 @@ import {
   type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
+import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -39,7 +40,28 @@ interface SessionData {
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
-function isBackendDelegatedSession(entries: AgentSessionEntry[]): boolean {
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasBackendSession(entry: StoredSessionEntry): boolean {
+  return (
+    Boolean(entry.acp) ||
+    hasNonEmptyString(entry.claudeCliSessionId) ||
+    Object.values(entry.cliSessionBindings ?? {}).some(
+      (binding) => hasNonEmptyString(binding?.sessionId),
+    ) ||
+    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString)
+  );
+}
+
+function isBackendDelegatedSession(
+  entry: StoredSessionEntry,
+  entries: AgentSessionEntry[],
+): boolean {
+  if (!hasBackendSession(entry)) {
+    return false;
+  }
   if (entries.length === 0) {
     return false;
   }
@@ -276,7 +298,9 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   });
 
   // 4. Prepare session data
-  const backendWarning = isBackendDelegatedSession(entries) ? BACKEND_DELEGATED_WARNING : undefined;
+  const backendWarning = isBackendDelegatedSession(entry, entries)
+    ? BACKEND_DELEGATED_WARNING
+    : undefined;
   const sessionData: SessionData = {
     header,
     entries,

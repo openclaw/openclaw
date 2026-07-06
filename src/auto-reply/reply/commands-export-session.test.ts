@@ -560,6 +560,15 @@ describe("buildExportSessionReply", () => {
   });
 
   it("warns when the session only contains user messages (backend-delegated transcript)", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "backend-session-1" },
+        },
+      },
+    });
     hoisted.sessionTranscriptContent = [
       JSON.stringify({ type: "session", version: 3, id: "session-1" }),
       JSON.stringify({
@@ -585,7 +594,68 @@ describe("buildExportSessionReply", () => {
     expect(data.warning).toContain("backend runtime");
   });
 
+  it("does not warn for a normal user-only transcript without backend session metadata", async () => {
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).not.toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+  });
+
+  it("ignores malformed persisted backend session metadata", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+        claudeCliSessionId: 123,
+        cliSessionBindings: {
+          "claude-cli": null,
+        },
+        cliSessionIds: {
+          acpx: 123,
+        },
+      },
+    } as never);
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).not.toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
+  });
+
   it("does not warn when the transcript includes assistant messages", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+        acp: {
+          backend: "acpx",
+          mode: "persistent",
+          agent: "claude",
+          runtimeSessionName: "backend-session-1",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      },
+    });
     hoisted.sessionTranscriptContent = [
       JSON.stringify({ type: "session", version: 3, id: "session-1" }),
       JSON.stringify({
