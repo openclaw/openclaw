@@ -6,19 +6,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
-import {
-  addMissingRequiredPluginDiagnostics,
-  discoverFromConfigPaths,
-  type PluginCandidate,
-} from "./discovery.js";
+import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type { BundledChannelConfigCollector } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -624,61 +618,16 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
             return !pluginId || pluginIdSet.has(pluginId);
           })
         : params.index.diagnostics;
-      const indexCandidates = params.index.plugins
+      const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
         .map((plugin) => toPluginCandidate(plugin, realpathCache));
-
-      // Also discover plugins from config load.paths. These may not be in the
-      // persisted index (e.g., after an npm plugin install only refreshed the
-      // index without including workspace extensions). Merge them in as a
-      // defensive fallback so config-origin plugins always appear in the
-      // manifest registry regardless of index completeness.
-      // P1: Only consider config-origin candidates (not bundled/global).
-      // P2: Preserve pluginId scoping for load-path candidates.
-      const normalized = normalizePluginsConfigWithResolver(params.config?.plugins);
-      let candidates = indexCandidates;
-      let extraDiagnostics: readonly PluginDiagnostic[] = [];
-
-      if (normalized.loadPaths.length > 0) {
-        const loadPathDiscovery = discoverFromConfigPaths({
-          loadPaths: normalized.loadPaths,
-          workspaceDir: params.workspaceDir,
-          env,
-        });
-        const indexRootDirs = new Set(indexCandidates.map((c) => c.rootDir));
-        const extraCandidates = loadPathDiscovery.candidates.filter(
-          (c) =>
-            c.origin === "config" &&
-            !indexRootDirs.has(c.rootDir) &&
-            (!pluginIdSet || (c.idHint != null && pluginIdSet.has(c.idHint))),
-        );
-        if (extraCandidates.length > 0) {
-          candidates = [...indexCandidates, ...extraCandidates];
-        }
-        // Always forward diagnostics from config load-path discovery, even
-        // when no extra candidate survives filtering (e.g., bundled aliases,
-        // missing paths, duplicates, or scoped-out entries). Without this,
-        // users silently lose normal discovery warnings or doctor hints.
-        extraDiagnostics = loadPathDiscovery.diagnostics;
-      }
-
-      // P2: Preserve requiresPlugins diagnostics over the combined index plus
-      // load-path candidate set. Normal discovery calls
-      // addMissingRequiredPluginDiagnostics after merging all candidates, but the
-      // installed-index path builds candidates from index records and optional
-      // config load paths separately, so the combined-candidate check is needed
-      // here to surface missing-required-plugin warnings that users would get on
-      // the normal discovery path.
-      const combinedDiagnostics: PluginDiagnostic[] = [...diagnostics, ...extraDiagnostics];
-      addMissingRequiredPluginDiagnostics({ candidates, diagnostics: combinedDiagnostics });
-
       return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
         candidates,
-        diagnostics: combinedDiagnostics,
+        diagnostics: [...diagnostics],
         installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
         ...(params.bundledChannelConfigCollector
           ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
