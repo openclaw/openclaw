@@ -5,7 +5,6 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearMemoryCoreWorkspaceNamespace,
-  DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -132,10 +131,6 @@ async function moveToArchive(params: {
   return destination;
 }
 
-// Clears every dreaming ingestion namespace tracked by the SQLite migration so a
-// repair fully resets ingestion bookkeeping. The daily-ingestion namespace mirrors
-// the legacy daily-ingestion.json sidecar and must be cleared alongside the session
-// files/seen namespaces (the audit already treats all three as ingestion state).
 async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
   await Promise.all([
     clearMemoryCoreWorkspaceNamespace({
@@ -144,10 +139,6 @@ async function clearSessionIngestionState(workspaceDir: string): Promise<void> {
     }),
     clearMemoryCoreWorkspaceNamespace({
       namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir,
-    }),
-    clearMemoryCoreWorkspaceNamespace({
-      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
       workspaceDir,
     }),
   ]);
@@ -221,10 +212,11 @@ export async function auditDreamingArtifacts(params: {
   // Fall back to SQLite plugin state when the legacy JSON file was archived by migration.
   if (!sessionIngestionExists) {
     try {
+      // Daily ingestion tracks memory/*.md independently; session repair must not
+      // report or clear that healthy bookkeeping when rebuilding the session corpus.
       const ingestionNamespaces = [
         DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
         DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-        DREAMING_DAILY_INGESTION_NAMESPACE,
       ] as const;
       for (const namespace of ingestionNamespaces) {
         const entries = await readMemoryCoreWorkspaceEntries({
