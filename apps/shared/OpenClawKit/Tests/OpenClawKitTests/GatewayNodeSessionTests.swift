@@ -313,7 +313,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 "id": id,
                 "nodeId": "test-node",
                 "command": command,
-                "paramsJSON": paramsJSON ?? NSNull(),
+                "paramsJSON": paramsJSON ?? (NSNull() as Any),
             ],
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
