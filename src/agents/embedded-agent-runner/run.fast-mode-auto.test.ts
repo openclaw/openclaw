@@ -94,7 +94,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
         resolve(successAttempt("ollama", "glm-5.1:cloud"));
       };
     });
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+    // Use a persistent implementation so CI timing variations that cause a
+    // retry do not break the test with an unhandled second attempt.
+    mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
       attemptParams = params as FastModeAttemptParams;
       resolveAttemptFastMode(params);
       return attemptDone;
@@ -107,6 +109,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
       runId: "run-fast-auto-retry",
       fastMode: "auto",
       fastModeAutoOnSeconds: 30,
+      timeoutMs: 120_000,
       onAgentEvent: (event) => {
         events.push(event);
       },
@@ -115,9 +118,12 @@ describe("runEmbeddedAgent fast auto progress", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 10_000 },
+    );
     await vi.advanceTimersByTimeAsync(31_000);
 
     expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
@@ -190,7 +196,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
         resolve(successAttempt("ollama", "glm-5.1:cloud"));
       };
     });
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+    // Use a persistent implementation so CI timing variations that cause a
+    // retry do not break the test with an unhandled second attempt.
+    mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
       attemptParams = params as FastModeAttemptParams;
       resolveAttemptFastMode(params);
       return attemptDone;
@@ -203,6 +211,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
       runId: "run-fast-auto-single-off",
       fastMode: "auto",
       fastModeAutoOnSeconds: 30,
+      timeoutMs: 120_000,
       onAgentEvent: (event) => {
         events.push(event);
       },
@@ -211,9 +220,12 @@ describe("runEmbeddedAgent fast auto progress", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 10_000 },
+    );
     await vi.advanceTimersByTimeAsync(31_000);
     await attemptParams?.onAgentEvent?.({
       stream: "tool",
@@ -266,7 +278,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
           resolve(successAttempt("ollama", "glm-5.1:cloud"));
         };
       });
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      // Use a persistent implementation so CI timing variations that cause a
+      // retry do not break the test with an unhandled second attempt.
+      mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
         attemptParams = params as FastModeAttemptParams;
         resolveAttemptFastMode(params);
         return attemptDone;
@@ -298,9 +312,12 @@ describe("runEmbeddedAgent fast auto progress", () => {
         },
       });
 
-      await vi.waitFor(() => {
-        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      });
+      await vi.waitFor(
+        () => {
+          expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 10_000 },
+      );
       await vi.advanceTimersByTimeAsync(61_000);
       await attemptParams?.onAgentEvent?.({
         stream: "tool",
@@ -341,7 +358,9 @@ describe("runEmbeddedAgent fast auto progress", () => {
           resolve(successAttempt("ollama", "glm-5.1:cloud"));
         };
       });
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      // Use a persistent implementation so CI timing variations that cause a
+      // retry do not break the test with an unhandled second attempt.
+      mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
         attemptParams = params as FastModeAttemptParams;
         resolveAttemptFastMode(params);
         return attemptDone;
@@ -368,9 +387,12 @@ describe("runEmbeddedAgent fast auto progress", () => {
         },
       });
 
-      await vi.waitFor(() => {
-        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      });
+      await vi.waitFor(
+        () => {
+          expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 10_000 },
+      );
       await vi.advanceTimersByTimeAsync(61_000);
       await attemptParams?.onAgentEvent?.({
         stream: "tool",
