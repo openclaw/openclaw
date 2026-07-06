@@ -31,7 +31,9 @@ public struct OpenClawChatSpeechClip: Equatable, Sendable {
             return true
         }
         let mimeType = self.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if ["audio/pcm", "audio/l16", "audio/pcmu", "audio/pcma", "audio/x-raw"].contains(mimeType) {
+        if let mimeType,
+           ["audio/pcm", "audio/l16", "audio/pcmu", "audio/pcma", "audio/x-raw"].contains(mimeType)
+        {
             return true
         }
         let outputFormat = self.outputFormat?
