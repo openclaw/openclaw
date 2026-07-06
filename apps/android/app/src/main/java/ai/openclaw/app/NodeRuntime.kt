@@ -1759,6 +1759,10 @@ class NodeRuntime private constructor(
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
     runTalkPttCommand {
+      talkMode.activePushToTalkCaptureId?.let { captureId ->
+        val payload = TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy")
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
       val start =
