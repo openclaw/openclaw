@@ -1001,7 +1001,19 @@ function pruneInactiveGatewayAuthCredentials(params: {
 }
 
 function toDotPath(path: PathSegment[]): string {
-  return path.join(".");
+  if (path.length === 0) {
+    return "";
+  }
+  let result = path[0];
+  for (let i = 1; i < path.length; i++) {
+    const segment = path[i];
+    if (isIndexSegment(segment)) {
+      result += `[${segment}]`;
+    } else {
+      result += `.${segment}`;
+    }
+  }
+  return result;
 }
 
 const RESTART_HINT = "Restart the gateway to apply.";
