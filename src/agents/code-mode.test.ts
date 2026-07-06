@@ -1160,10 +1160,10 @@ describe("Code Mode", () => {
     });
   });
 
-  it("rejects prototype-named tool identifiers in baseTools registration", () => {
+  it("does not throw when catalog contains prototype-named tool identifiers", () => {
     // Tool names matching Object.prototype properties (toString, __proto__, etc.)
-    // should not be registered as baseTools entries to avoid prototype pollution.
-    // Uses Object.hasOwn (not `in`) so inherited prototype keys are correctly skipped.
+    // must not cause the catalog initialization to throw. The use of Object.hasOwn
+    // in the controller source ensures these names are safely skipped.
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const protoTools = ["toString", "__proto__", "constructor", "hasOwnProperty"].map((name) =>
       mcpTool({
@@ -1178,7 +1178,6 @@ describe("Code Mode", () => {
       }),
     );
 
-    // Must not throw when prototype-named tools are present in the catalog
     expect(() =>
       applyCodeModeCatalog({
         tools: [...codeModeTools, ...protoTools],
