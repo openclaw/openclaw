@@ -1,8 +1,21 @@
 // Coverage for bootstrap routing across canonical and effective workspaces.
 import { describe, expect, it, vi } from "vitest";
-import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
+import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "./bootstrap-routing.js";
 
-describe("runEmbeddedAttempt bootstrap routing", () => {
+describe("isPrimaryBootstrapRun", () => {
+  it("treats regular sessions as primary bootstrap runs", () => {
+    expect(isPrimaryBootstrapRun("agent:main:main")).toBe(true);
+  });
+
+  it("suppresses bootstrap ownership for subagent and ACP/helper sessions", () => {
+    // Only the primary session owns bootstrap context; helper sessions inherit
+    // context through their parent flow.
+    expect(isPrimaryBootstrapRun("agent:main:subagent:worker")).toBe(false);
+    expect(isPrimaryBootstrapRun("agent:main:acp:worker")).toBe(false);
+  });
+});
+
+describe("resolveWorkspaceBootstrapRouting", () => {
   it("resolves bootstrap pending from the canonical workspace instead of a copied sandbox", async () => {
     // Sandbox copies are execution roots; bootstrap state belongs to the
     // canonical workspace.
@@ -12,7 +25,7 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
       return workspaceDir === sandboxWorkspace;
     });
 
-    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+    const routing = await resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending,
       trigger: "user",
       isPrimaryRun: true,
@@ -31,7 +44,7 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
   });
 
   it("falls back to limited bootstrap wording when a primary run cannot read files", async () => {
-    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+    const routing = await resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => true),
       trigger: "user",
       isPrimaryRun: true,
@@ -49,7 +62,7 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
   it("treats hook-provided BOOTSTRAP.md content as pending bootstrap context", async () => {
     // Hook-provided bootstrap files can replace filesystem reads and still drive
     // a full bootstrap turn.
-    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+    const routing = await resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
       bootstrapFiles: [
         {
@@ -73,7 +86,7 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
   });
 
   it("uses hook-provided BOOTSTRAP.md content even when normal file reads are unavailable", async () => {
-    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+    const routing = await resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
       bootstrapFiles: [
         {
@@ -97,7 +110,7 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
   });
 
   it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", async () => {
-    const routing = await resolveAttemptWorkspaceBootstrapRouting({
+    const routing = await resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
       bootstrapFiles: [
         {

@@ -33,6 +33,7 @@ import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
@@ -49,6 +50,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
@@ -82,6 +84,7 @@ import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl } from "../workspace.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -96,6 +99,7 @@ import {
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
+  isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
@@ -487,6 +491,28 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
+  // Mirror the embedded runner's bootstrap routing so CLI-backend runs render
+  // the same "Bootstrap Pending" system prompt gate while BOOTSTRAP.md is
+  // pending. CLI backends expose native file tools, so a run that reaches this
+  // point can read BOOTSTRAP.md unless the caller disabled tools outright.
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
+  const bootstrapRouting = isSideQuestion
+    ? undefined
+    : await resolveWorkspaceBootstrapRouting({
+        isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
+        bootstrapFiles,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
+        trigger: params.trigger,
+        sessionKey: params.sessionKey,
+        isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+        isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+        effectiveWorkspace: workspaceDir,
+        resolvedWorkspace,
+        hasBootstrapFileAccess: params.disableTools !== true,
+      });
+  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
   // Ring-zero Crestodian runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. The generated MCP config carries
   // only the crestodian stdio server, so the CLI harness sees exactly one
@@ -804,6 +830,7 @@ export async function prepareCliRunContext(
           skillsPrompt: systemPromptSkillsPrompt,
           tools: promptTools,
           contextFiles,
+          bootstrapMode,
           modelDisplay,
           agentId: sessionAgentId,
           sessionKey: params.sessionKey,
