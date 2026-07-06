@@ -32,7 +32,7 @@ OpenClaw keeps subscription quota and Platform API billing distinct:
 - ChatGPT/Codex OAuth shows the subscription plan, quota windows, and credit balance.
 - `OPENAI_ADMIN_KEY` shows 30 days of provider-reported organization cost and completions usage in Control UI **Usage**, including daily spend, request/token totals, top models, and cost categories.
 - `OPENAI_PROJECT_ID` optionally scopes Admin API history to one project.
-- When no ChatGPT/Codex OAuth credential is available, OpenClaw also tries the configured `OPENAI_API_KEY` for organization usage. OpenAI may require an Admin API key or explicit Usage Dashboard permission for these endpoints.
+- OpenClaw never sends `OPENAI_API_KEY` or an `openai` inference profile to organization APIs; those credentials may belong to custom, Azure, or agent-local endpoints.
 
 An explicit Admin key takes precedence over OAuth. Provider-reported history is not merged with OpenClaw's session-derived estimated cost; it can include API activity from other clients and provider-side billing adjustments.
 

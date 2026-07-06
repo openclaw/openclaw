@@ -1,5 +1,6 @@
 /** Tests dynamic provider env-var discovery from plugin metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
 import {
   testing,
   getProviderEnvVars,
@@ -144,17 +145,73 @@ describe("provider env vars dynamic manifest metadata", () => {
           origin: "global",
           providers: ["provider-billing"],
           providerUsageAuthEnvVars: {
-            "provider-billing": ["PROVIDER_BILLING_ADMIN_KEY"],
+            "provider-billing": ["PROVIDER_BILLING_CREDENTIAL"],
           },
         },
       ],
       diagnostics: [],
     });
 
-    expect(listKnownProviderAuthEnvVarNames()).toContain("PROVIDER_BILLING_ADMIN_KEY");
-    expect(listKnownSecretEnvVarNames()).toContain("PROVIDER_BILLING_ADMIN_KEY");
+    expect(listKnownProviderAuthEnvVarNames()).toContain("PROVIDER_BILLING_CREDENTIAL");
+    expect(listKnownSecretEnvVarNames()).toContain("PROVIDER_BILLING_CREDENTIAL");
     expect(resolveProviderAuthEnvVarCandidates()["provider-billing"]).toBeUndefined();
     expect(getProviderEnvVars("provider-billing")).toStrictEqual([]);
+    expect(
+      sanitizeEnvVars({ PROVIDER_BILLING_CREDENTIAL: "billing-secret", SAFE_VALUE: "ok" }),
+    ).toMatchObject({
+      allowed: { SAFE_VALUE: "ok" },
+      blocked: ["PROVIDER_BILLING_CREDENTIAL"],
+    });
+  });
+
+  it("scrubs usage credentials from the active configured plugin snapshot", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+      workspaceDir: "/workspace",
+      index: {
+        plugins: [
+          {
+            pluginId: "configured-billing",
+            origin: "workspace",
+            enabled: true,
+            enabledByDefault: true,
+          },
+          {
+            pluginId: "disabled-workspace",
+            origin: "workspace",
+            enabled: false,
+            enabledByDefault: false,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "configured-billing",
+          origin: "workspace",
+          providerUsageAuthEnvVars: {
+            "configured-billing": ["CONFIGURED_BILLING_CREDENTIAL"],
+          },
+        },
+        {
+          id: "disabled-workspace",
+          origin: "workspace",
+          providerUsageAuthEnvVars: {
+            "disabled-workspace": ["PATH"],
+          },
+        },
+      ],
+    });
+
+    expect(
+      sanitizeEnvVars({
+        CONFIGURED_BILLING_CREDENTIAL: "billing-secret",
+        PATH: "/usr/bin",
+        SAFE_VALUE: "ok",
+      }),
+    ).toMatchObject({
+      allowed: { PATH: "/usr/bin", SAFE_VALUE: "ok" },
+      blocked: ["CONFIGURED_BILLING_CREDENTIAL"],
+    });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("lets openai bootstrap from Codex app-server API-key env", () => {

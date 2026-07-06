@@ -109,7 +109,16 @@ describe("OpenAI provider usage", () => {
 
   it("prefers an explicit admin key over ChatGPT OAuth", async () => {
     const result = await resolveOpenAIUsageAuth({
-      config: {},
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      },
       env: { OPENAI_ADMIN_KEY: "sk-admin-explicit" },
       provider: "openai",
       resolveApiKeyFromConfigAndStore: () => "sk-proj-fallback",
@@ -120,17 +129,18 @@ describe("OpenAI provider usage", () => {
     });
   });
 
-  it("uses an asynchronously resolved stored key when OAuth is unavailable", async () => {
+  it("does not repurpose inference credentials for organization usage", async () => {
+    const resolveCandidates = vi.fn(async () => ["sk-admin-secretref"]);
     const result = await resolveOpenAIUsageAuth({
       config: {},
       env: {},
       provider: "openai",
-      resolveApiKeyFromConfigAndStore: () => undefined,
-      resolveApiKeyCandidatesFromConfigAndStore: async () => ["sk-admin-secretref"],
+      resolveApiKeyFromConfigAndStore: () => "sk-proj-inference",
+      resolveApiKeyCandidatesFromConfigAndStore: resolveCandidates,
       resolveOAuthToken: async () => null,
     });
-    expect(result).toEqual({
-      token: 'openclaw:openai-admin:v1:{"token":"sk-admin-secretref"}',
-    });
+
+    expect(result).toEqual({ handled: true });
+    expect(resolveCandidates).not.toHaveBeenCalled();
   });
 });

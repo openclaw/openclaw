@@ -423,9 +423,9 @@ export async function resolveOpenAIUsageAuth(
   if (oauth) {
     return oauth;
   }
-  const storedCandidates = await ctx.resolveApiKeyCandidatesFromConfigAndStore?.();
-  const apiKey = storedCandidates?.[0] ?? ctx.resolveApiKeyFromConfigAndStore();
-  return apiKey ? { token: encodeAdminToken(apiKey) } : { handled: true };
+  // Inference keys may belong to custom, Azure, or agent-local endpoints. Only
+  // the dedicated admin credential may cross to api.openai.com organization APIs.
+  return { handled: true };
 }
 
 export async function fetchOpenAIUsage(

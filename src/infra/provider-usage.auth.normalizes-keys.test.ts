@@ -205,13 +205,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         if (oauth) {
           return oauth;
         }
-        const token = resolveToken({
-          providerIds: ["openai"],
-          envDirect: [params.context.env?.OPENAI_API_KEY],
-        });
-        return token
-          ? { token: `openclaw:openai-admin:v1:${JSON.stringify({ token })}` }
-          : { handled: true };
+        return { handled: true };
       }
 
       if (params.provider === "minimax") {
@@ -654,7 +648,7 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
-  it("routes OpenAI api keys to the provider-owned Admin API usage path", async () => {
+  it("routes the dedicated OpenAI admin key to the provider-owned usage path", async () => {
     const config = {
       models: {
         providers: {
@@ -669,6 +663,7 @@ describe("resolveProviderAuths key normalization", () => {
     await expectResolvedAuthsFromSuiteHome({
       providers: ["openai"],
       env: {
+        OPENAI_ADMIN_KEY: "env-openai-admin-key",
         OPENAI_API_KEY: "env-openai-key",
       },
       setup: async (home) => {
@@ -681,9 +676,22 @@ describe("resolveProviderAuths key normalization", () => {
       expected: [
         {
           provider: "openai",
-          token: 'openclaw:openai-admin:v1:{"token":"env-openai-key"}',
+          token: 'openclaw:openai-admin:v1:{"token":"env-openai-admin-key"}',
         },
       ],
+    });
+  });
+
+  it("does not route OpenAI inference keys to organization usage", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      env: { OPENAI_API_KEY: "env-openai-key" },
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
+        });
+      },
+      expected: [],
     });
   });
 

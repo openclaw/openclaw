@@ -29,7 +29,7 @@ title: "Usage tracking"
 Subscription quota and API billing are different provider surfaces:
 
 - Anthropic subscription/setup credentials continue to show Claude quota windows and optional extra-usage budgets. Set `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_ADMIN_API_KEY` to show organization Usage and Cost API history instead. An Anthropic provider credential beginning with `sk-ant-admin` is detected automatically.
-- OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. When no OAuth credential is available, OpenClaw also tries the configured `OPENAI_API_KEY`, but the organization endpoints may require an Admin API key or explicit Usage Dashboard permission.
+- OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. OpenClaw never sends inference credentials from `OPENAI_API_KEY`, provider config, or auth profiles to organization APIs because those keys may belong to custom endpoints.
 
 Admin credentials take precedence because they provide actual organization billing. OpenClaw does not combine these provider-reported totals with its local session estimates; the two sections intentionally answer different questions.
 
@@ -334,9 +334,9 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **OpenAI (Codex/ChatGPT plan)**: OAuth tokens in auth profiles (`ChatGPT-Account-Id`
   header sent when an account id is present). Shows the ChatGPT plan, resettable
   Codex windows, and a credit balance when reported. Credits remain provider
-  credits; OpenClaw does not label them as dollars. `OPENAI_ADMIN_KEY`, or a
-  configured `OPENAI_API_KEY` when OAuth is absent, adds 30-day organization
-  cost and completions-usage history when the key has Usage Dashboard access.
+  credits; OpenClaw does not label them as dollars. `OPENAI_ADMIN_KEY` adds
+  30-day organization cost and completions-usage history when the key has Usage
+  Dashboard access. Inference credentials are never forwarded to organization APIs.
 - **OpenRouter**: API key or OAuth-backed API key (`OPENROUTER_API_KEY` or an auth
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
