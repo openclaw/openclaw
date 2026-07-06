@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
+- **Session usage logs:** normalize malformed transcript timestamps before sorting and Gateway serialization so invalid dates cannot surface as null usage-log times. (#99418) Thanks @sheyanmin.
 - **Control UI terminal reset:** isolate each web terminal's Ghostty WASM runtime so closing a tab and reopening starts with an empty screen instead of reusing freed terminal cells.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
