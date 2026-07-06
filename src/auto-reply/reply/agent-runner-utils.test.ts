@@ -370,6 +370,39 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
+  it("preserves channel-owned direct user context for embedded message tools", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          context,
+        }: {
+          context: { NativeChannelId?: string; To?: string };
+        }) => ({
+          currentChannelId: context.NativeChannelId ?? context.To,
+          currentMessagingTarget: context.To,
+          currentDirectUserId: "@alice:example.org",
+        }),
+      },
+    });
+    const run = makeRun({ agentAccountId: "work", chatType: "direct" });
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "matrix",
+        NativeChannelId: "room:!dm:example.org",
+        To: "room:!dm:example.org",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext.currentChannelId).toBe("room:!dm:example.org");
+    expect(resolved.embeddedContext.currentDirectUserId).toBe("@alice:example.org");
+  });
+
   it("carries inbound audio context into embedded message tools", () => {
     const run = makeRun();
 

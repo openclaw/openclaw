@@ -117,6 +117,8 @@ export function createOpenClawTools(
     currentChannelId?: string;
     /** Routable target for the current conversation when it differs from the native channel ID. */
     currentMessagingTarget?: string;
+    /** Transport-owned direct peer id for trusted same-DM read actions. */
+    currentDirectUserId?: string;
     /** Current thread timestamp for auto-threading. */
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks. */
@@ -355,6 +357,7 @@ export function createOpenClawTools(
         config: options?.config,
         currentChannelId: options?.currentChannelId,
         currentMessagingTarget: options?.currentMessagingTarget,
+        currentDirectUserId: options?.currentDirectUserId,
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,

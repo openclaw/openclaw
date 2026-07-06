@@ -463,6 +463,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         currentMessagingTarget?: string;
         currentGraphChannelId?: string;
         currentChannelProvider?: string;
+        currentDirectUserId?: string;
         currentThreadTs?: string;
         currentMessageId?: string | number;
         replyToMode?: "off" | "first" | "all" | "batched";

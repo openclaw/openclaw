@@ -11,6 +11,7 @@ const {
   getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
   listChannelsMSTeamsMock,
+  listPinsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -28,6 +29,7 @@ const {
   getMemberInfoMSTeamsMock: vi.fn(),
   getMessageMSTeamsMock: vi.fn(),
   listChannelsMSTeamsMock: vi.fn(),
+  listPinsMSTeamsMock: vi.fn(),
   listReactionsMSTeamsMock: vi.fn(),
   pinMessageMSTeamsMock: vi.fn(),
   reactMessageMSTeamsMock: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("./channel.runtime.js", () => ({
     getMemberInfoMSTeams: getMemberInfoMSTeamsMock,
     getMessageMSTeams: getMessageMSTeamsMock,
     listChannelsMSTeams: listChannelsMSTeamsMock,
+    listPinsMSTeams: listPinsMSTeamsMock,
     listReactionsMSTeams: listReactionsMSTeamsMock,
     pinMessageMSTeams: pinMessageMSTeamsMock,
     reactMessageMSTeams: reactMessageMSTeamsMock,
@@ -68,6 +71,7 @@ const actionMocks = [
   getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
   listChannelsMSTeamsMock,
+  listPinsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -96,6 +100,13 @@ const reactMissingEmojiDetail = "React requires an emoji (reaction type).";
 const searchMissingQueryError = "Search requires a target (to) and query.";
 const groupManagementAuthError =
   "Microsoft Teams group management requires an owner or operator.admin requester.";
+const openMSTeamsReadCfg = {
+  channels: {
+    msteams: {
+      groupPolicy: "open",
+    },
+  },
+};
 
 function padded(value: string) {
   return ` ${value} `;
@@ -187,9 +198,10 @@ function expectActionSuccess(
 function expectActionRuntimeCall(
   mockFn: ReturnType<typeof vi.fn>,
   params: Record<string, unknown>,
+  cfg: Record<string, unknown> = {},
 ) {
   expect(mockFn).toHaveBeenCalledWith({
-    cfg: {},
+    cfg,
     ...params,
   });
 }
@@ -198,6 +210,7 @@ async function expectSuccessfulAction(params: {
   mockFn: ReturnType<typeof vi.fn>;
   mockResult: unknown;
   action: Parameters<typeof runAction>[0]["action"];
+  cfg?: Parameters<typeof runAction>[0]["cfg"];
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
@@ -212,6 +225,7 @@ async function expectSuccessfulAction(params: {
   params.mockFn.mockResolvedValue(params.mockResult);
   const result = await runAction({
     action: params.action,
+    cfg: params.cfg,
     params: params.actionParams,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
@@ -220,7 +234,7 @@ async function expectSuccessfulAction(params: {
     senderIsOwner: params.senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
   });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams);
+  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
   expectActionSuccess(result, params.details, params.contentDetails);
 }
 
@@ -236,6 +250,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getMessageMSTeamsMock,
       mockResult: readMessage,
       action: "read",
+      cfg: openMSTeamsReadCfg,
       actionParams: {
         messageId: padded("msg-1"),
       },
@@ -256,6 +271,579 @@ describe("msteamsPlugin message actions", () => {
         message: readMessage,
       },
     });
+  });
+
+  it("blocks explicit read targets outside the Teams route allowlist", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "19:allowed@thread.tacv2": {},
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks explicit read targets when Teams uses env-only credentials", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks explicit read targets when env-only Teams inherits global open group defaults", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            defaults: {
+              groupPolicy: "open",
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit read targets inside the Teams route allowlist", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        target: "team-1/19:target@thread.tacv2",
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: "team-1/19:target@thread.tacv2",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows conversation-prefixed read targets inside the Teams route allowlist", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        target: targetChannelId,
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("does not allow direct conversation read targets via team-scoped wildcards", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "*": {},
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks explicit read targets outside configured Teams routes under open sender policy", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "open",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "19:allowed@thread.tacv2": {},
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: {
+          target: targetChannelId,
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit read targets inside configured Teams routes under open sender policy", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        target: "team-1/19:target@thread.tacv2",
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: "team-1/19:target@thread.tacv2",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows implicit read fallback targets inside the Teams route allowlist", async () => {
+    const teamChannelTarget = "team-1/19:target@thread.tacv2";
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            teams: {
+              "team-1": {
+                channels: {
+                  "19:target@thread.tacv2": {},
+                },
+              },
+            },
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: targetChannelId,
+        currentGraphChannelId: teamChannelTarget,
+      },
+      runtimeParams: {
+        to: teamChannelTarget,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("blocks implicit read fallback targets outside the Teams route allowlist", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          teams: {
+            "team-1": {
+              channels: {
+                "19:allowed@thread.tacv2": {},
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const toolContext = {
+      currentChannelId: targetChannelId,
+      currentGraphChannelId: "team-1/19:target@thread.tacv2",
+    };
+    const scenarios = [
+      { action: "read", params: { messageId: "msg-1" }, mockFn: getMessageMSTeamsMock },
+      { action: "list-pins", params: {}, mockFn: listPinsMSTeamsMock },
+      { action: "reactions", params: { messageId: "msg-1" }, mockFn: listReactionsMSTeamsMock },
+      { action: "search", params: { query: "hello" }, mockFn: searchMessagesMSTeamsMock },
+    ];
+
+    for (const scenario of scenarios) {
+      await expect(
+        runAction({
+          action: scenario.action,
+          cfg,
+          params: scenario.params,
+          toolContext,
+        }),
+      ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+      expect(scenario.mockFn).not.toHaveBeenCalled();
+    }
+  });
+
+  it("blocks explicit user read targets outside the Teams DM allowlist", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "allowlist",
+              allowFrom: ["user:allowed-aad"],
+            },
+          },
+        },
+        params: {
+          target: "user:cached-aad",
+          messageId: "msg-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit user read targets inside the Teams DM allowlist", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["user:cached-aad"],
+          },
+        },
+      },
+      actionParams: {
+        target: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows explicit user read targets when Teams groups are disabled but DMs allow the user", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "disabled",
+            dmPolicy: "allowlist",
+            allowFrom: ["user:cached-aad"],
+          },
+        },
+      },
+      actionParams: {
+        target: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows implicit current-DM read targets inside Teams allowFrom", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "pairing",
+            allowFrom: ["user:cached-aad"],
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: "user:cached-aad",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows paired implicit current-DM read targets without Teams allowFrom", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "pairing",
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: "user:cached-aad",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("blocks gateway-supplied paired current-DM read targets without Teams allowFrom", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "pairing",
+            },
+          },
+        },
+        params: {
+          messageId: "msg-1",
+        },
+        toolContext: {
+          currentChannelId: "user:cached-aad",
+        },
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks implicit current-DM read targets outside the Teams DM allowlist", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "allowlist",
+              allowFrom: ["user:allowed-aad"],
+            },
+          },
+        },
+        params: {
+          messageId: "msg-1",
+        },
+        toolContext: {
+          currentChannelId: "user:cached-aad",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows implicit current-DM read targets inside the Teams DM allowlist", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["user:cached-aad"],
+          },
+        },
+      },
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: "user:cached-aad",
+      },
+      runtimeParams: {
+        to: "user:cached-aad",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("blocks implicit current-DM read targets when Teams DMs are disabled", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "disabled",
+            },
+          },
+        },
+        params: {
+          messageId: "msg-1",
+        },
+        toolContext: {
+          currentChannelId: "user:cached-aad",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
   it("advertises upload-file in the message tool surface", () => {
@@ -319,6 +907,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getMemberInfoMSTeamsMock,
       mockResult: { member: { id: "user-1" } },
       action: "member-info",
+      cfg: openMSTeamsReadCfg,
       actionParams: { userId: " user-1 " },
       runtimeParams: { userId: "user-1" },
       details: okMSTeamsActionDetails("member-info", {
@@ -338,6 +927,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: listChannelsMSTeamsMock,
       mockResult: { channels: [{ id: "channel-1" }] },
       action: "channel-list",
+      cfg: openMSTeamsReadCfg,
       actionParams: { teamId: " team-1 " },
       runtimeParams: { teamId: "team-1" },
       details: okMSTeamsActionDetails("channel-list", {
@@ -357,6 +947,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getChannelInfoMSTeamsMock,
       mockResult: { channel: { id: "channel-1" } },
       action: "channel-info",
+      cfg: openMSTeamsReadCfg,
       actionParams: {
         teamId: " team-1 ",
         channelId: " channel-1 ",
@@ -375,6 +966,33 @@ describe("msteamsPlugin message actions", () => {
         channelInfo: { id: "channel-1" },
       },
     });
+  });
+
+  it("blocks channel metadata reads outside the Teams route allowlist", async () => {
+    await expect(
+      runAction({
+        action: "channel-info",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "channel-allowed": {},
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: {
+          teamId: "team-2",
+          channelId: "channel-1",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getChannelInfoMSTeamsMock).not.toHaveBeenCalled();
   });
 
   it("requires trusted requester sender for Teams group-management actions from Teams turns", () => {
@@ -786,11 +1404,14 @@ describe("msteamsPlugin message actions", () => {
   });
 
   it("requires a non-empty search query after trimming", async () => {
-    await expectActionParamError(
-      "search",
+    await expectActionError(
       {
-        to: targetChannelId,
-        query: "   ",
+        action: "search",
+        cfg: openMSTeamsReadCfg,
+        params: {
+          to: targetChannelId,
+          query: "   ",
+        },
       },
       searchMissingQueryError,
     );

@@ -8,11 +8,15 @@ const mocks = vi.hoisted(() => ({
   reactMatrixMessage: vi.fn(),
   listMatrixReactions: vi.fn(),
   removeMatrixReactions: vi.fn(),
+  readMatrixMessages: vi.fn(),
   sendMatrixMessage: vi.fn(),
   listMatrixPins: vi.fn(),
   getMatrixMemberInfo: vi.fn(),
   getMatrixRoomInfo: vi.fn(),
   applyMatrixProfileUpdate: vi.fn(),
+  resolveMatrixRoomId: vi.fn(),
+  inspectMatrixDirectRooms: vi.fn(),
+  withResolvedActionClient: vi.fn(),
 }));
 
 vi.mock("./matrix/actions.js", () => {
@@ -21,6 +25,7 @@ vi.mock("./matrix/actions.js", () => {
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
     listMatrixReactions: mocks.listMatrixReactions,
     listMatrixPins: mocks.listMatrixPins,
+    readMatrixMessages: mocks.readMatrixMessages,
     removeMatrixReactions: mocks.removeMatrixReactions,
     sendMatrixMessage: mocks.sendMatrixMessage,
     voteMatrixPoll: mocks.voteMatrixPoll,
@@ -30,6 +35,19 @@ vi.mock("./matrix/actions.js", () => {
 vi.mock("./matrix/send.js", () => {
   return {
     reactMatrixMessage: mocks.reactMatrixMessage,
+    resolveMatrixRoomId: mocks.resolveMatrixRoomId,
+  };
+});
+
+vi.mock("./matrix/actions/client.js", () => {
+  return {
+    withResolvedActionClient: mocks.withResolvedActionClient,
+  };
+});
+
+vi.mock("./matrix/direct-management.js", () => {
+  return {
+    inspectMatrixDirectRooms: mocks.inspectMatrixDirectRooms,
   };
 });
 
@@ -51,12 +69,44 @@ describe("handleMatrixAction pollVote", () => {
     mocks.listMatrixReactions.mockResolvedValue([{ key: "👍", count: 1, users: ["@u:example"] }]);
     mocks.listMatrixPins.mockResolvedValue({ pinned: ["$pin"], events: [] });
     mocks.removeMatrixReactions.mockResolvedValue({ removed: 1 });
+    mocks.readMatrixMessages.mockResolvedValue({ roomId: "!room:example", messages: [] });
     mocks.sendMatrixMessage.mockResolvedValue({
       messageId: "$sent",
       roomId: "!room:example",
     });
     mocks.getMatrixMemberInfo.mockResolvedValue({ userId: "@u:example" });
     mocks.getMatrixRoomInfo.mockResolvedValue({ roomId: "!room:example" });
+    mocks.resolveMatrixRoomId.mockImplementation(
+      async (client: { resolveRoom?: (alias: string) => Promise<string | null> }, raw: string) => {
+        if (raw.startsWith("#")) {
+          const resolved = await client.resolveRoom?.(raw);
+          if (!resolved) {
+            throw new Error(`Matrix alias ${raw} could not be resolved`);
+          }
+          return resolved;
+        }
+        return raw;
+      },
+    );
+    mocks.withResolvedActionClient.mockImplementation(async (opts: { client?: unknown }, run) => {
+      return await run(opts.client ?? {});
+    });
+    mocks.inspectMatrixDirectRooms.mockResolvedValue({
+      selfUserId: "@bot:example.org",
+      remoteUserId: "@alice:example.org",
+      mappedRoomIds: ["!dm:example"],
+      mappedRooms: [
+        {
+          roomId: "!dm:example",
+          joinedMembers: ["@bot:example.org", "@alice:example.org"],
+          strict: true,
+          explicit: true,
+          source: "account-data",
+        },
+      ],
+      discoveredStrictRoomIds: [],
+      activeRoomId: "!dm:example",
+    });
     mocks.applyMatrixProfileUpdate.mockResolvedValue({
       accountId: "ops",
       displayName: "Ops Bot",
@@ -166,7 +216,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts to add reactions", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "react",
@@ -184,8 +236,39 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("allows reaction adds without read allowlist room matches", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!allowed:example": {},
+          },
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "react",
+        roomId: "!other:example",
+        messageId: "$msg",
+        emoji: "👍",
+      },
+      cfg,
+    );
+
+    expect(mocks.reactMatrixMessage).toHaveBeenCalledWith("!other:example", "$msg", "👍", {
+      cfg,
+    });
+    expect(mocks.removeMatrixReactions).not.toHaveBeenCalled();
+  });
+
   it("passes account-scoped opts to remove reactions", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "react",
@@ -206,7 +289,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts and limit to reaction listing", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     const result = await handleMatrixAction(
       {
         action: "reactions",
@@ -229,8 +314,323 @@ describe("handleMatrixAction pollVote", () => {
     });
   });
 
+  it("blocks reaction reads outside the Matrix room allowlist", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!allowed:example": {},
+          },
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "reactions",
+          roomId: "!other:example",
+          messageId: "$msg",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
+  });
+
+  it("defaults Matrix reaction reads to the allowlist provider policy", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "reactions",
+          roomId: "!other:example",
+          messageId: "$msg",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.listMatrixReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows current Matrix DM reads from dm.allowFrom under default group allowlist", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ details: { ok: true } });
+
+    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!dm:example", {
+      cfg,
+      limit: undefined,
+      before: undefined,
+      after: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("allows paired current Matrix DM reads only after verifying the room is bound to the peer", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "pairing" },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ details: { ok: true } });
+
+    expect(mocks.inspectMatrixDirectRooms).toHaveBeenCalledWith({
+      client: {},
+      remoteUserId: "@alice:example.org",
+    });
+    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!dm:example", {
+      cfg,
+      limit: undefined,
+      before: undefined,
+      after: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("blocks current Matrix DM reads when the requested room is not current", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!other:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("blocks paired Matrix DM reads when provider state does not bind the room to the peer", async () => {
+    mocks.inspectMatrixDirectRooms.mockResolvedValueOnce({
+      selfUserId: "@bot:example.org",
+      remoteUserId: "@alice:example.org",
+      mappedRoomIds: ["!other-dm:example"],
+      mappedRooms: [
+        {
+          roomId: "!other-dm:example",
+          joinedMembers: ["@bot:example.org", "@alice:example.org"],
+          strict: true,
+          explicit: true,
+          source: "account-data",
+        },
+      ],
+      discoveredStrictRoomIds: [],
+      activeRoomId: "!other-dm:example",
+    });
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "pairing" },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("blocks trusted current Matrix DM reads outside dm.allowFrom", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "allowlist", allowFrom: ["@bob:example.org"] },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("blocks trusted current Matrix DM reads when dm policy is disabled", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          actions: { messages: true },
+          dm: { policy: "disabled" as never, allowFrom: ["@alice:example.org"] },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("blocks current Matrix DM reads when group policy is open but dm policy is disabled", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "open",
+          actions: { messages: true },
+          dm: { policy: "disabled" as never },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "readMessages",
+          roomId: "!dm:example",
+        },
+        cfg,
+        {
+          toolContext: {
+            currentChannelId: "room:!dm:example",
+            currentDirectUserId: "@alice:example.org",
+          },
+        },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.readMatrixMessages).not.toHaveBeenCalled();
+  });
+
+  it("allows unmatched Matrix room reads under open policy when another room is configured", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "open",
+          groups: {
+            "!blocked:example": { enabled: false },
+          },
+          actions: { reactions: true },
+        },
+      },
+    } as CoreConfig;
+
+    const result = await handleMatrixAction(
+      {
+        action: "reactions",
+        roomId: "!other:example",
+        messageId: "$msg",
+      },
+      cfg,
+    );
+
+    expect(mocks.listMatrixReactions).toHaveBeenCalledWith("!other:example", "$msg", {
+      cfg,
+      limit: undefined,
+    });
+    expect(result.details).toEqual({
+      ok: true,
+      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
+    });
+  });
+
   it("rejects fractional reaction limits before listing reactions", async () => {
-    const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { reactions: true } } },
+    } as CoreConfig;
     await expect(
       handleMatrixAction(
         {
@@ -340,7 +740,9 @@ describe("handleMatrixAction pollVote", () => {
   });
 
   it("passes account-scoped opts to pin listing", async () => {
-    const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+    const cfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { pins: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "listPins",
@@ -358,7 +760,7 @@ describe("handleMatrixAction pollVote", () => {
 
   it("passes account-scoped opts to member and room info actions", async () => {
     const memberCfg = {
-      channels: { matrix: { actions: { memberInfo: true } } },
+      channels: { matrix: { groupPolicy: "open", actions: { memberInfo: true } } },
     } as CoreConfig;
     await handleMatrixAction(
       {
@@ -369,7 +771,9 @@ describe("handleMatrixAction pollVote", () => {
       },
       memberCfg,
     );
-    const roomCfg = { channels: { matrix: { actions: { channelInfo: true } } } } as CoreConfig;
+    const roomCfg = {
+      channels: { matrix: { groupPolicy: "open", actions: { channelInfo: true } } },
+    } as CoreConfig;
     await handleMatrixAction(
       {
         action: "channelInfo",
@@ -388,6 +792,124 @@ describe("handleMatrixAction pollVote", () => {
       cfg: roomCfg,
       accountId: "ops",
     });
+  });
+
+  it("blocks room metadata reads outside the Matrix room allowlist", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!allowed:example": {},
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "channelInfo",
+          roomId: "!other:example",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.getMatrixRoomInfo).not.toHaveBeenCalled();
+  });
+
+  it("allows room metadata reads when a configured Matrix alias resolves to the room id", async () => {
+    const client = {
+      resolveRoom: vi.fn().mockResolvedValue("!room:example"),
+    };
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "#ops:example": {},
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "channelInfo",
+        roomId: "!room:example",
+      },
+      cfg,
+      { client: client as never },
+    );
+
+    expect(client.resolveRoom).toHaveBeenCalledWith("#ops:example");
+    expect(mocks.getMatrixRoomInfo).toHaveBeenCalledWith("!room:example", {
+      cfg,
+      client,
+    });
+  });
+
+  it("allows room metadata reads when a requested Matrix alias resolves to a configured room id", async () => {
+    const client = {
+      resolveRoom: vi.fn().mockResolvedValue("!room:example"),
+    };
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "allowlist",
+          groups: {
+            "!room:example": {},
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await handleMatrixAction(
+      {
+        action: "channelInfo",
+        roomId: "#ops:example",
+      },
+      cfg,
+      { client: client as never },
+    );
+
+    expect(client.resolveRoom).toHaveBeenCalledWith("#ops:example");
+    expect(mocks.getMatrixRoomInfo).toHaveBeenCalledWith("#ops:example", {
+      cfg,
+      client,
+    });
+  });
+
+  it("blocks room metadata reads when a disabled Matrix alias resolves under open policy", async () => {
+    const client = {
+      resolveRoom: vi.fn().mockResolvedValue("!room:example"),
+    };
+    const cfg = {
+      channels: {
+        matrix: {
+          groupPolicy: "open",
+          groups: {
+            "#ops:example": { enabled: false },
+          },
+          actions: { channelInfo: true },
+        },
+      },
+    } as CoreConfig;
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "channelInfo",
+          roomId: "!room:example",
+        },
+        cfg,
+        { client: client as never },
+      ),
+    ).rejects.toThrow("Matrix read target room is not allowed.");
+    expect(mocks.getMatrixRoomInfo).not.toHaveBeenCalled();
   });
 
   it("persists self-profile updates through the shared profile helper", async () => {

@@ -51,6 +51,7 @@ export type ConversationCapabilityProfileParams = {
   messageThreadId?: string | number | null;
   currentChannelId?: string | null;
   currentMessagingTarget?: string | null;
+  currentDirectUserId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
   groupId?: string | null;
@@ -107,6 +108,7 @@ export type ResolvedConversationCapabilityProfile = {
     messageThreadId?: string | number | null;
     currentChannelId?: string | null;
     currentMessagingTarget?: string | null;
+    currentDirectUserId?: string | null;
     currentThreadTs?: string | null;
     currentMessageId?: string | number | null;
     groupId?: string | null;
@@ -296,6 +298,7 @@ export function resolveConversationCapabilityProfile(
       messageThreadId: params.messageThreadId,
       currentChannelId: params.currentChannelId,
       currentMessagingTarget: params.currentMessagingTarget,
+      currentDirectUserId: params.currentDirectUserId,
       currentThreadTs: params.currentThreadTs,
       currentMessageId: params.currentMessageId,
       groupId: trustedGroup.groupId,

@@ -885,6 +885,7 @@ type MessageToolOptions = {
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentMessagingTarget?: string;
+  currentDirectUserId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
@@ -960,6 +961,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
   accountId?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
+  currentDirectUserId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
 } {
@@ -978,6 +980,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
       currentChannelProvider,
       currentChannelId,
       currentMessagingTarget: options?.currentMessagingTarget,
+      currentDirectUserId: options?.currentDirectUserId,
     };
   }
   return {
@@ -1443,6 +1446,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         effectiveCurrentChannel.currentChannelId ||
         effectiveCurrentChannel.currentChannelProvider ||
         effectiveCurrentChannel.currentMessagingTarget ||
+        effectiveCurrentChannel.currentDirectUserId ||
         currentThreadTs ||
         hasCurrentMessageId ||
         replyToMode ||
@@ -1451,6 +1455,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
               currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
+              currentDirectUserId: effectiveCurrentChannel.currentDirectUserId,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
               currentThreadTs,
               currentMessageId: options?.currentMessageId,

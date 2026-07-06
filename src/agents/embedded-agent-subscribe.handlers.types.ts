@@ -287,6 +287,7 @@ type ToolHandlerParams = Pick<
   | "sessionKey"
   | "currentChannelId"
   | "currentMessagingTarget"
+  | "currentDirectUserId"
   | "currentThreadId"
   | "currentMessageId"
   | "replyToMode"

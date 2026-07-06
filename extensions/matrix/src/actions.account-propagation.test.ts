@@ -73,7 +73,30 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.action).toBe("sendMessage");
     expect(call.input.accountId).toBe("ops");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: undefined });
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext: undefined });
+  });
+
+  it("forwards tool context for read actions", async () => {
+    const toolContext = {
+      currentChannelId: "room:!dm:example.org",
+      currentDirectUserId: "@alice:example.org",
+    };
+
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: "read",
+        accountId: "ops",
+        toolContext,
+        params: {
+          to: "room:!dm:example.org",
+        },
+      }),
+    );
+
+    const call = matrixActionCall();
+    expect(call.input.action).toBe("readMessages");
+    expect(call.input.accountId).toBe("ops");
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext });
   });
 
   it("forwards accountId for permissions actions", async () => {
@@ -91,7 +114,7 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.action).toBe("verificationList");
     expect(call.input.accountId).toBe("ops");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: undefined });
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext: undefined });
   });
 
   it("forwards accountId for self-profile updates", async () => {
@@ -113,7 +136,7 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.displayName).toBe("Ops Bot");
     expect(call.input.avatarUrl).toBe("mxc://example/avatar");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: undefined });
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext: undefined });
   });
 
   it("rejects self-profile updates without sender owner context", async () => {
@@ -167,7 +190,7 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.accountId).toBe("ops");
     expect(call.input.avatarPath).toBe("/tmp/avatar.jpg");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: undefined });
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext: undefined });
   });
 
   it("forwards mediaLocalRoots for media sends", async () => {
@@ -189,7 +212,10 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.accountId).toBe("ops");
     expect(call.input.mediaUrl).toBe("file:///tmp/photo.png");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: ["/tmp/openclaw-matrix-test"] });
+    expect(call.options).toEqual({
+      mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+      toolContext: undefined,
+    });
   });
 
   it("allows media-only sends without requiring a message body", async () => {
@@ -210,7 +236,7 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.content).toBeUndefined();
     expect(call.input.mediaUrl).toBe("file:///tmp/photo.png");
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: undefined });
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext: undefined });
   });
 
   it("accepts shared media aliases and forwards voice-send intent", async () => {
@@ -233,6 +259,6 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.mediaUrl).toBe("/tmp/clip.mp3");
     expect(call.input.audioAsVoice).toBe(true);
     expect(call.cfg).toBeTypeOf("object");
-    expect(call.options).toEqual({ mediaLocalRoots: undefined });
+    expect(call.options).toEqual({ mediaLocalRoots: undefined, toolContext: undefined });
   });
 });

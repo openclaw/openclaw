@@ -1017,6 +1017,7 @@ export function handleToolExecutionStart(
           config: ctx.params.config,
           currentChannelId: ctx.params.currentChannelId,
           currentMessagingTarget: ctx.params.currentMessagingTarget,
+          currentDirectUserId: ctx.params.currentDirectUserId,
           currentThreadId:
             ctx.params.currentThreadId ??
             parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
@@ -1297,6 +1298,7 @@ export async function handleToolExecutionEnd(
         config: ctx.params.config,
         currentChannelId: ctx.params.currentChannelId,
         currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentDirectUserId: ctx.params.currentDirectUserId,
         currentThreadId:
           ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
         currentMessageId: ctx.params.currentMessageId,

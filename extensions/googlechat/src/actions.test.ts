@@ -249,7 +249,7 @@ describe("googlechat message actions", () => {
 
   it("removes only matching app reactions on react remove", async () => {
     const account = buildAccount({
-      config: { botUser: "users/app-bot" },
+      config: { groupPolicy: "open", botUser: "users/app-bot" },
     });
     resolveGoogleChatAccount.mockReturnValue(account);
     listGoogleChatReactions.mockResolvedValue([
@@ -280,7 +280,7 @@ describe("googlechat message actions", () => {
         emoji: "👍",
         remove: true,
       },
-      cfg: {},
+      cfg: { channels: { googlechat: { groupPolicy: "open" } } },
       accountId: "default",
     } as never);
 
@@ -301,7 +301,9 @@ describe("googlechat message actions", () => {
   });
 
   it("rejects fractional reaction limits before listing reactions", async () => {
-    const account = buildAccount();
+    const account = buildAccount({
+      config: { groupPolicy: "open" },
+    });
     resolveGoogleChatAccount.mockReturnValue(account);
 
     if (!googlechatMessageActions.handleAction) {
@@ -314,10 +316,59 @@ describe("googlechat message actions", () => {
           messageId: "spaces/AAA/messages/msg-1",
           limit: 2.5,
         },
-        cfg: {},
+        cfg: { channels: { googlechat: { groupPolicy: "open" } } },
         accountId: "default",
       } as never),
     ).rejects.toThrow("limit must be a positive integer");
+
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("blocks reaction reads outside the Google Chat space allowlist", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        groups: {
+          "spaces/BBB": {},
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/AAA/messages/msg-1",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target space is not allowed.");
+
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("defaults Google Chat reaction reads to the allowlist provider policy", async () => {
+    const account = buildAccount();
+    resolveGoogleChatAccount.mockReturnValue(account);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/AAA/messages/msg-1",
+        },
+        cfg: { channels: { googlechat: {} } },
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target space is not allowed.");
 
     expect(listGoogleChatReactions).not.toHaveBeenCalled();
   });
