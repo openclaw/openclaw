@@ -1524,7 +1524,7 @@ export const tr: TranslationMap = {
     autoScrollAlways: "Her zaman",
     autoScrollNearBottom: "Alta yakın",
     autoScrollOff: "Kapalı",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Gönderme kısayolu",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Cron oturumlarını gizle",

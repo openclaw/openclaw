@@ -1518,7 +1518,7 @@ export const id: TranslationMap = {
     autoScrollAlways: "Selalu",
     autoScrollNearBottom: "Dekat bagian bawah",
     autoScrollOff: "Nonaktif",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Pintasan kirim",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Sembunyikan sesi cron",

@@ -1524,7 +1524,7 @@ export const ja_JP: TranslationMap = {
     autoScrollAlways: "常に",
     autoScrollNearBottom: "下部付近",
     autoScrollOff: "オフ",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "送信ショートカット",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Cron セッションを非表示",

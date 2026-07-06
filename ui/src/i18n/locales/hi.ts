@@ -1502,7 +1502,7 @@ export const hi: TranslationMap = {
     autoScrollAlways: "हमेशा",
     autoScrollNearBottom: "नीचे के पास",
     autoScrollOff: "बंद",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "भेजने का शॉर्टकट",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "cron सेशन छिपाएं",

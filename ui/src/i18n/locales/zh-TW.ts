@@ -1481,7 +1481,7 @@ export const zh_TW: TranslationMap = {
     autoScrollAlways: "一律",
     autoScrollNearBottom: "接近底部",
     autoScrollOff: "關閉",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "傳送快捷鍵",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "隱藏定時任務會話",

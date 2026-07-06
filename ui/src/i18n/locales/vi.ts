@@ -1509,7 +1509,7 @@ export const vi: TranslationMap = {
     autoScrollAlways: "Luôn luôn",
     autoScrollNearBottom: "Gần cuối",
     autoScrollOff: "Tắt",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Phím tắt gửi",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Ẩn phiên cron",

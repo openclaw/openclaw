@@ -1530,7 +1530,7 @@ export const ru: TranslationMap = {
     autoScrollAlways: "Всегда",
     autoScrollNearBottom: "Рядом с нижним краем",
     autoScrollOff: "Выкл.",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Сочетание клавиш для отправки",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Скрыть сеансы cron",

@@ -1518,7 +1518,7 @@ export const fa: TranslationMap = {
     autoScrollAlways: "همیشه",
     autoScrollNearBottom: "نزدیک پایین",
     autoScrollOff: "خاموش",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "میان‌بر ارسال",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "پنهان کردن نشست‌های cron",

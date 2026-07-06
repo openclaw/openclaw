@@ -1500,7 +1500,7 @@ export const ar: TranslationMap = {
     autoScrollAlways: "دائمًا",
     autoScrollNearBottom: "قرب الأسفل",
     autoScrollOff: "إيقاف",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "اختصار الإرسال",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "إخفاء جلسات cron",

@@ -1529,7 +1529,7 @@ export const de: TranslationMap = {
     autoScrollAlways: "Immer",
     autoScrollNearBottom: "Nahe am unteren Rand",
     autoScrollOff: "Aus",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Tastenkürzel zum Senden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Cron-Sitzungen ausblenden",

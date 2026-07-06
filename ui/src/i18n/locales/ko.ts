@@ -1507,7 +1507,7 @@ export const ko: TranslationMap = {
     autoScrollAlways: "항상",
     autoScrollNearBottom: "하단 근처",
     autoScrollOff: "끔",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "전송 단축키",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Cron 세션 숨기기",

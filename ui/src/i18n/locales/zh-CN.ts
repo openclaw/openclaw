@@ -1479,7 +1479,7 @@ export const zh_CN: TranslationMap = {
     autoScrollAlways: "始终",
     autoScrollNearBottom: "接近底部",
     autoScrollOff: "关闭",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "发送快捷键",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "隐藏定时任务会话",

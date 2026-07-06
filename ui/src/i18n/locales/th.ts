@@ -1484,7 +1484,7 @@ export const th: TranslationMap = {
     autoScrollAlways: "เสมอ",
     autoScrollNearBottom: "ใกล้ด้านล่าง",
     autoScrollOff: "ปิด",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "ปุ่มลัดสำหรับส่ง",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "ซ่อนเซสชัน cron",

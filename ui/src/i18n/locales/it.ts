@@ -1528,7 +1528,7 @@ export const it: TranslationMap = {
     autoScrollAlways: "Sempre",
     autoScrollNearBottom: "Vicino al fondo",
     autoScrollOff: "Disattivato",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Scorciatoia di invio",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Nascondi sessioni cron",

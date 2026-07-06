@@ -1520,7 +1520,7 @@ export const uk: TranslationMap = {
     autoScrollAlways: "Завжди",
     autoScrollNearBottom: "Біля низу",
     autoScrollOff: "Вимкнено",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Комбінація для надсилання",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Сховати сеанси Cron",

@@ -1523,7 +1523,7 @@ export const nl: TranslationMap = {
     autoScrollAlways: "Altijd",
     autoScrollNearBottom: "Bijna onderaan",
     autoScrollOff: "Uit",
-    sendShortcut: "Send shortcut",
+    sendShortcut: "Sneltoets voor verzenden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     hideCronSessions: "Cron-sessies verbergen",
