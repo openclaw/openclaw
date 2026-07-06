@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +29,7 @@ beforeEach(() => {
   tempAgentDir = mkdtempSync(join(tmpdir(), "openclaw-tools-manager-"));
   setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
   fetchWithSsrFGuardMock.mockReset();
+  extractArchiveMock.mockReset();
   spawnSyncMock.mockReturnValue({
     error: new Error("ENOENT"),
     status: null,
@@ -127,77 +128,85 @@ describe("ensureTool", () => {
         archivePath: expect.stringContaining(".zip"),
         destDir: expect.stringContaining("extract_tmp_rg_"),
         timeoutMs: 60_000,
-        limits: expect.objectContaining({
-          maxArchiveBytes: expect.any(Number),
-          maxExtractedBytes: expect.any(Number),
-          maxEntries: expect.any(Number),
-        }),
+        limits: {
+          maxArchiveBytes: 100 * 1024 * 1024,
+          maxExtractedBytes: 500 * 1024 * 1024,
+          maxEntries: 1_000,
+        },
       }),
     );
   });
 
-  it("rejects downloads with Content-Length exceeding archive byte cap", async () => {
-    vi.doMock("node:os", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("node:os")>()),
-      arch: () => "x64",
-      platform: () => "linux",
-    }));
+  it("rejects downloads whose declared size exceeds the byte cap", async () => {
+    const response = new Response("oversized-body", {
+      status: 200,
+      headers: { "content-length": "11" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://example.com/archive.tar.gz",
+    });
+    const destination = join(tempAgentDir!, "archive.tar.gz");
+    const { testing } = await import("./tools-manager.js");
 
-    const { ensureTool } = await import("./tools-manager.js");
-    const releaseCheckRelease = vi.fn(async () => {});
-    const downloadRelease = vi.fn(async () => {});
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-        release: releaseCheckRelease,
-        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-      })
-      .mockResolvedValueOnce({
-        response: new Response("oversized-body", {
-          status: 200,
-          headers: { "content-length": String(200 * 1024 * 1024) },
-        }),
-        release: downloadRelease,
-        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.tar.gz",
-      });
+    await expect(
+      testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
+    ).rejects.toThrow("Download exceeds the 10-byte archive limit");
 
-    await expect(ensureTool("rg", true)).resolves.toBeUndefined();
-
-    expect(downloadRelease).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(existsSync(destination)).toBe(false);
   });
 
-  it("accepts downloads with Content-Length under the archive byte cap", async () => {
-    vi.doMock("node:os", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("node:os")>()),
-      arch: () => "x64",
-      platform: () => "linux",
-    }));
+  it("rejects streamed bytes above the cap and removes the partial file", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3, 4, 5, 6]));
+          controller.enqueue(new Uint8Array([7, 8, 9, 10, 11, 12]));
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { "content-length": "6" } },
+    );
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://example.com/archive.tar.gz",
+    });
+    const destination = join(tempAgentDir!, "archive.tar.gz");
+    const { testing } = await import("./tools-manager.js");
 
-    const { ensureTool } = await import("./tools-manager.js");
-    const releaseCheckRelease = vi.fn(async () => {});
-    const downloadRelease = vi.fn(async () => {});
-    extractArchiveMock.mockRejectedValue(new Error("extraction error (expected)"));
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }),
-        release: releaseCheckRelease,
-        finalUrl: "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest",
-      })
-      .mockResolvedValueOnce({
-        response: new Response("small-body", {
-          status: 200,
-          headers: { "content-length": "10" },
-        }),
-        release: downloadRelease,
-        finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive.tar.gz",
-      });
+    await expect(
+      testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
+    ).rejects.toThrow("Download exceeded the 10-byte archive limit");
 
-    await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+    expect(existsSync(destination)).toBe(false);
+  });
 
-    // Download proceeded past the Content-Length check, then extraction failed
-    // as expected (no real archive). The important thing is we didn't reject
-    // preemptively.
-    expect(downloadRelease).toHaveBeenCalledOnce();
+  it("accepts downloads exactly at the byte cap", async () => {
+    const body = new Uint8Array([1, 2, 3, 4]);
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, {
+        status: 200,
+        headers: { "content-length": String(body.byteLength) },
+      }),
+      release,
+      finalUrl: "https://example.com/archive.tar.gz",
+    });
+    const destination = join(tempAgentDir!, "archive.tar.gz");
+    const { testing } = await import("./tools-manager.js");
+
+    await testing.downloadFile("https://example.com/archive.tar.gz", destination, body.byteLength);
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(readFileSync(destination)).toEqual(Buffer.from(body));
   });
 });
 

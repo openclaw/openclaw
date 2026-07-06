@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import { Transform, Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
@@ -27,10 +27,11 @@ import { APP_NAME, getBinDir } from "../config.js";
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
-// Maximum compressed archive size allowed for tool downloads (100 MB).
-// Matches the limit enforced during extraction so oversized archives are
-// rejected before hitting disk, not just when extractArchiveSafe runs.
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 1_000;
+const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
+const CONTENT_LENGTH_RE = /^\d+$/;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
@@ -162,12 +163,7 @@ async function getLatestVersion(repo: string): Promise<string> {
   }
 }
 
-// Download a file from URL with an optional byte cap. When maxBytes is set the
-// Content-Length header is checked before the body is read and a streaming byte
-// counter aborts the pipeline mid-transfer if the cap is exceeded. Without this
-// check an oversized release asset would fully download to disk before the
-// compression-bomb guard in extractArchiveSafe has a chance to reject it.
-async function downloadFile(url: string, dest: string, maxBytes?: number): Promise<void> {
+async function downloadFile(url: string, dest: string, maxBytes: number): Promise<void> {
   const guarded = await fetchWithSsrFGuard({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -185,65 +181,40 @@ async function downloadFile(url: string, dest: string, maxBytes?: number): Promi
       throw new Error("No response body");
     }
 
-    // Check Content-Length before reading the body so oversized responses are
-    // rejected without consuming any download bandwidth or disk space.
-    if (maxBytes !== undefined) {
-      const contentLength = response.headers.get("content-length");
-      if (contentLength !== null) {
-        const length = parseInt(contentLength, 10);
-        if (!isNaN(length) && length > maxBytes) {
+    const rawContentLength = response.headers.get("content-length");
+    if (rawContentLength !== null) {
+      const contentLength = rawContentLength.trim();
+      if (CONTENT_LENGTH_RE.test(contentLength)) {
+        const declaredBytes = Number(contentLength);
+        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
           await cancelUnreadResponseBody(response);
-          throw new Error(
-            `Download aborted: content-length ${length} exceeds ${maxBytes} byte limit`,
-          );
+          throw new Error(`Download exceeds the ${maxBytes}-byte archive limit`);
         }
       }
     }
 
     const fileStream = createWriteStream(dest);
 
-    // Wrap the pipeline in a completion-guarded block so that partial
-    // downloads are removed when the transfer fails midway through.
     let downloadCompleted = false;
     try {
-      if (maxBytes !== undefined) {
-        // Streaming byte counter — catches oversized responses even when the
-        // Content-Length header is missing or under-reported.  Uses a
-        // Transform to reject overflow chunks *before* they are forwarded
-        // to the file pipeline (a PassThrough data listener acts *after*
-        // emission and cannot prevent the offending chunk from landing on
-        // disk).
-        let downloaded = 0;
-        const byteCap = new Transform({
-          transform(chunk: Buffer, _encoding, callback) {
-            downloaded += chunk.length;
-            if (downloaded > maxBytes) {
-              callback(
-                new Error(
-                  `Download aborted: exceeded ${maxBytes} byte limit after ${downloaded} bytes`,
-                ),
-              );
-              return;
-            }
-            callback(null, chunk);
-          },
-        });
-        await pipeline(
-          Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
-          byteCap,
-          fileStream,
-        );
-      } else {
-        await pipeline(
-          Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
-          fileStream,
-        );
-      }
+      let downloadedBytes = 0;
+      const byteCap = new Transform({
+        transform(chunk: Uint8Array, _encoding, callback) {
+          downloadedBytes += chunk.byteLength;
+          if (downloadedBytes > maxBytes) {
+            callback(new Error(`Download exceeded the ${maxBytes}-byte archive limit`));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(
+        Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
+        byteCap,
+        fileStream,
+      );
       downloadCompleted = true;
     } finally {
-      // Remove the partially-downloaded file when the transfer fails (e.g.
-      // byte cap reached, network error, or timeout) so downloadTool does
-      // not leave a partial archive on disk before its own cleanup runs.
       if (!downloadCompleted) {
         rmSync(dest, { force: true });
       }
@@ -282,19 +253,15 @@ async function extractArchiveSafe(
   extractDir: string,
   assetName: string,
 ): Promise<void> {
-  // Use the safe archive extraction from @openclaw/fs-safe which enforces
-  // size limits (archive, extracted, per-entry), entry count caps, and
-  // symlink/hardlink traversal protection. Without these bounds a malicious
-  // archive (ZIP bomb) could exhaust disk or memory during extraction.
   try {
     await extractArchive({
       archivePath,
       destDir: extractDir,
-      timeoutMs: 60_000,
+      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
       limits: {
         maxArchiveBytes: MAX_ARCHIVE_BYTES,
-        maxExtractedBytes: 500 * 1024 * 1024,
-        maxEntries: 1000,
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+        maxEntries: MAX_ARCHIVE_ENTRIES,
       },
     });
   } catch (err) {
@@ -448,3 +415,7 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     return undefined;
   }
 }
+
+export const testing = {
+  downloadFile,
+};
