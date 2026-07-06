@@ -1128,13 +1128,14 @@ export const pt_BR: TranslationMap = {
       sessions: "sessões",
     },
     providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      balance: "Balance",
-      spend: "Usage",
-      budget: "Budget",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
+      title: "Planos e faturamento dos provedores",
+      subtitle:
+        "Dados em tempo real de plano, cota, saldo e orçamento informados pelos provedores configurados.",
+      balance: "Saldo",
+      spend: "Uso",
+      budget: "Orçamento",
+      remaining: "{percent}% restante",
+      resets: "Redefine em {date}",
     },
     presets: {
       today: "Hoje",

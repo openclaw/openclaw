@@ -1,19 +1,11 @@
 {
-  "fallbackKeys": [
-    "usage.providerUsage.balance",
-    "usage.providerUsage.budget",
-    "usage.providerUsage.remaining",
-    "usage.providerUsage.resets",
-    "usage.providerUsage.spend",
-    "usage.providerUsage.subtitle",
-    "usage.providerUsage.title"
-  ],
-  "generatedAt": "2026-07-06T02:52:18.622Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-06T02:52:33.606Z",
   "locale": "vi",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "fd605f57f77602adfa2c47b280122a4b50fa0b096663145e45ff55aea994f1f3",
   "totalKeys": 1546,
-  "translatedKeys": 1539,
+  "translatedKeys": 1546,
   "workflow": 1
 }

@@ -1127,13 +1127,14 @@ export const id: TranslationMap = {
       sessions: "sesi",
     },
     providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      balance: "Balance",
-      spend: "Usage",
-      budget: "Budget",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
+      title: "Paket & penagihan penyedia",
+      subtitle:
+        "Data paket, kuota, saldo, dan anggaran langsung yang dilaporkan oleh penyedia yang dikonfigurasi.",
+      balance: "Saldo",
+      spend: "Penggunaan",
+      budget: "Anggaran",
+      remaining: "Tersisa {percent}%",
+      resets: "Direset {date}",
     },
     presets: {
       today: "Hari ini",

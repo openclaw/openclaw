@@ -1134,13 +1134,14 @@ export const ru: TranslationMap = {
       sessions: "сеансы",
     },
     providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      balance: "Balance",
+      title: "Тарифы и расчёты провайдеров",
+      subtitle:
+        "Актуальные данные о тарифах, квотах, балансе и бюджете от настроенных провайдеров.",
+      balance: "Баланс",
       spend: "Использование",
-      budget: "Budget",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
+      budget: "Бюджет",
+      remaining: "Осталось {percent}%",
+      resets: "Сброс {date}",
     },
     presets: {
       today: "Сегодня",

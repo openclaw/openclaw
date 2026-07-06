@@ -1125,13 +1125,14 @@ export const vi: TranslationMap = {
       sessions: "phiên",
     },
     providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      balance: "Balance",
-      spend: "Usage",
-      budget: "Budget",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
+      title: "Gói dịch vụ & thanh toán của nhà cung cấp",
+      subtitle:
+        "Dữ liệu trực tiếp về gói dịch vụ, hạn mức, số dư và ngân sách do các nhà cung cấp đã cấu hình báo cáo.",
+      balance: "Số dư",
+      spend: "Mức sử dụng",
+      budget: "Ngân sách",
+      remaining: "Còn {percent}%",
+      resets: "Đặt lại vào {date}",
     },
     presets: {
       today: "Hôm nay",

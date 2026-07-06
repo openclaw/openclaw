@@ -1131,13 +1131,14 @@ export const ja_JP: TranslationMap = {
       sessions: "セッション",
     },
     providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      balance: "Balance",
-      spend: "Usage",
-      budget: "Budget",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
+      title: "プロバイダーのプランと請求",
+      subtitle:
+        "設定済みプロバイダーから取得したプラン、クォータ、残高、予算のリアルタイムデータ。",
+      balance: "残高",
+      spend: "使用量",
+      budget: "予算",
+      remaining: "残り {percent}%",
+      resets: "{date} にリセット",
     },
     presets: {
       today: "今日",
