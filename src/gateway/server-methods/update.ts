@@ -196,7 +196,16 @@ export const updateHandlers: GatewayRequestHandlers = {
         : false;
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
-      if (!isRestartEnabled(config) && !supervisor) {
+      if (configChannel === "extended-stable" && installSurface.kind === "git") {
+        result = {
+          status: "error",
+          mode: "git",
+          root: installSurface.root,
+          reason: "unsupported_git_channel",
+          steps: [],
+          durationMs: 0,
+        };
+      } else if (!isRestartEnabled(config) && !supervisor) {
         // Package updates need a restart path to finish safely. Dev/git installs
         // can report the disabled restart directly, but global installs must not
         // mutate files if this process cannot come back.
@@ -340,12 +349,13 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPath: string | null;
+    let sentinelPersisted: boolean;
     try {
-      sentinelPath = await writeRestartSentinel(payload);
+      await writeRestartSentinel(payload);
+      sentinelPersisted = true;
       recordLatestUpdateRestartSentinel(payload);
     } catch {
-      sentinelPath = null;
+      sentinelPersisted = false;
     }
 
     // Only restart the gateway when the update actually succeeded.
@@ -391,7 +401,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         ...(handoff ? { handoff } : {}),
         restart,
         sentinel: {
-          path: sentinelPath,
+          persisted: sentinelPersisted,
           payload,
         },
       },

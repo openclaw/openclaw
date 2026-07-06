@@ -287,6 +287,25 @@ describe("provider auth profile helpers", () => {
         token: "token;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        Accept: "application/json",
+        Authorization: "Bearer github-token",
+        "Copilot-Integration-Id": "vscode-chat",
+      }),
+    );
+  });
+
+  it("rejects malformed Copilot proxy hints", async () => {
+    vi.resetModules();
+
+    const { deriveCopilotApiBaseUrlFromToken } = await import("./provider-auth.js");
+
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
+    ).toBeNull();
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {

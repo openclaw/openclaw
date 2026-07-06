@@ -12,6 +12,11 @@ describe("live model error helpers", () => {
     expect(isModelNotFoundErrorMessage("Model not found: openai/gpt-6")).toBe(true);
     expect(isModelNotFoundErrorMessage("model_not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("The model gpt-foo does not exist.")).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        "FailoverError: The selected model was not found by the provider. Check the model id or choose a different model.",
+      ),
+    ).toBe(true);
     expect(isModelNotFoundErrorMessage('{"code":404,"message":"model not found"}')).toBe(true);
     expect(isModelNotFoundErrorMessage(openRouterJson404Payload)).toBe(true);
     expect(isModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(true);
@@ -61,5 +66,4 @@ describe("live model error helpers", () => {
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
-
 });

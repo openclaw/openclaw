@@ -4,51 +4,13 @@
  * channel, and before_tool_call metadata on wrapped tools.
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { bindAbortRelay } from "../utils/fetch-timeout.js";
-import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
+import { createAbortError, mergeAbortSignals } from "../infra/abort-signal.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
 function throwAbortError(): never {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  throw err;
-}
-
-/**
- * Checks if an object is a valid AbortSignal using structural typing.
- * This is more reliable than `instanceof` across different realms (VM, iframe, etc.)
- * where the AbortSignal constructor may differ.
- */
-function isAbortSignal(obj: unknown): obj is AbortSignal {
-  return obj instanceof AbortSignal;
-}
-
-function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
-  if (!a && !b) {
-    return undefined;
-  }
-  if (a && !b) {
-    return a;
-  }
-  if (b && !a) {
-    return b;
-  }
-  if (a?.aborted) {
-    return a;
-  }
-  if (b?.aborted) {
-    return b;
-  }
-  if (typeof AbortSignal.any === "function" && isAbortSignal(a) && isAbortSignal(b)) {
-    return AbortSignal.any([a, b]);
-  }
-
-  const controller = new AbortController();
-  const onAbort = bindAbortRelay(controller);
-  a?.addEventListener("abort", onAbort, { once: true });
-  b?.addEventListener("abort", onAbort, { once: true });
-  return controller.signal;
+  throw createAbortError("Aborted");
 }
 
 /** Wrap a tool so every execute call observes the supplied run abort signal. */
@@ -66,11 +28,15 @@ export function wrapToolWithAbortSignal(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const combined = combineAbortSignals(signal, abortSignal);
-      if (combined?.aborted) {
-        throwAbortError();
+      const combined = mergeAbortSignals([signal, abortSignal]);
+      try {
+        if (combined.signal?.aborted) {
+          throwAbortError();
+        }
+        return await execute(toolCallId, params, combined.signal, onUpdate);
+      } finally {
+        combined.dispose();
       }
-      return await execute(toolCallId, params, combined, onUpdate);
     },
   };
   copyPluginToolMeta(tool, wrappedTool);

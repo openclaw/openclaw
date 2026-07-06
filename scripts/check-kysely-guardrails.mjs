@@ -39,6 +39,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-transaction.ts",
+    "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
     "src/state/openclaw-agent-db.ts",
     "src/state/openclaw-state-db.ts",
@@ -48,6 +49,7 @@ const rawSqliteAllowPathGroups = {
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only SQLite status probes": ["src/commands/status.scan.shared.ts"],
   "doctor legacy state migration": [
+    "src/commands/doctor/cron/migration-ledger.ts",
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],

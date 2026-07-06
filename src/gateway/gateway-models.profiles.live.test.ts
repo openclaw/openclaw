@@ -2,7 +2,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -59,6 +58,8 @@ import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.t
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import {
@@ -67,7 +68,7 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -110,6 +111,12 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3.1-pro-preview-customtools",
   "openai/gpt-5.4-pro",
 ]);
+const GATEWAY_LIVE_AGENT_ID = "dev";
+const GATEWAY_LIVE_CONFIG_TEST_WORKSPACE = path.join(os.tmpdir(), "openclaw-live-config-test");
+const GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR = path.join(
+  os.tmpdir(),
+  "openclaw-live-config-test-agent",
+);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/kimi-k2p5",
@@ -344,7 +351,11 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
-  return /model timeout after \d+ms/i.test(error);
+  return (
+    /model timeout after \d+ms/i.test(error) ||
+    (/\bagent\.wait timeout for runId=/i.test(error) &&
+      /\btimeoutPhase=(?:preflight|provider|post_turn)\b/i.test(error))
+  );
 }
 
 function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
@@ -566,9 +577,9 @@ function restoreProductionEnvForLiveRun(previous: {
 
 function restoreOptionalEnv(key: string, value: string | undefined): void {
   if (value === undefined) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   } else {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
   }
 }
 
@@ -892,6 +903,24 @@ describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   });
 });
 
+describe("isGatewayLiveModelTimeout", () => {
+  it("matches provider-attributed agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match wait-layer agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=queue, providerStarted=false, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("formatGatewayLiveAgentWaitFailure", () => {
   it("includes terminal attribution fields without requiring transcript text", () => {
     expect(
@@ -1061,9 +1090,9 @@ describe("resolveGatewayLiveMaxModels", () => {
   const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
   function restoreEnvValue(name: string, value: string | undefined): void {
     if (value === undefined) {
-      delete process.env[name];
+      deleteTestEnvValue(name);
     } else {
-      process.env[name] = value;
+      setTestEnvValue(name, value);
     }
   }
 
@@ -1409,11 +1438,73 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {},
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "openclaw" },
     });
+  });
+
+  it("configures only the isolated live agent", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {
+        agents: {
+          list: [{ id: "ops", default: true }],
+        },
+        bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
+        broadcast: {
+          strategy: "parallel",
+          "release-test": ["ops"],
+        },
+      },
+      candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+
+    expect(cfg.agents?.list).toEqual([
+      {
+        id: GATEWAY_LIVE_AGENT_ID,
+        default: true,
+        agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+        workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+        sandbox: { mode: "off" },
+      },
+    ]);
+    expect(cfg.bindings).toBeUndefined();
+    expect(cfg.broadcast).toBeUndefined();
+  });
+
+  it("replaces a configured live agent workspace with the isolated workspace", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "Dev",
+              default: true,
+              agentDir: "/operator/agent",
+              workspace: "/operator/workspace",
+            },
+          ],
+        },
+      },
+      candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+    });
+
+    expect(cfg.agents?.list).toEqual([
+      {
+        id: GATEWAY_LIVE_AGENT_ID,
+        default: true,
+        agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+        workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+        sandbox: { mode: "off" },
+      },
+    ]);
   });
 
   it("keeps discovered live model metadata ahead of stale configured model rows", () => {
@@ -1444,6 +1535,8 @@ describe("buildLiveGatewayConfig", () => {
         },
       },
       candidates: [discovered],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
     expect(cfg.models?.providers?.google?.models?.[0]?.contextWindow).toBe(128_000);
@@ -1464,6 +1557,8 @@ describe("buildLiveGatewayConfig", () => {
         },
       },
       candidates: [createGatewayLiveTestModel("google", "gemini-3.1-pro-preview")],
+      liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+      liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
     expect(cfg.models?.providers?.google?.timeoutSeconds).toBeGreaterThanOrEqual(
@@ -1853,42 +1948,6 @@ function editDistance(a: string, b: string): number {
 
   return prev[bLen] ?? Number.POSITIVE_INFINITY;
 }
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === "string") {
-        srv.close();
-        reject(new Error("failed to acquire free port"));
-        return;
-      }
-      const port = addr.port;
-      srv.close((err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(port);
-        }
-      });
-    });
-  });
-}
-
-async function isPortFree(port: number): Promise<boolean> {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-    return false;
-  }
-  return await new Promise((resolve) => {
-    const srv = createServer();
-    srv.once("error", () => resolve(false));
-    srv.listen(port, "127.0.0.1", () => {
-      srv.close(() => resolve(true));
-    });
-  });
-}
-
 async function getFreeGatewayPort(): Promise<number> {
   // Gateway uses derived ports (browser/canvas). Avoid flaky collisions by
   // ensuring the common derived offsets are free too.
@@ -2690,6 +2749,8 @@ function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean 
 function buildLiveGatewayConfig(params: {
   cfg: OpenClawConfig;
   candidates: Array<Model>;
+  liveAgentDir: string;
+  liveAgentWorkspaceDir: string;
   providerOverrides?: Record<string, ModelProviderConfig>;
 }): OpenClawConfig {
   const providerOverrides = params.providerOverrides ?? {};
@@ -2716,14 +2777,23 @@ function buildLiveGatewayConfig(params: {
     ...providerOverrides,
   };
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
+  const configuredAgents = [
+    {
+      id: GATEWAY_LIVE_AGENT_ID,
+      default: true,
+      agentDir: params.liveAgentDir,
+      workspace: params.liveAgentWorkspaceDir,
+      sandbox: { mode: "off" },
+    },
+  ] satisfies NonNullable<OpenClawConfig["agents"]>["list"];
   const baseModels = params.cfg.models;
   return {
     ...params.cfg,
+    bindings: undefined,
+    broadcast: undefined,
     agents: {
       ...params.cfg.agents,
-      list: (params.cfg.agents?.list ?? []).map((entry) =>
-        Object.assign({}, entry, { sandbox: { mode: `off` } }),
-      ),
+      list: configuredAgents,
       defaults: {
         ...params.cfg.agents?.defaults,
         // Live tests should avoid Docker sandboxing so tool probes can
@@ -2841,7 +2911,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
   const token = `test-${randomUUID()}`;
   process.env.OPENCLAW_GATEWAY_TOKEN = token;
-  const agentId = "dev";
+  const agentId = GATEWAY_LIVE_AGENT_ID;
 
   const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
@@ -2856,10 +2926,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
-  const tempStateDir: string | undefined = await fs.mkdtemp(
-    path.join(os.tmpdir(), "openclaw-live-state-"),
-  );
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
   const tempAgentDir: string | undefined = path.join(
     tempStateDir,
     "agents",
@@ -2871,9 +2939,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   if (tempSessionAgentDir !== tempAgentDir) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
-  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+  setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+  const workspaceDir = path.join(tempStateDir, "workspace-dev");
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
   await fs.writeFile(
@@ -2901,12 +2969,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const nextCfg = buildLiveGatewayConfig({
     cfg: sanitizedCfg,
     candidates: params.candidates,
+    liveAgentDir: tempSessionAgentDir,
+    liveAgentWorkspaceDir: workspaceDir,
     providerOverrides: params.providerOverrides,
   });
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
   const tempConfigPath = path.join(tempDir, "openclaw.json");
   await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-  process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
 
   const liveProviders = nextCfg.models?.providers;
   if (liveProviders && Object.keys(liveProviders).length > 0) {
@@ -3879,6 +3949,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
       skipCron: process.env.OPENCLAW_SKIP_CRON,
       skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+      agentDir: process.env.OPENCLAW_AGENT_DIR,
+      stateDir: process.env.OPENCLAW_STATE_DIR,
     };
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
@@ -3892,11 +3964,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let client: GatewayClient | undefined;
     let toolProbePath: string | undefined;
+    let tempDir: string | undefined;
+    let tempStateDir: string | undefined;
     try {
       const cfg = getRuntimeConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
+      const hostStore = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+      });
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
@@ -3920,13 +3997,63 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         return;
       }
 
-      const agentId = "dev";
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const agentId = GATEWAY_LIVE_AGENT_ID;
+      tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-zai-state-"));
+      setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+      const workspaceDir = path.join(tempStateDir, "workspace-dev");
       await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            setupCompletedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
       const nonceA = randomUUID();
       const nonceB = randomUUID();
       toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
       await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+
+      const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
+        version: hostStore.version,
+        profiles: { ...hostStore.profiles },
+        order: hostStore.order ? { ...hostStore.order } : undefined,
+        lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
+        usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
+      });
+      const tempAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
+      saveAuthProfileStore(sanitizedStore, tempAgentDir);
+      setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
+
+      const sanitizedCfg: OpenClawConfig = {
+        ...cfg,
+        auth: await sanitizeAuthConfig({ cfg, agentDir }),
+      };
+      const nextCfg = buildLiveGatewayConfig({
+        cfg: sanitizedCfg,
+        candidates: [anthropic, zai],
+        liveAgentDir: tempAgentDir,
+        liveAgentWorkspaceDir: workspaceDir,
+      });
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-zai-"));
+      const tempConfigPath = path.join(tempDir, "openclaw.json");
+      await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+      clearRuntimeConfigSnapshot();
+
+      const liveProviders = nextCfg.models?.providers;
+      if (liveProviders && Object.keys(liveProviders).length > 0) {
+        await fs.mkdir(tempAgentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(tempAgentDir, "models.json"),
+          `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`,
+        );
+      }
 
       try {
         const port = await withGatewayLiveProbeTimeout(
@@ -4039,6 +4166,17 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       if (toolProbePath) {
         await fs.rm(toolProbePath, { force: true });
       }
+      if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+      if (tempStateDir) {
+        await fs.rm(tempStateDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        });
+      }
 
       restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
       restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
@@ -4046,6 +4184,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
       restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
       restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
+      restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
+      restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
     }
   }, 180_000);
 });

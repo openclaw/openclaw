@@ -7,7 +7,7 @@ read_when:
   - Updating community project highlights
 ---
 
-OpenClaw projects are not toy demos. People are shipping PR review loops, mobile apps, home automation, voice systems, devtools, and memory-heavy workflows from the channels they already use — chat-native builds on Telegram, WhatsApp, Discord, and terminals; real automation for booking, shopping, and support without waiting for an API; and physical-world integrations with printers, vacuums, cameras, and home systems.
+Community-built OpenClaw projects: PR review loops, mobile apps, home automation, voice systems, devtools, and memory workflows, built chat-native on Telegram, WhatsApp, Discord, and terminals.
 
 <Info>
 **Want to be featured?** Share your project in [#self-promotion on Discord](https://discord.gg/clawd) or [tag @openclaw on X](https://x.com/openclaw).
@@ -67,7 +67,7 @@ Wraps papla.media TTS and sends results as Telegram voice notes (no annoying aut
   <img src="/assets/showcase/papla-tts.jpg" alt="Telegram voice note output from TTS" />
 </Card>
 
-<Card title="CodexMonitor" icon="eye" href="https://clawhub.ai/odrobnik/codexmonitor">
+<Card title="CodexMonitor" icon="eye" href="https://clawhub.ai/odrobnik/skills/codexmonitor">
   **@odrobnik** • `devtools` `codex` `brew`
 
 Homebrew-installed helper to list, inspect, and watch local OpenAI Codex sessions (CLI + VS Code).
@@ -75,7 +75,7 @@ Homebrew-installed helper to list, inspect, and watch local OpenAI Codex session
   <img src="/assets/showcase/codexmonitor.png" alt="CodexMonitor on ClawHub" />
 </Card>
 
-<Card title="Bambu 3D Printer Control" icon="print" href="https://clawhub.ai/tobiasbischoff/bambu-cli">
+<Card title="Bambu 3D Printer Control" icon="print" href="https://clawhub.ai/tobiasbischoff/skills/bambu-cli">
   **@tobiasbischoff** • `hardware` `3d-printing` `skill`
 
 Control and troubleshoot BambuLab printers: status, jobs, camera, AMS, calibration, and more.
@@ -83,7 +83,7 @@ Control and troubleshoot BambuLab printers: status, jobs, camera, AMS, calibrati
   <img src="/assets/showcase/bambu-cli.png" alt="Bambu CLI skill on ClawHub" />
 </Card>
 
-<Card title="Vienna transport (Wiener Linien)" icon="train" href="https://clawhub.ai/hjanuschka/wienerlinien">
+<Card title="Vienna transport (Wiener Linien)" icon="train" href="https://clawhub.ai/hjanuschka/skills/wienerlinien">
   **@hjanuschka** • `travel` `transport` `skill`
 
 Real-time departures, disruptions, elevator status, and routing for Vienna's public transport.
@@ -97,7 +97,7 @@ Real-time departures, disruptions, elevator status, and routing for Vienna's pub
 Automated UK school meal booking via ParentPay. Uses mouse coordinates for reliable table cell clicking.
 </Card>
 
-<Card title="R2 upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawhub.ai/skills/r2-upload">
+<Card title="R2 upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawhub.ai/julianengel/skills/r2-upload">
   **@julianengel** • `files` `r2` `presigned-urls`
 
 Upload to Cloudflare R2/S3 and generate secure presigned download links. Useful for remote OpenClaw instances.
@@ -106,11 +106,9 @@ Upload to Cloudflare R2/S3 and generate secure presigned download links. Useful 
 </Card>
 
 <Card title="iOS app via Telegram" icon="mobile">
-  **@coard** • `ios` `xcode` `testflight`
+  **@coard** • `ios` `xcode` `app-store`
 
-Built a complete iOS app with maps and voice recording, deployed to TestFlight entirely via Telegram chat.
-
-  <img src="/assets/showcase/ios-testflight.jpg" alt="iOS app on TestFlight" />
+Built a complete iOS app with maps and voice recording, prepared for App Store distribution entirely via Telegram chat.
 </Card>
 
 <Card title="Oura Ring health assistant" icon="heart-pulse">
@@ -267,7 +265,7 @@ Speech-first entry points, phone bridges, and transcription-heavy workflows.
 Vapi voice assistant to OpenClaw HTTP bridge. Near real-time phone calls with your agent.
 </Card>
 
-<Card title="OpenRouter transcription" icon="microphone" href="https://clawhub.ai/obviyus/openrouter-transcribe">
+<Card title="OpenRouter transcription" icon="microphone" href="https://clawhub.ai/obviyus/skills/openrouter-transcribe">
   **@obviyus** • `transcription` `multilingual` `skill`
 
 Multi-lingual audio transcription via OpenRouter (Gemini, and more). Available on ClawHub.
@@ -289,8 +287,8 @@ Packaging, deployment, and integrations that make OpenClaw easier to run and ext
 OpenClaw gateway running on Home Assistant OS with SSH tunnel support and persistent state.
 </Card>
 
-<Card title="Home Assistant skill" icon="toggle-on" href="https://clawhub.ai/skills/homeassistant">
-  **ClawHub** • `homeassistant` `skill` `automation`
+<Card title="Home Assistant skill" icon="toggle-on" href="https://clawhub.ai/homeofe/skills/openclaw-homeassistant">
+  **@homeofe** • `homeassistant` `skill` `automation`
 
 Control and automate Home Assistant devices via natural language.
 
@@ -303,8 +301,8 @@ Control and automate Home Assistant devices via natural language.
 Batteries-included nixified OpenClaw configuration for reproducible deployments.
 </Card>
 
-<Card title="CalDAV calendar" icon="calendar" href="https://clawhub.ai/skills/caldav-calendar">
-  **ClawHub** • `calendar` `caldav` `skill`
+<Card title="CalDAV calendar" icon="calendar" href="https://clawhub.ai/asleep123/skills/caldav-calendar">
+  **@asleep123** • `calendar` `caldav` `skill`
 
 Calendar skill using khal and vdirsyncer. Self-hosted calendar integration.
 

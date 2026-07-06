@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence,
   parseArgs,
-  parseWorkflowRunPages,
+  parseWorkflowRunPage,
   SCHEDULED_HOSTED_WORKFLOWS,
+  workflowRunPageCount,
 } from "../../scripts/verify-pr-hosted-gates.mjs";
 
 const sha = "773ffd87a1e1e34451ad6e38fda37380c2569a50";
@@ -80,6 +81,24 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("uses the latest CI run when an older duplicate was cancelled", () => {
+    expect(
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            conclusion: "cancelled",
+          },
+          successfulRun("CI", 2, "2026-06-17T10:48:00Z"),
+        ],
+      }),
+    ).toEqual({
+      headSha: sha,
+      workflows: [expect.objectContaining({ name: "CI", id: 2 })],
+    });
+  });
+
   it("accepts the explicit exact-SHA manual CI release gate", () => {
     expect(
       collectHostedGateEvidence({
@@ -134,6 +153,30 @@ describe("verify-pr-hosted-gates", () => {
           },
           {
             ...successfulRun(`CI release gate ${sha}`, 2, "2026-06-17T10:49:00Z"),
+            event: "workflow_dispatch",
+            display_title: `CI release gate ${sha}`,
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head CI workflow");
+  });
+
+  it("does not mask a failed CI run with a queued rerun and release-gate fallback", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            conclusion: "failure",
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:48:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+          {
+            ...successfulRun(`CI release gate ${sha}`, 3, "2026-06-17T10:49:00Z"),
             event: "workflow_dispatch",
             display_title: `CI release gate ${sha}`,
           },
@@ -304,11 +347,65 @@ describe("verify-pr-hosted-gates", () => {
       changelogOnly: false,
     });
     expect(() => parseArgs(["--repo", "openclaw/openclaw"])).toThrow("Usage:");
+    expect(() =>
+      parseArgs(["--repo", "-h", "--sha", sha, "--output", ".local/gates-hosted-checks.json"]),
+    ).toThrow("Expected --repo <value>.");
+    expect(() =>
+      parseArgs([
+        "--repo",
+        "openclaw/openclaw",
+        "--sha",
+        "-h",
+        "--output",
+        ".local/gates-hosted-checks.json",
+      ]),
+    ).toThrow("Expected --sha <value>.");
+    expect(() =>
+      parseArgs(["--repo", "openclaw/openclaw", "--sha", sha, "--output", "-h"]),
+    ).toThrow("Expected --output <value>.");
   });
 
-  it("accepts JSON emitted through a colorizing GitHub CLI shim", () => {
+  it("rejects duplicate hosted gate verifier CLI arguments", () => {
+    const requiredArgs = [
+      "--repo",
+      "openclaw/openclaw",
+      "--sha",
+      sha,
+      "--output",
+      ".local/gates-hosted-checks.json",
+    ];
+    const duplicateCases = [
+      [
+        "--repo",
+        ["--repo", "openclaw/openclaw", "--repo", "fork/openclaw", "--sha", sha, "--output", "out.json"],
+      ],
+      [
+        "--sha",
+        ["--repo", "openclaw/openclaw", "--sha", sha, "--sha", "other-sha", "--output", "out.json"],
+      ],
+      [
+        "--output",
+        ["--repo", "openclaw/openclaw", "--sha", sha, "--output", "one.json", "--output", "two.json"],
+      ],
+      ["--changelog-only", [...requiredArgs, "--changelog-only", "--changelog-only"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once.`);
+    }
+  });
+
+  it("accepts one workflow-runs page emitted through a colorizing GitHub CLI shim", () => {
     expect(
-      parseWorkflowRunPages('\u001B[1;37m[{"workflow_runs":[{"id":1,"name":"CI"}]}]\u001B[0m'),
-    ).toEqual([{ id: 1, name: "CI" }]);
+      parseWorkflowRunPage(
+        '\u001B[1;37m{"total_count":101,"workflow_runs":[{"id":1,"name":"CI"}]}\u001B[0m',
+      ),
+    ).toEqual({ totalCount: 101, workflowRuns: [{ id: 1, name: "CI" }] });
+  });
+
+  it("bounds workflow-run pagination to GitHub's search result limit", () => {
+    expect(workflowRunPageCount(0)).toBe(0);
+    expect(workflowRunPageCount(101)).toBe(2);
+    expect(workflowRunPageCount(10_000)).toBe(10);
   });
 });

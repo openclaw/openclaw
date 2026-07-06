@@ -46,6 +46,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "exec-approvals",
+    description: "Manage exec approvals (alias for approvals)",
+    hasSubcommands: true,
+  },
+  {
     name: "exec-policy",
     description: "Show or synchronize requested exec policy with host approvals",
     hasSubcommands: true,
@@ -70,6 +75,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "sandbox",
     description: "Manage sandbox containers for agent isolation",
     hasSubcommands: true,
+  },
+  {
+    name: "attach",
+    description: "Attach Claude Code to a gateway session with scoped MCP tools",
+    hasSubcommands: false,
   },
   {
     name: "tui",

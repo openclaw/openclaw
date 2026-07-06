@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { execPlainGh } from "./lib/plain-gh.mjs";
 
 export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Blacksmith Testbox",
@@ -17,10 +17,12 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
   "Blacksmith ARM Testbox",
   "Workflow Sanity",
 ];
+const WORKFLOW_RUNS_PAGE_SIZE = 100;
+const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`Expected ${optionName} <value>.`);
   }
   return value;
@@ -28,23 +30,31 @@ function readOptionValue(argv, index, optionName) {
 
 export function parseArgs(argv) {
   const args = { repo: "", sha: "", output: "", changelogOnly: false };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once.`);
+    }
+    seen.add(flag);
+    args[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
       case "--repo":
-        args.repo = readOptionValue(argv, index, arg);
+        setOnce(arg, "repo", readOptionValue(argv, index, arg));
         index += 1;
         break;
       case "--sha":
-        args.sha = readOptionValue(argv, index, arg);
+        setOnce(arg, "sha", readOptionValue(argv, index, arg));
         index += 1;
         break;
       case "--output":
-        args.output = readOptionValue(argv, index, arg);
+        setOnce(arg, "output", readOptionValue(argv, index, arg));
         index += 1;
         break;
       case "--changelog-only":
-        args.changelogOnly = true;
+        setOnce(arg, "changelogOnly", true);
         break;
       default:
         throw new Error(`Unknown option: ${arg}`);
@@ -98,13 +108,16 @@ function latestRun(runs) {
 
 function preferredCiRun(runs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
-  const failedScheduledRun = scheduledRuns.find(
-    (run) => run.status === "completed" && run.conclusion !== "success",
+  const latestScheduledRun = latestRun(scheduledRuns);
+  const failedScheduledRun = latestRun(
+    scheduledRuns.filter(
+      (run) =>
+        run.status === "completed" && !["success", "cancelled", "skipped"].includes(run.conclusion),
+    ),
   );
-  if (failedScheduledRun) {
+  if (failedScheduledRun && latestScheduledRun?.status !== "completed") {
     return failedScheduledRun;
   }
-  const latestScheduledRun = latestRun(scheduledRuns);
   if (latestScheduledRun?.status === "completed") {
     return latestScheduledRun;
   }
@@ -157,8 +170,19 @@ function stripAnsi(raw) {
   return raw.replace(new RegExp(`${escape}\\[[0-?]*[ -/]*[@-~]`, "gu"), "");
 }
 
-export function parseWorkflowRunPages(raw) {
-  return JSON.parse(stripAnsi(raw)).flatMap((page) => page.workflow_runs ?? []);
+export function parseWorkflowRunPage(raw) {
+  const page = JSON.parse(stripAnsi(raw));
+  return {
+    totalCount: page.total_count ?? 0,
+    workflowRuns: page.workflow_runs ?? [],
+  };
+}
+
+export function workflowRunPageCount(totalCount) {
+  return Math.min(
+    Math.ceil(totalCount / WORKFLOW_RUNS_PAGE_SIZE),
+    MAX_WORKFLOW_RUN_SEARCH_RESULTS / WORKFLOW_RUNS_PAGE_SIZE,
+  );
 }
 
 export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = false }) {
@@ -209,12 +233,24 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
 }
 
 function loadWorkflowRuns(repo, sha) {
-  const raw = execFileSync(
-    "gh",
-    ["api", `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`, "--paginate", "--slurp"],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  return parseWorkflowRunPages(raw);
+  const loadPage = (page) =>
+    parseWorkflowRunPage(
+      execPlainGh(
+        [
+          "api",
+          `repos/${repo}/actions/runs?head_sha=${sha}&per_page=${WORKFLOW_RUNS_PAGE_SIZE}&page=${page}`,
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    );
+
+  // Keep every request pinned to the head SHA and bound it to GitHub's documented search window.
+  const firstPage = loadPage(1);
+  const workflowRuns = [...firstPage.workflowRuns];
+  for (let page = 2; page <= workflowRunPageCount(firstPage.totalCount); page += 1) {
+    workflowRuns.push(...loadPage(page).workflowRuns);
+  }
+  return workflowRuns;
 }
 
 export function main(argv = process.argv.slice(2)) {

@@ -1305,6 +1305,71 @@ describe("model-pricing-cache", () => {
       cacheWrite: 0,
     });
   });
+
+  it("bounds streamed LiteLLM catalog responses without content-length", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "kimi/kimi-k2.6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const liteLLMCancel = vi.fn(async () => undefined);
+    let liteLLMPullCount = 0;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "moonshotai/kimi-k2.6",
+                pricing: {
+                  prompt: "0.00000095",
+                  completion: "0.000004",
+                  input_cache_read: "0.00000016",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response(
+        new ReadableStream({
+          pull(controller) {
+            liteLLMPullCount += 1;
+            controller.enqueue(new Uint8Array(liteLLMPullCount === 1 ? 5 * 1024 * 1024 : 1));
+          },
+          cancel: liteLLMCancel,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(liteLLMPullCount).toBeGreaterThanOrEqual(2);
+    expect(liteLLMCancel).toHaveBeenCalledOnce();
+    const health = getGatewayModelPricingHealth();
+    expect(health.sources[0]?.source).toBe("litellm");
+    expect(health.sources[0]?.detail).toContain(
+      "LiteLLM pricing response too large: 5242881 bytes",
+    );
+    expect(getCachedGatewayModelPricing({ provider: "kimi", model: "kimi-k2.6" })).toEqual({
+      input: 0.95,
+      output: 4,
+      cacheRead: 0.16,
+      cacheWrite: 0,
+    });
+  });
 });
 
 function createManifestRecord(overrides: Partial<PluginManifestRecord>): PluginManifestRecord {

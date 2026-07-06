@@ -12,7 +12,10 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
-import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
+import {
+  normalizeDirectChatIdentifier,
+  resolveIMessageMessageId as resolveIMessageMessageIdImpl,
+} from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -115,7 +118,7 @@ function chatListCacheSet(
  * forms — the action surface synthesizes `iMessage;-;<phone>` from a
  * handle target, while imsg's chats.list returns `identifier: <phone>`
  * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
- * miss the match. Mirror of the same helper in monitor-reply-cache.ts.
+ * miss the match.
  */
 export function normalizeDirectChatIdentifierForTest(raw: string): string {
   return normalizeDirectChatIdentifier(raw);
@@ -126,17 +129,6 @@ export function findChatGuidForTest(
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string | null {
   return findChatGuid(chats, target);
-}
-
-function normalizeDirectChatIdentifier(raw: string): string {
-  const trimmed = raw.trim();
-  const lowered = trimmed.toLowerCase();
-  for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {
-    if (lowered.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
-    }
-  }
-  return trimmed;
 }
 
 function findChatGuid(
@@ -530,6 +522,55 @@ export const imessageActionsRuntime = {
 
   async leaveGroup(params: { chatGuid: string; options: IMessageBridgeActionOptions }) {
     await runIMessageCliJson(["chat-leave", "--chat", params.chatGuid], params.options);
+  },
+
+  async sendPoll(params: {
+    chatGuid: string;
+    question: string;
+    // Pre-validated, trimmed choices (>=2). Named `choices` so it does not
+    // shadow `options` (the CLI run options) on this params bag.
+    choices: readonly string[];
+    replyToMessageId?: string;
+    options: IMessageBridgeActionOptions;
+  }): Promise<IMessageBridgeSendResult> {
+    const result = await runIMessageCliJson(
+      [
+        "poll",
+        "send",
+        "--chat",
+        params.chatGuid,
+        "--question",
+        params.question,
+        ...params.choices.flatMap((choice) => ["--option", choice]),
+        ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+      ],
+      params.options,
+    );
+    return { messageId: resolveMessageId(result) };
+  },
+
+  async sendPollVote(params: {
+    chatGuid: string;
+    pollGuid: string;
+    // Exactly one selector; the CLI resolves index/text to the option UUID.
+    optionIndex?: number;
+    optionId?: string;
+    optionText?: string;
+    options: IMessageBridgeActionOptions;
+  }): Promise<IMessageBridgeSendResult & { optionText?: string }> {
+    const selector = params.optionId
+      ? ["--option-id", params.optionId]
+      : params.optionIndex !== undefined
+        ? ["--option-index", String(params.optionIndex)]
+        : params.optionText
+          ? ["--option", params.optionText]
+          : [];
+    const result = await runIMessageCliJson(
+      ["poll", "vote", "--chat", params.chatGuid, "--poll", params.pollGuid, ...selector],
+      params.options,
+    );
+    const optionText = typeof result.optionText === "string" ? result.optionText.trim() : "";
+    return { messageId: resolveMessageId(result), ...(optionText ? { optionText } : {}) };
   },
 
   async sendAttachment(params: {

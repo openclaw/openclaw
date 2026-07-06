@@ -309,6 +309,16 @@ describe("discordOutbound", () => {
   });
 
   it("routes audioAsVoice payloads through the Discord voice send helper", async () => {
+    const onDeliveryResult = vi.fn();
+    hoisted.sendMessageDiscordMock.mockImplementation(
+      async (_to: unknown, _text: unknown, options: unknown) => {
+        const deliveryResult = { messageId: "msg-1", channelId: "ch-1" };
+        const onProgress = (options as { onDeliveryResult?: (result: unknown) => Promise<void> })
+          .onDeliveryResult;
+        await onProgress?.(deliveryResult);
+        return deliveryResult;
+      },
+    );
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:123456",
@@ -321,6 +331,7 @@ describe("discordOutbound", () => {
       accountId: "default",
       replyToId: "reply-1",
       replyToMode: "first",
+      onDeliveryResult,
     });
 
     const voiceCall = mockCall(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord");
@@ -345,7 +356,7 @@ describe("discordOutbound", () => {
       2,
     );
     expect(messageOptions.accountId).toBe("default");
-    expect(messageOptions.replyTo).toBeUndefined();
+    expect(messageOptions.replyTo).toBe("reply-1");
 
     const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
     expect(mediaCall[0]).toBe("channel:123456");
@@ -353,12 +364,146 @@ describe("discordOutbound", () => {
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
     expect(mediaOptions.mediaUrl).toBe("https://example.com/extra.png");
-    expect(mediaOptions.replyTo).toBeUndefined();
+    expect(mediaOptions.replyTo).toBe("reply-1");
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
       channelId: "ch-1",
     });
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "voice-1",
+      "msg-1",
+      "msg-1",
+    ]);
+  });
+
+  it("keeps captured replyTo on audioAsVoice sends when replyToMode is batched", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "voice note",
+        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
+        audioAsVoice: true,
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "batched",
+    });
+
+    expect(
+      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).replyTo,
+    ).toBe("reply-1");
+    expect(
+      hoisted.sendMessageDiscordMock.mock.calls.map(
+        (call) => (call[2] as { replyTo?: unknown } | undefined)?.replyTo,
+      ),
+    ).toEqual(["reply-1", "reply-1"]);
+  });
+
+  it.each([
+    {
+      name: "visible text",
+      payload: {
+        text: "voice note",
+        mediaUrls: ["https://example.com/voice.ogg"],
+        audioAsVoice: true,
+      },
+      expectedText: "voice note",
+    },
+    {
+      name: "TTS supplement text",
+      payload: {
+        mediaUrls: ["https://example.com/voice.ogg"],
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "spoken answer",
+        },
+      },
+      expectedText: "spoken answer",
+    },
+  ])("falls back to $name when audioAsVoice delivery fails", async ({ payload, expectedText }) => {
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload,
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledOnce();
+    const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+    expect(messageCall[0]).toBe("channel:123456");
+    expect(messageCall[1]).toBe(expectedText);
+    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).replyTo).toBe(
+      "reply-1",
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
+  it("does not duplicate already-delivered TTS supplement text when audioAsVoice delivery fails", async () => {
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        mediaUrls: ["https://example.com/voice.ogg"],
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      channel: "discord",
+      messageId: "",
+      channelId: "channel:123456",
+      receipt: {
+        platformMessageIds: [],
+        parts: [],
+      },
+    });
+  });
+
+  it("does not treat delivery progress failures as voice delivery failures", async () => {
+    await expect(
+      discordOutbound.sendPayload?.({
+        cfg: {},
+        to: "channel:123456",
+        text: "",
+        payload: {
+          text: "voice note",
+          mediaUrls: ["https://example.com/voice.ogg"],
+          audioAsVoice: true,
+        },
+        accountId: "default",
+        onDeliveryResult: async () => {
+          throw new Error("progress unavailable");
+        },
+      }),
+    ).rejects.toThrow("progress unavailable");
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {

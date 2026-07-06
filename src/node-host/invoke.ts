@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
@@ -230,7 +231,7 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
   if (raw.length <= maxChars) {
     return { text: raw, truncated: false };
   }
-  return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+  return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
 }
 
 export function decodeCapturedOutputBuffer(params: {
@@ -375,7 +376,14 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
   }
   const extensions =
     process.platform === "win32"
-      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
+      ? (
+          env?.PATHEXT ??
+          env?.PathExt ??
+          env?.Pathext ??
+          process.env.PATHEXT ??
+          process.env.PathExt ??
+          ".EXE;.CMD;.BAT;.COM"
+        )
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];

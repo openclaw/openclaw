@@ -17,6 +17,7 @@ import {
 import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
@@ -289,13 +290,12 @@ async function readPricingJsonObject(
   if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
   }
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
-  }
+  const buffer = await readResponseWithLimit(response, MAX_PRICING_CATALOG_BYTES, {
+    onOverflow: ({ size }) => new Error(`${source} pricing response too large: ${size} bytes`),
+  });
   let payload: unknown;
   try {
-    payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+    payload = JSON.parse(buffer.toString("utf8")) as unknown;
   } catch {
     throw new Error(`${source} pricing response is malformed JSON`);
   }

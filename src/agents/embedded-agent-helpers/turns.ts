@@ -3,6 +3,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../runtime/index.js";
+import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 type AnthropicContentBlock = {
@@ -20,14 +21,6 @@ type UserContentBlock = Extract<
 
 function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
-}
-
-function isThinkingLikeBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
 }
 
 function isAbortedAssistantTurn(message: AgentMessage): boolean {

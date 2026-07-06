@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/github-copilot-provider",
-  "version": "2026.6.8",
+  "version": "2026.6.11",
   "private": true,
   "description": "OpenClaw GitHub Copilot provider plugin",
   "type": "module",
   "dependencies": {
-    "@clack/prompts": "1.4.0"
+    "@clack/prompts": "1.6.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -3,7 +3,8 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveSessionTranscriptPathInDir } from "../../../config/sessions/paths.js";
 import {
   appendSessionTranscriptEvent,
@@ -15,6 +16,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   SessionWriteLockStaleError,
@@ -41,6 +43,25 @@ const lockOptions = {
 };
 
 const tempDirs: string[] = [];
+const LARGE_LINEAR_TRANSCRIPT_LINE = `${JSON.stringify({
+  type: "message",
+  id: "large-linear-user",
+  timestamp: "2026-01-01T00:00:00.000Z",
+  message: {
+    role: "user",
+    content: [{ type: "text", text: "界".repeat(Math.ceil((7 * 1024 * 1024) / 3)) }],
+  },
+})}\n`;
+const LARGE_LEGACY_DELIVERY_TRANSCRIPT_LINE = `${JSON.stringify({
+  type: "message",
+  id: "large-legacy-user",
+  timestamp: "2026-01-01T00:00:00.000Z",
+  message: {
+    role: "user",
+    content: [{ type: "text", text: "界".repeat(Math.ceil((8 * 1024 * 1024) / 3)) }],
+  },
+})}\n`;
+const LARGE_OWNED_TRANSCRIPT_TEXT = "界".repeat(1024 * 1024);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -59,6 +80,31 @@ async function createTempSessionFile(): Promise<string> {
   const sessionFile = path.join(dir, "session.jsonl");
   await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
   return sessionFile;
+}
+
+async function readSessionFileTail(sessionFile: string, maxBytes = 512): Promise<string> {
+  const stat = await fs.stat(sessionFile);
+  const length = Math.min(maxBytes, stat.size);
+  const buffer = Buffer.alloc(length);
+  const handle = await fs.open(sessionFile, "r");
+  try {
+    const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(message);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
 }
 
 function cloneBigIntStatWith(
@@ -172,6 +218,24 @@ describe("embedded attempt session lock lifecycle", () => {
     const symlinkOwner = await symlinkOwnerPromise;
     expect(symlinkOwnerAcquired).toBe(true);
     symlinkOwner.release();
+  });
+
+  it("clamps oversized session file owner wait timeouts before arming timers", async () => {
+    const sessionFile = await createTempSessionFile();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
+    const secondOwnerPromise = acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    });
+
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    firstOwner.release();
+    const secondOwner = await secondOwnerPromise;
+    secondOwner.release();
   });
 
   it("releases the coarse attempt lock before prompt submission and reacquires for cleanup", async () => {
@@ -1541,6 +1605,111 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(3);
   });
 
+  it("allows delivery mirror side appends with leaf controls while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    const timestamp = "2026-07-04T17:03:02.949Z";
+    const firstMirror = {
+      type: "message",
+      id: "delivery-mirror-1",
+      parentId: null,
+      timestamp,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "image-1.jpg" }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        stopReason: "stop",
+        idempotencyKey: "run-message-tool:message-tool:fingerprint:call-1",
+      },
+    };
+    const leaf = {
+      type: "leaf",
+      id: "delivery-leaf",
+      parentId: firstMirror.id,
+      timestamp,
+      targetId: "assistant-tool-call",
+      appendParentId: firstMirror.id,
+      appendMode: "side",
+    };
+    const sideMirrors = [2, 3, 4].map((index) => ({
+      type: "message",
+      id: `delivery-mirror-${index}`,
+      parentId: index === 2 ? firstMirror.id : `delivery-mirror-${index - 1}`,
+      timestamp,
+      appendMode: "side",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `image-${index}.jpg` }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        stopReason: "stop",
+        idempotencyKey: `run-message-tool:message-tool:fingerprint:call-${index}`,
+      },
+    }));
+    await fs.appendFile(
+      sessionFile,
+      [firstMirror, leaf, ...sideMirrors].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
+      expect.objectContaining({ type: "message", id: firstMirror.id }),
+      expect.objectContaining({
+        type: "prompt_released_opaque",
+        preserveActiveLeaf: true,
+        record: expect.objectContaining({ type: "leaf", id: leaf.id }),
+      }),
+      ...sideMirrors.map((mirror) => expect.objectContaining({ type: "message", id: mirror.id })),
+    ]);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects active leaf controls while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const mergePromptReleasedSessionEntries = vi.fn();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "leaf",
+        id: "active-leaf-control",
+        parentId: null,
+        timestamp: "2026-07-04T17:03:02.949Z",
+        targetId: null,
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+    expect(mergePromptReleasedSessionEntries).not.toHaveBeenCalled();
+  });
+
   it("allows mixed delivery mirror and global metadata appends", async () => {
     const sessionFile = await createTempSessionFile();
     const mergePromptReleasedSessionEntries = vi.fn();
@@ -1653,64 +1822,68 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
-  it("allows parentless delivery mirrors appended to large legacy linear transcripts", async () => {
-    const sessionFile = await createTempSessionFile();
-    await fs.appendFile(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: "large-legacy-user",
-        timestamp: new Date().toISOString(),
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "x".repeat(8 * 1024 * 1024) }],
+  describe("large legacy linear transcript delivery", () => {
+    let result: {
+      hasTakeover: boolean;
+      lastLine?: string;
+      mergedEntries: unknown;
+    };
+
+    beforeAll(async () => {
+      const sessionFile = await createTempSessionFile();
+      await fs.appendFile(sessionFile, LARGE_LEGACY_DELIVERY_TRANSCRIPT_LINE, "utf8");
+      const mergePromptReleasedSessionEntries = vi.fn();
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock,
+        lockOptions: { ...lockOptions, sessionFile },
+        mergePromptReleasedSessionEntries,
+      });
+
+      await controller.releaseForPrompt();
+      const sessionKey = "agent:main:large-linear-delivery";
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          sessionKey,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
         },
-      })}\n`,
-      "utf8",
-    );
-    const mergePromptReleasedSessionEntries = vi.fn();
-    const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
-      lockOptions: { ...lockOptions, sessionFile },
-      mergePromptReleasedSessionEntries,
+        async () =>
+          await runWithOwnedSessionTranscriptWritePublication(
+            { sessionFile, sessionKey },
+            async () =>
+              await appendSessionTranscriptMessage({
+                transcriptPath: sessionFile,
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "mirrored large transcript delivery" }],
+                  provider: "openclaw",
+                  model: "delivery-mirror",
+                },
+              }),
+          ),
+      );
+
+      result = {
+        hasTakeover: controller.hasSessionTakeover(),
+        lastLine: (await readSessionFileTail(sessionFile)).trimEnd().split("\n").at(-1),
+        mergedEntries: mergePromptReleasedSessionEntries.mock.calls[0]?.[0],
+      };
+      await controller.dispose();
     });
 
-    await controller.releaseForPrompt();
-    const sessionKey = "agent:main:large-linear-delivery";
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        sessionKey,
-        withSessionWriteLock: (operation, options) =>
-          controller.withSessionWriteLock(operation, options),
-      },
-      async () =>
-        await runWithOwnedSessionTranscriptWritePublication(
-          { sessionFile, sessionKey },
-          async () =>
-            await appendSessionTranscriptMessage({
-              transcriptPath: sessionFile,
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "mirrored large transcript delivery" }],
-                provider: "openclaw",
-                model: "delivery-mirror",
-              },
-            }),
-        ),
-    );
-
-    const lastLine = (await fs.readFile(sessionFile, "utf8")).trimEnd().split("\n").at(-1);
-    expect(lastLine).toBeDefined();
-    expect(JSON.parse(lastLine ?? "{}")).not.toHaveProperty("parentId");
-    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
-      expect.objectContaining({
-        type: "message",
-        parentId: null,
-        message: expect.objectContaining({ model: "delivery-mirror" }),
-      }),
-    ]);
-    expect(controller.hasSessionTakeover()).toBe(false);
+    it("allows parentless delivery mirrors appended to large legacy linear transcripts", () => {
+      expect(result.lastLine).toBeDefined();
+      expect(JSON.parse(result.lastLine ?? "{}")).not.toHaveProperty("parentId");
+      expect(result.mergedEntries).toEqual([
+        expect.objectContaining({
+          type: "message",
+          parentId: null,
+          message: expect.objectContaining({ model: "delivery-mirror" }),
+        }),
+      ]);
+      expect(result.hasTakeover).toBe(false);
+    });
   });
 
   it("refreshes the prompt fence after an owned write throws", async () => {
@@ -2571,7 +2744,7 @@ describe("embedded attempt session lock lifecycle", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "first-turn delivery" }],
-            api: "openai-responses",
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
             provider: "openclaw",
             model: "delivery-mirror",
             usage: {
@@ -2940,54 +3113,59 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.dispose();
   });
 
-  it("validates large owned entries after migrating a large linear transcript", async () => {
-    const sessionFile = await createTempSessionFile();
-    await fs.appendFile(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: "large-linear-user",
-        timestamp: new Date().toISOString(),
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "x".repeat(7 * 1024 * 1024) }],
+  describe("large owned linear transcript migration", () => {
+    let result: {
+      appendedId: string;
+      hasTakeover: boolean;
+      mergedEntries: unknown;
+      persistedParentLink: boolean;
+    };
+
+    beforeAll(async () => {
+      const sessionFile = await createTempSessionFile();
+      await fs.appendFile(sessionFile, LARGE_LINEAR_TRANSCRIPT_LINE, "utf8");
+      const mergePromptReleasedSessionEntries = vi.fn();
+      const controller = await createEmbeddedAttemptSessionLockController({
+        acquireSessionWriteLock,
+        lockOptions: { ...lockOptions, sessionFile },
+        mergePromptReleasedSessionEntries,
+      });
+      await controller.releaseForPrompt();
+
+      const appended = await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          withSessionWriteLock: (operation, options) =>
+            controller.withSessionWriteLock(operation, options),
         },
-      })}\n`,
-      "utf8",
-    );
-    const mergePromptReleasedSessionEntries = vi.fn();
-    const controller = await createEmbeddedAttemptSessionLockController({
-      acquireSessionWriteLock,
-      lockOptions: { ...lockOptions, sessionFile },
-      mergePromptReleasedSessionEntries,
+        async () =>
+          await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: LARGE_OWNED_TRANSCRIPT_TEXT }],
+              provider: "anthropic",
+              model: "sonnet-4.6",
+            },
+          }),
+      );
+
+      result = {
+        appendedId: appended.messageId,
+        hasTakeover: controller.hasSessionTakeover(),
+        mergedEntries: mergePromptReleasedSessionEntries.mock.calls[0]?.[0],
+        persistedParentLink: (await fs.readFile(sessionFile, "utf8")).includes('"parentId"'),
+      };
+      await controller.dispose();
     });
-    await controller.releaseForPrompt();
 
-    const appended = await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile,
-        withSessionWriteLock: (operation, options) =>
-          controller.withSessionWriteLock(operation, options),
-      },
-      async () =>
-        await appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "y".repeat(3 * 1024 * 1024) }],
-            provider: "anthropic",
-            model: "sonnet-4.6",
-          },
-        }),
-    );
-
-    const persisted = await fs.readFile(sessionFile, "utf8");
-    expect(persisted).toContain('"parentId"');
-    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
-      expect.objectContaining({ type: "message", id: appended.messageId }),
-    ]);
-    expect(controller.hasSessionTakeover()).toBe(false);
-    await controller.dispose();
+    it("validates large owned entries after migrating a large linear transcript", () => {
+      expect(result.persistedParentLink).toBe(true);
+      expect(result.mergedEntries).toEqual([
+        expect.objectContaining({ type: "message", id: result.appendedId }),
+      ]);
+      expect(result.hasTakeover).toBe(false);
+    });
   });
 
   it("serializes concurrent nested owned transcript publications", async () => {
@@ -3957,20 +4135,148 @@ describe("embedded attempt session lock lifecycle", () => {
       .finally(() => {
         takeoverSettled = true;
       });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitUntil(
+      () => controller.hasSessionTakeover(),
+      "expected takeover detection while active retained writer was still running",
+    );
 
     expect(takeoverSettled).toBe(false);
     expect(releaseRetained).not.toHaveBeenCalled();
 
     releaseActiveWrite();
-    await expect(activeWrite).resolves.toBeUndefined();
+    await expect(activeWrite).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
     await expect(takeoverWrite).resolves.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
     expect(releaseRetained).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["prep-release", "active-start", "active-finish", "retained-release"]);
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+  });
+
+  it("releaseHeldLockWithFence sets deferred flag when bailed out during active scope; re-attempted after scope deactivation (#95915)", async () => {
+    const events: string[] = [];
+    const releasePrep = vi.fn(async () => events.push("prep-release"));
+    const releaseRetained = vi.fn(async () => events.push("retained-release"));
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releasePrep })
+      .mockResolvedValueOnce({ release: releaseRetained });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+
+    await controller.withSessionWriteLock(async () => {
+      events.push("write-start");
+      await controller.releaseHeldLockForAbort();
+      events.push("write-end");
+    });
+
+    expect(events).toEqual(["prep-release", "write-start", "write-end", "retained-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+  });
+
+  it("controls the held lock lifecycle across deferred abort release, reacquisition, and prompt release", async () => {
+    const events: string[] = [];
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("init-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("held-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("reacquire-release")) });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+
+    await controller.withSessionWriteLock(async () => {
+      events.push("write");
+      await controller.releaseHeldLockForAbort();
+    });
+
+    expect(events).toEqual(["init-release", "write", "held-release"]);
+
+    await controller.reacquireAfterPrompt();
+    await controller.releaseForPrompt();
+
+    expect(events).toEqual(["init-release", "write", "held-release", "reacquire-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
+  });
+
+  it("releases a prompt reacquire that resolves after controller disposal", async () => {
+    const releaseInitial = vi.fn(async () => {});
+    const releaseLate = vi.fn(async () => {});
+    let resolveReacquiredLock!: (lock: { release(): Promise<void> }) => void;
+    const reacquiredLock = new Promise<{ release(): Promise<void> }>((resolve) => {
+      resolveReacquiredLock = resolve;
+    });
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockImplementationOnce(async () => await reacquiredLock);
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    const reacquire = controller.reacquireAfterPrompt();
+    await waitUntil(
+      () => acquireSessionWriteLockLocal.mock.calls.length === 2,
+      "expected prompt cleanup to begin reacquiring the session lock",
+    );
+    await controller.dispose();
+    resolveReacquiredLock({ release: releaseLate });
+    await reacquire;
+
+    expect(releaseInitial).toHaveBeenCalledTimes(1);
+    expect(releaseLate).toHaveBeenCalledTimes(1);
+  });
+
+  it("takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)", async () => {
+    const events: string[] = [];
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("init-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("held-release")) })
+      .mockRejectedValueOnce(
+        new SessionWriteLockTimeoutError({
+          timeoutMs: lockOptions.timeoutMs,
+          owner: "pid=test",
+          lockPath: `${lockOptions.sessionFile}.lock`,
+        }),
+      );
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await controller.reacquireAfterPrompt();
+
+    const takeoverError = await controller
+      .withSessionWriteLock(async () => {
+        events.push("write-start");
+        const cleanupLock = await controller.acquireForCleanup();
+        await cleanupLock.release();
+        events.push("cleanup-inside-done");
+      })
+      .catch((error: unknown) => error);
+
+    expect(takeoverError).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(events).toEqual(["init-release", "write-start", "cleanup-inside-done", "held-release"]);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
   });
 
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {

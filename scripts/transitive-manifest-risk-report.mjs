@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import YAML from "yaml";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { parseReportCliArgs, writeReportArtifact } from "./lib/report-cli-helpers.mjs";
 import {
   collectAllResolvedPackagesFromLockfile,
@@ -130,10 +131,6 @@ function splitMinimumReleaseAgeExcludeSelector(selector) {
       .map((entry) => entry.trim())
       .filter(Boolean),
   };
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function packagePatternMatches(pattern, packageName) {
@@ -656,7 +653,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exitCode = exitCode;
     },
     /** @param {unknown} error */ (error) => {
-      process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     },
   );

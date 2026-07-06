@@ -291,19 +291,9 @@ function consumeOptionalXmlishFunctionClose(text: string, start: number): number
   return consumeXmlishFunctionClose(text, start) ?? start;
 }
 
-function parseXmlishPlainTextToolCallBlockEndAt(
-  text: string,
-  start: number,
-  options?: PlainTextToolCallParseOptions,
-): number | null {
+function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): number | null {
   const opening = parseXmlishOpening(text, start);
   if (!opening) {
-    return null;
-  }
-  const allowedToolNames = options?.allowedToolNames
-    ? new Set(options.allowedToolNames)
-    : undefined;
-  if (allowedToolNames && !allowedToolNames.has(opening.name)) {
     return null;
   }
 

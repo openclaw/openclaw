@@ -22,6 +22,7 @@ import {
 } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
@@ -593,7 +594,7 @@ describeLive("gateway live (ACP bind)", () => {
         | undefined;
 
       clearRuntimeConfigSnapshot();
-      process.env.OPENCLAW_STATE_DIR = tempStateDir;
+      setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_SKIP_CRON = "0";
@@ -682,7 +683,7 @@ describeLive("gateway live (ACP bind)", () => {
         },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
       logLiveStep(`using parent live model ${parentModel}`);
       clearConfigCache();
       clearRuntimeConfigSnapshot();

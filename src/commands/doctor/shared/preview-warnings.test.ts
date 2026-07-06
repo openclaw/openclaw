@@ -7,10 +7,15 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
-  collectDoctorPreviewWarnings,
   collectProfileConfiguredToolSectionWarnings,
   collectVisibleReplyToolPolicyWarnings,
 } from "./preview-warnings.js";
+
+async function collectDoctorPreviewWarnings(
+  params: Parameters<typeof collectDoctorPreviewNotes>[0],
+): Promise<string[]> {
+  return (await collectDoctorPreviewNotes(params)).warningNotes;
+}
 
 type TestManifestRecord = {
   id: string;
@@ -997,6 +1002,43 @@ describe("doctor preview warnings", () => {
         },
       },
     });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn for configured tool sections when the profile id is unknown", () => {
+    const malformedConfig = {
+      tools: {
+        profile: "custom-profile",
+        exec: {
+          security: "allowlist",
+        },
+        byProvider: {
+          openai: {
+            profile: "custom-provider-profile",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: {
+                security: "allowlist",
+              },
+              byProvider: {
+                openai: {
+                  profile: "custom-agent-provider-profile",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as Parameters<typeof collectProfileConfiguredToolSectionWarnings>[0];
+
+    const warnings = collectProfileConfiguredToolSectionWarnings(malformedConfig);
 
     expect(warnings).toStrictEqual([]);
   });

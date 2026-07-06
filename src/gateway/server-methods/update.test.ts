@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
+import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
 let capturedPayload: RestartSentinelPayload | undefined;
@@ -24,7 +26,7 @@ const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
-const normalizeUpdateChannelMock = vi.fn((): "stable" | "beta" | "dev" | null => null);
+const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
   status: "started" as const,
@@ -48,7 +50,7 @@ type UpdateRunPayload = {
   ok: boolean;
   result?: { status?: string; reason?: string; mode?: string };
   handoff?: { status?: string; command?: string; message?: string };
-  sentinel?: { path?: string | null };
+  sentinel?: { persisted?: boolean };
   restart?: unknown;
 };
 
@@ -96,7 +98,6 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
       capturedPayload = payload;
-      return "/tmp/sentinel.json";
     },
   };
 });
@@ -156,13 +157,16 @@ vi.mock("./restart-request.js", () => ({
 
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
-  formatManagedServiceUpdateCommand: (params?: {
-    timeoutMs?: number;
-    channel?: "stable" | "beta" | "dev";
-  }) =>
-    params?.timeoutMs
-      ? `openclaw update --yes --timeout ${Math.ceil(params.timeoutMs / 1000)}`
-      : "openclaw update --yes",
+  formatManagedServiceUpdateCommand: (params?: { timeoutMs?: number; channel?: UpdateChannel }) => {
+    const args = ["openclaw", "update", "--yes"];
+    if (params?.channel) {
+      args.push("--channel", params.channel);
+    }
+    if (params?.timeoutMs) {
+      args.push("--timeout", String(Math.ceil(params.timeoutMs / 1000)));
+    }
+    return args.join(" ");
+  },
   buildManagedServiceHandoffUnavailableMessage: (command: string) =>
     [
       "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
@@ -273,27 +277,7 @@ async function withProcessEnv<T>(
   updates: Record<string, string | undefined>,
   run: () => Promise<T>,
 ): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const key of Object.keys(updates)) {
-    previous.set(key, process.env[key]);
-    const value = updates[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return await withEnvAsync(updates, run);
 }
 
 function mockGlobalInstallSurface() {
@@ -481,7 +465,7 @@ describe("update.run restart scheduling", () => {
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
     });
-    expect(payload?.sentinel?.path).toBe("/tmp/sentinel.json");
+    expect(payload?.sentinel?.persisted).toBe(true);
     const sentinel = readCapturedPayload();
     expect(sentinel.kind).toBe("update");
     expect(sentinel.status).toBe("skipped");
@@ -597,6 +581,40 @@ describe("update.run restart scheduling", () => {
     ) as [{ channel?: string }];
     expect(handoffParams).not.toHaveProperty("channel");
     expect(payload?.handoff?.command).not.toContain("--channel");
+  });
+
+  it("rejects stored extended-stable on Git without starting a handoff or mutation", async () => {
+    normalizeUpdateChannelMock.mockReturnValueOnce("extended-stable");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGitInstallSurface("/tmp/openclaw-git");
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result).toMatchObject({
+      status: "error",
+      mode: "git",
+      reason: "unsupported_git_channel",
+    });
+  });
+
+  it("forwards stored extended-stable to package managed-service handoff", async () => {
+    normalizeUpdateChannelMock.mockReturnValueOnce("extended-stable");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+
+    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "extended-stable" }),
+    );
   });
 
   it("keeps unsupervised git/dev updates on the in-process gateway update path", async () => {

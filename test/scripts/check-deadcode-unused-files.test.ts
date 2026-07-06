@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   checkUnusedFiles,
@@ -63,6 +64,21 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(25);
   }
   throw new Error(`process still alive: ${pid}`);
+}
+
+function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
 }
 
 describe("check-deadcode-unused-files", () => {
@@ -358,6 +374,71 @@ src/a.ts: src/a.ts
         });
         await waitForDead(childPid, 2_000);
       } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "cleans active Knip descendants before forwarding parent SIGTERM",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-parent-signal-"));
+      const childPidPath = path.join(root, "child.pid");
+      const readyPath = path.join(root, "child.ready");
+      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mjs")).href;
+      let childPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+
+      try {
+        const childScript = [
+          "const fs = require('node:fs');",
+          "process.on('SIGTERM', () => {});",
+          `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const runnerScript = [
+          "import { spawn } from 'node:child_process';",
+          `import { runKnipUnusedFiles } from ${JSON.stringify(scriptUrl)};`,
+          "await runKnipUnusedFiles({",
+          "  spawnCommand(_command, _args, options) {",
+          `    return spawn(process.execPath, ['-e', ${JSON.stringify(parentScript)}], options);`,
+          "  },",
+          "  timeoutMs: 60_000,",
+          "  writeStatus: () => {},",
+          "});",
+        ].join("\n");
+
+        runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+
+        await waitForFile(readyPath, 2_000);
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForChildClose(runner)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (runner?.pid && isProcessAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }

@@ -48,6 +48,8 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
   /** Reasoning stream text is a complete replacement snapshot, not a delta. */
   isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
@@ -62,6 +64,54 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+// Private device-pair -> Gateway live-display envelope key. Do not re-export
+// through Plugin SDK; this is not a third-party plugin contract.
+export const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+
+export type PairingQrReplyChannelData = {
+  setupCode: string;
+  expiresAtMs: number;
+};
+
+function normalizePairingQrSetupCode(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+export function buildPairingQrReplyChannelData(
+  params: PairingQrReplyChannelData,
+): Record<string, unknown> {
+  return {
+    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
+      setupCode: params.setupCode,
+      expiresAtMs: params.expiresAtMs,
+    },
+  };
+}
+
+export function readPairingQrReplyChannelData(
+  payload: Pick<ReplyPayload, "channelData">,
+): PairingQrReplyChannelData | undefined {
+  const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
+}
+
+/** Metadata for fast-auto progress notices. */
+export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
+
+export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
+  return payload.channelData?.openclawProgressKind === FAST_MODE_AUTO_PROGRESS_KIND;
+}
+
 /** Metadata for audio-only media that supplements already-visible assistant text. */
 export type ReplyPayloadTtsSupplement = {
   spokenText: string;
@@ -74,7 +124,7 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {

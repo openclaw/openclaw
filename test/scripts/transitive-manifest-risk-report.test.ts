@@ -1,4 +1,6 @@
 // Transitive Manifest Risk Report tests cover transitive manifest risk report script behavior.
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createTransitiveManifestRiskReport,
@@ -7,7 +9,27 @@ import {
   renderTransitiveManifestRiskMarkdownReport,
 } from "../../scripts/transitive-manifest-risk-report.mjs";
 
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/transitive-manifest-risk-report.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
+}
+
 describe("transitive-manifest-risk-report", () => {
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const unknownArg = runCli("--wat");
+    expect(unknownArg.status).toBe(1);
+    expect(unknownArg.stdout).toBe("");
+    expect(unknownArg.stderr.trim()).toBe("Unsupported argument: --wat");
+    expectNoNodeStack(unknownArg.stderr);
+  });
+
   it("reports floating transitive specs, lifecycle scripts, exotic sources, and recently published versions", async () => {
     const report = await createTransitiveManifestRiskReport({
       packageVersions: [

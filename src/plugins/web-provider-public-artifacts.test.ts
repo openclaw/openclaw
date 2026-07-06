@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
-  hasBundledWebFetchProviderPublicArtifact,
-  hasBundledWebSearchProviderPublicArtifact,
+  loadBundledWebFetchProviderEntriesFromDir,
+  loadBundledWebSearchProviderEntriesFromDir,
 } from "./web-provider-public-artifacts.explicit.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -45,16 +45,21 @@ function bundledPluginIdsWithContract(
 }
 
 describe("web provider public artifacts", () => {
-  it("has public artifacts for every bundled web provider declared in manifests", () => {
+  it("declares bundled web providers in manifests", () => {
     expect(webSearchPluginIds).not.toHaveLength(0);
-    for (const pluginId of webSearchPluginIds) {
-      expect(hasBundledWebSearchProviderPublicArtifact(pluginId)).toBe(true);
-    }
-
     expect(webFetchPluginIds).not.toHaveLength(0);
-    for (const pluginId of webFetchPluginIds) {
-      expect(hasBundledWebFetchProviderPublicArtifact(pluginId)).toBe(true);
-    }
+  });
+
+  it.each(webSearchPluginIds)("loads public web-search artifacts for %s", (pluginId) => {
+    expect(
+      loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+    ).not.toBeNull();
+  });
+
+  it.each(webFetchPluginIds)("loads public web-fetch artifacts for %s", (pluginId) => {
+    expect(
+      loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+    ).not.toBeNull();
   });
 
   it("registers compatibility runtime paths for bundled SecretRef-capable web search providers", () => {

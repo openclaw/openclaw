@@ -2,6 +2,7 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -24,6 +25,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import {
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
+  type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
@@ -95,6 +97,10 @@ const ACP_TRANSCRIPT_USAGE = {
 } as const;
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
+
+function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
+  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
+}
 
 type TranscriptUsage = {
   input?: number;
@@ -429,16 +435,18 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
+  const skipUserTurn = gapFill || params.skipUserTurn === true;
 
   return await persistTextTurnTranscript({
-    body: gapFill ? "" : params.body,
-    transcriptBody: gapFill ? undefined : params.transcriptBody,
-    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
+    body: skipUserTurn ? "" : params.body,
+    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -472,9 +480,13 @@ export function runAgentAttempt(params: {
   workspaceDir: string;
   cwd?: string;
   body: string;
+  transcriptBody?: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
+  isFinalFallbackAttempt?: boolean;
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
@@ -502,7 +514,9 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
@@ -541,6 +555,12 @@ export function runAgentAttempt(params: {
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+  if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
+    params.fallbackRuntimeState.originRuntime =
+      !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
+  }
+  const shouldForwardImagesToEmbedded =
+    !params.isFallbackRetry || params.fallbackRuntimeState?.originRuntime === "cli";
   const allowCliAuthProfileForwarding =
     isCliExecutionProvider &&
     cliBackendAcceptsAuthProfileForwarding({
@@ -664,6 +684,7 @@ export function runAgentAttempt(params: {
         cwd: params.cwd,
         config: params.cfg,
         prompt: cliPrompt,
+        transcriptPrompt: params.transcriptBody,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
@@ -684,15 +705,22 @@ export function runAgentAttempt(params: {
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        // Image discovery must use the original turn, before retry/history decoration.
+        imagePrompt: params.body,
+        // Fallback prompts repeat the current task, so prompt-local images must
+        // accompany every CLI process. Native dedupe requires a runtime receipt.
+        images: params.opts.images,
+        imageOrder: params.opts.imageOrder,
         skillsSnapshot: params.skillsSnapshot,
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
         currentChannelId: params.runContext.currentChannelId,
+        chatId: params.runContext.chatId,
+        channelContext: params.runContext.channelContext,
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
+        approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
@@ -700,6 +728,8 @@ export function runAgentAttempt(params: {
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
         oneShotCliRun: params.opts.oneShotCliRun,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+        suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
@@ -761,6 +791,8 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    chatId: params.runContext.chatId,
+    channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
@@ -775,8 +807,11 @@ export function runAgentAttempt(params: {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+    transcriptPrompt: params.transcriptBody,
+    // CLI-origin retries cannot rely on transcript replay: orphan-user repair
+    // removes the persisted CLI turn before the embedded prompt is submitted.
+    images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
+    imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
@@ -785,12 +820,19 @@ export function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
+    fastModeStartedAtMs: params.fastModeStartedAtMs,
+    fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
+    // Hidden internal runs have no assistant-event consumer. Visible subagent
+    // lanes can still feed Control UI, session subscribers, and ACP parent relays.
+    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
@@ -802,6 +844,7 @@ export function runAgentAttempt(params: {
     disableMessageTool: params.opts.disableMessageTool,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
+    allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
     oneShotCliRun: params.opts.oneShotCliRun,
@@ -812,6 +855,7 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
       if (info?.lifecycleGeneration) {

@@ -1,5 +1,5 @@
 /** Shared helpers for model commands that read or mutate model config. */
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId, listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -19,8 +19,6 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
-export { normalizeAlias } from "./alias-name.js";
-export { isLocalBaseUrl } from "./list.local-url.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -33,10 +31,12 @@ export const formatTokenK = (value?: number | null) => {
   if (!value || !Number.isFinite(value)) {
     return "-";
   }
-  if (value < 1024) {
+  // Token counts use decimal-K (/1000), matching formatTokenCount and how
+  // providers advertise context windows (e.g. 200000 -> "200k", not "195k").
+  if (value < 1000) {
     return `${Math.round(value)}`;
   }
-  return `${Math.round(value / 1024)}k`;
+  return `${Math.round(value / 1000)}k`;
 };
 
 /** Formats millisecond durations for model command output. */
@@ -163,6 +163,19 @@ export function resolveKnownAgentId(params: {
     );
   }
   return agentId;
+}
+
+/** Resolves the selected model-command agent and its profile directory. */
+export function resolveModelsTargetAgent(
+  cfg: OpenClawConfig,
+  rawAgentId?: string,
+): {
+  agentId: string;
+  agentDir: string;
+} {
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId }) ?? resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return { agentId, agentDir };
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */

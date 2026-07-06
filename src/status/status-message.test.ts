@@ -20,6 +20,26 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
 });
 
+describe("buildStatusMessage current time", () => {
+  it("surfaces a live current-time line so session_status returns the date/time", () => {
+    // 2025-07-03T08:00:00Z; the Reference UTC line is timezone-independent.
+    const now = 1_751_529_600_000;
+    const text = buildStatusMessage({
+      now,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("Current time:");
+    expect(text).toContain("(UTC)");
+    expect(text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
+  });
+});
+
 describe("buildStatusMessage context window", () => {
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({
@@ -60,7 +80,8 @@ describe("buildStatusMessage context window", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain("Session selected: ollama-cloud/glm-5.1");
+    expect(text).toContain("Model: ollama-cloud/glm-5.1");
+    expect(text).toContain("pinned session; config primary ollama-cloud/deepseek-v4-pro");
     expect(text).toContain("Context: 128k/200k");
     expect(text).not.toContain("Context: 128k/1.0m");
   });

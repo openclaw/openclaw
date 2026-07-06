@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
@@ -22,6 +22,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   claimAgentRunContext,
+  emitAgentItemEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   registerAgentRunContext,
@@ -29,7 +30,8 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -89,6 +91,12 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import {
+  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
+  type FastModeAutoProgressState,
+  formatFastModeAutoProgressText,
+  resolveFastModeForElapsed,
+} from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
@@ -118,6 +126,11 @@ import {
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import {
+  applyAgentRunSessionTargetIdentity,
+  resolveAgentRunSessionTarget,
+} from "../run-session-target.js";
+import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -128,7 +141,7 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -168,7 +181,10 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
-import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
+import {
+  hasCodexAppServerRecoveryRetryBudget,
+  resolveCodexAppServerRecoveryRetry,
+} from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -180,6 +196,7 @@ import {
   resolveActiveErrorContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveLatestCallUsage,
   resolveMaxRunRetryIterations,
   resolveReportedModelRef,
   MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
@@ -220,6 +237,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -247,6 +265,7 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -586,6 +605,8 @@ function resolveInitialEmbeddedRunModel(params: {
   };
 }
 
+const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
+
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
@@ -609,20 +630,28 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  let params = paramsInput;
-  let lifecycleGeneration = params.lifecycleGeneration!;
+  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
-    config: params.config,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    config: paramsBase.config,
+    sessionId: paramsBase.sessionId,
+    sessionKey: paramsBase.sessionKey,
+    agentId: paramsBase.agentId,
   });
-  if (effectiveSessionKey !== params.sessionKey) {
-    params = { ...params, sessionKey: effectiveSessionKey };
-  }
+  const runSessionTarget = await resolveAgentRunSessionTarget({
+    ...paramsBase,
+    sessionKey: effectiveSessionKey,
+  });
+  let params: RunEmbeddedAgentParamsWithSessionFile = {
+    ...paramsBase,
+    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    sessionId: runSessionTarget.sessionId,
+    sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
+    sessionFile: runSessionTarget.sessionFile,
+  };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -772,6 +801,14 @@ async function runEmbeddedAgentInternal(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
+      const fastModeStarted = params.fastModeStartedAtMs ?? started;
+      const fastModeAutoOnSeconds =
+        params.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
+      const fastModeAutoProgressState: FastModeAutoProgressState =
+        params.fastModeAutoProgressState ?? {
+          offAnnounced: false,
+          resetAnnounced: false,
+        };
       const startupStages = createEmbeddedRunStageTracker();
       let startupStagesEmitted = false;
       const notifyExecutionPhase = (
@@ -789,6 +826,114 @@ async function runEmbeddedAgentInternal(
       ) => {
         noteLaneTaskProgress();
         params.onRunProgress?.(info);
+      };
+      const emitFastModeAutoProgress = async (payload: {
+        enabled: boolean;
+        elapsedSeconds: number;
+        fastAutoOnSeconds?: number;
+      }) => {
+        const summary = formatFastModeAutoProgressText(payload);
+        try {
+          emitAgentItemEvent({
+            runId: params.runId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            data: {
+              itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              status: "running",
+              summary,
+            },
+          });
+        } catch (error) {
+          log.debug(
+            `embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`,
+          );
+        }
+        try {
+          await params.onAgentEvent?.({
+            stream: "item",
+            data: {
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              summary,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
+        } catch (error) {
+          log.debug(`embedded run fast mode auto event failed: ${formatErrorMessage(error)}`);
+        }
+        try {
+          await params.onToolResult?.({
+            text: summary,
+            channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+          });
+        } catch (error) {
+          log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
+        }
+      };
+      const maybeAnnounceFastModeAutoOff = async () => {
+        if (params.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
+          return;
+        }
+        const next = resolveFastModeForElapsed({
+          mode: "auto",
+          startedAtMs: fastModeStarted,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+        if (next.enabled) {
+          return;
+        }
+        fastModeAutoProgressState.offAnnounced = true;
+        await emitFastModeAutoProgress(next);
+      };
+      const notifyToolResult = async (payload: ReplyPayload) => {
+        await params.onToolResult?.(payload);
+      };
+      const notifyAgentEvent = async (
+        event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
+      ) => {
+        await params.onAgentEvent?.(event);
+      };
+      const resolveAttemptFastMode = (): boolean | undefined => {
+        const resolved = resolveFastModeForElapsed({
+          mode: params.fastMode,
+          startedAtMs: fastModeStarted,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+        return resolved.mode === undefined ? undefined : resolved.enabled;
+      };
+      const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {
+        if (params.fastMode === "auto") {
+          return resolveAttemptFastMode;
+        }
+        return resolveAttemptFastMode();
+      };
+      const maybeEmitFastModeAutoReset = async () => {
+        if (
+          params.fastMode !== "auto" ||
+          !fastModeAutoProgressState.offAnnounced ||
+          fastModeAutoProgressState.resetAnnounced
+        ) {
+          return;
+        }
+        fastModeAutoProgressState.resetAnnounced = true;
+        await emitFastModeAutoProgress({
+          enabled: true,
+          elapsedSeconds: 0,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+      };
+      const maybeEmitFastModeAutoResetBestEffort = async () => {
+        try {
+          await maybeEmitFastModeAutoReset();
+        } catch (error) {
+          log.warn(
+            `embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
+          );
+        }
       };
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
@@ -977,6 +1122,10 @@ async function runEmbeddedAgentInternal(
             {
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
+              // Enable bundled static catalog fallback so plugin-provided
+              // models that are not discoverable via agent model discovery
+              // can still be resolved from the static catalog.
+              allowBundledStaticCatalogFallback: true,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -1596,6 +1745,48 @@ async function runEmbeddedAgentInternal(
           modelId: failure.modelId,
         });
       };
+      const markAuthProfileSuccessAfterRun = () => {
+        if (!lastProfileId) {
+          return;
+        }
+        const successProfileId = lastProfileId;
+        const safeSuccessProfileId = redactIdentifier(successProfileId, { len: 12 });
+        const successProvider = resolveAuthProfileStateProvider(
+          profileFailureStore,
+          successProfileId,
+          provider,
+        );
+        const successStarted = Date.now();
+        void markAuthProfileSuccess({
+          store: profileFailureStore,
+          provider: successProvider,
+          profileId: successProfileId,
+          agentDir: params.agentDir,
+        })
+          .then(() => {
+            const durationMs = Date.now() - successStarted;
+            if (durationMs >= POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS) {
+              log.warn(
+                `post-run auth-profile success bookkeeping completed after ${durationMs}ms: ` +
+                  `runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId}`,
+              );
+            } else if (log.isEnabled("trace")) {
+              log.trace(
+                `post-run auth-profile success bookkeeping completed: ` +
+                  `runId=${params.runId} sessionId=${params.sessionId} durationMs=${durationMs}`,
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            log.warn(
+              `post-run auth-profile success bookkeeping failed: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId} ` +
+                `error=${formatErrorMessage(err)}`,
+            );
+          });
+      };
       const resolveRunAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
         opts?: { providerStarted?: boolean; transientRateLimit?: boolean },
@@ -1809,6 +2000,7 @@ async function runEmbeddedAgentInternal(
             apiKeyInfo,
             runtimeAuthState,
           });
+          const attemptFastMode = resolveAttemptFastModeParam();
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -1838,7 +2030,7 @@ async function runEmbeddedAgentInternal(
             thinkingLevel: thinkLevel,
             extraParamsOverride: {
               ...params.streamParams,
-              fastMode: params.fastMode,
+              fastMode: attemptFastMode,
             },
           });
           if (!startupStagesEmitted) {
@@ -1903,6 +2095,12 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+          let attemptCancellationRequested = false;
+          const codexAppServerRecoveryRetryAvailable = hasCodexAppServerRecoveryRetryBudget({
+            alreadyRetried: codexAppServerRecoveryRetries > 0,
+            runLoopIterations,
+            maxRunLoopIterations: MAX_RUN_LOOP_ITERATIONS,
+          });
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1926,7 +2124,11 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
+            approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
+            chatId: params.chatId,
+            channelContext: params.channelContext,
             currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
@@ -1957,6 +2159,7 @@ async function runEmbeddedAgentInternal(
             requestedModelId,
             fallbackActive: modelId !== requestedModelId || Boolean(resolveRuntimeFallbackReason()),
             fallbackReason: resolveRuntimeFallbackReason(),
+            isFinalFallbackAttempt: params.isFinalFallbackAttempt,
             // Use the harness selected before model/auth setup for the actual
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
@@ -1993,8 +2196,17 @@ async function runEmbeddedAgentInternal(
             thinkLevel,
             onToolOutcome: observeToolOutcome,
             allocateToolOutcomeOrdinal,
+            onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
             onRunProgress: notifyRunProgress,
-            fastMode: params.fastMode,
+            fastMode: attemptFastMode,
+            fastModeAuto: params.fastMode === "auto",
+            ...(params.fastMode === "auto"
+              ? {
+                  fastModeStartedAtMs: fastModeStarted,
+                  fastModeAutoOnSeconds,
+                  fastModeAutoProgressState,
+                }
+              : {}),
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -2010,12 +2222,16 @@ async function runEmbeddedAgentInternal(
               ? undefined
               : startLaneProgressHeartbeat,
             onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-            onAttemptAbort: pluginHarnessOwnsTransport
-              ? undefined
-              : () => {
-                  stopLaneProgressHeartbeat();
-                  laneTaskAbortController.abort();
-                },
+            onAttemptAbort: () => {
+              attemptCancellationRequested = true;
+              if (!params.abortSignal?.aborted) {
+                params.replyOperation?.abortByUser();
+              }
+              if (!pluginHarnessOwnsTransport) {
+                stopLaneProgressHeartbeat();
+                laneTaskAbortController.abort();
+              }
+            },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -2026,10 +2242,11 @@ async function runEmbeddedAgentInternal(
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
+            streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
             onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
+            onToolResult: notifyToolResult,
             onAgentToolResult: params.onAgentToolResult,
-            onAgentEvent: params.onAgentEvent,
+            onAgentEvent: notifyAgentEvent,
             deferTerminalLifecycle:
               params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             deferTerminalLifecycleEnd:
@@ -2044,10 +2261,12 @@ async function runEmbeddedAgentInternal(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
+            suppressLiveStreamOutput: params.suppressLiveStreamOutput,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            crestodianTool: params.crestodianTool,
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -2082,6 +2301,10 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          if (attemptCancellationRequested) {
+            throwIfAborted();
+            throw createAgentRunDirectAbortError();
+          }
 
           const {
             aborted,
@@ -2118,12 +2341,22 @@ async function runEmbeddedAgentInternal(
                 )
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-          const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
+          const currentAttemptAssistantUsage = normalizeUsage(
+            currentAttemptAssistant?.usage as UsageLike,
+          );
+          const promptCacheLastCallUsage = normalizeUsage(
+            attempt.promptCache?.lastCallUsage as UsageLike,
+          );
+          const callUsage = resolveLatestCallUsage({
+            currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
+            carriedCandidates: [lastRunPromptUsage, lastAssistantUsage],
+          });
+          const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
-          lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
-          lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          lastRunPromptUsage = callUsage.latest;
+          lastTurnTotal = callUsage.latest?.total;
           // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
           // pure helper below so it stays unit-testable; the run loop just
           // feeds it the latest attempt outcome and bails through the
@@ -2276,7 +2509,9 @@ async function runEmbeddedAgentInternal(
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
-            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const lastTurnPromptTokens = deriveContextPromptTokens({
+              lastCallUsage: lastRunPromptUsage,
+            });
             const tokenUsedRatio =
               lastTurnPromptTokens != null && ctxInfo.tokens > 0
                 ? lastTurnPromptTokens / ctxInfo.tokens
@@ -2635,6 +2870,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
                     config: params.config,
+                    protectTrailingToolResults: true,
                   });
                   if (truncResult.truncated) {
                     log.info(
@@ -2698,6 +2934,7 @@ async function runEmbeddedAgentInternal(
                   sessionKey: params.sessionKey,
                   agentId: sessionAgentId,
                   config: params.config,
+                  protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
                 });
                 if (truncResult.truncated) {
                   log.info(
@@ -2808,9 +3045,10 @@ async function runEmbeddedAgentInternal(
             // Retry replay-safe Codex app-server failures.
             const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
-              alreadyRetried: codexAppServerRecoveryRetries > 0,
+              retryAvailable: codexAppServerRecoveryRetryAvailable,
             });
             if (codexAppServerRecoveryRetry.retry) {
+              throwIfAborted();
               codexAppServerRecoveryRetries += 1;
               suppressNextUserMessagePersistence = true;
               log.warn(
@@ -2830,7 +3068,7 @@ async function runEmbeddedAgentInternal(
               !hasRecoverableCodexAppServerTimeoutOutcome &&
               !shouldSurfaceCodexCompletionTimeout
             ) {
-              throw toLintErrorObject(promptError, "Prompt failed");
+              throw toErrorObject(promptError, "Prompt failed");
             }
           }
 
@@ -2965,6 +3203,12 @@ async function runEmbeddedAgentInternal(
             );
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
+            const promptTimeoutFallbackSafe =
+              promptErrorSource === "prompt" &&
+              promptFailoverReason === "timeout" &&
+              !attempt.codexAppServerFailure &&
+              attempt.promptTimeoutOutcome?.replayInvalid !== true &&
+              attempt.replayMetadata.replaySafe;
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
@@ -2996,6 +3240,7 @@ async function runEmbeddedAgentInternal(
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
+              promptTimeoutFallbackSafe,
               profileRotated: false,
             });
             if (
@@ -3035,6 +3280,7 @@ async function runEmbeddedAgentInternal(
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
+                promptTimeoutFallbackSafe,
                 profileRotated: true,
               });
             }
@@ -3100,7 +3346,7 @@ async function runEmbeddedAgentInternal(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw toLintErrorObject(promptError, "Prompt failed");
+            throw toErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -3377,6 +3623,7 @@ async function runEmbeddedAgentInternal(
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+            assistantTranscriptOwned: attempt.assistantTranscriptOwned,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,
@@ -3877,18 +4124,7 @@ async function runEmbeddedAgentInternal(
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
-          if (lastProfileId) {
-            await markAuthProfileSuccess({
-              store: profileFailureStore,
-              provider: resolveAuthProfileStateProvider(
-                profileFailureStore,
-                lastProfileId,
-                provider,
-              ),
-              profileId: lastProfileId,
-              agentDir: params.agentDir,
-            });
-          }
+          markAuthProfileSuccessAfterRun();
           const replayInvalid = resolveReplayInvalidForAttempt(null);
           const livenessState = attempt.yieldDetected
             ? "paused"
@@ -3993,6 +4229,9 @@ async function runEmbeddedAgentInternal(
           };
         }
       } finally {
+        if (params.isFinalFallbackAttempt !== false) {
+          await maybeEmitFastModeAutoResetBestEffort();
+        }
         forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
         await runAgentCleanupStep({
@@ -4047,18 +4286,4 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
