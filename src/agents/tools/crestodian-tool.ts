@@ -322,6 +322,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
           directive.kind === "channel-setup"
             ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
             : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`,
+          {},
         );
       }
       const persistent = isPersistentCrestodianOperation(operation);

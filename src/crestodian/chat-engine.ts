@@ -507,7 +507,7 @@ export class CrestodianChatEngine {
       return {
         text: loopReply.text,
         action: "open-tui",
-        handoff: { kind: "open-tui", ...loopReply.directive },
+        handoff: loopReply.directive,
       };
     }
     return { text: loopReply.text, action: "none" };
