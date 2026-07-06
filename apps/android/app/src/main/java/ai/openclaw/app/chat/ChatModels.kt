@@ -31,6 +31,7 @@ data class ChatMessageContent(
   val mimeType: String? = null,
   val fileName: String? = null,
   val base64: String? = null,
+  val durationMs: Long? = null,
 )
 
 /**
@@ -106,4 +107,5 @@ data class OutgoingAttachment(
   val mimeType: String,
   val fileName: String,
   val base64: String,
+  val durationMs: Long? = null,
 )

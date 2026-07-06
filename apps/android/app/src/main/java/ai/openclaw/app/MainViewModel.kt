@@ -17,6 +17,7 @@ import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
+import android.Manifest
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
@@ -57,6 +58,8 @@ class MainViewModel(
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
 
+  @Volatile private var permissionRequester: PermissionRequester? = null
+
   @Volatile private var foreground = false
 
   @Volatile private var runtimeStartupQueued = false
@@ -71,6 +74,7 @@ class MainViewModel(
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
   val assistantAutoSendInFlight: StateFlow<Boolean> = _assistantAutoSendInFlight
+  private val voiceNoteRecordingActive = MutableStateFlow(false)
 
   /**
    * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
@@ -264,6 +268,7 @@ class MainViewModel(
     runtime.camera.attachLifecycleOwner(owner)
     runtime.camera.attachPermissionRequester(permissionRequester)
     runtime.sms.attachPermissionRequester(permissionRequester)
+    this.permissionRequester = permissionRequester
   }
 
   /**
@@ -525,6 +530,8 @@ class MainViewModel(
   }
 
   fun setMicEnabled(enabled: Boolean) {
+    // Voice capture has no mic arbiter; the active composer recording owns it until stop/cancel.
+    if (enabled && voiceNoteRecordingActive.value) return
     ensureRuntime().setMicEnabled(enabled)
   }
 
@@ -533,7 +540,19 @@ class MainViewModel(
   }
 
   fun setTalkModeEnabled(enabled: Boolean) {
+    if (enabled && voiceNoteRecordingActive.value) return
     ensureRuntime().setTalkModeEnabled(enabled)
+  }
+
+  suspend fun requestVoiceNotePermission(): Boolean {
+    val requester = permissionRequester ?: return false
+    return runCatching {
+      requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
+    }.getOrDefault(false)
+  }
+
+  fun setVoiceNoteRecordingActive(active: Boolean) {
+    voiceNoteRecordingActive.value = active
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {

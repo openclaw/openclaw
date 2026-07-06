@@ -682,6 +682,7 @@ class ChatController internal constructor(
               mimeType = att.mimeType,
               fileName = att.fileName,
               base64 = att.base64,
+              durationMs = att.durationMs,
             ),
           )
         }
@@ -2221,29 +2222,60 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
 
-    "image" ->
+    "image", "audio" ->
       ChatMessageContent(
-        type = "image",
+        type = obj["type"].asStringOrNull() ?: "image",
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
         base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
       )
+
+    "attachment" -> {
+      val attachment = obj["attachment"].asObjectOrNull() ?: return null
+      val mimeType = attachment["mimeType"].asStringOrNull()
+      if (attachment["kind"].asStringOrNull() != "audio" && mimeType?.startsWith("audio/") != true) return null
+      ChatMessageContent(
+        type = "audio",
+        mimeType = mimeType,
+        fileName = attachment["label"].asStringOrNull(),
+      )
+    }
 
     else -> null
   }
 }
 
 internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
-  obj["content"].asArrayOrNull()?.let { content ->
-    return content.mapNotNull(::parseChatMessageContent)
+  val content =
+    obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent)
+      ?: obj["content"].asStringOrNull()?.let { listOf(ChatMessageContent(type = "text", text = it)) }
+      ?: obj["text"].asStringOrNull()?.let { listOf(ChatMessageContent(type = "text", text = it)) }
+      ?: emptyList()
+  val transcriptAudio = parseTranscriptAudioContents(obj)
+  if (transcriptAudio.isEmpty()) return content
+  return content +
+    transcriptAudio.filterNot { audio ->
+      content.any { it.mimeType == audio.mimeType && it.fileName == audio.fileName }
+    }
+}
+
+private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {
+  val paths =
+    obj["MediaPaths"].asArrayOrNull()?.mapNotNull { it.asStringOrNull() }
+      ?: obj["MediaPath"].asStringOrNull()?.let { listOf(it) }
+      ?: return emptyList()
+  val types =
+    obj["MediaTypes"].asArrayOrNull()?.map { it.asStringOrNull().orEmpty() }
+      ?: obj["MediaType"].asStringOrNull()?.let { listOf(it) }
+      ?: emptyList()
+  return paths.mapIndexedNotNull { index, path ->
+    val mimeType = types.getOrNull(index)?.takeIf { it.startsWith("audio/") } ?: return@mapIndexedNotNull null
+    ChatMessageContent(
+      type = "audio",
+      mimeType = mimeType,
+      fileName = path.substringAfterLast('/').takeIf(String::isNotBlank),
+    )
   }
-  obj["content"].asStringOrNull()?.let { text ->
-    return listOf(ChatMessageContent(type = "text", text = text))
-  }
-  obj["text"].asStringOrNull()?.let { text ->
-    return listOf(ChatMessageContent(type = "text", text = text))
-  }
-  return emptyList()
 }
 
 private fun parseCreatedSessionKey(
@@ -2330,21 +2362,48 @@ internal fun reconcileMessageIds(
 ): List<ChatMessage> {
   if (previous.isEmpty() || incoming.isEmpty()) return incoming
 
-  val idsByKey = LinkedHashMap<String, ArrayDeque<String>>()
+  val messagesByKey = LinkedHashMap<String, ArrayDeque<ChatMessage>>()
   for (message in previous) {
     val key = messageIdentityKey(message) ?: continue
-    idsByKey.getOrPut(key) { ArrayDeque() }.addLast(message.id)
+    messagesByKey.getOrPut(key) { ArrayDeque() }.addLast(message)
   }
 
   return incoming.map { message ->
     val key = messageIdentityKey(message) ?: return@map message
-    val ids = idsByKey[key] ?: return@map message
-    val reusedId = ids.removeFirstOrNull() ?: return@map message
-    if (ids.isEmpty()) {
-      idsByKey.remove(key)
+    val matches = messagesByKey[key] ?: return@map message
+    val previousMessage = matches.removeFirstOrNull() ?: return@map message
+    if (matches.isEmpty()) {
+      messagesByKey.remove(key)
     }
-    if (reusedId == message.id) return@map message
-    message.copy(id = reusedId)
+    message.copy(
+      id = previousMessage.id,
+      content = preserveOptimisticAudioDuration(previous = previousMessage, incoming = message),
+    )
+  }
+}
+
+private fun preserveOptimisticAudioDuration(
+  previous: ChatMessage,
+  incoming: ChatMessage,
+): List<ChatMessageContent> {
+  val idempotencyKey = incoming.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isEmpty() || idempotencyKey != previous.idempotencyKey?.trim()) return incoming.content
+
+  val remainingAudio =
+    previous.content
+      .filter { it.mimeType?.startsWith("audio/") == true && it.durationMs != null }
+      .toMutableList()
+  if (remainingAudio.isEmpty()) return incoming.content
+
+  return incoming.content.map { part ->
+    if (part.durationMs != null || part.mimeType?.startsWith("audio/") != true) return@map part
+    if (remainingAudio.isEmpty()) return@map part
+    val exactIndex =
+      remainingAudio.indexOfFirst {
+        it.mimeType == part.mimeType && it.fileName == part.fileName
+      }
+    val match = remainingAudio.removeAt(if (exactIndex >= 0) exactIndex else 0)
+    part.copy(durationMs = match.durationMs)
   }
 }
 
