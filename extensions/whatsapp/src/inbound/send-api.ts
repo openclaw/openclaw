@@ -243,11 +243,11 @@ async function maybeFetchOutboundTokenDiagnostics(params: { sock: WebSendSocket 
   newChatMessageCap?: NewChatMessageCapInfo;
 }> {
   const [reachoutTimelock, newChatMessageCap] = await Promise.all([
-    params.sock.fetchAccountReachoutTimelock?.().catch((err) => {
+    params.sock.fetchAccountReachoutTimelock?.().catch((err: unknown) => {
       logVerbose(`WhatsApp reachout timelock lookup failed: ${String(err)}`);
       return undefined;
     }),
-    params.sock.fetchNewChatMessageCap?.().catch((err) => {
+    params.sock.fetchNewChatMessageCap?.().catch((err: unknown) => {
       logVerbose(`WhatsApp new-chat message cap lookup failed: ${String(err)}`);
       return undefined;
     }),

@@ -667,8 +667,9 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
   });
 
   it("fails before sendMessage when reachout timelock is active without a trusted-contact token", async () => {
+    const keysGet = vi.fn(async () => ({}));
     const keys = {
-      get: vi.fn(async () => ({})),
+      get: keysGet,
       set: vi.fn(async () => undefined),
       isInTransaction: () => false,
       transaction: vi.fn(async (exec: () => Promise<unknown>) => await exec()),
@@ -695,7 +696,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       "WhatsApp reachout timelock is active",
     );
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(keys.get).toHaveBeenCalledWith("tctoken", ["14445550000@s.whatsapp.net"]);
+    expect(keysGet).toHaveBeenCalledWith("tctoken", ["14445550000@s.whatsapp.net"]);
   });
 
   it("logs missing trusted-contact token diagnostics without blocking inactive accounts", async () => {
