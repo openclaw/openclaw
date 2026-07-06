@@ -77,7 +77,10 @@ describe("crabline transport", () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
-        scenarioIds: ["channel-multi-actor-ordering"],
+        transportPolicy: {
+          requireGroupMention: true,
+          senderAllowlist: ["driver"],
+        },
         selection: createSelection(),
         state: createQaBusState(),
       });
@@ -115,9 +118,7 @@ describe("crabline transport", () => {
         const payload = (await response.json()) as {
           result?: Array<{ message?: { from?: { id?: number }; text?: string } }>;
         };
-        expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([
-          100002, 100001,
-        ]);
+        expect(payload.result?.map((update) => update.message?.from?.id)).toEqual([100002, 100001]);
       } finally {
         await transport.cleanup?.();
       }
@@ -129,13 +130,11 @@ describe("crabline transport", () => {
       await expect(
         createQaCrablineTransportAdapter({
           outputDir,
-          scenarioIds: ["channel-sender-allowlist"],
+          transportPolicy: { senderAllowlist: ["driver"] },
           selection: createSelection("matrix"),
           state: createQaBusState(),
         }),
-      ).rejects.toThrow(
-        "Crabline matrix does not support canonical sender-policy scenario(s): channel-sender-allowlist",
-      );
+      ).rejects.toThrow("Crabline matrix does not support the requested group transport policy");
     });
   });
 

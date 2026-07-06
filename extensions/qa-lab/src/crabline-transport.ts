@@ -11,6 +11,7 @@ import {
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaRunnerTransportPolicy } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -42,10 +43,6 @@ import type {
 const CRABLINE_TRANSPORT_ID = "crabline";
 const TELEGRAM_QA_DRIVER_ID = "100001";
 const TELEGRAM_QA_OBSERVER_ID = "100002";
-const TELEGRAM_ONLY_SENDER_POLICY_SCENARIO_IDS = new Set([
-  "channel-multi-actor-ordering",
-  "channel-sender-allowlist",
-]);
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -55,6 +52,14 @@ type QaCrablineTransportState = QaTransportState & {
 };
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
+
+function resolveTelegramQaSenderId(senderId: string) {
+  return senderId === "driver"
+    ? TELEGRAM_QA_DRIVER_ID
+    : senderId === "observer"
+      ? TELEGRAM_QA_OBSERVER_ID
+      : senderId;
+}
 
 function readTelegramLifecycleEvent(params: {
   cursor: number;
@@ -283,11 +288,7 @@ function createCrablineState(params: {
     async addInboundMessage(input: QaBusInboundMessageInput) {
       const providerSenderId =
         params.adapter.channel === "telegram"
-          ? input.senderId === "driver"
-            ? TELEGRAM_QA_DRIVER_ID
-            : input.senderId === "observer"
-              ? TELEGRAM_QA_OBSERVER_ID
-              : input.senderId
+          ? resolveTelegramQaSenderId(input.senderId)
           : input.senderId;
       const providerInbound = params.adapter.createInbound({
         input: {
@@ -326,7 +327,7 @@ function createCrablineState(params: {
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
-  readonly #scenarioIds: ReadonlySet<string>;
+  readonly #transportPolicy?: QaRunnerTransportPolicy;
   readonly #state: QaCrablineTransportState;
   readonly sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
   readonly waitForOutboundSequence?: (input: QaTransportOutboundSequenceMatch) => Promise<{
@@ -336,7 +337,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   constructor(params: {
     adapter: StartedOpenClawCrablineAdapter;
-    scenarioIds?: readonly string[];
+    transportPolicy?: QaRunnerTransportPolicy;
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
   }) {
@@ -349,7 +350,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     });
     this.#adapter = params.adapter;
     this.#selection = params.selection;
-    this.#scenarioIds = new Set(params.scenarioIds ?? []);
+    this.#transportPolicy = params.transportPolicy;
     this.#state = params.state;
     if (params.selection.channel === "telegram") {
       this.sendNativeCommand = async (input) => {
@@ -373,11 +374,8 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     if (this.#selection.channel !== "telegram") {
       return config as QaTransportGatewayConfig;
     }
-    const requiresMention = this.#scenarioIds.has("channel-mention-gating");
-    const enforcesSenderAllowlist =
-      this.#scenarioIds.has("channel-sender-allowlist") ||
-      this.#scenarioIds.has("channel-multi-actor-ordering");
-    if (!requiresMention && !enforcesSenderAllowlist) {
+    const senderAllowlist = this.#transportPolicy?.senderAllowlist?.map(resolveTelegramQaSenderId);
+    if (!this.#transportPolicy?.requireGroupMention && !senderAllowlist) {
       return config as QaTransportGatewayConfig;
     }
     return {
@@ -386,10 +384,10 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
         ...config.channels,
         telegram: {
           ...config.channels?.telegram,
-          ...(enforcesSenderAllowlist
+          ...(senderAllowlist
             ? {
-                allowFrom: [TELEGRAM_QA_DRIVER_ID],
-                groupAllowFrom: [TELEGRAM_QA_DRIVER_ID],
+                allowFrom: [...senderAllowlist],
+                groupAllowFrom: [...senderAllowlist],
                 groupPolicy: "allowlist" as const,
               }
             : {}),
@@ -397,7 +395,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
             ...config.channels?.telegram?.groups,
             "*": {
               ...config.channels?.telegram?.groups?.["*"],
-              ...(requiresMention ? { requireMention: true } : {}),
+              ...(this.#transportPolicy?.requireGroupMention ? { requireMention: true } : {}),
             },
           },
         },
@@ -445,21 +443,16 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
 export async function createQaCrablineTransportAdapter(params: {
   outputDir: string;
-  scenarioIds?: readonly string[];
+  transportPolicy?: QaRunnerTransportPolicy;
   selection: OpenClawCrablineChannelDriverSelection;
   state?: QaBusState;
 }) {
-  const unsupportedScenarioIds =
-    params.selection.channel === "telegram"
-      ? []
-      : (params.scenarioIds ?? []).filter((scenarioId) =>
-          TELEGRAM_ONLY_SENDER_POLICY_SCENARIO_IDS.has(scenarioId),
-        );
-  if (unsupportedScenarioIds.length > 0) {
+  const requiresTelegramPolicy =
+    params.transportPolicy?.requireGroupMention === true ||
+    params.transportPolicy?.senderAllowlist !== undefined;
+  if (params.selection.channel !== "telegram" && requiresTelegramPolicy) {
     throw new Error(
-      `Crabline ${params.selection.channel} does not support canonical sender-policy scenario(s): ${unsupportedScenarioIds.join(
-        ", ",
-      )}; use the Crabline Telegram bridge or a live channel adapter`,
+      `Crabline ${params.selection.channel} does not support the requested group transport policy; use the Crabline Telegram bridge or a live channel adapter`,
     );
   }
   const recorderPath = path.join(
@@ -489,7 +482,7 @@ export async function createQaCrablineTransportAdapter(params: {
   observeEvent = state.observeEvent;
   return new QaCrablineTransport({
     adapter,
-    scenarioIds: params.scenarioIds,
+    transportPolicy: params.transportPolicy,
     selection: params.selection,
     state,
   });

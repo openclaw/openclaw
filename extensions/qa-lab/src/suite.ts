@@ -71,6 +71,7 @@ import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
+  collectQaSuiteTransportPolicy,
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -124,7 +125,7 @@ async function createQaSuiteTransportAdapter(params: {
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
-  scenarioIds: readonly string[];
+  transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
 }) {
@@ -144,7 +145,14 @@ async function createQaSuiteTransportAdapter(params: {
         outputDir: params.outputDir,
         adapterOptions: {
           ...params.adapterOptions,
-          scenarioIds: params.scenarioIds,
+          ...(params.transportPolicy
+            ? {
+                transportPolicy: {
+                  ...params.adapterOptions?.transportPolicy,
+                  ...params.transportPolicy,
+                },
+              }
+            : {}),
         },
         state: params.state,
       },
@@ -766,7 +774,7 @@ async function runQaRuntimeParitySuite(params: {
     adapterOptions: params.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir: params.outputDir,
-    scenarioIds: params.selectedScenarios.map((scenario) => scenario.id),
+    transportPolicy: collectQaSuiteTransportPolicy(params.selectedScenarios),
     state: lab.state,
     transportId: params.transportId,
   });
@@ -1345,7 +1353,6 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       adapterOptions: params?.adapterOptions,
       cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
       outputDir,
-      scenarioIds: selectedScenarios.map((scenario) => scenario.id),
       state: lab.state,
       transportId,
     });
@@ -1610,7 +1617,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     adapterOptions: params?.adapterOptions,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
-    scenarioIds: selectedScenarios.map((scenario) => scenario.id),
+    transportPolicy: collectQaSuiteTransportPolicy(selectedScenarios),
     state: lab.state,
     transportId,
   });

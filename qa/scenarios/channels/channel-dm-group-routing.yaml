@@ -22,6 +22,8 @@ scenario:
   execution:
     kind: flow
     summary: Send sequential DM and group turns and assert route separation.
+    transportPolicy:
+      requireGroupMention: true
     config:
       dmConversationId: qa-routing-dm
       dmMarker: QA-DM-ROUTING-OK

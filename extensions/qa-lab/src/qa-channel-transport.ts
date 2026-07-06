@@ -2,6 +2,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaRunnerTransportPolicy } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
@@ -83,21 +84,9 @@ async function waitForQaChannelReady(params: {
 
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
-  scenarioIds?: readonly string[];
+  transportPolicy?: QaRunnerTransportPolicy;
 }): QaTransportGatewayConfig {
-  const scenarioIds = new Set(params.scenarioIds ?? []);
-  const requiresMention = [
-    "channel-canary",
-    "channel-dm-group-routing",
-    "channel-mention-gating",
-    "channel-sender-allowlist",
-    "channel-top-level-reply-shape",
-    "channel-secondary-conversation-isolation",
-    "channel-multi-actor-ordering",
-  ].some((scenarioId) => scenarioIds.has(scenarioId));
-  const enforcesSenderAllowlist =
-    scenarioIds.has("channel-sender-allowlist") ||
-    scenarioIds.has("channel-multi-actor-ordering");
+  const senderAllowlist = params.transportPolicy?.senderAllowlist;
   return {
     channels: {
       [QA_CHANNEL_ID]: {
@@ -105,14 +94,14 @@ export function createQaChannelGatewayConfig(params: {
         baseUrl: params.baseUrl,
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
-        allowFrom: enforcesSenderAllowlist ? ["driver"] : ["*"],
-        ...(enforcesSenderAllowlist
+        allowFrom: senderAllowlist ? [...senderAllowlist] : ["*"],
+        ...(senderAllowlist
           ? {
               groupPolicy: "allowlist" as const,
-              groupAllowFrom: ["driver"],
+              groupAllowFrom: [...senderAllowlist],
             }
           : {}),
-        ...(requiresMention
+        ...(params.transportPolicy?.requireGroupMention
           ? {
               groups: {
                 "*": {
@@ -163,9 +152,9 @@ async function handleQaChannelAction(params: {
 }
 
 class QaChannelTransport extends QaStateBackedTransportAdapter {
-  readonly #scenarioIds: readonly string[];
+  readonly #transportPolicy?: QaRunnerTransportPolicy;
 
-  constructor(state: QaBusState, scenarioIds: readonly string[] = []) {
+  constructor(state: QaBusState, transportPolicy?: QaRunnerTransportPolicy) {
     super({
       id: QA_CHANNEL_ID,
       label: "qa-channel + qa-lab bus",
@@ -174,11 +163,11 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       supportedActions: ["delete", "edit", "react", "thread-create"],
       state,
     });
-    this.#scenarioIds = scenarioIds;
+    this.#transportPolicy = transportPolicy;
   }
 
   createGatewayConfig = ({ baseUrl }: { baseUrl: string }) =>
-    createQaChannelGatewayConfig({ baseUrl, scenarioIds: this.#scenarioIds });
+    createQaChannelGatewayConfig({ baseUrl, transportPolicy: this.#transportPolicy });
   waitReady = waitForQaChannelReady;
   buildAgentDelivery = ({ target }: { target: string }) => ({
     channel: QA_CHANNEL_ID,
@@ -203,6 +192,9 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   createReportNotes = createQaChannelReportNotes;
 }
 
-export function createQaChannelTransport(state: QaBusState, scenarioIds?: readonly string[]) {
-  return new QaChannelTransport(state, scenarioIds);
+export function createQaChannelTransport(
+  state: QaBusState,
+  transportPolicy?: QaRunnerTransportPolicy,
+) {
+  return new QaChannelTransport(state, transportPolicy);
 }

@@ -21,6 +21,10 @@ scenario:
   execution:
     kind: flow
     summary: Preserve actor order across a blocked observer turn and a successful driver turn.
+    transportPolicy:
+      requireGroupMention: true
+      senderAllowlist:
+        - driver
     config:
       conversationId: qa-routing-ordering
       blockedMarker: QA-BLOCKED-ACTOR-SHOULD-NOT-REPLY

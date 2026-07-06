@@ -21,6 +21,10 @@ scenario:
   execution:
     kind: flow
     summary: Exercise sender allowlist rejection and the configured driver override in one ordered flow.
+    transportPolicy:
+      requireGroupMention: true
+      senderAllowlist:
+        - driver
     config:
       conversationId: qa-routing-allowlist
       expectedMarker: QA-ALLOWLIST-OVERRIDE-OK

@@ -21,6 +21,8 @@ scenario:
   execution:
     kind: flow
     summary: Prove the shared mention gate with a quiet turn followed by a mentioned turn.
+    transportPolicy:
+      requireGroupMention: true
     config:
       conversationId: qa-routing-mention
       expectedMarker: QA-MENTION-GATING-OK

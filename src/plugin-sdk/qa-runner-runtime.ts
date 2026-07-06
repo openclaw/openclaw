@@ -15,12 +15,18 @@ import type {
   QaBusOutboundMessageInput,
 } from "./qa-channel-protocol.js";
 
+export type QaRunnerTransportPolicy = {
+  requireGroupMention?: true;
+  senderAllowlist?: readonly string[];
+  topLevelReplies?: true;
+};
+
 type QaRunnerAdapterOptions = {
   repoRoot?: string;
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
-  scenarioIds?: readonly string[];
+  transportPolicy?: QaRunnerTransportPolicy;
 };
 
 type QaRunnerMessageRecorder = {

@@ -22,6 +22,8 @@ scenario:
   execution:
     kind: flow
     summary: Run the shared channel canary through QA Channel, Crabline, or a live adapter.
+    transportPolicy:
+      requireGroupMention: true
     config:
       conversationId: qa-routing-primary
       expectedMarker: QA-CHANNEL-CANARY-OK

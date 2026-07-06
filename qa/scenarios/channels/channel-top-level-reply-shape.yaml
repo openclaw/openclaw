@@ -21,6 +21,9 @@ scenario:
   execution:
     kind: flow
     summary: Assert portable top-level reply shape while native adapters normalize transport relations.
+    transportPolicy:
+      requireGroupMention: true
+      topLevelReplies: true
     config:
       conversationId: qa-routing-top-level
       expectedMarker: QA-TOP-LEVEL-REPLY-OK

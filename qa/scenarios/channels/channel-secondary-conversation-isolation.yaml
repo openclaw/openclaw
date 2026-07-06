@@ -21,6 +21,8 @@ scenario:
   execution:
     kind: flow
     summary: Send sequential turns to primary and secondary channel conversations and assert isolation.
+    transportPolicy:
+      requireGroupMention: true
     config:
       primaryConversationId: primary
       primaryMarker: QA-PRIMARY-CONVERSATION-OK

@@ -169,9 +169,7 @@ export async function createWhatsAppQaTransportAdapter(
         authDir: sutAuthDir,
         dmPolicy: "allowlist",
         groupJid: runtimeEnv.groupJid,
-        overrides: options.scenarioIds?.includes("channel-top-level-reply-shape")
-          ? { replyToMode: "off" }
-          : undefined,
+        overrides: options.transportPolicy?.topLevelReplies ? { replyToMode: "off" } : undefined,
         sutAccountId: accountId,
       }),
     waitReady: async ({ gateway }) =>
