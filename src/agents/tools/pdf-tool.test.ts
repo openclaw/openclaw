@@ -8,8 +8,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import * as modelDiscovery from "../agent-model-discovery.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import * as model from "../embedded-agent-runner/model.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
@@ -116,36 +116,33 @@ async function stubPdfToolInfra(
     provider?: string;
     input?: string[];
     api?: string;
-    modelFound?: boolean;
   },
 ) {
-  // Keep PDF tool tests focused on orchestration; provider discovery, auth, and
+  // Keep PDF tool tests focused on orchestration; model resolution, auth, and
   // remote media loading are replaced with narrow spies at the module boundary.
+  // resolveModelAsync is the same resolver the image tool and main loop use, so
+  // stubbing it keeps provider-runtime/static-catalog resolution out of scope.
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
   if (params?.mockLoad !== false) {
     loadSpy.mockResolvedValue(FAKE_PDF_MEDIA as never);
   }
 
-  vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
-    setRuntimeApiKey: vi.fn(),
-  } as never);
-  const find =
-    params?.modelFound === false
-      ? () => null
-      : () =>
-          ({
-            provider: params?.provider ?? "anthropic",
-            api:
-              params?.api ??
-              (params?.provider === "openai"
-                ? "openai-chatgpt-responses"
-                : params?.provider === "openai"
-                  ? "openai-responses"
-                  : "anthropic-messages"),
-            maxTokens: 8192,
-            input: params?.input ?? ["text", "document"],
-          }) as never;
-  vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({ find } as never);
+  const provider = params?.provider ?? "anthropic";
+  const api = params?.api ?? (provider === "openai" ? "openai-responses" : "anthropic-messages");
+  vi.spyOn(model, "resolveModelAsync").mockImplementation(async (resolvedProvider, modelId) => {
+    return {
+      model: {
+        provider: resolvedProvider,
+        id: modelId,
+        name: modelId,
+        api,
+        maxTokens: 8192,
+        input: params?.input ?? ["text", "document"],
+      },
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never;
+  });
 
   vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
     agentDir,
@@ -520,9 +517,13 @@ describe("createPdfTool", () => {
       );
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
-      expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
-        workspaceDir,
-      });
+      expect(model.resolveModelAsync).toHaveBeenCalledWith(
+        "anthropic",
+        "claude-opus-4-6",
+        agentDir,
+        expect.anything(),
+        expect.objectContaining({ allowBundledStaticCatalogFallback: true, workspaceDir }),
+      );
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
       expectFields(result.details, {
@@ -648,7 +649,42 @@ describe("createPdfTool", () => {
         native: false,
         model: OPENAI_PDF_MODEL,
       });
+      // Non-native fallback candidates resolve through the shared resolver too,
+      // so plugin-provided/catalog-native providers stay usable for extraction.
+      expect(model.resolveModelAsync).toHaveBeenCalledWith(
+        "openai",
+        "gpt-5.4-mini",
+        agentDir,
+        expect.anything(),
+        expect.objectContaining({ allowBundledStaticCatalogFallback: true }),
+      );
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("surfaces the resolver error when model resolution fails", async () => {
+    // resolveModelAsync reports a rich diagnostic in `error` when a candidate
+    // cannot be resolved; the pdf tool must surface that instead of a generic
+    // "Unknown model" string. Failure-path coverage suggested by @STiFLeR7.
+    await withTempPdfAgentDir(async (agentDir) => {
+      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
+        agentDir,
+        wrote: false,
+      });
+      const resolverError = "Custom model resolution failed: API key missing or invalid.";
+      vi.spyOn(model, "resolveModelAsync").mockResolvedValue({
+        model: undefined,
+        error: resolverError,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      } as never);
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", { prompt: "summarize", pdf: "/tmp/doc.pdf" }),
+      ).rejects.toThrow(resolverError);
     });
   });
 
