@@ -21,6 +21,10 @@ function readBuildArtifactsTestboxWorkflow() {
   return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
 }
 
+function readTestboxWorkflow() {
+  return parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
+}
+
 function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
@@ -129,6 +133,18 @@ describe("ci workflow guards", () => {
         "github.event_name == 'workflow_dispatch'",
       );
     }
+  });
+
+  it("keeps Testbox pull request validation off leased runner capacity", () => {
+    const workflow = readTestboxWorkflow();
+
+    expect(workflow.jobs.check["runs-on"]).toBe(
+      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
+    );
+    expect(workflow.jobs.check.steps[0]).toMatchObject({
+      name: "Begin Testbox",
+      with: { testbox_id: "${{ inputs.testbox_id }}" },
+    });
   });
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
