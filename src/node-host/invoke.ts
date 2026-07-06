@@ -351,6 +351,12 @@ async function runCommand(
       });
     };
 
+    child.stdout?.on("error", (err) => {
+      finalize(undefined, err.message);
+    });
+    child.stderr?.on("error", (err) => {
+      finalize(undefined, err.message);
+    });
     child.on("error", (err) => {
       finalize(undefined, err.message);
     });
@@ -783,3 +789,7 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
     // ignore: node events are best-effort
   }
 }
+
+export const testing = {
+  runCommand,
+} as const;
