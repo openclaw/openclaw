@@ -829,6 +829,11 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     id: "openai",
     label: "OpenAI",
     isConfigured: ({ cfg, agentDir }) => {
+      // generateImage already authenticates from a config apiKey; count it as
+      // configured here too, so image gen works from config alone, like chat.
+      if (cfg?.models?.providers?.openai?.apiKey !== undefined) {
+        return true;
+      }
       const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
       const hasPublicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(configuredBaseUrl);
       const hasChatGPTRouteConfig = hasChatGPTImageRouteConfig(cfg);

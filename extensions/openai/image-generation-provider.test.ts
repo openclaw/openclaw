@@ -409,6 +409,32 @@ describe("openai image generation provider", () => {
     ).toBe(false);
   });
 
+  it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    // Config-only auth: a provider apiKey in config, with no env var and no
+    // auth profile.
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://gateway.example.test/openai/v1",
+                apiKey: "gateway-token",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", () => {
     const provider = buildOpenAIImageGenerationProvider();
 
