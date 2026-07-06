@@ -955,7 +955,7 @@ describe("matrix live qa scenarios", () => {
             id: "matrix-secondary-room-open-trigger",
             standardId: "canary",
             timeoutMs: 60_000,
-            title: "Matrix restart resume",
+            title: "Matrix secondary topology",
             topology: {
               defaultRoomKey: "main",
               rooms: [
