@@ -800,8 +800,15 @@ describe("maybeRepairGatewayDaemon", () => {
     // The restart prompt was shown but user declined (createPrompter returned false for it).
   });
 
-  it("skips repair flow when protocolMismatch is true", async () => {
+  it("runs read-only diagnostics and skips repair mutations when protocolMismatch is true", async () => {
     setPlatform("linux");
+    const listeners = [{ pid: 12_345, command: "node" }];
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status: "busy",
+      listeners,
+      hints: ["Port 18789 is already in use."],
+    });
 
     await maybeRepairGatewayDaemon({
       cfg: { gateway: {} },
@@ -816,10 +823,19 @@ describe("maybeRepairGatewayDaemon", () => {
       protocolMismatch: true,
     });
 
-    // Service diagnostics still run (isLoaded is called), but the
-    // dead-gateway restart/install flow is skipped.
+    expect(service.isLoaded).toHaveBeenCalled();
+    expect(service.readRuntime).toHaveBeenCalled();
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+    expect(formatPortDiagnostics).toHaveBeenCalledWith({
+      port: 18789,
+      status: "busy",
+      listeners,
+      hints: ["Port 18789 is already in use."],
+    });
+    expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
+    expect(service.stage).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
   });
 });

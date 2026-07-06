@@ -136,8 +136,9 @@ describe("checkGatewayHealth", () => {
     isGatewayTransportError.mockImplementation((value) => value === error);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+    const result = await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
 
+    expect(result).toEqual({ authenticated: false, healthOk: false, status: undefined });
     expect(note).toHaveBeenCalledWith(
       "Gateway connect failed: gateway closed (1008): protocol version mismatch",
       "Gateway",
@@ -168,6 +169,19 @@ describe("checkGatewayHealth", () => {
     );
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", expect.anything());
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not infer protocolMismatch from untyped close text", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1002): protocol mismatch"));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const result = await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(result).toEqual({ authenticated: false, healthOk: false, status: undefined });
+    expect(note).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "Gateway protocol mismatch",
+    );
   });
 
   it("reports credentials-required when status RPC auth blocks a reachable gateway", async () => {
