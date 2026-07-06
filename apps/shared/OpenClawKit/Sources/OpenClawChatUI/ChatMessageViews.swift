@@ -478,16 +478,28 @@ private struct AttachmentRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "paperclip")
-            Text(self.att.fileName ?? "Attachment")
+            Image(systemName: self.isAudio ? "waveform" : "paperclip")
+            Text(self.isAudio ? "Voice note" : (self.att.fileName ?? "Attachment"))
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+            if self.isAudio, let durationSeconds = self.att.durationSeconds {
+                Text(openClawVoiceNoteDurationLabel(durationSeconds))
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(
+                        self.isUser
+                            ? OpenClawChatTheme.userText.opacity(0.72)
+                            : OpenClawChatTheme.assistantText.opacity(0.72))
+            }
             Spacer()
         }
         .padding(10)
         .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var isAudio: Bool {
+        self.att.mimeType?.hasPrefix("audio/") == true
     }
 }
 

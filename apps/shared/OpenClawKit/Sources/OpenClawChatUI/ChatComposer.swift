@@ -87,6 +87,8 @@ struct OpenClawChatComposer: View {
     let isAttachmentInputEnabled: Bool
     let messagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
+    let voiceNoteControl: OpenClawChatVoiceNoteControl?
+    @State private var stagingVoiceNoteURL: URL?
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -101,7 +103,7 @@ struct OpenClawChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if self.showsToolbar {
+            if self.showsToolbar, self.voiceNoteControl?.recorder.isRecording != true {
                 self.composerToolbar
             }
 
@@ -109,7 +111,12 @@ struct OpenClawChatComposer: View {
                 self.attachmentsStrip
             }
 
-            self.editor
+            if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
+                OpenClawVoiceNoteRecordingRow(recorder: voiceNoteControl.recorder)
+                    .padding(self.editorPadding)
+            } else {
+                self.editor
+            }
         }
         .padding(self.composerPadding)
         .background {
@@ -163,6 +170,18 @@ struct OpenClawChatComposer: View {
                 self.viewModel.loadSlashCommandsIfNeeded()
             }
         #endif
+            .onChange(of: self.voiceNoteControl?.recorder.completedRecording) { _, recording in
+                    guard recording != nil else { return }
+                    self.stageCompletedVoiceNoteIfNeeded()
+                }
+                .onChange(of: self.voiceNoteControl?.recorder.errorMessage) { _, message in
+                    if let message {
+                        self.viewModel.errorText = message
+                    }
+                }
+                .onAppear {
+                    self.stageCompletedVoiceNoteIfNeeded()
+                }
     }
 
     private var composerToolbar: some View {
@@ -193,6 +212,13 @@ struct OpenClawChatComposer: View {
             if self.style == .standard {
                 self.refreshButton
                 self.attachmentPicker
+                if let voiceNoteControl, !voiceNoteControl.isTalkActive {
+                    OpenClawVoiceNoteButton(
+                        control: voiceNoteControl,
+                        compact: false,
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -400,13 +426,27 @@ struct OpenClawChatComposer: View {
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
                                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        } else if att.mimeType.hasPrefix("audio/") {
+                            Image(systemName: "waveform")
+                            Text("Voice note")
+                                .font(OpenClawChatTypography.caption)
+                            if let durationSeconds = att.durationSeconds {
+                                Text(openClawVoiceNoteDurationLabel(durationSeconds))
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
                             Image(systemName: "photo")
+                            Text(att.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
                         }
 
-                        Text(att.fileName)
-                            .font(OpenClawChatTypography.caption)
-                            .lineLimit(1)
+                        if att.preview != nil {
+                            Text(att.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
+                        }
 
                         Button {
                             self.viewModel.removeAttachment(att.id)
@@ -496,6 +536,15 @@ struct OpenClawChatComposer: View {
             HStack(alignment: .bottom, spacing: 8) {
                 self.attachmentPicker
                     .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
+
+                if let voiceNoteControl, !voiceNoteControl.isTalkActive {
+                    OpenClawVoiceNoteButton(
+                        control: voiceNoteControl,
+                        compact: true,
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                        .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
+                }
 
                 self.editorOverlay
                     .padding(.vertical, self.cleanEditorTextPadding)
@@ -1030,8 +1079,29 @@ struct OpenClawChatComposer: View {
 
     private var canSendMessage: Bool {
         self.isComposerEnabled
+            && self.voiceNoteControl?.recorder.completedRecording == nil
             && self.viewModel.canSend
             && (self.isAttachmentInputEnabled || self.viewModel.attachments.isEmpty)
+    }
+
+    private func stageCompletedVoiceNoteIfNeeded() {
+        guard let recorder = self.voiceNoteControl?.recorder,
+              let recording = recorder.completedRecording,
+              self.stagingVoiceNoteURL != recording.fileURL
+        else { return }
+
+        self.stagingVoiceNoteURL = recording.fileURL
+        Task {
+            await self.viewModel.addVoiceNoteAttachment(
+                fileURL: recording.fileURL,
+                durationSeconds: recording.durationSeconds)
+            if recorder.completedRecording == recording {
+                recorder.clearCompletedRecording()
+            }
+            if self.stagingVoiceNoteURL == recording.fileURL {
+                self.stagingVoiceNoteURL = nil
+            }
+        }
     }
 
     private var connectionStatusText: String {

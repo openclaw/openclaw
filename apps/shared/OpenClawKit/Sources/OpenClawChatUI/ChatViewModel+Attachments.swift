@@ -9,6 +9,35 @@ import UIKit
 #endif
 
 extension OpenClawChatViewModel {
+    /// Stages a recorded m4a voice note and removes its temporary file.
+    func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let data: Data
+        do {
+            data = try await Task.detached(priority: .userInitiated) {
+                try Data(contentsOf: fileURL)
+            }.value
+        } catch {
+            self.errorText = String(localized: "Could not attach voice note: \(error.localizedDescription)")
+            return
+        }
+
+        guard data.count <= Self.maxAttachmentBytes else {
+            self.errorText = String(localized: "Voice note exceeds the 5 MB attachment limit")
+            return
+        }
+
+        self.attachments.append(
+            OpenClawPendingAttachment(
+                url: nil,
+                data: data,
+                fileName: fileURL.lastPathComponent,
+                mimeType: "audio/mp4",
+                preview: nil,
+                durationSeconds: max(0, durationSeconds)))
+    }
+
     func loadAttachments(urls: [URL]) async {
         for url in urls {
             do {
