@@ -157,12 +157,11 @@ class TasksPage extends LitElement {
       }
       this.error = formatTaskError(error, t("tasksPage.cancelFailed"));
     } finally {
-      if (client !== this.client) {
-        return;
+      if (client === this.client) {
+        const next = new Set(this.cancellingTaskIds);
+        next.delete(taskId);
+        this.cancellingTaskIds = next;
       }
-      const next = new Set(this.cancellingTaskIds);
-      next.delete(taskId);
-      this.cancellingTaskIds = next;
     }
   }
 
