@@ -713,6 +713,9 @@ class NodeRuntime private constructor(
   private val voiceCaptureOwnershipEpoch = AtomicLong()
   private val talkPttCommandEpoch = AtomicLong()
   private val talkPttOwnership = AtomicReference<TalkPttOwnership?>()
+  // Keep ownership epochs and their service/capture state transitions atomic.
+  // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
+  private val voiceCaptureOwnershipLock = Any()
   private val voiceCapturePreparationMutex = Mutex()
 
   private var didAutoRequestCanvasRehydrate = false
@@ -1736,7 +1739,7 @@ class NodeRuntime private constructor(
                   voiceCaptureOwnershipEpoch.get() == ownershipEpoch
               },
             )
-          talkPttOwnership.set(TalkPttOwnership(captureId = started.captureId, epoch = ownershipEpoch))
+          recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
           started
         }
       GatewaySession.InvokeResult.ok(payload.toJson())
@@ -1774,7 +1777,7 @@ class NodeRuntime private constructor(
               is TalkPttOnceStart.Busy -> started.payload.captureId
               is TalkPttOnceStart.Started -> started.captureId
             }
-          talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+          recordTalkPttOwnership(captureId = captureId, ownershipEpoch = ownershipEpoch)
           started
         }
       val payload =
@@ -1836,24 +1839,26 @@ class NodeRuntime private constructor(
     // yields, preparation must not write capture state that backgrounding cleared.
     val ownershipEpoch =
       withContext(Dispatchers.Main) {
-        if (
-          !_isForeground.value ||
-          voiceLifecycleEpoch.get() != lifecycleEpoch ||
-          talkPttCommandEpoch.get() != commandEpoch
-        ) {
-          throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+        synchronized(voiceCaptureOwnershipLock) {
+          if (
+            !_isForeground.value ||
+            voiceLifecycleEpoch.get() != lifecycleEpoch ||
+            talkPttCommandEpoch.get() != commandEpoch
+          ) {
+            throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          }
+          if (!hasRecordAudioPermission()) {
+            throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+          }
+          val epoch = voiceCaptureOwnershipEpoch.incrementAndGet()
+          micCapture.setMicEnabled(false)
+          stopVoicePlayback()
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+          talkMode.ttsOnAllResponses = true
+          talkMode.setPlaybackEnabled(speakerEnabled.value)
+          externalAudioCaptureActive.value = true
+          epoch
         }
-        if (!hasRecordAudioPermission()) {
-          throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-        }
-        val epoch = voiceCaptureOwnershipEpoch.incrementAndGet()
-        micCapture.setMicEnabled(false)
-        stopVoicePlayback()
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-        talkMode.ttsOnAllResponses = true
-        talkMode.setPlaybackEnabled(speakerEnabled.value)
-        externalAudioCaptureActive.value = true
-        epoch
       }
     try {
       talkMode.refreshConfig()
@@ -1865,17 +1870,30 @@ class NodeRuntime private constructor(
   }
 
   private fun cleanupFailedTalkCapture(ownershipEpoch: Long) {
-    // TalkModeManager owns capture-scoped cancellation. A stale invoke must not
-    // tear down a newer capture after a background/foreground transition.
-    if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
-      talkMode.activePushToTalkCaptureId?.let { captureId ->
-        // An idempotent retry can fail while the original capture remains live.
-        // Transfer preparation ownership so its eventual stop still cleans up.
+    synchronized(voiceCaptureOwnershipLock) {
+      // TalkModeManager owns capture-scoped cancellation. A stale invoke must not
+      // tear down a newer capture after a background/foreground transition.
+      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
+        talkMode.activePushToTalkCaptureId?.let { captureId ->
+          // An idempotent retry can fail while the original capture remains live.
+          // Transfer preparation ownership so its eventual stop still cleans up.
+          talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+          return
+        }
+      }
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
+    }
+  }
+
+  private fun recordTalkPttOwnership(
+    captureId: String,
+    ownershipEpoch: Long,
+  ) {
+    synchronized(voiceCaptureOwnershipLock) {
+      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
         talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
-        return
       }
     }
-    finishTalkCaptureIfIdle(ownershipEpoch)
   }
 
   private suspend fun finishTalkCaptureIfIdleAfterPreparation(captureId: String) {
@@ -1901,12 +1919,20 @@ class NodeRuntime private constructor(
     }
 
   private fun finishTalkCaptureIfIdleLocked(captureId: String) {
-    val ownership = talkPttOwnership.get()
-    if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
-    finishTalkCaptureIfIdle(ownership.epoch)
+    synchronized(voiceCaptureOwnershipLock) {
+      val ownership = talkPttOwnership.get()
+      if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
+    }
   }
 
   private fun finishTalkCaptureIfIdle(ownershipEpoch: Long) {
+    synchronized(voiceCaptureOwnershipLock) {
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
+    }
+  }
+
+  private fun finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch: Long) {
     if (ownershipEpoch == 0L || voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return
     if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
       talkMode.ttsOnAllResponses = false
@@ -1916,13 +1942,15 @@ class NodeRuntime private constructor(
   }
 
   private fun finishTalkModeAfterRelayClose() {
-    if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
-    talkPttCommandEpoch.incrementAndGet()
-    voiceCaptureOwnershipEpoch.incrementAndGet()
-    _voiceCaptureMode.value = VoiceCaptureMode.Off
-    talkMode.ttsOnAllResponses = false
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    externalAudioCaptureActive.value = false
+    synchronized(voiceCaptureOwnershipLock) {
+      if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      talkMode.ttsOnAllResponses = false
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      externalAudioCaptureActive.value = false
+    }
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -2050,56 +2078,58 @@ class NodeRuntime private constructor(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
   ) {
-    talkPttCommandEpoch.incrementAndGet()
-    voiceCaptureOwnershipEpoch.incrementAndGet()
-    if (mode.requiresMicrophonePermission && !hasRecordAudioPermission()) {
-      _voiceCaptureMode.value = VoiceCaptureMode.Off
-      prefs.setVoiceMicEnabled(false)
-      externalAudioCaptureActive.value = false
-      return
-    }
-    if (_voiceCaptureMode.value == mode && isVoiceCaptureModeActive(mode)) return
-    talkPttOwnership.set(null)
-    _voiceCaptureMode.value = mode
-    when (mode) {
-      VoiceCaptureMode.Off -> {
-        talkMode.ttsOnAllResponses = false
-        talkMode.stopAllCapture()
-        stopVoicePlayback()
-        micCapture.setMicEnabled(false)
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(false)
-        }
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    synchronized(voiceCaptureOwnershipLock) {
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      if (mode.requiresMicrophonePermission && !hasRecordAudioPermission()) {
+        _voiceCaptureMode.value = VoiceCaptureMode.Off
+        prefs.setVoiceMicEnabled(false)
         externalAudioCaptureActive.value = false
+        return
       }
-
-      VoiceCaptureMode.ManualMic -> {
-        talkMode.ttsOnAllResponses = false
-        talkMode.stopAllCapture()
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(true)
+      if (_voiceCaptureMode.value == mode && isVoiceCaptureModeActive(mode)) return
+      talkPttOwnership.set(null)
+      _voiceCaptureMode.value = mode
+      when (mode) {
+        VoiceCaptureMode.Off -> {
+          talkMode.ttsOnAllResponses = false
+          talkMode.stopAllCapture()
+          stopVoicePlayback()
+          micCapture.setMicEnabled(false)
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(false)
+          }
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+          externalAudioCaptureActive.value = false
         }
-        // Tapping mic on interrupts any active TTS (barge-in).
-        stopVoicePlayback()
-        scope.launch { talkMode.refreshConfig() }
-        micCapture.setMicEnabled(true)
-        externalAudioCaptureActive.value = true
-      }
 
-      VoiceCaptureMode.TalkMode -> {
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(false)
+        VoiceCaptureMode.ManualMic -> {
+          talkMode.ttsOnAllResponses = false
+          talkMode.stopAllCapture()
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(true)
+          }
+          // Tapping mic on interrupts any active TTS (barge-in).
+          stopVoicePlayback()
+          scope.launch { talkMode.refreshConfig() }
+          micCapture.setMicEnabled(true)
+          externalAudioCaptureActive.value = true
         }
-        micCapture.setMicEnabled(false)
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-        talkMode.ttsOnAllResponses = true
-        talkMode.setPlaybackEnabled(speakerEnabled.value)
-        scope.launch { talkMode.refreshConfig() }
-        talkMode.stopAllCapture()
-        talkMode.setEnabled(true)
-        externalAudioCaptureActive.value = true
+
+        VoiceCaptureMode.TalkMode -> {
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(false)
+          }
+          micCapture.setMicEnabled(false)
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+          talkMode.ttsOnAllResponses = true
+          talkMode.setPlaybackEnabled(speakerEnabled.value)
+          scope.launch { talkMode.refreshConfig() }
+          talkMode.stopAllCapture()
+          talkMode.setEnabled(true)
+          externalAudioCaptureActive.value = true
+        }
       }
     }
   }
@@ -2110,17 +2140,19 @@ class NodeRuntime private constructor(
   }
 
   private fun stopActiveVoiceSession() {
-    talkPttCommandEpoch.incrementAndGet()
-    voiceCaptureOwnershipEpoch.incrementAndGet()
-    talkPttOwnership.set(null)
-    talkMode.ttsOnAllResponses = false
-    talkMode.stopAllCapture()
-    stopVoicePlayback()
-    micCapture.setMicEnabled(false)
-    prefs.setVoiceMicEnabled(false)
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    _voiceCaptureMode.value = VoiceCaptureMode.Off
-    externalAudioCaptureActive.value = false
+    synchronized(voiceCaptureOwnershipLock) {
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      talkPttOwnership.set(null)
+      talkMode.ttsOnAllResponses = false
+      talkMode.stopAllCapture()
+      stopVoicePlayback()
+      micCapture.setMicEnabled(false)
+      prefs.setVoiceMicEnabled(false)
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      externalAudioCaptureActive.value = false
+    }
   }
 
   private fun stopVoicePlayback() {

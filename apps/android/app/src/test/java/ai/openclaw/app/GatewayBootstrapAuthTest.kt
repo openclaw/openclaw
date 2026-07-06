@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -996,14 +997,15 @@ class GatewayBootstrapAuthTest {
         async(start = CoroutineStart.UNDISPATCHED) {
           dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
         }
+      yield()
       val start =
         async(start = CoroutineStart.UNDISPATCHED) {
           dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
         }
       preparationMutex.unlock()
 
-      assertEquals("NODE_BACKGROUND_UNAVAILABLE", start.await().error?.code)
-      assertNull(cancel.await().error)
+      assertNull(withTimeout(5_000) { cancel.await() }.error)
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)
       val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
       assertNull(talkMode.activePushToTalkCaptureId)
       assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
