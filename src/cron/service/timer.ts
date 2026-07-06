@@ -1912,6 +1912,9 @@ async function runStartupCatchupCandidate(
       provider: result.provider,
       usage: result.usage,
       isolatedAgentSetupTimeout: result.isolatedAgentSetupTimeout,
+      // Quiet trigger ticks during startup catch-up must keep their eval
+      // outcome; dropping it would record them as successful payload runs.
+      triggerEval: result.triggerEval,
       startedAt,
       endedAt: state.deps.nowMs(),
     };
