@@ -8,6 +8,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-bare:local")"
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz package-openclaw-for-docker "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/package-openclaw-for-docker-identities.json}"
 CONTAINER_NAME="openclaw-package-proof-$$"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_PACKAGE_OPENCLAW_FOR_DOCKER_RUN_TIMEOUT:-120s}"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -18,7 +19,7 @@ trap cleanup EXIT
 docker_e2e_build_or_reuse "$IMAGE_NAME" package-openclaw-for-docker "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 
 echo "Installing the real OpenClaw package artifact in the target container..."
-docker run -d \
+DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$CONTAINER_NAME" \
   -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
   "$IMAGE_NAME" \

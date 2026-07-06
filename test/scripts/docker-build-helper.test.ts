@@ -21,6 +21,7 @@ const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const DOCKER_COMPOSE_SETUP_E2E_PATH = "scripts/e2e/docker-compose-setup-docker.sh";
+const PACKAGE_OPENCLAW_FOR_DOCKER_E2E_PATH = "scripts/e2e/package-openclaw-for-docker.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const CLEANUP_DOCKER_SMOKE_PATH = "scripts/test-cleanup-docker.sh";
 const INSTALL_E2E_DOCKER_SMOKE_PATH = "scripts/test-install-sh-e2e-docker.sh";
@@ -3774,6 +3775,15 @@ output="$(cat "$sampler_log")"
     const composeRunner = readFileSync(DOCKER_COMPOSE_SETUP_E2E_PATH, "utf8");
     expect(composeRunner).not.toMatch(/(^|\n)\s*docker rm -f "\$CLI_NAME"/u);
     expect(composeRunner).toContain('docker_e2e_docker_cmd rm -f "$CLI_NAME"');
+
+    const packageRunner = readFileSync(PACKAGE_OPENCLAW_FOR_DOCKER_E2E_PATH, "utf8");
+    expect(packageRunner).toContain(
+      'DOCKER_RUN_TIMEOUT="${OPENCLAW_PACKAGE_OPENCLAW_FOR_DOCKER_RUN_TIMEOUT:-120s}"',
+    );
+    expect(packageRunner).toContain(
+      'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d',
+    );
+    expect(packageRunner).not.toMatch(/(^|\n)docker run -d/u);
   });
 
   it("routes the gateway network client through the timeout-aware run helper", () => {
