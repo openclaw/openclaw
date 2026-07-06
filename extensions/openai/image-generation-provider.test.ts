@@ -435,6 +435,32 @@ describe("openai image generation provider", () => {
     ).toBe(true);
   });
 
+  it("treats an empty config apiKey as not configured", () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    // An empty-string placeholder resolves to no usable credential in the
+    // generate path, so readiness must not count it either.
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://gateway.example.test/openai/v1",
+                apiKey: "",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", () => {
     const provider = buildOpenAIImageGenerationProvider();
 

@@ -829,9 +829,10 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     id: "openai",
     label: "OpenAI",
     isConfigured: ({ cfg, agentDir }) => {
-      // generateImage already authenticates from a config apiKey; count it as
-      // configured here too, so image gen works from config alone, like chat.
-      if (cfg?.models?.providers?.openai?.apiKey !== undefined) {
+      // generateImage already authenticates from a config apiKey; count a
+      // non-empty one as configured here too, so image gen works from config
+      // alone, like chat.
+      if (cfg?.models?.providers?.openai?.apiKey) {
         return true;
       }
       const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
