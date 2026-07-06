@@ -291,23 +291,31 @@ describe("resolveFeishuCredentials", () => {
     });
   });
 
-  it("does not resolve encryptKey SecretRefs outside webhook mode", () => {
-    const creds = resolveFeishuCredentials(
-      asConfig({
-        connectionMode: "websocket",
-        appId: "cli_123",
-        appSecret: "secret_456",
-        encryptKey: { source: "file", provider: "default", id: "path/to/secret" } as never,
-      }),
-    );
+  it("resolves env encryptKey SecretRefs in websocket mode when unresolved refs are allowed", () => {
+    const key = "FEISHU_WEBSOCKET_ENCRYPT_KEY_TEST";
+    const restore = setTestEnvValue(key, " websocket_encrypt_key ");
 
-    expect(creds).toEqual({
-      appId: "cli_123",
-      appSecret: "secret_456", // pragma: allowlist secret
-      encryptKey: undefined,
-      verificationToken: undefined,
-      domain: "feishu",
-    });
+    try {
+      const creds = resolveFeishuCredentials(
+        asConfig({
+          connectionMode: "websocket",
+          appId: "cli_123",
+          appSecret: "secret_456",
+          encryptKey: { source: "env", provider: "default", id: key } as never,
+        }),
+        { allowUnresolvedSecretRef: true },
+      );
+
+      expect(creds).toEqual({
+        appId: "cli_123",
+        appSecret: "secret_456", // pragma: allowlist secret
+        encryptKey: "websocket_encrypt_key",
+        verificationToken: undefined,
+        domain: "feishu",
+      });
+    } finally {
+      restore();
+    }
   });
 
   it("keeps required credentials when optional event SecretRefs are unresolved in inspect mode", () => {

@@ -122,15 +122,12 @@ function resolveFeishuEventSecrets(
   verificationToken?: string;
 } {
   return {
-    encryptKey:
-      (cfg?.connectionMode ?? "websocket") === "webhook"
-        ? resolveFeishuSecretLike({
-            value: cfg?.encryptKey,
-            path: "channels.feishu.encryptKey",
-            mode,
-            allowEnvSecretRefRead: true,
-          })
-        : normalizeString(cfg?.encryptKey),
+    encryptKey: resolveFeishuSecretLike({
+      value: cfg?.encryptKey,
+      path: "channels.feishu.encryptKey",
+      mode,
+      allowEnvSecretRefRead: true,
+    }),
     verificationToken: resolveFeishuSecretLike({
       value: cfg?.verificationToken,
       path: "channels.feishu.verificationToken",

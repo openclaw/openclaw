@@ -63,6 +63,7 @@ export function collectRuntimeConfigAssignments(params: {
     hasOwnProperty(account, "connectionMode")
       ? normalizeSecretStringValue(account.connectionMode)
       : baseConnectionMode;
+  const topLevelEncryptKeyConfigured = hasOwnProperty(feishu, "encryptKey");
   collectConditionalChannelFieldAssignments({
     channelKey: "feishu",
     field: "encryptKey",
@@ -70,14 +71,14 @@ export function collectRuntimeConfigAssignments(params: {
     surface,
     defaults: params.defaults,
     context: params.context,
-    topLevelActiveWithoutAccounts: baseConnectionMode === "webhook",
+    topLevelActiveWithoutAccounts: baseConnectionMode === "webhook" || topLevelEncryptKeyConfigured,
     topLevelInheritedAccountActive: ({ account, enabled }) =>
       enabled &&
       !hasOwnProperty(account, "encryptKey") &&
-      resolveAccountMode(account) === "webhook",
-    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "webhook",
-    topInactiveReason: "no enabled Feishu webhook-mode surface inherits this top-level encryptKey.",
-    accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
+      (resolveAccountMode(account) === "webhook" || topLevelEncryptKeyConfigured),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled Feishu account inherits this top-level encryptKey.",
+    accountInactiveReason: "Feishu account is disabled.",
   });
   collectConditionalChannelFieldAssignments({
     channelKey: "feishu",
