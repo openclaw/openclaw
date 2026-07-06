@@ -296,6 +296,15 @@ Default state directory: `~/.openclaw`.
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
+### Tool-policy diagnostic
+
+When autonomous capture is enabled, `openclaw doctor` runs the
+`core/doctor/skill-workshop-tool-policy` check for the default agent. If policy
+hides `skill_workshop`, the warning names the first excluding config layer and
+the exact `allow` or `alsoAllow` change to make. Older runbooks may still use
+`openclaw plugins inspect skill-workshop`; that command now explains that Skill
+Workshop is built in and prints the same policy hint when applicable.
+
 ## Related
 
 - [Skills](/tools/skills) for load order, precedence, and visibility
