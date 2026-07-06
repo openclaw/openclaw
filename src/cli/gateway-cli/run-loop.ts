@@ -188,7 +188,7 @@ export async function runGatewayLoop(params: {
       reason: restartReason ?? "gateway.restart",
     });
     const hadLock = await releaseLockIfHeld();
-    const isUpdateRestart = restartReason === "update.run";
+    const isUpdateRestart = restartReason === "update.run" || restartReason === "update.auto";
     const {
       detectRespawnSupervisor,
       markUpdateRestartSentinelFailure,

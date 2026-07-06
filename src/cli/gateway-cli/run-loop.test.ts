@@ -1740,34 +1740,37 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("writes a handoff before exiting for supervised update restarts", async () => {
-    vi.clearAllMocks();
-    peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
-    respawnGatewayProcessForUpdate.mockReturnValueOnce({
-      mode: "supervised",
-    });
-    try {
-      setPlatform("freebsd");
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runtime, exited } = await createSignaledLoopHarness();
-        const sigusr1 = captureSignal("SIGUSR1");
-
-        sigusr1();
-
-        await expect(exited).resolves.toBe(0);
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-        expectRestartHandoffCall({
-          restartKind: "update-process",
-          reason: "update.run",
-          supervisorMode: "external",
-        });
+  it.each(["update.run", "update.auto"] as const)(
+    "writes a handoff before exiting for supervised %s restarts",
+    async (reason) => {
+      vi.clearAllMocks();
+      peekGatewaySigusr1RestartReason.mockReturnValue(reason);
+      respawnGatewayProcessForUpdate.mockReturnValueOnce({
+        mode: "supervised",
       });
-    } finally {
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      try {
+        setPlatform("freebsd");
+        await withIsolatedSignals(async ({ captureSignal }) => {
+          const { runtime, exited } = await createSignaledLoopHarness();
+          const sigusr1 = captureSignal("SIGUSR1");
+
+          sigusr1();
+
+          await expect(exited).resolves.toBe(0);
+          expect(runtime.exit).toHaveBeenCalledWith(0);
+          expectRestartHandoffCall({
+            restartKind: "update-process",
+            reason,
+            supervisorMode: "external",
+          });
+        });
+      } finally {
+        if (originalPlatformDescriptor) {
+          Object.defineProperty(process, "platform", originalPlatformDescriptor);
+        }
       }
-    }
-  });
+    },
+  );
 
   it("probes the configured gateway host for update respawn health", async () => {
     vi.clearAllMocks();
