@@ -31,7 +31,9 @@ export function normalizeCronSessionTargetOption(value: unknown): string | undef
   }
   if (lower.startsWith("session:")) {
     const id = normalizeOptionalString(raw.slice(8));
-    return id ? `session:${id}` : undefined;
+    if (id) {
+      return `session:${id}`;
+    }
   }
-  return undefined;
+  throw new Error("session must be one of 'main', 'isolated', 'current', or 'session:<id>'");
 }

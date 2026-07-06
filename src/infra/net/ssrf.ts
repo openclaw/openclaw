@@ -413,10 +413,18 @@ function assertAllowedResolvedAddressesOrThrow(
 
 function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
+  hostname: string,
 ): void {
+  const isLoopbackAllowed =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname.endsWith(".localhost") ||
+    isLoopbackIpAddress(hostname);
+
   for (const entry of results) {
     if (
-      isLoopbackIpAddress(entry.address) ||
+      (!isLoopbackAllowed && isLoopbackIpAddress(entry.address)) ||
       isLinkLocalIpAddress(entry.address) ||
       isCloudMetadataIpAddress(entry.address)
     ) {
@@ -566,7 +574,7 @@ export async function resolvePinnedHostnameWithPolicy(
   } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
     // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
     // it must not turn metadata/link-local DNS rebinding into an implicit allow.
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -622,7 +630,7 @@ function resolvePinnedDispatcherLookup(
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
