@@ -173,6 +173,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         ),
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+      onReplyMessage = viewModel::setChatReplyDraft,
     )
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {

@@ -178,8 +178,7 @@ fun ChatScreen(
   var input by rememberSaveable { mutableStateOf("") }
 
   LaunchedEffect(chatDraft) {
-    val draft = chatDraft?.trim()?.ifEmpty { null } ?: return@LaunchedEffect
-    input = draft
+    input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
     viewModel.clearChatDraft()
   }
 
@@ -257,6 +256,7 @@ fun ChatScreen(
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onStarterPrompt = { prompt -> input = prompt },
+      onReplyMessage = viewModel::setChatReplyDraft,
       modifier = Modifier.weight(1f),
     )
 
@@ -557,6 +557,7 @@ private fun ChatMessageList(
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
+  onReplyMessage: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
@@ -592,6 +593,7 @@ private fun ChatMessageList(
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
+              onReplyMessage = onReplyMessage,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -606,6 +608,7 @@ private fun ChatMessageList(
               live = true,
               content = listOf(ChatMessageContent(text = item.text)),
               timestampMs = null,
+              onReplyMessage = onReplyMessage,
             )
           ChatTimelineItem.Thinking -> ChatThinkingBubble()
         }
@@ -760,6 +763,7 @@ private fun ChatBubble(
   live: Boolean,
   content: List<ChatMessageContent>,
   timestampMs: Long?,
+  onReplyMessage: (String) -> Unit,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -777,41 +781,49 @@ private fun ChatBubble(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
-    Surface(
+    val messageText = chatMessagePlainText(displayableContent)
+    ChatMessageActionHost(
+      text = messageText,
+      onReply = onReplyMessage,
+      enabled = !live,
       modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
-      shape = RoundedCornerShape(7.dp),
-      color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
-      contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
-      tonalElevation = 1.dp,
-      shadowElevation = 2.dp,
     ) {
-      Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-          text =
-            when {
-              live -> "OpenClaw · Live"
-              isUser -> "You"
-              normalizedRole == "system" -> "System"
-              else -> "OpenClaw"
-            },
-          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-          color = ClawTheme.colors.text,
-        )
-        displayableContent.forEach { part ->
-          if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-          } else {
-            Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          }
-        }
-        timestampMs?.let {
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(7.dp),
+        color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
+        contentColor = ClawTheme.colors.text,
+        border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+        tonalElevation = 1.dp,
+        shadowElevation = 2.dp,
+      ) {
+        Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(
-            text = formatChatTimestamp(it),
-            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
-            color = ClawTheme.colors.textMuted,
-            modifier = Modifier.align(Alignment.End),
+            text =
+              when {
+                live -> "OpenClaw · Live"
+                isUser -> "You"
+                normalizedRole == "system" -> "System"
+                else -> "OpenClaw"
+              },
+            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+            color = ClawTheme.colors.text,
           )
+          displayableContent.forEach { part ->
+            if (part.type == "text") {
+              ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+            } else {
+              Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            }
+          }
+          timestampMs?.let {
+            Text(
+              text = formatChatTimestamp(it),
+              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+              color = ClawTheme.colors.textMuted,
+              modifier = Modifier.align(Alignment.End),
+            )
+          }
         }
       }
     }
