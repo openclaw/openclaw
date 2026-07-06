@@ -326,27 +326,15 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
   }
 }
 
-/**
- * Recursively strip `status` fields from input items.
- * Strict OpenAI-compatible Responses endpoints reject the output-only `status`
- * field on replayed message items in `input[]` (HTTP 400 "Unknown parameter").
- * Known-native routes (api.openai.com, Azure) silently accept it.
- */
-export function stripInputStatusFromInput(input: unknown): void {
-  if (Array.isArray(input)) {
-    for (const item of input) {
-      stripInputStatusFromInput(item);
-    }
+/** Strip returned-item metadata rejected by strict Responses-compatible endpoints. */
+function stripInputItemStatuses(input: unknown): void {
+  if (!Array.isArray(input)) {
     return;
   }
-  if (!input || typeof input !== "object") {
-    return;
-  }
-  const record = input as Record<string, unknown>;
-  delete record.status;
-  for (const value of Object.values(record)) {
-    if (typeof value === "object" && value !== null) {
-      stripInputStatusFromInput(value);
+  for (const item of input) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      // Only item-level status is provider metadata. Nested values may be user or tool payloads.
+      delete (item as Record<string, unknown>).status;
     }
   }
 }
@@ -427,6 +415,6 @@ export function applyOpenAIResponsesPayloadPolicy(
     stripDisabledOpenAIReasoningPayload(payloadObj);
   }
   if (policy.shouldStripInputStatus) {
-    stripInputStatusFromInput(payloadObj.input);
+    stripInputItemStatuses(payloadObj.input);
   }
 }

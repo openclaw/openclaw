@@ -268,7 +268,14 @@ describe("openai responses payload policy", () => {
         {
           type: "message",
           role: "assistant",
-          content: [{ type: "output_text", text: "Hello", annotations: [] }],
+          content: [
+            {
+              type: "output_text",
+              text: "Hello",
+              annotations: [],
+              status: "nested-domain-value",
+            },
+          ],
           status: "completed",
         },
         {
@@ -287,19 +294,26 @@ describe("openai responses payload policy", () => {
     applyOpenAIResponsesPayloadPolicy(payload, policy);
     expect((payload.input[0] as Record<string, unknown>).status).toBeUndefined();
     expect((payload.input[2] as Record<string, unknown>).status).toBeUndefined();
+    expect((payload.input[0] as { content: Array<{ status?: string }> }).content[0]?.status).toBe(
+      "nested-domain-value",
+    );
   });
 
-  it("preserves status in input items for native OpenAI openai-responses endpoints", () => {
-    const model = {
-      id: "gpt-5.5",
+  it.each([
+    {
       api: "openai-responses",
       provider: "openai",
       baseUrl: "https://api.openai.com/v1",
-    } satisfies {
-      api: unknown;
-      baseUrl: unknown;
-      id: unknown;
-      provider: unknown;
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure-openai",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    },
+  ])("preserves status for native $provider Responses endpoints", (route) => {
+    const model = {
+      ...route,
+      id: "native-model",
     };
     const policy = resolveOpenAIResponsesPayloadPolicy(model);
     expect(policy.shouldStripInputStatus).toBe(false);
