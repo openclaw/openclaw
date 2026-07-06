@@ -80,8 +80,27 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           }, timeoutMs);
         }
         // Stream stdout and stderr.
+        let streamError: Error | null = null;
+        const handleStreamError = (err: Error) => {
+          if (streamError) {
+            return;
+          }
+          streamError = err;
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
+          if (signal) {
+            signal.removeEventListener("abort", onAbort);
+          }
+          if (child.pid) {
+            killProcessTree(child.pid);
+          }
+          reject(toErrorObject(err, "bash stream error"));
+        };
         child.stdout?.on("data", onData);
+        child.stdout?.on("error", handleStreamError);
         child.stderr?.on("data", onData);
+        child.stderr?.on("error", handleStreamError);
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
