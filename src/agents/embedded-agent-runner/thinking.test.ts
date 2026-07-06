@@ -7,6 +7,7 @@ import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-messa
 import {
   OMITTED_ASSISTANT_REASONING_TEXT,
   assessLastAssistantMessage,
+  compactAssistantMessages,
   dropReasoningFromHistory,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
@@ -149,9 +150,7 @@ describe("dropThinkingBlocks", () => {
     const latestAssistant = result[3] as Extract<AgentMessage, { role: "assistant" }>;
     const originalLatestAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
 
-    expect(oldAssistant.content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-    ]);
+    expect(oldAssistant.content).toEqual([]);
     expect(latestAssistant.content).toEqual(originalLatestAssistant.content);
   });
 
@@ -172,9 +171,7 @@ describe("dropThinkingBlocks", () => {
     const result = dropThinkingBlocks(messages);
     const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
 
-    expect(oldAssistant.content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-    ]);
+    expect(oldAssistant.content).toEqual([]);
   });
 });
 
@@ -212,7 +209,7 @@ describe("dropReasoningFromHistory", () => {
     const result = dropReasoningFromHistory(messages);
     const assistant = result[1] as AssistantMessage;
 
-    expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
+    expect(assistant.content).toEqual([]);
   });
 
   it("preserves reasoning for the active tool-call continuation after the latest user turn", () => {
@@ -377,7 +374,7 @@ describe("stripInvalidThinkingSignatures", () => {
     const result = stripInvalidThinkingSignatures(messages);
     const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
 
-    expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
+    expect(assistant.content).toEqual([]);
   });
 
   it("strips redacted thinking blocks with invalid opaque signatures from older assistant messages", () => {
@@ -512,9 +509,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     if (!retryMessage || retryMessage.role !== "assistant") {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
-    expect(retryMessage.content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-    ]);
+    expect(retryMessage.content).toEqual([]);
   });
 
   it("retries with visible assistant text when stripping thinking leaves content", async () => {
@@ -832,9 +827,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     if (!retryMessage || retryMessage.role !== "assistant") {
       throw new Error("Expected Anthropic recovery retry to start with an assistant message");
     }
-    expect(retryMessage.content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-    ]);
+    expect(retryMessage.content).toEqual([]);
   });
 
   it("does not retry non-thinking terminal stream-error events", async () => {
@@ -1291,5 +1284,45 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
     // Same millisecond as compaction: treated as post-compaction; signature preserved
     expect(result).toBe(messages);
+  });
+});
+
+describe("compactAssistantMessages", () => {
+  it("removes assistant messages that carry only the old persisted placeholder sentinel", () => {
+    const result = compactAssistantMessages([
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.role).toBe("user");
+    expect(JSON.stringify(result)).not.toContain(OMITTED_ASSISTANT_REASONING_TEXT);
+  });
+
+  it("removes empty-content assistant messages", () => {
+    const result = compactAssistantMessages([
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({ role: "assistant", content: [] }),
+      castAgentMessage({ role: "user", content: "second" }),
+    ]);
+    expect(result).toHaveLength(1);
+  });
+
+  it("preserves assistant messages with real text content", () => {
+    const result = compactAssistantMessages([
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "hello" }] }),
+      castAgentMessage({ role: "user", content: "second" }),
+    ]);
+    expect(result).toHaveLength(3);
+    expect(result[1]?.role).toBe("assistant");
+  });
+
+  it("returns original reference when unchanged", () => {
+    const input = [castAgentMessage({ role: "user", content: "hi" })];
+    expect(compactAssistantMessages(input)).toBe(input);
   });
 });

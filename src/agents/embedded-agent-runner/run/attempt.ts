@@ -317,6 +317,7 @@ import {
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { repairRejectedThinkingReplayInSessionManager } from "../thinking-replay-repair.js";
 import {
+  compactAssistantMessages,
   dropReasoningFromHistory,
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
@@ -2950,9 +2951,10 @@ export async function runEmbeddedAttempt(
             const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
               ? dropReasoningFromHistory(messages)
               : messages;
-            return transcriptPolicy.dropThinkingBlocks
+            const noThinking = transcriptPolicy.dropThinkingBlocks
               ? dropThinkingBlocks(reasoningSanitized)
               : reasoningSanitized;
+            return compactAssistantMessages(noThinking);
           },
         );
       }

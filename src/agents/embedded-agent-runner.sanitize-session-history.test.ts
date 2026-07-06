@@ -23,7 +23,6 @@ import {
   TEST_SESSION_ID,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
-import { OMITTED_ASSISTANT_REASONING_TEXT } from "./embedded-agent-runner/thinking.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
@@ -1774,9 +1773,7 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-3-7-sonnet-20250219",
     });
 
-    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-    ]);
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([]);
     expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       {
         type: "thinking",
@@ -1823,9 +1820,7 @@ describe("sanitizeSessionHistory", () => {
         modelId: "claude-3-7-sonnet-20250219",
       });
 
-      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-        { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-      ]);
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([]);
       expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
         { type: "text", text: "latest visible answer" },
       ]);
@@ -1855,9 +1850,7 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-sonnet-4-6",
     });
 
-    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-    ]);
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([]);
   });
 
   it.each([
@@ -2036,9 +2029,7 @@ describe("sanitizeSessionHistory", () => {
         modelId: "claude-sonnet-4-6",
       });
 
-      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-        { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
-      ]);
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([]);
       expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
         { type: "thinking", thinking: "latest blank", thinkingSignature: "" },
       ]);

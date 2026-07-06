@@ -4,6 +4,7 @@
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import { mergeConsecutiveUserTurns } from "../embedded-agent-helpers.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
 
@@ -90,8 +91,11 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
 }
 
 function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
-  // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
-  return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
+  // Return empty content so downstream filters (compactAssistantMessages) can
+  // detect and strip these messages generically without string-matching the
+  // placeholder text. Provider converters handle empty assistant messages by
+  // skipping them; alternation is repaired by compactAssistantMessages.
+  return [];
 }
 
 function parseTimestampMs(value: unknown): number | null {
@@ -487,6 +491,62 @@ export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage
       ...message,
       content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
     });
+  }
+  return touched ? out : messages;
+}
+
+/**
+ * Removes assistant messages with no meaningful visible content (e.g. messages
+ * that became empty or placeholder-only after reasoning/thinking sanitization)
+ * and merges resulting consecutive user messages to maintain provider-required
+ * message alternation. This prevents internal placeholder text from entering
+ * model-visible context where it can leak into channel replies.
+ *
+ * Handles both new empty message content (content: []) and the old persisted
+ * [assistant reasoning omitted] placeholder sentinel from existing transcripts.
+ *
+ * @returns A new message array, or the original if unchanged.
+ */
+export function compactAssistantMessages(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    // Skip assistant messages that carry no visible content
+    if (msg.role === "assistant") {
+      const content = Array.isArray(msg.content) ? msg.content : [];
+      const hasVisible = content.some((block) => {
+        const type = (block as { type?: unknown }).type;
+        if (type === "thinking" || type === "redacted_thinking") {
+          return false;
+        }
+        if (type === "toolCall" || type === "tool_use" || type === "function_call") {
+          return true;
+        }
+        if (type === "text") {
+          const text = (block as { text?: string }).text?.trim();
+          if (text && text !== OMITTED_ASSISTANT_REASONING_TEXT) {
+            return true;
+          }
+          return false;
+        }
+        return true;
+      });
+      if (!hasVisible) {
+        touched = true;
+        continue;
+      }
+    }
+    const last = out.at(-1);
+    if (msg.role === "user" && last?.role === "user") {
+      out[out.length - 1] = mergeConsecutiveUserTurns(
+        last as Extract<AgentMessage, { role: "user" }>,
+        msg as Extract<AgentMessage, { role: "user" }>,
+      );
+      touched = true;
+      continue;
+    }
+    out.push(msg);
   }
   return touched ? out : messages;
 }

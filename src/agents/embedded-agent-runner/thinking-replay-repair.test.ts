@@ -71,9 +71,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
     const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
     expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
-    expect(branchAssistantContents(sessionManager)).toEqual([
-      [{ type: "text", text: "[assistant reasoning omitted]" }],
-    ]);
+    expect(branchAssistantContents(sessionManager)).toEqual([[]]);
   });
 
   it("preserves downstream branch suffix entries after rewriting the first repaired assistant", () => {
