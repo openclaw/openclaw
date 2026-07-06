@@ -1794,36 +1794,43 @@ describe("runGatewayLoop", () => {
         }),
     );
 
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { start, started } = createSignaledStart(close);
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      await runLoopWithStart({ start, runtime });
-      await waitForStart(started);
-      const sigusr1 = captureSignal("SIGUSR1");
+    try {
+      setPlatform("freebsd");
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime });
+        await waitForStart(started);
+        const sigusr1 = captureSignal("SIGUSR1");
 
-      sigusr1();
-      await waitForLoopCondition(
-        () => close.mock.calls.length === 1,
-        "restart close did not start",
-      );
-      sigusr1();
-      await waitForLoopCondition(
-        () =>
-          gatewayLog.info.mock.calls.some(([message]) =>
-            String(message).includes("upgrading to update.auto"),
-          ),
-        "accepted restart was not upgraded",
-      );
+        sigusr1();
+        await waitForLoopCondition(
+          () => close.mock.calls.length === 1,
+          "restart close did not start",
+        );
+        sigusr1();
+        await waitForLoopCondition(
+          () =>
+            gatewayLog.info.mock.calls.some(([message]) =>
+              String(message).includes("upgrading to update.auto"),
+            ),
+          "accepted restart was not upgraded",
+        );
 
-      releaseClose();
-      await expect(exited).resolves.toBe(0);
-      expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
-      expectRestartHandoffCall({
-        restartKind: "update-process",
-        reason: "update.auto",
-        supervisorMode: "external",
+        releaseClose();
+        await expect(exited).resolves.toBe(0);
+        expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+        expectRestartHandoffCall({
+          restartKind: "update-process",
+          reason: "update.auto",
+          supervisorMode: "external",
+        });
       });
-    });
+    } finally {
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
   });
 
   it("reads a managed update upgrade after asynchronous lock release", async () => {

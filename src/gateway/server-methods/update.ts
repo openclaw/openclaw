@@ -174,7 +174,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       ...(note !== undefined ? { note } : {}),
       ...(continuationMessage !== undefined ? { continuationMessage } : {}),
     };
-    let supervisor: ReturnType<typeof detectRespawnSupervisor> = null;
     try {
       const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
@@ -192,7 +191,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         cwd: root,
         argv1: process.argv[1],
       });
-      supervisor = detectRespawnSupervisor(process.env, process.platform);
+      const supervisor = detectRespawnSupervisor(process.env, process.platform);
       const hasHandoffContext = supervisor
         ? hasManagedServiceHandoffContext(process.env, supervisor)
         : false;
