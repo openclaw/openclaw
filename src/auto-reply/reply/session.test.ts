@@ -2211,6 +2211,15 @@ describe("initSessionState reset policy", () => {
       expectNewSession: false,
     },
     {
+      name: "main killed terminal rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      status: "killed" as const,
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: true,
+    },
+    {
       name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
