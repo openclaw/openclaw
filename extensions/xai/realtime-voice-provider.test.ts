@@ -868,6 +868,73 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("preserves pending parallel tool calls across resumed reconnects", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const firstSocket = FakeWebSocket.instances[0];
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_tools" } }),
+      ),
+    );
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    for (const callId of ["call_1", "call_2"]) {
+      firstSocket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.done",
+            item_id: `item_${callId}`,
+            name: "openclaw_agent_consult",
+            call_id: callId,
+            arguments: JSON.stringify({ question: callId }),
+          }),
+        ),
+      );
+    }
+
+    firstSocket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const secondSocket = FakeWebSocket.instances[1];
+    expect(String(secondSocket.args[0])).toContain("conversation_id=conv_tools");
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    bridge.submitToolResult("call_1", { text: "first" });
+    expect(parseSent(secondSocket).filter((event) => event.type === "response.create")).toEqual([]);
+
+    bridge.submitToolResult("call_2", { text: "second" });
+    expect(parseSent(secondSocket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_2",
+          output: JSON.stringify({ text: "second" }),
+        },
+      },
+      { type: "response.create" },
+    ]);
+    bridge.close();
+  });
+
   it("exhausts reconnect attempts when websocket opens without session setup", async () => {
     vi.useFakeTimers();
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret

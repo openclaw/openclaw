@@ -508,7 +508,7 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
       };
 
       ws.on("open", () => {
-        this.resetRealtimeSessionState();
+        this.resetRealtimeSessionState({ preserveToolCallState: this.conversationId !== null });
         this.connected = true;
         this.sessionConfigured = false;
         captureWsEvent({
@@ -962,19 +962,21 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.requestResponseCreate();
   }
 
-  private resetRealtimeSessionState(): void {
+  private resetRealtimeSessionState(options: { preserveToolCallState?: boolean } = {}): void {
     this.markQueue = [];
     this.responseStartTimestamp = null;
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
-    this.continuingToolCallIds.clear();
-    this.pendingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.inputTranscriptReplacements.clear();
-    this.toolCallBuffers.clear();
-    this.deliveredToolCallKeys.clear();
+    if (!options.preserveToolCallState) {
+      this.continuingToolCallIds.clear();
+      this.pendingToolCallIds.clear();
+      this.toolCallBuffers.clear();
+      this.deliveredToolCallKeys.clear();
+    }
   }
 
   private inputTranscriptKey(event: RealtimeEvent): string {
