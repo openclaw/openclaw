@@ -1547,6 +1547,27 @@ describe("google transport stream", () => {
     });
   });
 
+  it("adds the Gemini thought-signature fallback for unsigned Flash latest alias tool calls", () => {
+    const model = buildGeminiModel({
+      id: "gemini-flash-latest",
+      name: "Gemini Flash Latest",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [googleToolCallAssistantTurn({ model: "gemini-flash-latest" })],
+    } as never);
+
+    expect(params.contents[0]).toEqual({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
   it("re-attaches replayed Gemini thought signatures when a later tool call is missing one", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",

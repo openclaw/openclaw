@@ -160,7 +160,7 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -532,7 +532,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     routeModel,
     (id) => (requiresToolCallId(model.id) ? normalizeToolCallId(id) : id),
     {
-      preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
+      preserveCrossModelToolCallThoughtSignature: shouldReplayToolCallThoughtSignature,
     },
   );
   // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
