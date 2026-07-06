@@ -197,10 +197,8 @@ const packageEntrySet = new Set(packageNormalized);
 const normalizedEntryCounts = new Map();
 const errors = [];
 const warnings = [];
-const REQUIRED_TARBALL_ENTRIES = [
-  "dist/control-ui/index.html",
-  "scripts/lib/content-inventory-compat.mjs",
-];
+const CONTENT_INVENTORY_COMPAT_PATH = "scripts/lib/content-inventory-compat.mjs";
+const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
@@ -507,6 +505,13 @@ if (packageEntrySet.has("package.json")) {
     errors.push(
       `unreadable package.json: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+}
+if (!packageEntrySet.has(CONTENT_INVENTORY_COMPAT_PATH)) {
+  if (isLegacyContentInventoryCompatVersion(packageVersion)) {
+    warnings.push(`legacy package omits ${CONTENT_INVENTORY_COMPAT_PATH}`);
+  } else {
+    errors.push(`missing required tar entry ${CONTENT_INVENTORY_COMPAT_PATH}`);
   }
 }
 const expectedPackageDistInventoryEntries = [

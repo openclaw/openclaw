@@ -447,7 +447,10 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
       },
       version,
-      { includeContentInventory: false },
+      {
+        includeContentInventory: false,
+        includeContentInventoryCompat: false,
+      },
     );
   });
 
