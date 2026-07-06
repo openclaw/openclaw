@@ -107,7 +107,7 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
-    unsubs?.taskUnsub();
+    void unsubs?.taskUnsub();
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
   });
@@ -218,7 +218,7 @@ describe("startGatewayEventSubscriptions", () => {
     expect(wireTerminalSummary).toBeTruthy();
     expect(wireTerminalSummary?.length ?? 0).toBeLessThan(10_000);
 
-    unsubs?.taskUnsub();
+    void unsubs?.taskUnsub();
     await vi.waitFor(() => expect(getTaskRegistryObservers()).toBeNull());
     broadcast.mockClear();
     createTaskRecord({

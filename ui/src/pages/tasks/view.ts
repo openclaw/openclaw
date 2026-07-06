@@ -18,36 +18,30 @@ export type TasksProps = {
   onNavigateToChat: (sessionKey: string) => void;
 };
 
+const STATUS_LABEL_KEYS = {
+  queued: "tasksPage.status.queued",
+  running: "tasksPage.status.running",
+  completed: "tasksPage.status.completed",
+  failed: "tasksPage.status.failed",
+  cancelled: "tasksPage.status.cancelled",
+  timed_out: "tasksPage.status.timedOut",
+} as const satisfies Record<TaskStatus, string>;
+
+const STATUS_CHIP_CLASSES = {
+  queued: "chip-warn",
+  running: "chip-warn",
+  completed: "chip-ok",
+  failed: "chip-danger",
+  cancelled: "",
+  timed_out: "chip-danger",
+} as const satisfies Record<TaskStatus, string>;
+
 function statusLabel(status: TaskStatus): string {
-  switch (status) {
-    case "queued":
-      return t("tasksPage.status.queued");
-    case "running":
-      return t("tasksPage.status.running");
-    case "completed":
-      return t("tasksPage.status.completed");
-    case "failed":
-      return t("tasksPage.status.failed");
-    case "cancelled":
-      return t("tasksPage.status.cancelled");
-    case "timed_out":
-      return t("tasksPage.status.timedOut");
-  }
+  return t(STATUS_LABEL_KEYS[status]);
 }
 
 function statusClass(status: TaskStatus): string {
-  switch (status) {
-    case "completed":
-      return "chip-ok";
-    case "failed":
-    case "timed_out":
-      return "chip-danger";
-    case "queued":
-    case "running":
-      return "chip-warn";
-    case "cancelled":
-      return "";
-  }
+  return STATUS_CHIP_CLASSES[status];
 }
 
 function runtimeLabel(task: TaskSummary): string {

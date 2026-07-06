@@ -126,7 +126,7 @@ export function taskTimestampMs(value: TaskTimestamp | undefined): number {
 }
 
 export function sortTasks(tasks: readonly TaskSummary[]): TaskSummary[] {
-  return [...tasks].sort((left, right) => {
+  return tasks.toSorted((left, right) => {
     const timeDelta = taskTimestampMs(right.updatedAt) - taskTimestampMs(left.updatedAt);
     if (timeDelta !== 0) {
       return timeDelta;
