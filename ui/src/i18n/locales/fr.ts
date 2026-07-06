@@ -304,6 +304,12 @@ export const fr: TranslationMap = {
     moveToGroup: "Déplacer la session vers un groupe",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Options du groupe {group}",
+    renameGroupMenu: "Renommer le groupe…",
+    renameGroupPrompt: "Renommer le groupe",
+    deleteGroupMenu: "Supprimer le groupe…",
+    deleteGroupConfirm:
+      "Supprimer le groupe « {group} » ? Ses sessions seront déplacées vers Non groupé.",
     dragSessionHint: "Faites glisser pour déplacer entre les groupes",
     dateToday: "Aujourd’hui",
     dateYesterday: "Hier",
@@ -1608,6 +1614,7 @@ export const fr: TranslationMap = {
     sidebar: {
       allSessions: "Toutes les sessions",
       openSessionMenu: "Open session menu",
+      sortBy: "Trier par",
       sortCreated: "Créé",
       sortSessions: "Trier les sessions",
       sortUpdated: "Dernière mise à jour",

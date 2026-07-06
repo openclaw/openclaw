@@ -300,6 +300,12 @@ export const id: TranslationMap = {
     moveToGroup: "Pindahkan sesi ke grup",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Opsi grup untuk {group}",
+    renameGroupMenu: "Ganti nama grup…",
+    renameGroupPrompt: "Ganti nama grup",
+    deleteGroupMenu: "Hapus grup…",
+    deleteGroupConfirm:
+      'Hapus grup "{group}"? Sesi-sesinya akan dipindahkan ke Tidak dikelompokkan.',
     dragSessionHint: "Seret untuk memindahkan antargrup",
     dateToday: "Hari ini",
     dateYesterday: "Kemarin",
@@ -1590,6 +1596,7 @@ export const id: TranslationMap = {
     sidebar: {
       allSessions: "Semua sesi",
       openSessionMenu: "Open session menu",
+      sortBy: "Urutkan berdasarkan",
       sortCreated: "Dibuat",
       sortSessions: "Urutkan sesi",
       sortUpdated: "Terakhir diperbarui",
