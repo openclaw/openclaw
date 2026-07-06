@@ -1,6 +1,7 @@
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
@@ -13,6 +14,10 @@ type WindowWithControlUiBasePath = Window &
 
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+}
+
+function currentGatewaySelectionKeyForPage(pageUrl: string): string {
+  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${normalizeGatewayTokenScope(pageUrl)}`;
 }
 
 type ScopedSessionSelection = {
@@ -364,6 +369,95 @@ function normalizeGatewayTokenScope(gatewayUrl: string): string {
   }
 }
 
+type PersistedSettingsSource = {
+  gatewayUrl: string;
+  legacy: boolean;
+  parsed: PersistedUiSettings;
+};
+
+function parsePersistedSettings(raw: string | null): PersistedUiSettings | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as PersistedUiSettings;
+  } catch {
+    return null;
+  }
+}
+
+function settingsMatchGatewayTarget(
+  parsed: PersistedUiSettings,
+  targetUrl: string,
+  aliases: readonly string[] = [],
+): boolean {
+  const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
+  if (!storedUrl) {
+    return false;
+  }
+  const storedScope = normalizeGatewayTokenScope(storedUrl);
+  return [targetUrl, ...aliases].some(
+    (candidate) => normalizeGatewayTokenScope(candidate) === storedScope,
+  );
+}
+
+function isClaimableLegacyGateway(storedUrl: string | undefined, pageUrl: string): boolean {
+  if (!storedUrl) {
+    return false;
+  }
+  try {
+    const stored = new URL(normalizeGatewayTokenScope(storedUrl));
+    const page = new URL(normalizeGatewayTokenScope(pageUrl));
+    return stored.host !== page.host || page.pathname === "/";
+  } catch {
+    return false;
+  }
+}
+
+function readSettingsForGateway(
+  storage: Storage | null,
+  targetUrl: string,
+  options: {
+    includeLegacy?: boolean;
+    legacyAliases?: readonly string[];
+    remoteLegacyPageUrl?: string;
+  } = {},
+): PersistedSettingsSource | null {
+  const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
+  if (
+    scoped &&
+    (!normalizeOptionalString(scoped.gatewayUrl) || settingsMatchGatewayTarget(scoped, targetUrl))
+  ) {
+    return {
+      gatewayUrl: normalizeOptionalString(scoped.gatewayUrl) ?? targetUrl,
+      legacy: false,
+      parsed: scoped,
+    };
+  }
+  if (!options.includeLegacy) {
+    return null;
+  }
+  for (const key of [`${SETTINGS_KEY_PREFIX}default`, LEGACY_SETTINGS_KEY]) {
+    const parsed = parsePersistedSettings(storage?.getItem(key) ?? null);
+    if (!parsed) {
+      continue;
+    }
+    const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
+    const matchesTarget = settingsMatchGatewayTarget(parsed, targetUrl, options.legacyAliases);
+    const isRemote = options.remoteLegacyPageUrl
+      ? isClaimableLegacyGateway(storedUrl, options.remoteLegacyPageUrl)
+      : false;
+    if (matchesTarget || isRemote) {
+      return {
+        gatewayUrl: storedUrl ?? targetUrl,
+        legacy: true,
+        parsed,
+      };
+    }
+  }
+  return null;
+}
+
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
@@ -400,11 +494,8 @@ export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSe
   const fallback = { sessionKey: "main", lastActiveSessionKey: "main" };
   try {
     const storage = getSafeLocalStorage();
-    const raw =
-      storage?.getItem(settingsKeyForGateway(gatewayUrl)) ?? storage?.getItem(LEGACY_SETTINGS_KEY);
-    return raw
-      ? resolveScopedSessionSelection(gatewayUrl, JSON.parse(raw) as PersistedUiSettings, fallback)
-      : fallback;
+    const source = readSettingsForGateway(storage, gatewayUrl, { includeLegacy: true });
+    return source ? resolveScopedSessionSelection(gatewayUrl, source.parsed, fallback) : fallback;
   } catch {
     return fallback;
   }
@@ -484,17 +575,25 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
-    const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
-    if (!raw) {
+    const selectedGatewayUrl = normalizeOptionalString(
+      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
+    );
+    const selected = selectedGatewayUrl
+      ? readSettingsForGateway(storage, selectedGatewayUrl)
+      : null;
+    // Legacy state has no page owner. Only the current page target or a deliberate
+    // cross-origin remote can claim it; ambiguous same-origin sibling paths cannot.
+    const defaultSource = readSettingsForGateway(storage, defaultUrl, {
+      includeLegacy: true,
+      legacyAliases: [pageDerivedUrl],
+      remoteLegacyPageUrl: pageDerivedUrl,
+    });
+    const source = selected ?? defaultSource;
+    if (!source) {
       return defaults;
     }
-    const parsed = JSON.parse(raw) as PersistedUiSettings;
-    const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
+    const parsed = source.parsed;
+    const parsedGatewayUrl = source.gatewayUrl;
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
@@ -553,8 +652,8 @@ export function loadSettings(): UiSettings {
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
-    if ("token" in parsed) {
-      persistSettings(settings);
+    if (source.legacy || "token" in parsed) {
+      persistSettings(settings, { selectGateway: true });
     }
     return settings;
   } catch {
@@ -568,7 +667,7 @@ export function saveSettings(next: UiSettings) {
 
 export function patchSettings(patch: Partial<UiSettings>): UiSettings {
   const next = { ...loadSettings(), ...patch };
-  persistSettings(next);
+  persistSettings(next, { selectGateway: patch.gatewayUrl !== undefined });
   return next;
 }
 
@@ -600,20 +699,16 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
   }
 }
 
-function persistSettings(next: UiSettings) {
+function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
-    // Try to migrate from legacy key or other scopes
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem("openclaw.control.settings.v1");
-    if (raw) {
-      const parsed = JSON.parse(raw) as PersistedUiSettings;
+    const source = readSettingsForGateway(storage, next.gatewayUrl, { includeLegacy: true });
+    if (source) {
+      const parsed = source.parsed;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
         existingSessionsByGateway = parsed.sessionsByGateway;
       }
@@ -658,8 +753,13 @@ function persistSettings(next: UiSettings) {
   };
   const serialized = JSON.stringify(persisted);
   try {
+    const { pageUrl } = deriveDefaultGatewayUrl();
+    const selectionKey = currentGatewaySelectionKeyForPage(pageUrl);
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    if (options.selectGateway || storage?.getItem(selectionKey) == null) {
+      storage?.setItem(selectionKey, next.gatewayUrl);
+    }
+    storage?.removeItem(LEGACY_SETTINGS_KEY);
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
