@@ -38,6 +38,7 @@ import {
 } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
+  getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
@@ -74,6 +75,10 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
+const LARGE_PASTE_TEXT_THRESHOLD = 1000;
+const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
+const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
+const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
 
 type ChatComposerProps = {
   paneId: string;
@@ -938,7 +943,11 @@ function renderSlashMenu(
 
 type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
+  draft?: string;
+  getDraft?: () => string;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onDraftChange?: (next: string) => void;
+  onRequestUpdate?: () => void;
 };
 
 type ChatQueueProps = {
@@ -1100,6 +1109,92 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
+function isLargePastedTextAttachment(attachment: ChatAttachment): boolean {
+  return (
+    attachment.mimeType === LARGE_PASTE_TEXT_MIME_TYPE &&
+    attachment.fileName?.startsWith(LARGE_PASTE_TEXT_FILE_PREFIX) === true
+  );
+}
+
+function createLargePastedTextAttachment(text: string): Promise<ChatAttachment | null> {
+  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
+    type: LARGE_PASTE_TEXT_MIME_TYPE,
+  });
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve(chatAttachmentFromFile(file, reader.result as string));
+    });
+    reader.addEventListener("error", () => resolve(null));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readTextFromDataUrl(dataUrl: string): string | null {
+  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const metadata = match[1].toLowerCase();
+  const payload = match[2];
+  if (metadata.includes(";base64")) {
+    try {
+      const binary = atob(payload);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return decodeURIComponent(payload.replace(/\+/g, "%20"));
+  } catch {
+    return null;
+  }
+}
+
+function compactPastedTextPreview(text: string): string {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    return "Pasted text";
+  }
+  if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
+}
+
+function pastedTextPreview(attachment: ChatAttachment): string {
+  const dataUrl = getChatAttachmentDataUrl(attachment);
+  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
+  return text ? compactPastedTextPreview(text) : "Pasted text";
+}
+
+function appendPastedTextToDraft(draft: string, text: string): string {
+  if (!draft.trim()) {
+    return text;
+  }
+  return `${draft.replace(/\s+$/u, "")}\n\n${text}`;
+}
+
+function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): boolean {
+  if (!props.onAttachmentsChange) {
+    return false;
+  }
+  const text = e.clipboardData?.getData("text/plain");
+  if (!text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+    return false;
+  }
+  e.preventDefault();
+  void createLargePastedTextAttachment(text).then((attachment) => {
+    if (!attachment) {
+      return;
+    }
+    props.onAttachmentsChange?.([...(props.attachments ?? []), attachment]);
+  });
+  return true;
+}
+
 function dataImageClipboardFile(
   dataUrl: string,
   baseName = "pasted-image",
@@ -1162,6 +1257,7 @@ function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentContr
     const text = e.clipboardData?.getData("text/plain");
     const pasted = text ? dataImageClipboardFile(text) : null;
     if (!pasted) {
+      handleLargeTextPaste(e, props);
       return;
     }
     e.preventDefault();
@@ -1186,6 +1282,21 @@ function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentContr
     });
     reader.readAsDataURL(file);
   }
+}
+
+function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentControlsProps): void {
+  const dataUrl = getChatAttachmentDataUrl(att);
+  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
+  if (!text || !props.onDraftChange) {
+    return;
+  }
+  const nextAttachments = (props.attachments ?? []).filter(
+    (attachment) => attachment.id !== att.id,
+  );
+  releaseChatAttachmentPayload(att.id);
+  props.onAttachmentsChange?.(nextAttachments);
+  props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
+  props.onRequestUpdate?.();
 }
 
 function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
@@ -1253,22 +1364,41 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
             class=${[
               "chat-attachment-thumb",
               isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
+              isLargePastedTextAttachment(att) ? "chat-attachment-thumb--pasted-text" : "",
             ]
               .filter(Boolean)
               .join(" ")}
           >
             ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
               ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
-              : html`
-                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
-                    <div class="chat-attachment-file">
-                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                      <span class="chat-attachment-file__name"
-                        >${att.fileName ?? "Attached file"}</span
-                      >
+              : isLargePastedTextAttachment(att)
+                ? html`
+                    <div class="chat-attachment-file chat-attachment-file--pasted-text">
+                      <span class="chat-attachment-file__icon">${icons.fileText}</span>
+                      <span class="chat-attachment-file__body">
+                        <span class="chat-attachment-file__name">${pastedTextPreview(att)}</span>
+                        <button
+                          class="chat-attachment-text-action"
+                          type="button"
+                          aria-label="Show pasted text in text field"
+                          @click=${() => showPastedTextInComposer(att, props)}
+                        >
+                          Show in text field
+                          <span aria-hidden="true">${icons.chevronRight}</span>
+                        </button>
+                      </span>
                     </div>
-                  </openclaw-tooltip>
-                `}
+                  `
+                : html`
+                    <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
+                      <div class="chat-attachment-file">
+                        <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                        <span class="chat-attachment-file__name"
+                          >${att.fileName ?? "Attached file"}</span
+                        >
+                      </div>
+                    </openclaw-tooltip>
+                  `}
             <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
               <button
                 class="chat-attachment-remove"
@@ -1280,7 +1410,7 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                   props.onAttachmentsChange?.(next);
                 }}
               >
-                &times;
+                ${icons.x}
               </button>
             </openclaw-tooltip>
           </div>
@@ -2111,7 +2241,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   const actionDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
-  const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const hasVisualAttachments = (props.attachments ?? []).some(
+    (attachment) => !isLargePastedTextAttachment(attachment),
+  );
   const tokens = tokenEstimate(visibleDraft);
   const contextNotice = renderContextNotice(
     activeSession,
@@ -2150,7 +2282,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const placeholder =
     !canCompose && props.disabledReason
       ? props.disabledReason
-      : hasAttachments
+      : hasVisualAttachments
         ? t("chat.composer.placeholderWithAttachments")
         : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 

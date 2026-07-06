@@ -25,6 +25,7 @@ import {
 } from "../../test-helpers/chat-model.ts";
 import {
   getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
@@ -3519,6 +3520,155 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
+  it("turns large pasted plain text into a compact attachment", async () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({
+      draft: "intro",
+      getDraft: () => "intro",
+      onAttachmentsChange,
+    });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const pastedText = "large paste\n" + "x".repeat(1100);
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? pastedText : ""),
+      },
+    });
+
+    const allowed = textarea.dispatchEvent(event);
+
+    expect(allowed).toBe(false);
+    await vi.waitFor(() => {
+      const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]?.fileName).toMatch(/^pasted-text-\d+\.txt$/u);
+      expect(attachments[0]?.mimeType).toBe("text/plain");
+      expect(attachments[0]?.sizeBytes).toBe(new Blob([pastedText]).size);
+      expect(getChatAttachmentDataUrl(attachments[0])).toMatch(/^data:text\/plain;base64,/u);
+    });
+  });
+
+  it("keeps the default composer placeholder for pasted text attachments", () => {
+    const pastedTextAttachment: ChatAttachment = {
+      id: "pasted-text",
+      fileName: "pasted-text-1.txt",
+      mimeType: "text/plain",
+      sizeBytes: 2048,
+    };
+    const imageAttachment: ChatAttachment = {
+      id: "image",
+      fileName: "screen.png",
+      mimeType: "image/png",
+      sizeBytes: 2048,
+    };
+
+    const textOnly = renderChatView({ attachments: [pastedTextAttachment] });
+    expect(textOnly.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholder", { name: "Val" }),
+    );
+
+    const withImage = renderChatView({ attachments: [imageAttachment] });
+    expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholderWithAttachments"),
+    );
+  });
+
+  it("shows a short pasted text preview in the attachment card", () => {
+    const text = "First words from a long pasted note";
+    const file = new File([text], "pasted-text-1.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "pasted-text",
+        fileName: "pasted-text-1.txt",
+        mimeType: "text/plain",
+        sizeBytes: file.size,
+      },
+      dataUrl: `data:text/plain;base64,${btoa(text)}`,
+      file,
+    });
+
+    const container = renderChatView({ attachments: [attachment] });
+
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toContain(
+      "First words from a l...",
+    );
+    expect(container.querySelector(".chat-attachment-text-action")?.textContent).toContain(
+      "Show in text field",
+    );
+  });
+
+  it("keeps normal short plain-text paste in the textarea", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? "short paste" : ""),
+      },
+    });
+
+    const allowed = textarea.dispatchEvent(event);
+
+    expect(allowed).toBe(true);
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
+  it("moves a pasted text attachment back into the composer", async () => {
+    const onAttachmentsChange = vi.fn();
+    const firstRender = renderChatView({ onAttachmentsChange });
+    const textarea = requireElement(
+      firstRender,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const pastedText = "large paste\n" + "x".repeat(1100);
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? pastedText : ""),
+      },
+    });
+    textarea.dispatchEvent(event);
+
+    await vi.waitFor(() => {
+      expect(onAttachmentsChange).toHaveBeenCalled();
+    });
+    const [attachment] = requireFirstAttachmentsChange(onAttachmentsChange);
+    const onDraftChange = vi.fn();
+    const onShowAttachmentsChange = vi.fn();
+    const preview = renderChatView({
+      attachments: [attachment],
+      draft: "intro",
+      getDraft: () => "intro",
+      onAttachmentsChange: onShowAttachmentsChange,
+      onDraftChange,
+    });
+    const showButton = requireElement(
+      preview,
+      '[aria-label="Show pasted text in text field"]',
+      "show pasted text button",
+    ) as HTMLButtonElement;
+
+    showButton.click();
+
+    expect(onShowAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
   it("converts pasted data image text into an attachment", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -3546,6 +3696,27 @@ describe("chat attachment picker", () => {
     expect(attachments[0]?.mimeType).toBe("image/png");
     expect(attachments[0]?.sizeBytes).toBe(3);
     expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
+  });
+
+  it("removes a pasted image attachment from the preview", () => {
+    const attachment: ChatAttachment = {
+      id: "image",
+      fileName: "pasted-image.png",
+      mimeType: "image/png",
+      previewUrl: "blob:pasted-image",
+      sizeBytes: 3,
+    };
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ attachments: [attachment], onAttachmentsChange });
+    const removeButton = requireElement(
+      container,
+      '[aria-label="Remove attachment"]',
+      "remove attachment button",
+    ) as HTMLButtonElement;
+
+    removeButton.click();
+
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
   });
 
   it("opens the scoped file input from the attachment menu", () => {
