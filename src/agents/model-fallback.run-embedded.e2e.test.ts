@@ -83,6 +83,7 @@ const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
+const NO_ERROR_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 
 type EmbeddedAttemptParams = {
   provider: string;
@@ -481,6 +482,35 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
+  it("falls back after missing provider error details without cooling down the profile", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(NO_ERROR_DETAILS_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:no-error-details-no-cooldown",
+        runId: "run:no-error-details-no-cooldown",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("no_error_details");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.failureCounts?.no_error_details).toBeUndefined();
+      expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
+
+      expect(countProviderAttempts("openai")).toBeGreaterThan(0);
+      expect(countProviderAttempts("groq")).toBe(1);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
