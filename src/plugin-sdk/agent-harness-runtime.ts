@@ -357,6 +357,7 @@ export {
   resolveCompactionTimeoutMs,
 } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 export {
+  estimateLlmBoundaryTokenPressure,
   estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,

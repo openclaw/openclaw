@@ -11,6 +11,7 @@ import {
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
+  estimateLlmBoundaryTokenPressure,
   finalizeHarnessContextEngineTurn,
   FAST_MODE_AUTO_PROGRESS_KIND,
   formatFastModeAutoProgressText,
@@ -1024,12 +1025,19 @@ export async function runCodexAppServerAttempt(
     if (!activeContextEngine) {
       return;
     }
+    // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
+    const preassemblyCurrentTokenCount = estimateLlmBoundaryTokenPressure({
+      messages: historyMessages,
+      systemPrompt: developerInstructions,
+      prompt: params.prompt ?? "",
+    });
     const assembled = await assembleHarnessContextEngine({
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       messages: historyMessages,
       tokenBudget: params.contextTokenBudget,
+      currentTokenCount: preassemblyCurrentTokenCount,
       availableTools: new Set(
         flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
           .map((tool) => tool.name)

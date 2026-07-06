@@ -2696,6 +2696,14 @@ export async function runEmbeddedAttempt(
               cwd: effectiveCwd,
               agentDir,
               tokenBudget: params.contextTokenBudget,
+              // Mid-tool-loop the next model call has no new user prompt — the
+              // continuation is driven by tool results that are already in
+              // `messages`. Estimate against messages + system prompt only.
+              currentTokenCount: estimateLlmBoundaryTokenPressure({
+                messages,
+                systemPrompt: systemPromptText,
+                prompt: "",
+              }),
               promptCache:
                 promptCache ??
                 buildLoopPromptCacheInfo({
@@ -3377,12 +3385,19 @@ export async function runEmbeddedAttempt(
               1,
               contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
             );
+            // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
+            const preassemblyCurrentTokenCount = estimateLlmBoundaryTokenPressure({
+              messages: activeSession.messages,
+              systemPrompt: systemPromptText,
+              prompt: params.prompt ?? "",
+            });
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: contextEngineAssembleMessageBudget,
+              currentTokenCount: preassemblyCurrentTokenCount,
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,

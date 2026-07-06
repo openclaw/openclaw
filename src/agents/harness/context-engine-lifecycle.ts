@@ -136,6 +136,7 @@ export async function assembleHarnessContextEngine(params: {
   sessionKey?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
+  currentTokenCount?: number;
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
   modelId: string;
@@ -161,6 +162,9 @@ export async function assembleHarnessContextEngine(params: {
     sessionKey: params.sessionKey,
     messages,
     tokenBudget: params.tokenBudget,
+    ...(typeof params.currentTokenCount === "number"
+      ? { currentTokenCount: params.currentTokenCount }
+      : {}),
     ...(params.availableTools ? { availableTools: params.availableTools } : {}),
     ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
     model: params.modelId,
