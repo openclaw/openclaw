@@ -1,5 +1,6 @@
 // Huggingface plugin module implements models behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
@@ -11,6 +12,7 @@ import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-en
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
 export const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
+const HUGGINGFACE_DISCOVERY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 const HUGGINGFACE_DEFAULT_COST = {
   input: 0,
@@ -165,7 +167,11 @@ export async function discoverHuggingfaceModels(
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = await readProviderJsonResponse<OpenAIListModelsResponse>(
+        response,
+        "HuggingFace model discovery",
+        { maxBytes: HUGGINGFACE_DISCOVERY_MAX_RESPONSE_BYTES },
+      );
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);

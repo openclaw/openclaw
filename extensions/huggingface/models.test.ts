@@ -108,6 +108,28 @@ describe("huggingface models", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
+  it("falls back to the static catalog when the discovery response exceeds the byte cap", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const hugeBody = JSON.stringify({
+      data: [{ id: "huggingface/oversized", padding: "x".repeat(16 * 1024 * 1024) }],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(hugeBody, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+  });
+
   describe("isHuggingfacePolicyLocked", () => {
     it("returns true for :cheapest and :fastest refs", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(true);
