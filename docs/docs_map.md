@@ -2361,6 +2361,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Layout and names
   - H2: Provision ignored files
   - H2: Run repository setup
+  - H2: Session worktrees
   - H2: Snapshots, cleanup, and restore
   - H2: CLI
   - H2: Gateway methods
@@ -2448,6 +2449,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Prerequisites
   - H3: Enable
   - H2: How the sidecar works
+  - H3: CPU-only VPS guidance
   - H2: Search performance and compatibility
   - H2: Model overrides
   - H2: Indexing extra paths
