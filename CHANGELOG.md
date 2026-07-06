@@ -4,8 +4,6 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-- **Anthropic-compatible stream hardening:** bound incomplete SSE frames in the native Messages parser so malformed or hostile streams fail cleanly instead of growing memory without limit. (#100686) Thanks @zhangguiping-xydt.
-
 ### Changes
 
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
