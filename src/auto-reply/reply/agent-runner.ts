@@ -36,6 +36,7 @@ import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
+import { maybeGenerateAutoSessionTitle } from "./auto-session-title.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -2616,6 +2617,33 @@ export async function runReplyAgent(params: {
             takeCacheOwnership: true,
           },
         );
+      }
+    }
+
+    // Auto-generate a session title from the first user message (ChatGPT/Gemini/Claude style).
+    // Fire-and-forget: runs in the background so it never blocks the reply path.
+    const autoTitleEnabled = cfg.session?.autoTitle !== false;
+    if (
+      autoTitleEnabled &&
+      activeIsNewSession &&
+      sessionKey &&
+      storePath &&
+      !isHeartbeat
+    ) {
+      const agentId = followupRun.run.agentId;
+      const userMessage = commandBody ?? "";
+      if (userMessage.trim()) {
+        void maybeGenerateAutoSessionTitle({
+          cfg,
+          agentId,
+          entry: activeSessionEntry,
+          sessionId,
+          sessionKey,
+          storePath,
+          userMessage,
+        }).catch((err: unknown) => {
+          logVerbose(`auto-session-title: background generation failed: ${String(err)}`);
+        });
       }
     }
 

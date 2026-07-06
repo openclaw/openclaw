@@ -236,6 +236,8 @@ export type SessionConfig = {
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
+  /** Auto-generate session titles from the first user message (ChatGPT/Gemini/Claude style). Default: true. */
+  autoTitle?: boolean;
 };
 
 export type SessionWriteLockConfig = {
