@@ -244,9 +244,48 @@ final class OnboardingAISetupModel {
             }
         } catch {
             guard token == self.attemptToken else { return }
+            // Activating a CLI candidate can install a provider plugin (Codex),
+            // and the gateway restarts itself to load it — dropping this RPC's
+            // socket after the server already tested and persisted the model.
+            // A transport error means "outcome unknown", not "failed": re-read
+            // server state before reporting failure.
+            if await self.reconcileActivationAfterTransportDrop(kind: kind, token: token) { return }
+            guard token == self.attemptToken else { return }
             self.statuses[kind] = .failed(message: Self.friendlyTransportError(error.localizedDescription))
             await self.tryNextAfterFailure(of: kind)
         }
+    }
+
+    /// After a transport drop during activate, poll `crestodian.setup.detect`
+    /// (the gateway restart takes a few seconds) and count the attempt as
+    /// connected only when the server persisted exactly the model this
+    /// candidate would have written. Returns true when reconciled.
+    private func reconcileActivationAfterTransportDrop(kind: String, token: UUID) async -> Bool {
+        guard let expected = self.candidates.first(where: { $0.kind == kind })?.modelRef else {
+            return false
+        }
+        for delayMs in [2000, 4000, 6000] {
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            guard token == self.attemptToken else { return false }
+            guard let data = try? await GatewayConnection.shared.request(
+                method: "crestodian.setup.detect",
+                params: [:],
+                timeoutMs: 10000,
+                retryTransportFailures: true)
+            else { continue }
+            guard token == self.attemptToken else { return false }
+            guard let result = try? JSONDecoder().decode(DetectResult.self, from: data) else { return false }
+            if result.setupComplete, result.configuredModel == expected {
+                self.finishConnected(
+                    kind: kind,
+                    result: ActivateResult(ok: true, modelRef: expected, latencyMs: nil, status: nil, error: nil))
+                return true
+            }
+            // The gateway answered and setup is not complete: the activation
+            // genuinely failed before persisting — report the original error.
+            return false
+        }
+        return false
     }
 
     func submitManualKey() {
