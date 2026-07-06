@@ -14,6 +14,7 @@ import {
   formatLocationText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
@@ -104,12 +105,31 @@ const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
   expires: number;
 };
+
+function resolveRetryableWhatsAppInboundError(
+  error: unknown,
+): WhatsAppRetryableInboundError | null {
+  if (error instanceof WhatsAppRetryableInboundError) {
+    return error;
+  }
+  const hasSessionInitConflict = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.error,
+  ]).some((candidate) =>
+    REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
+  if (!hasSessionInitConflict) {
+    return null;
+  }
+  return new WhatsAppRetryableInboundError(formatErrorMessage(error), { cause: error });
+}
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
 export type WhatsAppBaileysCacheEntry<T> = {
   expiresAt: number;
@@ -465,12 +485,13 @@ export async function attachWebInboxToSocket(
       (entry): entry is QueuedInboundMessage & { readReceipt: WhatsAppReadReceiptTarget } =>
         Boolean(entry.readReceipt),
     );
-    if (error instanceof WhatsAppRetryableInboundError) {
-      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
+    const retryableError = resolveRetryableWhatsAppInboundError(error);
+    if (retryableError) {
+      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, retryableError));
       await Promise.all(
         durableEntries.map((entry) =>
           durableInboundJournal.release(entry.durableId, {
-            lastError: formatError(error),
+            lastError: formatError(retryableError),
           }),
         ),
       );
