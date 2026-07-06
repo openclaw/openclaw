@@ -674,10 +674,11 @@ export class ModelRegistry {
           ? { ...model.headers, ...providerHeaders, ...modelHeaders }
           : undefined;
 
+      if (!apiKey) {
+        return { ok: false, error: `No API key found for "${model.provider}"` };
+      }
+
       if (providerConfig?.authHeader) {
-        if (!apiKey) {
-          return { ok: false, error: `No API key found for "${model.provider}"` };
-        }
         headers = { ...headers, Authorization: `Bearer ${apiKey}` };
       }
 
