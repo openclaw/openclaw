@@ -56,7 +56,8 @@ export async function execFileUtf8Tail(
         }
       }
     });
-    child.on("error", (error) => {
+
+    const resolveWithError = (error: unknown) => {
       if (settled) {
         return;
       }
@@ -67,7 +68,11 @@ export async function execFileUtf8Tail(
         code: 1,
         truncated,
       });
-    });
+    };
+
+    child.stdout?.on("error", resolveWithError);
+    child.stderr?.on("error", resolveWithError);
+    child.on("error", resolveWithError);
     child.on("close", (code) => {
       if (settled) {
         return;
