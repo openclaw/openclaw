@@ -1246,6 +1246,25 @@ public final class OpenClawChatViewModel {
             }
         }
 
+        let mustPreserveOutboxOrder = !self.hasRestoredOutboxMessages ||
+            self.outboxStatesByMessageID.values.contains(where: { !$0.isFailed })
+        var shouldPersistAttachmentDraft = !draftAttachments.isEmpty
+        if shouldPersistAttachmentDraft,
+           !mustPreserveOutboxOrder,
+           self.healthOK,
+           self.outbox != nil
+        {
+            let routeResult = await self.transport.acquireOutboxRouteLease()
+            guard self.isCurrentSession(sessionSnapshot) else { return }
+            if case let .unavailable(reason) = routeResult,
+               reason == OpenClawChatTransportUpgradeMessage.routingContract
+            {
+                // Older healthy gateways can send attachments live but cannot
+                // safely replay them. Preserve that shipped live-only path.
+                shouldPersistAttachmentDraft = false
+            }
+        }
+
         // FIFO across the reconnect boundary: while this session still has
         // queued/sending outbox rows — or restore has not yet adopted rows
         // persisted by an earlier process, so we must assume a backlog — a
@@ -1258,9 +1277,7 @@ public final class OpenClawChatViewModel {
         // session-scoped: other sessions are separate conversations with no
         // ordering contract.
         if self.outbox != nil,
-           !draftAttachments.isEmpty
-           || !self.hasRestoredOutboxMessages
-           || self.outboxStatesByMessageID.values.contains(where: { !$0.isFailed })
+           shouldPersistAttachmentDraft || mustPreserveOutboxOrder
         {
             self.logDiagnostic(
                 "chat.ui send routed behind outbox sessionKey=\(sessionKey) inputLen=\(trimmed.count)")

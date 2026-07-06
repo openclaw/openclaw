@@ -57,19 +57,22 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let failsAmbiguously: Bool
     let responseStatus: String
     let returnsEmptyHistory: Bool
+    let durableOutboxAvailable: Bool
 
     init(
         capture: AttachmentSendCapture? = nil,
         healthGate: AttachmentHealthGate? = nil,
         failsAmbiguously: Bool = false,
         responseStatus: String = "started",
-        returnsEmptyHistory: Bool = false)
+        returnsEmptyHistory: Bool = false,
+        durableOutboxAvailable: Bool = true)
     {
         self.capture = capture
         self.healthGate = healthGate
         self.failsAmbiguously = failsAmbiguously
         self.responseStatus = responseStatus
         self.returnsEmptyHistory = returnsEmptyHistory
+        self.durableOutboxAvailable = durableOutboxAvailable
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
@@ -103,6 +106,25 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         await self.healthGate?.wait()
         return true
+    }
+
+    func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
+        guard self.durableOutboxAvailable else {
+            return .unavailable(reason: OpenClawChatTransportUpgradeMessage.routingContract)
+        }
+        let transport = self
+        return .available(OpenClawChatTransportRouteLease(
+            sendMessage: { sessionKey, message, thinking, idempotencyKey, attachments in
+                try await transport.sendMessage(
+                    sessionKey: sessionKey,
+                    message: message,
+                    thinking: thinking,
+                    idempotencyKey: idempotencyKey,
+                    attachments: attachments)
+            },
+            requestHistory: { sessionKey in
+                try await transport.requestHistory(sessionKey: sessionKey)
+            }))
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -402,6 +424,41 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertTrue(state.0)
         XCTAssertNil(state.1)
         XCTAssertEqual(state.2, 4)
+    }
+
+    func testHealthyLegacyGatewayUsesLiveAttachmentPath() async throws {
+        let capture = AttachmentSendCapture()
+        let outbox = makeAttachmentOutbox()
+        let viewModel = await MainActor.run {
+            makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(
+                    capture: capture,
+                    returnsEmptyHistory: true,
+                    durableOutboxAvailable: false),
+                outbox: outbox)
+        }
+        await MainActor.run { viewModel.load() }
+        try await waitUntil("legacy gateway bootstrap completed") {
+            await MainActor.run { viewModel.healthOK && !viewModel.isLoading }
+        }
+        await MainActor.run {
+            viewModel.attachments = [
+                OpenClawPendingAttachment(
+                    url: nil,
+                    data: Data("legacy-voice-note".utf8),
+                    fileName: "legacy.m4a",
+                    mimeType: "audio/mp4",
+                    preview: nil,
+                    durationSeconds: 3),
+            ]
+            viewModel.send()
+        }
+        try await waitUntil("legacy attachment sent live") {
+            await capture.count() == 1
+        }
+
+        let commands = await outbox.loadCommands()
+        XCTAssertTrue(commands.isEmpty)
     }
 
     func testFailedAttachmentSendWithoutOutboxRestoresDraft() async throws {
