@@ -110,11 +110,13 @@ final class VoiceNoteRecorderTests: XCTestCase {
             capture: capture,
             now: { Date(timeIntervalSince1970: 0) })
 
-        await XCTAssertTrue(recorder.start())
+        let firstStarted = await recorder.start()
+        XCTAssertTrue(firstStarted)
         let firstURL = try XCTUnwrap(capture.activeURL)
         recorder.cancel()
 
-        await XCTAssertTrue(recorder.start())
+        let secondStarted = await recorder.start()
+        XCTAssertTrue(secondStarted)
         let secondURL = try XCTUnwrap(capture.activeURL)
         XCTAssertNotEqual(firstURL, secondURL)
         recorder.cancel()
@@ -180,7 +182,8 @@ final class VoiceNoteRecorderTests: XCTestCase {
         var activeChanges: [Bool] = []
         recorder.onRecordingActiveChanged = { activeChanges.append($0) }
 
-        await XCTAssertTrue(recorder.start())
+        let started = await recorder.start()
+        XCTAssertTrue(started)
         let fileURL = try XCTUnwrap(capture.activeURL)
 
         capture.failCapture()

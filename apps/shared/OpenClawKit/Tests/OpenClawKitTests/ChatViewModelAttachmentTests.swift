@@ -102,7 +102,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         await self.healthGate?.wait()
-        true
+        return true
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -482,24 +482,17 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         let capture = AttachmentSendCapture()
         let healthGate = AttachmentHealthGate()
         let transport = AttachmentProcessingTransport(capture: capture, healthGate: healthGate)
-        let draftAttachment = OpenClawPendingAttachment(
-            url: nil,
-            data: Data("draft-audio".utf8),
-            fileName: "draft.m4a",
-            mimeType: "audio/mp4",
-            preview: nil,
-            durationSeconds: 21.2)
-        let replacementAttachment = OpenClawPendingAttachment(
-            url: nil,
-            data: Data("replacement-audio".utf8),
-            fileName: "replacement.m4a",
-            mimeType: "audio/mp4",
-            preview: nil,
-            durationSeconds: 99)
-        let viewModel = await MainActor.run {
+        let (viewModel, draftAttachmentID) = await MainActor.run {
             let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+            let draftAttachment = OpenClawPendingAttachment(
+                url: nil,
+                data: Data("draft-audio".utf8),
+                fileName: "draft.m4a",
+                mimeType: "audio/mp4",
+                preview: nil,
+                durationSeconds: 21.2)
             viewModel.attachments = [draftAttachment]
-            return viewModel
+            return (viewModel, draftAttachment.id)
         }
 
         await MainActor.run { viewModel.send() }
@@ -507,8 +500,15 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             await healthGate.hasEntered()
         }
         await MainActor.run {
-            viewModel.removeAttachment(draftAttachment.id)
-            viewModel.attachments.append(replacementAttachment)
+            viewModel.removeAttachment(draftAttachmentID)
+            viewModel.attachments.append(
+                OpenClawPendingAttachment(
+                    url: nil,
+                    data: Data("replacement-audio".utf8),
+                    fileName: "replacement.m4a",
+                    mimeType: "audio/mp4",
+                    preview: nil,
+                    durationSeconds: 99))
         }
         await healthGate.release()
         try await waitUntil("voice note sent") {
