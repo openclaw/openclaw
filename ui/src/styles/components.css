@@ -3145,8 +3145,6 @@
   border-bottom: none;
 }
 
-
-
 /* Checkbox column */
 .data-table-checkbox-col {
   width: var(--data-table-checkbox-col-width);
@@ -3306,7 +3304,6 @@ td.data-table-key-col {
 .field-inline.checkbox input[type="checkbox"] {
   accent-color: var(--accent);
 }
-
 
 /* ===========================================
    Log Stream

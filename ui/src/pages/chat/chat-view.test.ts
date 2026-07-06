@@ -1975,9 +1975,7 @@ describe("chat voice controls", () => {
       "disabled advanced Settings link",
     ) as HTMLButtonElement;
     expect(settings.disabled).toBe(true);
-    expect(settings.textContent?.trim()).toBe(
-      t("chat.composer.talkAdvancedSettingsRequiresAdmin"),
-    );
+    expect(settings.textContent?.trim()).toBe(t("chat.composer.talkAdvancedSettingsRequiresAdmin"));
     expect(settings.title).toContain("operator.admin");
     settings.click();
     expect(onOpenRealtimeTalkSettings).not.toHaveBeenCalled();
@@ -2013,9 +2011,9 @@ describe("chat voice controls", () => {
       voiceOptions.querySelector<HTMLInputElement>(".agent-chat__talk-options-primary input")
         ?.placeholder,
     ).toBe(t("chat.composer.talkModelAuto"));
-    expect(
-      voiceOptions.querySelector(".agent-chat__talk-settings-link")?.textContent?.trim(),
-    ).toBe(t("chat.composer.talkMoreInSettings"));
+    expect(voiceOptions.querySelector(".agent-chat__talk-settings-link")?.textContent?.trim()).toBe(
+      t("chat.composer.talkMoreInSettings"),
+    );
     requireElement(
       container,
       `[aria-label="${t("chat.composer.addAttachment")}"]`,
