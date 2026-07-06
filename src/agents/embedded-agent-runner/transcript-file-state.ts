@@ -242,11 +242,10 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
         summary?: unknown;
         tokensBefore?: unknown;
       };
-      return (
-        isString(candidate.firstKeptEntryId) &&
-        typeof candidate.summary === "string" &&
-        typeof candidate.tokensBefore === "number"
-      );
+      // tokensBefore is telemetry and must not gate truncation. A persisted null
+      // (from former NaN serialization) is accepted so compaction records with
+      // degenerate usage (e.g. delivery-mirror) can still truncate session history.
+      return isString(candidate.firstKeptEntryId) && typeof candidate.summary === "string";
     }
     case "custom":
       return isString((entry as { customType?: unknown }).customType);

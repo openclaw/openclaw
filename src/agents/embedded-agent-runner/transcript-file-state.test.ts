@@ -391,6 +391,105 @@ describe("readTranscriptFileState", () => {
     expect(state.getLeafId()).toBe("compact-1");
   });
 
+  it("accepts compaction entries with null tokensBefore (persisted NaN from degenerate usage)", async () => {
+    const root = await makeRoot("openclaw-transcript-state-compaction-null-tokens-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "question" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          summary: "compacted history",
+          firstKeptEntryId: "user-1",
+          tokensBefore: null,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "compact-1",
+    ]);
+    expect(state.getLeafId()).toBe("compact-1");
+  });
+
+  it("accepts compaction entries with missing tokensBefore", async () => {
+    const root = await makeRoot("openclaw-transcript-state-compaction-missing-tokens-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "question" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          summary: "compacted history",
+          firstKeptEntryId: "user-1",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => entry.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "compact-1",
+    ]);
+    expect(state.getLeafId()).toBe("compact-1");
+  });
+
   it("skips JSON-valid non-object rows", async () => {
     const root = await makeRoot("openclaw-transcript-state-null-row-");
     const sessionFile = path.join(root, "session.jsonl");

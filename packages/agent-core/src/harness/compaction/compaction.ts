@@ -151,7 +151,21 @@ export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
     return usage.contextUsage.totalTokens;
   }
-  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+
+  // Prefer top-level totalTokens when it is a valid positive number.
+  const total = usage.totalTokens;
+  if (typeof total === "number" && total > 0 && Number.isFinite(total)) {
+    return total;
+  }
+
+  // Fall back to summing individual fields, guarding against NaN from entries with
+  // degenerate usage (e.g. delivery-mirror rebuilds that lack cacheRead/cacheWrite).
+  const input = usage.input || 0;
+  const output = usage.output || 0;
+  const cacheRead = usage.cacheRead || 0;
+  const cacheWrite = usage.cacheWrite || 0;
+  const sum = input + output + cacheRead + cacheWrite;
+  return sum > 0 && Number.isFinite(sum) ? sum : 0;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   if (msg.role === "assistant" && "usage" in msg) {

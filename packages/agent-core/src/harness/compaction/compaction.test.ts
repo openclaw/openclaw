@@ -28,6 +28,45 @@ describe("calculateContextTokens", () => {
     ).toBe(163_978);
   });
 
+  it("falls back to sum when totalTokens is NaN or 0", () => {
+    expect(
+      calculateContextTokens({
+        input: 10,
+        output: 20,
+        cacheRead: 100,
+        cacheWrite: 200,
+        totalTokens: NaN,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }),
+    ).toBe(330);
+  });
+
+  it("returns 0 when all usage fields are zero", () => {
+    expect(
+      calculateContextTokens({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }),
+    ).toBe(0);
+  });
+
+  it("returns 0 when all usage fields are degenerate (NaN)", () => {
+    expect(
+      calculateContextTokens({
+        input: NaN,
+        output: NaN,
+        cacheRead: NaN,
+        cacheWrite: NaN,
+        totalTokens: NaN,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }),
+    ).toBe(0);
+  });
+
   it("preserves the numeric compatibility fallback when the snapshot is unavailable", () => {
     expect(
       calculateContextTokens({
