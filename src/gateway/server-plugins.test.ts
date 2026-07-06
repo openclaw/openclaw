@@ -1034,6 +1034,24 @@ describe("loadGatewayPlugins", () => {
     expect(params.idempotencyKey).toBe("caller-provided-key");
   });
 
+  test("forwards cwd on plugin-owned subagent runs", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("cwd-forward"));
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "workboard", pluginOrigin: "bundled" },
+      () =>
+        runtime.run({
+          sessionKey: "s-cwd-forward",
+          message: "hello",
+          cwd: "/tmp/managed-worktree",
+        }),
+    );
+
+    expect(getRequiredLastDispatchedParams().cwd).toBe("/tmp/managed-worktree");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
+  });
+
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

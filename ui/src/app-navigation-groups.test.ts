@@ -1,51 +1,47 @@
-// Control UI tests cover sidebar pinned-route customization behavior.
+// Control UI tests cover navigation groups behavior.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
   SETTINGS_NAVIGATION_ROUTES,
-  SIDEBAR_NAV_ROUTES,
+  SIDEBAR_SECTIONS,
   isSettingsNavigationRoute,
-  normalizeSidebarPinnedRoutes,
-  sidebarMoreRoutes,
+  isRouteInSidebarSection,
 } from "./app-navigation.ts";
 import { routeIdFromPath } from "./app-routes.ts";
 
-describe("sidebar pinned routes", () => {
-  it("defaults to a small pinned set drawn from the customizable routes", () => {
-    expect(DEFAULT_SIDEBAR_PINNED_ROUTES.length).toBeLessThan(SIDEBAR_NAV_ROUTES.length);
-    for (const routeId of DEFAULT_SIDEBAR_PINNED_ROUTES) {
-      expect(SIDEBAR_NAV_ROUTES).toContain(routeId);
-    }
-  });
-
-  it("keeps channel management and settings slices out of the customizable sidebar", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("channels");
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
-    expect(SETTINGS_NAVIGATION_ROUTES).toContain("channels");
+describe("SIDEBAR_SECTIONS", () => {
+  it("collapses detailed settings slices into one sidebar entry", () => {
+    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
+    expect(settings?.routes).toEqual(["config"]);
     expect(SETTINGS_NAVIGATION_ROUTES.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(
       true,
     );
   });
 
-  it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
-    expect(
-      normalizeSidebarPinnedRoutes(["workboard", "overview", "workboard", "bogus", 7]),
-    ).toEqual(["workboard", "overview"]);
-    expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
+  it("keeps channel management out of the primary control sidebar", () => {
+    const control = SIDEBAR_SECTIONS.find((group) => group.label === "control");
+    expect(control?.routes).toEqual([
+      "overview",
+      "activity",
+      "workboard",
+      "worktrees",
+      "instances",
+      "sessions",
+      "usage",
+      "cron",
+    ]);
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("channels");
   });
 
-  it("falls back to null for non-list values so callers use defaults", () => {
-    expect(normalizeSidebarPinnedRoutes(undefined)).toBeNull();
-    expect(normalizeSidebarPinnedRoutes({ overview: true })).toBeNull();
-    expect(normalizeSidebarPinnedRoutes("overview")).toBeNull();
-  });
+  it("keeps the settings group active for nested settings routes", () => {
+    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
+    if (!settings) {
+      throw new Error("Expected settings group");
+    }
 
-  it("puts every unpinned nav route into the More section", () => {
-    const pinned = ["overview", "agents"] as const;
-    const more = sidebarMoreRoutes(pinned);
-    expect(more).not.toContain("overview");
-    expect(more).not.toContain("agents");
-    expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
+    expect(isRouteInSidebarSection(settings, "appearance")).toBe(true);
+    expect(isRouteInSidebarSection(settings, "channels")).toBe(true);
+    expect(isRouteInSidebarSection(settings, "debug")).toBe(true);
+    expect(isRouteInSidebarSection(settings, "chat")).toBe(false);
   });
 
   it("routes every published settings slice", () => {
