@@ -1724,6 +1724,52 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("resolves agentId-only cron wake to the agent's default session key", () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-agentid-wake-${Date.now()}`);
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(tmpDir, "cron.json") },
+      agents: {
+        list: [
+          { id: "main", default: true, model: "test/main" },
+          { id: "historian2", model: "test/historian2" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      // agentId-only wake: no sessionKey provided
+      expect(
+        state.cron.wake({
+          mode: "now",
+          text: "heartbeat task",
+          agentId: "historian2",
+        }),
+      ).toEqual({ ok: true });
+
+      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
+      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
+
+      // Enqueued event should go to historian2's main session
+      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
+        /^agent:historian2:main$/,
+      );
+
+      // Heartbeat request should target historian2
+      const wakeRequest = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
+      expect(wakeRequest?.agentId).toBe("historian2");
+      expect(wakeRequest?.sessionKey).toMatch(/^agent:historian2:main$/);
+    } finally {
+      state.cron.stop();
+    }
+  });
 });
 
 describe("fireOnExitJob (on-exit fire routing)", () => {

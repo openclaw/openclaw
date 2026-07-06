@@ -317,13 +317,19 @@ export function buildGatewayCronService(params: {
     // agents (e.g. heartbeat overrides) are available to downstream consumers.
     if (requestedAgentId) {
       const { cfg: runtimeConfig } = resolveCronAgent(requestedAgentId);
-      const sessionKey = requestedSessionKey
-        ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId: requestedAgentId,
-            requestedSessionKey,
-          })
-        : undefined;
+      const resolvedSessionKey = resolveCronSessionKey({
+        runtimeConfig,
+        agentId: requestedAgentId,
+        requestedSessionKey,
+      });
+      const sessionKey =
+        resolvedSessionKey && runtimeConfig.session?.scope === "global"
+          ? resolveEventSessionKey(
+              resolvedSessionKey,
+              runtimeConfig.session?.mainKey,
+              runtimeConfig.session?.scope,
+            )
+          : resolvedSessionKey;
       return { runtimeConfig, agentId: requestedAgentId, sessionKey };
     }
 
