@@ -16,7 +16,6 @@ Docs: https://docs.openclaw.ai
 - **Control UI message context:** reveal per-message token, context, and model details from the timestamp on hover or activation instead of showing a separate Context button.
 - **Control UI session titles:** reveal truncated recent-session names with a reduced-motion-safe hover animation.
 - **Control UI sidebar navigation:** show a small customizable pinned destination set, keep the remaining pages under More, move Settings to the footer, and persist sidebar customization in the browser. (#100296)
-- **Control UI session navigation:** keep sidebar rows stable when switching chats, move cross-agent session search into the command palette with paginated hidden-row filtering, compact the agent scope control, preserve grouped full session menus, and place the macOS brand in the native titlebar. (#100648)
 - **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd.
 - **Android chat code highlighting:** render fenced Kotlin, Swift, TypeScript, JavaScript, Python, Bash, and JSON blocks with bounded, theme-aware syntax colors while preserving plain rendering for unknown, partial, or oversized blocks. (#100217)
 
