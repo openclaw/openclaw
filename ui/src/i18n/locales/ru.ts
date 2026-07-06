@@ -448,7 +448,6 @@ export const ru: TranslationMap = {
     collapse: "Свернуть боковую панель",
     resize: "Изменить размер боковой панели",
     more: "Ещё",
-    chats: "Chats",
     customize: "Настроить боковую панель",
     customizeReset: "Сбросить настройки",
   },

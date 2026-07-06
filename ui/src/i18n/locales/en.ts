@@ -443,7 +443,6 @@ export const en: TranslationMap = {
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
     more: "More",
-    chats: "Chats",
     customize: "Customize sidebar",
     customizeReset: "Reset to defaults",
   },

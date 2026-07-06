@@ -447,7 +447,6 @@ export const tr: TranslationMap = {
     collapse: "Kenar çubuğunu daralt",
     resize: "Kenar çubuğunu yeniden boyutlandır",
     more: "Daha fazla",
-    chats: "Chats",
     customize: "Kenar çubuğunu özelleştir",
     customizeReset: "Varsayılanlara sıfırla",
   },

@@ -449,7 +449,6 @@ export const it: TranslationMap = {
     collapse: "Comprimi barra laterale",
     resize: "Ridimensiona barra laterale",
     more: "Altro",
-    chats: "Chats",
     customize: "Personalizza barra laterale",
     customizeReset: "Ripristina impostazioni predefinite",
   },

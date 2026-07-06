@@ -442,7 +442,6 @@ export const zh_CN: TranslationMap = {
     collapse: "折叠侧边栏",
     resize: "调整侧边栏大小",
     more: "更多",
-    chats: "Chats",
     customize: "自定义侧边栏",
     customizeReset: "恢复默认设置",
   },

@@ -695,7 +695,9 @@ export class AppSidebar extends LitElement {
                     `}
                 <div class="sidebar-recent-sessions__group">
                   <div class="sidebar-recent-sessions__head">
-                    <span class="sidebar-recent-sessions__label-text">${t("nav.chats")}</span>
+                    <span class="sidebar-recent-sessions__label-text"
+                      >${t("sessionsView.title")}</span
+                    >
                     <openclaw-session-picker
                       .sessions=${context?.sessions}
                       .sessionsResult=${this.sessionsResult}

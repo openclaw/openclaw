@@ -446,7 +446,6 @@ export const uk: TranslationMap = {
     collapse: "Згорнути бічну панель",
     resize: "Змінити розмір бічної панелі",
     more: "Більше",
-    chats: "Chats",
     customize: "Налаштувати бічну панель",
     customizeReset: "Скинути до типових налаштувань",
   },
