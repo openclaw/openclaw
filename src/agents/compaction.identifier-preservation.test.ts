@@ -100,7 +100,34 @@ describe("compaction identifier-preservation instructions", () => {
     expect(firstSummaryInstructions()).toContain("Focus on release-impacting bugs.");
   });
 
-  it("applies identifier-preservation guidance on staged split + merge summarization", async () => {
+  it("preserves chunk timestamps in staged-split merge messages instead of all Date.now()", async () => {
+    // Messages 1-4 have timestamps 1-4; messages 5-8 have timestamps 5-8.
+    // With parts=2, chunk boundaries preserve relative chronological ordering.
+    await runSummary(4, {
+      maxChunkTokens: 1000,
+      parts: 2,
+      minMessagesForSplit: 4,
+    });
+
+    // 3 calls: 2 chunk summaries + 1 merge
+    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
+    const mergeCall = mockGenerateSummary.mock.calls[2];
+    const mergeMessages = mergeCall?.[0] as AgentMessage[] | undefined;
+    expect(mergeMessages).toBeDefined();
+    expect(mergeMessages?.length).toBeGreaterThanOrEqual(2);
+
+    // Verify merge messages use chunk timestamps, not all Date.now()
+    const mergeTimestamps = mergeMessages
+      ?.map((m: AgentMessage) => (m as { timestamp?: number }).timestamp)
+      .filter((t: unknown): t is number => typeof t === "number");
+    expect(mergeTimestamps?.length).toBeGreaterThanOrEqual(2);
+    // With the fix, timestamps are from the first message of each chunk
+    // (small values like 1, 3), not Date.now() (~1.7e12).
+    // Assert at least one timestamp is under 1e10 to prove it's not Date.now().
+    expect(mergeTimestamps?.some((t) => t > 0 && t < 1e10)).toBe(true);
+  });
+
+  it("keeps identifier-preservation guidance on staged split + merge summarization with timestamp preservation", async () => {
     await runSummary(4, {
       maxChunkTokens: 1000,
       parts: 2,
