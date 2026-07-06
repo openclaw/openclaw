@@ -1498,19 +1498,23 @@ export async function dispatchReplyFromConfig(
     // acknowledgement) waits out the full stuck-session abort window before the
     // recovery one-shot reclaims the slot. Guards, in order: terminal-recovery
     // operations stay protected exactly as in the terminal-session force-clear
-    // below; both the dispatch-start snapshot AND a fresh store lookup must
-    // disagree with the operation's sessionId, so a mid-run rotation that has
-    // committed the store but not yet relabeled its own operation is never
-    // treated as stale; and terminal snapshots are excluded entirely because
-    // terminal-session recovery admits a fresh operation with a NEW sessionId
-    // before the store entry rotates (#86827), which the id comparison alone
-    // cannot distinguish from a leftover.
+    // below; a still-queued reservation is skipped because get-reply-run.ts only
+    // relabels it to its own turn's committed sessionId once dispatch reaches
+    // updateSessionId, so a queued op's sessionId legitimately lags there; both
+    // the dispatch-start snapshot AND a fresh store lookup must disagree with
+    // the operation's sessionId, so a mid-run rotation that has committed the
+    // store but not yet relabeled its own operation is never treated as stale;
+    // and terminal snapshots are excluded entirely because terminal-session
+    // recovery admits a fresh operation with a NEW sessionId before the store
+    // entry rotates (#86827), which the id comparison alone cannot distinguish
+    // from a leftover.
     if (phase === "dispatch" && replyTurnKind === "visible") {
       const activeBeforeAdmission = replyRunRegistry.get(dispatchOperationSessionKey);
       const snapshotSessionId = sessionStoreEntry.entry?.sessionId;
       if (
         activeBeforeAdmission &&
         !activeBeforeAdmission.terminalRecovery &&
+        activeBeforeAdmission.phase !== "queued" &&
         snapshotSessionId &&
         snapshotSessionId !== activeBeforeAdmission.sessionId
       ) {

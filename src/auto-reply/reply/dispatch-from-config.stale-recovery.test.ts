@@ -95,6 +95,61 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
   });
 
+  it("does not clear a queued pre-dispatch reservation whose turn already committed a new session id", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:queued-pre-dispatch-rotation";
+    const queuedOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "archived-session",
+      resetTriggered: false,
+    });
+    // Left in the default "queued" phase: get-reply-run.ts only relabels this
+    // reservation to the session id its own turn committed once it reaches
+    // updateSessionId, so a store mismatch here does not mean it is stale.
+    sessionStoreMocks.currentEntry = { sessionId: "rotated-session", updatedAt: Date.now() };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "post-reset reply" }) satisfies ReplyPayload);
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "first post-reset turn",
+      }),
+      cfg: {
+        diagnostics: {
+          stuckSessionWarnMs: 1_000,
+          stuckSessionAbortMs: 1_000,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(queuedOperation.result).toBeNull();
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    // Mirrors get-reply-run.ts reaching updateSessionId for its own queued
+    // reservation before finishing, exactly like the real continuation path.
+    queuedOperation.updateSessionId("rotated-session");
+    queuedOperation.complete();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await resultPromise;
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("does not clear an active reply operation whose session id matches the store entry", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:telegram:direct:current-session-active";
