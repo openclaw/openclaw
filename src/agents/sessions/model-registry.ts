@@ -594,11 +594,7 @@ export class ModelRegistry {
    * Get API key for a model.
    */
   hasConfiguredAuth(model: Model): boolean {
-    return (
-      this.authStorage.hasAuth(model.provider) ||
-      this.providerRequestConfigs.get(model.provider)?.auth === "aws-sdk" ||
-      this.providerRequestConfigs.get(model.provider)?.apiKey !== undefined
-    );
+    return this.getProviderAuthStatus(model.provider).configured;
   }
 
   private getModelRequestKey(provider: string, modelId: string): string {

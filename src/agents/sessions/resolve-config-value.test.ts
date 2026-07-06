@@ -60,7 +60,7 @@ describe("resolveConfigValueUncached", () => {
 describe("ModelRegistry.getProviderAuthStatus with env apiKey", () => {
   let modelsPath: string;
 
-  function writeTestModelsJson(apiKey: string) {
+  function writeTestModelsJson(apiKey?: string, auth?: string) {
     const path = join(tmpdir(), `openclaw-test-models-${Date.now()}.json`);
     writeFileSync(
       path,
@@ -69,7 +69,8 @@ describe("ModelRegistry.getProviderAuthStatus with env apiKey", () => {
           [TEST_PROVIDER]: {
             baseUrl: "https://test.example/v1",
             api: "openai-completions",
-            apiKey,
+            ...(auth !== undefined ? { auth } : {}),
+            ...(apiKey !== undefined ? { apiKey } : {}),
             models: [{ id: "test-model" }],
           },
         },
@@ -127,5 +128,74 @@ describe("ModelRegistry.getProviderAuthStatus with env apiKey", () => {
       configured: true,
       source: "models_json_command",
     });
+  });
+});
+
+describe("ModelRegistry availability with env apiKey", () => {
+  let modelsPath: string;
+
+  function writeTestModelsJson(apiKey?: string, auth?: string) {
+    const path = join(tmpdir(), `openclaw-test-models-${Date.now()}.json`);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        providers: {
+          [TEST_PROVIDER]: {
+            baseUrl: "https://test.example/v1",
+            api: "openai-completions",
+            ...(auth !== undefined ? { auth } : {}),
+            ...(apiKey !== undefined ? { apiKey } : {}),
+            models: [{ id: "test-model" }],
+          },
+        },
+      }),
+    );
+    return path;
+  }
+
+  beforeEach(() => {
+    delete process.env[TEST_ENV_KEY];
+  });
+
+  afterEach(() => {
+    delete process.env[TEST_ENV_KEY];
+    if (modelsPath) {
+      try {
+        unlinkSync(modelsPath);
+      } catch {}
+    }
+  });
+
+  it("excludes provider from getAvailable when env var is empty", () => {
+    process.env[TEST_ENV_KEY] = "";
+    modelsPath = writeTestModelsJson(TEST_ENV_KEY);
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    expect(registry.getAvailable()).toEqual([]);
+    expect(registry.find(TEST_PROVIDER, "test-model")).toBeDefined();
+  });
+
+  it("includes provider in getAvailable when env var has a real value", () => {
+    process.env[TEST_ENV_KEY] = "sk-test-key";
+    modelsPath = writeTestModelsJson(TEST_ENV_KEY);
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    const model = registry.find(TEST_PROVIDER, "test-model")!;
+    expect(registry.getAvailable()).toEqual([model]);
+    expect(registry.hasConfiguredAuth(model)).toBe(true);
+  });
+
+  it("includes provider in getAvailable when env var is absent (literal key)", () => {
+    modelsPath = writeTestModelsJson(TEST_ENV_KEY);
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    const model = registry.find(TEST_PROVIDER, "test-model")!;
+    expect(registry.getAvailable()).toEqual([model]);
+    expect(registry.hasConfiguredAuth(model)).toBe(true);
+  });
+
+  it("includes provider in getAvailable when apiKey is a shell command", () => {
+    modelsPath = writeTestModelsJson("!echo sk-test");
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    const model = registry.find(TEST_PROVIDER, "test-model")!;
+    expect(registry.getAvailable()).toEqual([model]);
+    expect(registry.hasConfiguredAuth(model)).toBe(true);
   });
 });
