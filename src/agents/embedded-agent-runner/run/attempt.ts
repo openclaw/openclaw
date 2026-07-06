@@ -334,6 +334,7 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
+  PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -688,7 +689,10 @@ function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boo
     return false;
   }
   const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
-  return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+  return record.stopReason === "error" && (
+    record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE ||
+    record.errorMessage === PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE
+  );
 }
 
 function removeTrailingMidTurnPrecheckAssistantError(params: {
