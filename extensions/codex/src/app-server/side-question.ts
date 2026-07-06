@@ -905,7 +905,9 @@ function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number 
     return undefined;
   }
   const fromMs = readSidePositiveFiniteTimeoutMs(value.timeoutMs);
-  if (fromMs !== undefined) return fromMs;
+  if (fromMs !== undefined) {
+    return fromMs;
+  }
   const fromSeconds = readSideTimeoutSecondsAsMs(value.timeoutSeconds);
   if (fromSeconds !== undefined) {
     return fromSeconds + CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS;

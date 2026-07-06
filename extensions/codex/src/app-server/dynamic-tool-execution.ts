@@ -450,7 +450,9 @@ function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | un
     return undefined;
   }
   const fromMs = readPositiveFiniteTimeoutMs(value.timeoutMs);
-  if (fromMs !== undefined) return fromMs;
+  if (fromMs !== undefined) {
+    return fromMs;
+  }
   const fromSeconds = readTimeoutSecondsAsMs(value.timeoutSeconds);
   if (fromSeconds !== undefined) {
     return fromSeconds + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS;
