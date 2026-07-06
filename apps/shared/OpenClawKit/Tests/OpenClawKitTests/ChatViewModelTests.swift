@@ -83,7 +83,13 @@ private func historyPayload(
         inFlightRun: inFlightRun)
 }
 
-private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
+private func sessionEntry(
+    key: String,
+    updatedAt: Double,
+    totalTokens: Int? = nil,
+    totalTokensFresh: Bool? = nil,
+    contextTokens: Int? = nil) -> OpenClawChatSessionEntry
+{
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
@@ -100,10 +106,11 @@ private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSession
         verboseLevel: nil,
         inputTokens: nil,
         outputTokens: nil,
-        totalTokens: nil,
+        totalTokens: totalTokens,
+        totalTokensFresh: totalTokensFresh,
         modelProvider: nil,
         model: nil,
-        contextTokens: nil)
+        contextTokens: contextTokens)
 }
 
 private func thinkingOption(_ id: String, label: String? = nil) -> OpenClawChatThinkingLevelOption {
@@ -867,6 +874,27 @@ extension TestChatTransportState {
 
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test func `context usage fraction validates freshness and token bounds`() {
+        func fraction(total: Int?, fresh: Bool? = true, context: Int?) -> Double? {
+            OpenClawChatViewModel.chatContextUsageFraction(
+                for: sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    totalTokens: total,
+                    totalTokensFresh: fresh,
+                    contextTokens: context))
+        }
+
+        #expect(fraction(total: nil, context: 100) == nil)
+        #expect(fraction(total: 25, context: nil) == nil)
+        #expect(fraction(total: 25, context: 0) == nil)
+        #expect(fraction(total: 25, context: -100) == nil)
+        #expect(fraction(total: -1, context: 100) == nil)
+        #expect(fraction(total: 25, fresh: false, context: 100) == nil)
+        #expect(fraction(total: 150, context: 100) == 1)
+        #expect(fraction(total: 25, fresh: nil, context: 100) == 0.25)
+    }
+
     @Test @MainActor func `event listener does not retain discarded view model`() async throws {
         let transport = TestChatTransport(historyResponses: [historyPayload()])
         var viewModel: OpenClawChatViewModel? = OpenClawChatViewModel(
@@ -4293,6 +4321,44 @@ struct ChatViewModelTests {
         #expect(keys == ["main", "recent-1", "recent-2"])
     }
 
+    @Test func `context usage follows active session switches`() async throws {
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: 1,
+            path: nil,
+            count: 2,
+            defaults: nil,
+            sessions: [
+                sessionEntry(
+                    key: "main",
+                    updatedAt: 2,
+                    totalTokens: 20,
+                    totalTokensFresh: true,
+                    contextTokens: 100),
+                sessionEntry(
+                    key: "other",
+                    updatedAt: 1,
+                    totalTokens: 80,
+                    totalTokensFresh: true,
+                    contextTokens: 100),
+            ])
+        let (_, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
+            ],
+            sessionsResponses: [sessions, sessions])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("main context usage loaded") {
+            await MainActor.run { vm.contextUsageFraction == 0.2 }
+        }
+
+        await MainActor.run { vm.switchSession(to: "other") }
+        try await waitUntil("other context usage selected") {
+            await MainActor.run { vm.contextUsageFraction == 0.8 }
+        }
+    }
+
     @Test func `session choices include current when missing`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
@@ -6497,6 +6563,9 @@ struct ChatViewModelTests {
               "key": "main",
               "modelProvider": "openrouter",
               "model": "deepseek/deepseek-v4",
+              "totalTokens": 25000,
+              "totalTokensFresh": false,
+              "contextTokens": 100000,
               "thinkingLevel": "max",
               "thinkingLevels": [
                 { "id": "off", "label": "off" },
@@ -6520,6 +6589,7 @@ struct ChatViewModelTests {
         #expect(decoded.defaults?.thinkingDefault == "adaptive")
         #expect(decoded.sessions.first?.thinkingLevels?.map(\.id) == ["off", "xhigh", "max"])
         #expect(decoded.sessions.first?.thinkingDefault == "max")
+        #expect(decoded.sessions.first?.totalTokensFresh == false)
     }
 
     @Test func `session thinking levels drive picker options`() async throws {
