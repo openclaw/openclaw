@@ -166,6 +166,25 @@ const providerRuntimeMocks = vi.hoisted(() => ({
       }
 
       if (params.provider === "anthropic") {
+        const adminKey =
+          params.context.env?.ANTHROPIC_ADMIN_KEY ?? params.context.env?.ANTHROPIC_ADMIN_API_KEY;
+        if (adminKey) {
+          return {
+            token: `openclaw:anthropic-admin:v1:${JSON.stringify({ token: adminKey })}`,
+          };
+        }
+        const candidates =
+          (await params.context.resolveApiKeyCandidatesFromConfigAndStore?.({
+            providerIds: ["anthropic"],
+          })) ?? [];
+        const storedAdminKey = candidates.find((candidate: string) =>
+          candidate.startsWith("sk-ant-admin"),
+        );
+        if (storedAdminKey) {
+          return {
+            token: `openclaw:anthropic-admin:v1:${JSON.stringify({ token: storedAdminKey })}`,
+          };
+        }
         const oauth = await params.context.resolveOAuthToken();
         if (oauth) {
           return oauth;
@@ -175,6 +194,24 @@ const providerRuntimeMocks = vi.hoisted(() => ({
           envDirect: [params.context.env?.ANTHROPIC_API_KEY],
         });
         return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
+      }
+
+      if (params.provider === "openai") {
+        const adminKey = params.context.env?.OPENAI_ADMIN_KEY;
+        if (adminKey) {
+          return { token: `openclaw:openai-admin:v1:${JSON.stringify({ token: adminKey })}` };
+        }
+        const oauth = await params.context.resolveOAuthToken();
+        if (oauth) {
+          return oauth;
+        }
+        const token = resolveToken({
+          providerIds: ["openai"],
+          envDirect: [params.context.env?.OPENAI_API_KEY],
+        });
+        return token
+          ? { token: `openclaw:openai-admin:v1:${JSON.stringify({ token })}` }
+          : { handled: true };
       }
 
       if (params.provider === "minimax") {
@@ -274,6 +311,9 @@ describe("resolveProviderAuths key normalization", () => {
     MINIMAX_CODE_PLAN_KEY: undefined,
     MINIMAX_CODING_API_KEY: undefined,
     OPENAI_API_KEY: undefined,
+    OPENAI_ADMIN_KEY: undefined,
+    ANTHROPIC_ADMIN_KEY: undefined,
+    ANTHROPIC_ADMIN_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
@@ -614,7 +654,7 @@ describe("resolveProviderAuths key normalization", () => {
     });
   });
 
-  it("does not use OpenAI api keys for ChatGPT usage auth", async () => {
+  it("routes OpenAI api keys to the provider-owned Admin API usage path", async () => {
     const config = {
       models: {
         providers: {
@@ -638,7 +678,12 @@ describe("resolveProviderAuths key normalization", () => {
         });
       },
       config,
-      expected: [],
+      expected: [
+        {
+          provider: "openai",
+          token: 'openclaw:openai-admin:v1:{"token":"env-openai-key"}',
+        },
+      ],
     });
   });
 
@@ -756,6 +801,50 @@ describe("resolveProviderAuths key normalization", () => {
         ANTHROPIC_API_KEY: `sk-ant-oat01-${"a".repeat(80)}`,
       },
       expected: [{ provider: "anthropic", token: `sk-ant-oat01-${"a".repeat(80)}` }],
+    });
+  });
+
+  it("routes Anthropic Admin API keys to provider cost usage", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_ADMIN_KEY: "sk-ant-admin-status-key",
+      },
+      expected: [
+        {
+          provider: "anthropic",
+          token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-status-key"}',
+        },
+      ],
+    });
+  });
+
+  it("selects a stored Anthropic Admin key before coexisting OAuth and API auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["anthropic"],
+      env: {
+        ANTHROPIC_API_KEY: "sk-ant-api03-inference",
+      },
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "anthropic:oauth": {
+            type: "oauth",
+            provider: "anthropic",
+            accessToken: "oauth-token",
+          },
+          "anthropic:billing": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-ant-admin-billing",
+          },
+        });
+      },
+      expected: [
+        {
+          provider: "anthropic",
+          token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-billing"}',
+        },
+      ],
     });
   });
 

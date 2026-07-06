@@ -25,6 +25,19 @@ compatibility route for agent turns.
 OpenAI explicitly supports subscription OAuth usage in external tools and
 workflows like OpenClaw.
 
+## Usage and cost tracking
+
+OpenClaw keeps subscription quota and Platform API billing distinct:
+
+- ChatGPT/Codex OAuth shows the subscription plan, quota windows, and credit balance.
+- `OPENAI_ADMIN_KEY` shows 30 days of provider-reported organization cost and completions usage in Control UI **Usage**, including daily spend, request/token totals, top models, and cost categories.
+- `OPENAI_PROJECT_ID` optionally scopes Admin API history to one project.
+- When no ChatGPT/Codex OAuth credential is available, OpenClaw also tries the configured `OPENAI_API_KEY` for organization usage. OpenAI may require an Admin API key or explicit Usage Dashboard permission for these endpoints.
+
+An explicit Admin key takes precedence over OAuth. Provider-reported history is not merged with OpenClaw's session-derived estimated cost; it can include API activity from other clients and provider-side billing adjustments.
+
+OpenAI's [API Usage Dashboard](https://help.openai.com/en/articles/10478918) documentation describes the organization-owner and explicit Usage Dashboard permission requirements for usage data.
+
 Provider, model, runtime, and channel are separate layers. If those labels are
 getting mixed together, read [Agent runtimes](/concepts/agent-runtimes) before
 changing config.

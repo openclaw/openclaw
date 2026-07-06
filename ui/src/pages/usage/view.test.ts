@@ -191,6 +191,64 @@ describe("renderUsage", () => {
     expect(card?.textContent).toContain("$5.00 / $20.00");
   });
 
+  it("renders provider-reported cost history and attribution", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                plan: "Admin API",
+                windows: [],
+                costHistory: {
+                  unit: "USD",
+                  periodDays: 30,
+                  daily: [
+                    {
+                      date: new Date().toISOString().slice(0, 10),
+                      amount: 12.5,
+                      requests: 42,
+                      inputTokens: 1_000,
+                      cacheReadTokens: 400,
+                      cacheWriteTokens: 0,
+                      outputTokens: 250,
+                      totalTokens: 1_250,
+                    },
+                  ],
+                  models: [
+                    {
+                      name: "gpt-5.5",
+                      requests: 42,
+                      inputTokens: 1_000,
+                      cacheReadTokens: 400,
+                      cacheWriteTokens: 0,
+                      outputTokens: 250,
+                      totalTokens: 1_250,
+                    },
+                  ],
+                  categories: [{ name: "Responses", amount: 12.5 }],
+                },
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const card = container.querySelector(".provider-usage-card");
+    expect(card?.textContent).toContain("$12.50");
+    expect(card?.textContent).toContain("42 requests");
+    expect(card?.textContent).toContain("gpt-5.5");
+    expect(card?.textContent).toContain("Responses");
+    expect(card?.querySelectorAll(".provider-cost-chart span")).toHaveLength(1);
+  });
+
   it("filters visible sessions when an agent scope is selected", () => {
     const container = document.createElement("div");
 

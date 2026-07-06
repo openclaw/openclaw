@@ -21,6 +21,7 @@ type MockManifestRegistry = {
     kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
     providers?: string[];
     providerAuthEnvVars?: Record<string, string[]>;
+    providerUsageAuthEnvVars?: Record<string, string[]>;
     providerAuthAliases?: Record<string, string>;
     setup?: {
       requiresRuntime?: boolean;
@@ -133,6 +134,27 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+  });
+
+  it("scrubs provider usage credentials without making them inference auth candidates", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "provider-billing",
+          origin: "global",
+          providers: ["provider-billing"],
+          providerUsageAuthEnvVars: {
+            "provider-billing": ["PROVIDER_BILLING_ADMIN_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(listKnownProviderAuthEnvVarNames()).toContain("PROVIDER_BILLING_ADMIN_KEY");
+    expect(listKnownSecretEnvVarNames()).toContain("PROVIDER_BILLING_ADMIN_KEY");
+    expect(resolveProviderAuthEnvVarCandidates()["provider-billing"]).toBeUndefined();
+    expect(getProviderEnvVars("provider-billing")).toStrictEqual([]);
   });
 
   it("lets openai bootstrap from Codex app-server API-key env", () => {
