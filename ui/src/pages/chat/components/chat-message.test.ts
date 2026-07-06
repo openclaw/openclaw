@@ -14,13 +14,18 @@ import {
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+  vi.fn(
+    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
+  ),
 );
 const streamingTextRenderMock = vi.hoisted(() =>
   vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
 );
 const streamingMarkdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string) => `<div class="streaming-markdown">${value}</div>`),
+  vi.fn(
+    (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
+      `<div class="streaming-markdown">${value}</div>`,
+  ),
 );
 
 vi.mock("../../../local-storage.ts", () => ({
@@ -619,7 +624,10 @@ describe("grouped chat rendering", () => {
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: "none" });
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      codeBlockChrome: "none",
+      fileLinks: true,
+    });
   });
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
@@ -632,7 +640,10 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, undefined);
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      codeBlockChrome: "copy",
+      fileLinks: true,
+    });
   });
 
   it("positions delete confirm by message side", () => {
@@ -1016,7 +1027,10 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
     expect(streamingTextRenderMock).not.toHaveBeenCalled();
-    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
+      codeBlockChrome: "copy",
+      fileLinks: true,
+    });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });
