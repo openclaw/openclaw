@@ -500,6 +500,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
+  estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -509,6 +510,22 @@ import {
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+type PreflightRecoveryBudgetSnapshot = Pick<
+  MidTurnPrecheckRequest,
+  "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
+>;
+
+// Carries the measured prompt budget into the outer recovery loop. The synthetic
+// precheck error is only a routing signal, so compaction engines need these
+// fields to compact against the prompt OpenClaw actually rendered.
+function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetSnapshot) {
+  return {
+    estimatedPromptTokens: snapshot.estimatedPromptTokens,
+    promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
+    overflowTokens: snapshot.overflowTokens,
+  };
+}
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -3334,15 +3351,42 @@ export async function runEmbeddedAttempt(
             // history in place would otherwise leave the precheck reading
             // already-windowed messages instead of the true pre-assembly state.
             const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            const contextEngineAssembleReserveTokens = Math.max(
+              0,
+              Math.floor(settingsManager.getCompactionReserveTokens()),
+            );
+            const contextEngineAssembleContextTokenBudget = Math.max(
+              1,
+              Math.floor(
+                params.contextTokenBudget ??
+                  params.model.contextWindow ??
+                  params.model.maxTokens ??
+                  DEFAULT_CONTEXT_TOKENS,
+              ),
+            );
+            const contextEngineAssemblePromptBudget = Math.max(
+              1,
+              contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
+            );
+            const contextEngineAssembleRenderedPromptTokens =
+              estimateRenderedLlmBoundaryTokenPressure({
+                systemPrompt: systemPromptText,
+                prompt: params.prompt ?? "",
+              });
+            const contextEngineAssembleMessageBudget = Math.max(
+              1,
+              contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
+            );
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
-              tokenBudget: params.contextTokenBudget,
+              tokenBudget: contextEngineAssembleMessageBudget,
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              maxOutputTokens: contextEngineAssembleReserveTokens,
               contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
               providerId: params.provider,
               requestedModelId: params.requestedModelId,
@@ -3911,6 +3955,7 @@ export async function runEmbeddedAttempt(
             preflightRecovery = {
               route: "truncate_tool_results_only",
               source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
               handled: true,
               truncatedCount: truncationResult.truncatedCount,
             };
@@ -3921,7 +3966,11 @@ export async function runEmbeddedAttempt(
               `handled=true truncatedCount=${truncationResult.truncatedCount}`,
             );
           } else {
-            preflightRecovery = { route: "compact_only", source: "mid-turn" };
+            preflightRecovery = {
+              route: "compact_only",
+              source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
+            };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             logMidTurnPrecheck(
@@ -3930,7 +3979,11 @@ export async function runEmbeddedAttempt(
             );
           }
         } else {
-          preflightRecovery = { route: request.route, source: "mid-turn" };
+          preflightRecovery = {
+            route: request.route,
+            source: "mid-turn",
+            ...buildPreflightRecoveryBudgetSnapshot(request),
+          };
           promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           promptErrorSource = "precheck";
           logMidTurnPrecheck(request.route);
@@ -4761,6 +4814,7 @@ export async function runEmbeddedAttempt(
             if (truncationResult.truncated) {
               preflightRecovery = {
                 route: "truncate_tool_results_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
                 handled: true,
                 truncatedCount: truncationResult.truncatedCount,
               };
@@ -4783,7 +4837,10 @@ export async function runEmbeddedAttempt(
                   `${params.provider}/${params.modelId}; falling back to compaction ` +
                   `reason=${truncationResult.reason ?? "unknown"} sessionFile=${params.sessionFile}`,
               );
-              preflightRecovery = { route: "compact_only" };
+              preflightRecovery = {
+                route: "compact_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+              };
               promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
               promptErrorSource = "precheck";
               skipPromptSubmission = true;
@@ -4792,8 +4849,14 @@ export async function runEmbeddedAttempt(
           if (preemptiveCompaction?.shouldCompact) {
             preflightRecovery =
               preemptiveCompaction.route === "compact_then_truncate"
-                ? { route: "compact_then_truncate" }
-                : { route: "compact_only" };
+                ? {
+                    route: "compact_then_truncate",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  }
+                : {
+                    route: "compact_only",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             log.warn(
