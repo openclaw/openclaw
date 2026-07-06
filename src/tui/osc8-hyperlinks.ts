@@ -6,6 +6,37 @@ const ANSI_RE = new RegExp(`${SGR_PATTERN}|${OSC8_PATTERN}`, "g");
 const SGR_START_RE = new RegExp(`^${SGR_PATTERN}`);
 const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 
+/** Allow one level of balanced parentheses inside a URL so markdown link
+ *  targets like `https://en.wikipedia.org/wiki/URL_(disambiguation)` are
+ *  fully captured instead of truncated at the first `)`. */
+const URL_PATH_WITH_PARENS = /https?:\/\/[^()\s<>]*(?:\([^()\s<>]*\)[^()\s<>]*)*/g;
+
+/** Strip trailing `)` characters that don't have a matching `(` in the URL.
+ *  Bare URLs in prose can pick up a trailing `)` that belongs to surrounding
+ *  punctuation, e.g. `(see https://example.com/path)` — the `)` after `path`
+ *  is sentence punctuation, not part of the URL. */
+function trimUnbalancedTrailingParens(url: string): string {
+  let open = 0;
+  for (const ch of url) {
+    if (ch === "(") {
+      open++;
+    } else if (ch === ")") {
+      open--;
+    }
+  }
+  // If close parens outnumber open parens, the trailing ones are not
+  // part of the URL — strip them.
+  if (open >= 0) {
+    return url;
+  }
+  let trimmed = url;
+  while (trimmed.endsWith(")") && open < 0) {
+    trimmed = trimmed.slice(0, -1);
+    open++;
+  }
+  return trimmed;
+}
+
 /**
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).
@@ -14,20 +45,20 @@ export function extractUrls(markdown: string): string[] {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
-  const mdLinkRe = /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  const mdLinkRe = new RegExp(
+    `\\[(?:[^\\]]*)\\]\\(\\s*<?(${URL_PATH_WITH_PARENS.source})>?(?:\\s+["'][^"']*["'])?\\s*\\)`,
+    "g",
+  );
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
     urls.add(m[1]);
   }
 
   // Bare URLs (remove markdown links first to avoid double-matching)
-  const stripped = markdown.replace(
-    /\[(?:[^\]]*)\]\(\s*<?https?:\/\/[^)\s>]+>?(?:\s+["'][^"']*["'])?\s*\)/g,
-    "",
-  );
-  const bareRe = /https?:\/\/[^\s)\]>]+/g;
+  const stripped = markdown.replace(mdLinkRe, "");
+  const bareRe = /https?:\/\/[^\s\]>]+/g;
   while ((m = bareRe.exec(stripped)) !== null) {
-    urls.add(m[0]);
+    urls.add(trimUnbalancedTrailingParens(m[0]));
   }
 
   return [...urls];
@@ -86,12 +117,12 @@ function findUrlRanges(
   }
 
   // Find new URL starts in visible text
-  const urlRe = /https?:\/\/[^\s)\]>]+/g;
+  const urlRe = /https?:\/\/[^\s\]>]+/g;
   urlRe.lastIndex = searchFrom;
   let match: RegExpExecArray | null;
 
   while ((match = urlRe.exec(visibleText)) !== null) {
-    const fragment = match[0];
+    const fragment = trimUnbalancedTrailingParens(match[0]);
     const start = match.index;
 
     // Resolve fragment to a known URL (exact > prefix > superstring)
