@@ -59,10 +59,8 @@ function spawnDockerProcess(command: string, args: string[]) {
 
   queueMicrotask(() => {
     if (spawnState.streamError) {
-      child[spawnState.streamError].emit(
-        "error",
-        new Error(`${spawnState.streamError} read failed`),
-      );
+      const stream = child[spawnState.streamError] as EventEmitter;
+      stream.emit("error", new Error(`${spawnState.streamError} read failed`));
     }
     if (stderr) {
       child.stderr.emit("data", Buffer.from(stderr));
