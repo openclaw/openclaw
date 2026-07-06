@@ -4211,6 +4211,8 @@ async function updateCommandInternal(
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop);
     } catch (resumeErr) {
+      recoveryState.windowsTaskAutoStartRecovery?.complete();
+      recoveryState.windowsTaskAutoStartRecovery = undefined;
       // oxlint-disable-next-line eslint/preserve-caught-error -- Both caught errors remain inspectable as aggregate members.
       throw new AggregateError(
         [err, resumeErr],
