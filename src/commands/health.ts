@@ -36,8 +36,10 @@ import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-sta
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
+import { countFailedDeliveryQueueEntries } from "../infra/delivery-queue-sqlite.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
@@ -54,6 +56,7 @@ import type {
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
   ContextEngineHealthSummary,
+  DeliveryQueueHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -240,6 +243,46 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   }
   const engines = quarantined.map((entry) => entry.engineId).join(", ");
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+/** Builds dead-lettered delivery queue health; shared with cached gateway responses. */
+export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
+  // Dead-lettered deliveries are retained in SQLite for diagnostics but had no
+  // health surface; a storage read failure must not take health down with it.
+  try {
+    const failed = countFailedDeliveryQueueEntries().map((queue) => {
+      const entry: DeliveryQueueHealthSummary["failed"][number] = {
+        queueName: queue.queueName,
+        count: queue.count,
+      };
+      if (queue.oldestFailedAt != null) {
+        entry.oldestFailedAt = queue.oldestFailedAt;
+      }
+      return entry;
+    });
+    return failed.length > 0 ? { failed } : undefined;
+  } catch (error) {
+    debugHealth("delivery queue health read failed", error);
+    return undefined;
+  }
+}
+
+/** Formats dead-lettered delivery queue entries for text health output. */
+export function formatDeliveryQueueHealthLine(
+  summary: HealthSummary,
+  now = Date.now(),
+): string | null {
+  const failed = summary.deliveryQueues?.failed ?? [];
+  if (failed.length === 0) {
+    return null;
+  }
+  const counts = failed.map((queue) => `${queue.queueName}: ${queue.count}`).join(", ");
+  const oldest = failed
+    .map((queue) => queue.oldestFailedAt)
+    .filter((value): value is number => typeof value === "number");
+  const oldestNote =
+    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
+  return `Delivery queue: warning (dead-lettered entries — ${counts}${oldestNote})`;
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
@@ -658,6 +701,7 @@ export async function getHealthSnapshot(params?: {
 
   const pluginHealth = buildPluginHealthSummary();
   const contextEngineHealth = buildContextEngineHealthSummary();
+  const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
@@ -665,6 +709,7 @@ export async function getHealthSnapshot(params?: {
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
+    ...(deliveryQueueHealth ? { deliveryQueues: deliveryQueueHealth } : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
@@ -899,6 +944,10 @@ export async function healthCommand(
     const contextEngineLine = formatContextEngineHealthLine(summary);
     if (contextEngineLine) {
       runtime.log(styleHealthChannelLine(contextEngineLine, rich));
+    }
+    const deliveryQueueLine = formatDeliveryQueueHealthLine(summary);
+    if (deliveryQueueLine) {
+      runtime.log(styleHealthChannelLine(deliveryQueueLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];
