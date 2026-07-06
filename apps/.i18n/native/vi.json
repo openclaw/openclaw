@@ -2384,6 +2384,26 @@
       "translated": "Cập nhật"
     },
     {
+      "id": "native.android.aac3310699b496c8",
+      "source": "© 2026 OpenClaw Foundation — MIT License.",
+      "translated": "© 2026 OpenClaw Foundation — Giấy phép MIT."
+    },
+    {
+      "id": "native.android.a157bbb606e9b398",
+      "source": "OpenClaw logo",
+      "translated": "Logo OpenClaw"
+    },
+    {
+      "id": "native.android.7b78b4869baf2160",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.ad4c14835d1b71ca",
+      "source": "Personal AI on your devices",
+      "translated": "AI cá nhân trên các thiết bị của bạn"
+    },
+    {
       "id": "native.android.13f70e22b5648308",
       "source": "Licenses",
       "translated": "Giấy phép"
@@ -2639,9 +2659,9 @@
       "translated": "SMS"
     },
     {
-      "id": "native.android.51b5f4cf7eaa5c86",
-      "source": "Send and search SMS from this device.",
-      "translated": "Gửi và tìm kiếm SMS từ thiết bị này."
+      "id": "native.android.cba20518e9758043",
+      "source": "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+      "translated": "Cấp quyền truy cập SMS trên Android. Gateway phải cho phép riêng `sms.search` và, chỉ khi cần, `sms.send`."
     },
     {
       "id": "native.android.8c32ca1f11a93a25",
@@ -4739,6 +4759,16 @@
       "translated": "Mức sử dụng"
     },
     {
+      "id": "native.apple.f48d33a93f53ae56",
+      "source": "Files",
+      "translated": "Tệp"
+    },
+    {
+      "id": "native.apple.b84aa382768fe819",
+      "source": "Workspace files",
+      "translated": "Tệp trong không gian làm việc"
+    },
+    {
       "id": "native.apple.98306aca23d04451",
       "source": "Dreaming",
       "translated": "Đang mơ"
@@ -5114,6 +5144,41 @@
       "translated": "Sẵn sàng"
     },
     {
+      "id": "native.apple.9c4e8b82edf0b324",
+      "source": "Files",
+      "translated": "Tệp"
+    },
+    {
+      "id": "native.apple.ada58d7ce8866f71",
+      "source": "This folder is empty.",
+      "translated": "Thư mục này trống."
+    },
+    {
+      "id": "native.apple.35512c4d46a2da28",
+      "source": "Load More",
+      "translated": "Tải thêm"
+    },
+    {
+      "id": "native.apple.e617cdacc3bce5ea",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "translated": "\\(self.entries.count) trong số \\(self.totalEntries)"
+    },
+    {
+      "id": "native.apple.336a7eeb12d6e5f4",
+      "source": "Share file",
+      "translated": "Chia sẻ tệp"
+    },
+    {
+      "id": "native.apple.0ab324ff650d720c",
+      "source": "Could not share this file.",
+      "translated": "Không thể chia sẻ tệp này."
+    },
+    {
+      "id": "native.apple.8218f673399060cc",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Không thể xuất bản ghi cuộc trò chuyện"
@@ -5174,14 +5239,19 @@
       "translated": "Không khả dụng"
     },
     {
-      "id": "native.apple.889fe76e02b8ad5d",
-      "source": "Connect to a gateway",
-      "translated": "Kết nối với gateway"
-    },
-    {
-      "id": "native.apple.e8173c7d24457256",
+      "id": "native.apple.4dcedefea4b49a1c",
       "source": "Message \\(self.agentDisplayName)...",
       "translated": "Nhắn tin cho \\(self.agentDisplayName)..."
+    },
+    {
+      "id": "native.apple.84767ec18054524b",
+      "source": "Message \\(self.agentDisplayName); sends when connected",
+      "translated": "Nhắn tin cho \\(self.agentDisplayName); gửi khi đã kết nối"
+    },
+    {
+      "id": "native.apple.11b20bef7e51ab69",
+      "source": "Connect to a gateway",
+      "translated": "Kết nối với một gateway"
     },
     {
       "id": "native.apple.14492e334b87e4f2",
@@ -6047,6 +6117,11 @@
       "id": "native.apple.feb28c9cba676ba2",
       "source": "Instances",
       "translated": "Phiên bản"
+    },
+    {
+      "id": "native.apple.3f2726ccd1acd987",
+      "source": "Files",
+      "translated": "Tệp"
     },
     {
       "id": "native.apple.614c9b40919fb103",
@@ -8229,6 +8304,11 @@
       "translated": "Phiên bản"
     },
     {
+      "id": "native.apple.d1a5c9b0c4acbfe2",
+      "source": "Files",
+      "translated": "Tệp"
+    },
+    {
       "id": "native.apple.ad3c65353227b63e",
       "source": "Dreaming",
       "translated": "Đang mơ"
@@ -8317,6 +8397,11 @@
       "id": "native.apple.3579cf2750470a22",
       "source": "Sessions",
       "translated": "Phiên"
+    },
+    {
+      "id": "native.apple.253cb2debeb51859",
+      "source": "Files",
+      "translated": "Tệp"
     },
     {
       "id": "native.apple.f7e04202c3e37bd8",
@@ -13544,6 +13629,16 @@
       "translated": "Đang gửi…"
     },
     {
+      "id": "native.apple.38722ea25417ad4f",
+      "source": "Confirming…",
+      "translated": "Đang xác nhận…"
+    },
+    {
+      "id": "native.apple.78682085b14232f8",
+      "source": "Delivery unknown",
+      "translated": "Không xác định được trạng thái gửi"
+    },
+    {
       "id": "native.apple.2888a268bfa49e9e",
       "source": "Not sent",
       "translated": "Chưa gửi"
@@ -13557,6 +13652,16 @@
       "id": "native.apple.00e673b9c5263c5c",
       "source": "Sending",
       "translated": "Đang gửi"
+    },
+    {
+      "id": "native.apple.bfe7aab77abe9a2c",
+      "source": "Sent, waiting for chat history confirmation",
+      "translated": "Đã gửi, đang chờ xác nhận từ lịch sử trò chuyện"
+    },
+    {
+      "id": "native.apple.7eb6eca416d33bb4",
+      "source": "Delivery unconfirmed, touch and hold to retry or delete",
+      "translated": "Chưa xác nhận được trạng thái gửi, chạm và giữ để thử lại hoặc xóa"
     },
     {
       "id": "native.apple.df1a81bd7a0bca36",
@@ -13617,6 +13722,16 @@
       "id": "native.apple.82c2287cd78da56f",
       "source": "\\(baseName).jpg",
       "translated": "\\(baseName).jpg"
+    },
+    {
+      "id": "native.apple.2b45abdc56b2caed",
+      "source": "delivery unconfirmed",
+      "translated": "chưa xác nhận được trạng thái gửi"
+    },
+    {
+      "id": "native.apple.722f1f90b97e8e45",
+      "source": "queued after route change",
+      "translated": "đã đưa vào hàng đợi sau khi thay đổi tuyến"
     },
     {
       "id": "native.apple.59aa8697b933d6b6",

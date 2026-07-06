@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent auth copy order:** preserve the source agent's portable auth-profile precedence when copying credentials to a new agent while excluding skipped profiles and transient auth state. (#100833) Thanks @machine3at.
 - **Cron edit delivery:** preserve each job's implicit delivery mode when applying partial delivery updates, so disabling best-effort delivery no longer turns detached job announcements off. (#100846) Thanks @machine3at.
 - **Control UI session creation:** keep newly created sessions at the front of the stable sidebar order after selecting another session. Thanks @shakkernerd.
 - **FTS-only memory startup:** skip plugin capability discovery when `memorySearch.provider` is explicitly `none`, avoiding an unnecessary cold-start scan.
