@@ -169,6 +169,9 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
+    private pendingHandlers: Promise<void>[] = [];
+    private drainResolve: (() => void) | null = null;
+
     start(): void {
       mockState.agentStart();
     }
@@ -179,6 +182,25 @@ vi.mock("./translator.js", () => ({
 
     async handleGatewayEvent(event: unknown): Promise<void> {
       await mockState.agentHandleGatewayEvent(event);
+    }
+
+    trackHandler(promise: Promise<void>): void {
+      this.pendingHandlers.push(promise);
+      promise.finally(() => {
+        const idx = this.pendingHandlers.indexOf(promise);
+        if (idx !== -1) this.pendingHandlers.splice(idx, 1);
+        if (this.pendingHandlers.length === 0 && this.drainResolve) {
+          this.drainResolve();
+          this.drainResolve = null;
+        }
+      });
+    }
+
+    async drain(): Promise<void> {
+      if (this.pendingHandlers.length === 0) return;
+      await new Promise<void>((resolve) => {
+        this.drainResolve = resolve;
+      });
     }
   },
 }));

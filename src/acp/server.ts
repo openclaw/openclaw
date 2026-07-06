@@ -105,7 +105,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
             }
           }),
         );
-      }t handlers before closing ledger on shutdown)
+      }
     },
     onHelloOk: () => {
       resolveGatewayReady();
