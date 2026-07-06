@@ -77,7 +77,7 @@ export function normalizeConfig(params: {
       modelMutated = true;
     }
 
-    // Hydrate cost from catalog when missing or when all fields are zero/absent.
+    // Hydrate cost from catalog only when the model has no explicit numeric cost fields.
     if (!hasCostValues(raw.cost) && hasCostValues(catalogEntry.cost)) {
       patched.cost = catalogEntry.cost;
       modelMutated = true;

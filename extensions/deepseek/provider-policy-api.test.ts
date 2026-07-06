@@ -156,6 +156,29 @@ describe("deepseek provider-policy-api", () => {
     expect(model.contextWindow).toBe(1_000_000);
   });
 
+  it("preserves explicit all-zero user cost override", () => {
+    const userCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.deepseek.com",
+      api: "openai-completions",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          reasoning: true,
+          input: ["text"],
+          cost: userCost,
+        } as never,
+      ],
+    };
+
+    const result = normalizeConfig({ provider: "deepseek", providerConfig });
+    const model = result.models[0];
+    expect(model.cost).toEqual(userCost);
+    expect(model.contextWindow).toBe(1_000_000);
+    expect(model.maxTokens).toBe(384_000);
+  });
+
   it("preserves explicit user maxTokens override", () => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",

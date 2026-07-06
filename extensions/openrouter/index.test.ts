@@ -851,6 +851,49 @@ describe("openrouter provider hooks", () => {
     }
   });
 
+  it("reconciles OpenRouter zero generation metadata cost", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-free-1");
+      return new Response(JSON.stringify({ data: { total_cost: 0 } }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const baseStreamFn = vi.fn(() =>
+      createOpenRouterDoneStream({ responseId: "gen-free-1", totalCost: 0.001 }),
+    );
+
+    try {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+        streamFn: baseStreamFn,
+      } as never);
+      if (!wrapped) {
+        throw new Error("expected OpenRouter wrapper");
+      }
+      const stream = await wrapped(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/auto",
+          baseUrl: "https://openrouter.ai/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        { apiKey: "or-test-key" } as never,
+      );
+      const message = await stream.result();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(message.usage.cost.total).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("falls back to streamed cost estimate when generation metadata response is oversized", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     // Body exceeds the 16 MiB cap; readProviderJsonResponse must reject it and

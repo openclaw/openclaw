@@ -76,7 +76,7 @@ export type {
 
 // Bump when the durable cache schema or the meaning of cached totals changes, so
 // older builds are rebuilt instead of served stale.
-const USAGE_COST_CACHE_VERSION = 6;
+const USAGE_COST_CACHE_VERSION = 7;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1139,6 +1139,18 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+const isDirectDeepSeekV4ModelRef = (params: { provider?: string; model?: string }): boolean => {
+  const provider = normalizeOptionalString(params.provider)?.toLowerCase();
+  const model = normalizeOptionalString(params.model);
+  if (provider !== "deepseek" || !model) {
+    return false;
+  }
+  const modelId = (model.split("/").at(-1) ?? model).toLowerCase();
+  return DEEPSEEK_V4_MODEL_IDS.has(modelId);
+};
+
 const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
   costBreakdown?.total === 0 &&
   [
@@ -1152,9 +1164,12 @@ const shouldRecomputeRecordedZeroCost = (params: {
   cost: ReturnType<typeof resolveModelCostConfig>;
   costBreakdown: CostBreakdown | undefined;
   costTotal: number | undefined;
+  model?: string;
+  provider?: string;
   usage: NormalizedUsage;
 }): boolean =>
   params.costTotal === 0 &&
+  isDirectDeepSeekV4ModelRef(params) &&
   !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
   isModelPricingKnown(params.cost) &&
   computeUsageTokenTotals(params.usage).totalTokens > 0;
@@ -1289,11 +1304,13 @@ async function scanTranscriptFile(params: {
           cost,
           costBreakdown: entry.costBreakdown,
           costTotal: entry.costTotal,
+          provider: entry.provider,
+          model: entry.model,
         })
       ) {
         // Fill in missing estimates and override fabricated API-provided zeros
-        // for known-priced models such as DeepSeek V4. Providers that reconcile
-        // only the total keep their authoritative zero when components are nonzero.
+        // only for direct DeepSeek V4 transcripts. Other known-priced providers
+        // can report a real billed zero, so keep their recorded total authoritative.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       }
@@ -2758,14 +2775,13 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          const costConfig = resolveCost({
-            provider:
-              (typeof message.provider === "string" ? message.provider : undefined) ??
-              (typeof parsed.provider === "string" ? parsed.provider : undefined),
-            model:
-              (typeof message.model === "string" ? message.model : undefined) ??
-              (typeof parsed.model === "string" ? parsed.model : undefined),
-          });
+          const provider =
+            (typeof message.provider === "string" ? message.provider : undefined) ??
+            (typeof parsed.provider === "string" ? parsed.provider : undefined);
+          const model =
+            (typeof message.model === "string" ? message.model : undefined) ??
+            (typeof parsed.model === "string" ? parsed.model : undefined);
+          const costConfig = resolveCost({ provider, model });
           if (
             breakdown?.total !== undefined &&
             !shouldRecomputeRecordedZeroCost({
@@ -2773,6 +2789,8 @@ export async function loadSessionLogs(params: {
               cost: costConfig,
               costBreakdown: breakdown,
               costTotal: breakdown.total,
+              provider,
+              model,
             })
           ) {
             cost = breakdown.total;

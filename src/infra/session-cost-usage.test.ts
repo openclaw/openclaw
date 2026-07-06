@@ -449,6 +449,130 @@ describe("session cost usage", () => {
     }
   });
 
+  it("preserves provider-billed zero totals with all-zero cost components", async () => {
+    const root = await makeSessionCostRoot("cost-provider-billed-all-zero-total");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-openrouter-billed-zero.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openrouter",
+        model: "openai/gpt-5.5",
+        content: "billed-free OpenRouter answer",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-openrouter-billed-zero", entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                id: "openai/gpt-5.5",
+                cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+      });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+
+      await refreshCostUsageCache({ config, sessionFiles: [sessionFile] });
+      const cached = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+        requestRefresh: false,
+      });
+      expect(cached.totals.totalCost).toBe(0);
+      expect(cached.totals.missingCostEntries).toBe(0);
+
+      const logs = await loadSessionLogs({ sessionFile, config });
+      expect(logs?.[0]?.tokens).toBe(15_000);
+      expect(logs?.[0]?.cost).toBe(0);
+    });
+  });
+
+  it("keeps zero-token recorded zero costs at zero even when pricing is known", async () => {
+    const root = await makeSessionCostRoot("cost-known-pricing-zero-token");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-zero-tokens.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        content: "empty DeepSeek accounting row",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-zero-tokens", entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+      });
+      expect(summary.totals.totalTokens).toBe(0);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+
+      const logs = await loadSessionLogs({ sessionFile, config });
+      expect(logs?.[0]?.tokens).toBe(0);
+      expect(logs?.[0]?.cost).toBe(0);
+    });
+  });
+
   it("uses top-level transcript provider and model when recomputing session-log cost", async () => {
     const root = await makeSessionCostRoot("cost-known-pricing-top-level-metadata");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -529,7 +653,7 @@ describe("session cost usage", () => {
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 5;
+      cache.version = 6;
       await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
