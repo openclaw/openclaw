@@ -15,6 +15,7 @@ export type ContextEngineHostSupport = {
 
 export const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
+  "assemble-before-prompt",
   "after-turn",
   "maintain",
 ] as const satisfies readonly ContextEngineHostCapability[];

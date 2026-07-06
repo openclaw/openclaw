@@ -1837,7 +1837,48 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
+  it("folds the context engine systemPromptAddition into the CLI system prompt in the same turn", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const engineId = `cli-assemble-engine-${Date.now().toString(36)}`;
+    const sentinel = `CARRYOVER_SLOT_${engineId}`;
+    const assemble = vi.fn(async ({ messages }) => ({
+      messages,
+      estimatedTokens: 0,
+      systemPromptAddition: sentinel,
+    }));
+    registerContextEngine(engineId, (): ContextEngine => {
+      return {
+        info: { id: engineId, name: "CLI assemble engine" },
+        ingest: vi.fn(async () => ({ ingested: true })),
+        assemble,
+        compact: vi.fn(async () => ({ ok: true, compacted: false })),
+      };
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-context-engine-assemble",
+        config: {
+          ...createCliBackendConfig(),
+          plugins: { slots: { contextEngine: engineId } },
+        },
+      });
+
+      expect(assemble).toHaveBeenCalledOnce();
+      expect(context.systemPrompt).toContain(sentinel);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects CLI runs for context engines that require an unsupported capability", async () => {
     const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-unsupported-engine-${Date.now().toString(36)}`;
     registerContextEngine(engineId, (): ContextEngine => {
@@ -1847,7 +1888,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           name: "CLI unsupported engine",
           hostRequirements: {
             "agent-run": {
-              requiredCapabilities: ["assemble-before-prompt"],
+              requiredCapabilities: ["runtime-llm-complete"],
               unsupportedMessage: "Use the native Codex or OpenClaw embedded runtime.",
             },
           },

@@ -43,10 +43,18 @@ describe("context engine host compatibility", () => {
     });
   });
 
-  it("rejects generic CLI hosts when an engine requires pre-prompt assembly", () => {
+  it("allows generic CLI hosts to satisfy pre-prompt assembly", () => {
+    assertContextEngineHostSupport({
+      contextEngine: createEngine(["assemble-before-prompt"]),
+      operation: "agent-run",
+      host: buildGenericCliContextEngineHostSupport({ backendId: "claude-cli" }),
+    });
+  });
+
+  it("rejects generic CLI hosts when an engine requires a capability they lack", () => {
     expect(() =>
       assertContextEngineHostSupport({
-        contextEngine: createEngine(["assemble-before-prompt"]),
+        contextEngine: createEngine(["runtime-llm-complete"]),
         operation: "agent-run",
         host: buildGenericCliContextEngineHostSupport({ backendId: "claude-cli" }),
       }),
@@ -57,14 +65,14 @@ describe("context engine host compatibility", () => {
 
   it("evaluates missing capabilities without throwing", () => {
     const evaluation = evaluateContextEngineHostSupport({
-      contextEngineInfo: createEngine(["assemble-before-prompt"]).info,
+      contextEngineInfo: createEngine(["runtime-llm-complete"]).info,
       operation: "agent-run",
       host: buildGenericCliContextEngineHostSupport({ backendId: "claude-cli" }),
     });
 
     expect(evaluation).toMatchObject({
       ok: false,
-      missingCapabilities: ["assemble-before-prompt"],
+      missingCapabilities: ["runtime-llm-complete"],
     });
   });
 

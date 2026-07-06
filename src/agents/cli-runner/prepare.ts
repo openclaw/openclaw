@@ -77,9 +77,11 @@ import {
   mapSandboxSkillEntriesForPrompt,
   resolveSandboxSkillRuntimeInputs,
 } from "../embedded-agent-runner/sandbox-skills.js";
+import { assembleHarnessContextEngine } from "../harness/context-engine-lifecycle.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -1059,14 +1061,51 @@ export async function prepareCliRunContext(
     const contextEngine =
       resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
     if (contextEngine) {
+      const cliContextEngineHost = buildGenericCliContextEngineHostSupport({
+        backendId: backendResolved.id,
+        capabilities: backendResolved.contextEngineHostCapabilities,
+      });
       assertContextEngineHostSupport({
         contextEngine,
         operation: "agent-run",
-        host: buildGenericCliContextEngineHostSupport({
-          backendId: backendResolved.id,
-          capabilities: backendResolved.contextEngineHostCapabilities,
-        }),
+        host: cliContextEngineHost,
       });
+      // Parity with the embedded/codex runners: when the host advertises
+      // pre-prompt assembly, run assemble() now and fold the returned
+      // systemPromptAddition into this turn's system prompt. The generic CLI
+      // runner otherwise never calls assemble(), so engine slots that depend on
+      // it (e.g. the post-reset carry-over) would only surface a turn late.
+      // Ephemeral per-turn injection: no sessionFile mutation, no accumulation.
+      if (cliContextEngineHost.capabilities.includes("assemble-before-prompt")) {
+        try {
+          const assembled = await assembleHarnessContextEngine({
+            contextEngine,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            messages: (await loadCliSessionHistoryMessages({
+              sessionId: params.sessionId,
+              sessionFile: params.sessionFile,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              config: contextEngineConfig,
+            })) as AgentMessage[],
+            modelId,
+            contextEngineHostSupport: cliContextEngineHost,
+            providerId: params.provider,
+            ...(preparedPrompt !== undefined ? { prompt: preparedPrompt } : {}),
+          });
+          if (assembled?.systemPromptAddition) {
+            systemPrompt = prependSystemPromptAddition({
+              systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
+              systemPromptAddition: assembled.systemPromptAddition,
+            });
+          }
+        } catch (assembleErr) {
+          cliBackendLog.warn(
+            `cli context engine assemble failed, continuing without system prompt addition: ${String(assembleErr)}`,
+          );
+        }
+      }
     }
     const hadSessionFile = await hasCliSessionTranscript({
       sessionId: params.sessionId,
