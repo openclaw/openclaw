@@ -1352,6 +1352,7 @@
                     "group": "Web browser",
                     "pages": [
                       "tools/browser",
+                      "tools/chrome-extension",
                       "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
