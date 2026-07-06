@@ -387,7 +387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1229,
+      "line": 1239,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -395,7 +395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1229,
+      "line": 1239,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 334,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Last gateway error",
       "surface": "android",
@@ -1019,7 +1019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 334,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Pairing required",
       "surface": "android",
@@ -1027,7 +1027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 340,
+      "line": 345,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "OpenClaw Android ${openClawAndroidVersionLabel()}",
       "surface": "android",
@@ -1035,7 +1035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 381,
+      "line": 386,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Setup code, endpoint, TLS, token, password, onboarding.",
       "surface": "android",
@@ -1043,7 +1043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 390,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Collapse advanced controls",
       "surface": "android",
@@ -1051,7 +1051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 390,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Expand advanced controls",
       "surface": "android",
@@ -1059,7 +1059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 421,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Run these on the gateway host:",
       "surface": "android",
@@ -1067,7 +1067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 419,
+      "line": 424,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1075,7 +1075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 448,
+      "line": 453,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Android Emulator",
       "surface": "android",
@@ -1083,7 +1083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 457,
+      "line": 462,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Localhost",
       "surface": "android",
@@ -1091,7 +1091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 489,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Port",
       "surface": "android",
@@ -1099,7 +1099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 489,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Port (optional, defaults to 443)",
       "surface": "android",
@@ -1107,7 +1107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 510,
+      "line": 515,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1115,7 +1115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 536,
+      "line": 541,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Leave blank to keep saved token",
       "surface": "android",
@@ -1123,11 +1123,19 @@
     },
     {
       "kind": "ui-call",
-      "line": 545,
+      "line": 550,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Password (optional)",
       "surface": "android",
       "id": "native.android.8123f2cfbe415437"
+    },
+    {
+      "kind": "ui-call",
+      "line": 660,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
+      "source": "CF-Access-Client-Id",
+      "surface": "android",
+      "id": "native.android.4ddaa88cd4939df2"
     },
     {
       "kind": "ui-named-argument",
@@ -6708,6 +6716,54 @@
     {
       "kind": "resource-string",
       "line": 24,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Custom headers (optional)",
+      "surface": "android",
+      "id": "native.android.43900769f2cf0458"
+    },
+    {
+      "kind": "resource-string",
+      "line": 24,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "surface": "android",
+      "id": "native.android.6d42cb48a4a32331"
+    },
+    {
+      "kind": "resource-string",
+      "line": 25,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Header value",
+      "surface": "android",
+      "id": "native.android.c4d4f0299965fe55"
+    },
+    {
+      "kind": "resource-string",
+      "line": 26,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "surface": "android",
+      "id": "native.android.123e497273b8586e"
+    },
+    {
+      "kind": "resource-string",
+      "line": 27,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Add header",
+      "surface": "android",
+      "id": "native.android.94f0633a1fb099bc"
+    },
+    {
+      "kind": "resource-string",
+      "line": 28,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Remove %1$s",
+      "surface": "android",
+      "id": "native.android.ff4c8c3b56827d8e"
+    },
+    {
+      "kind": "resource-string",
+      "line": 29,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Run onboarding again",
       "surface": "android",

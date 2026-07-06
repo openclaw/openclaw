@@ -709,6 +709,11 @@
       "translated": "Пароль (необов’язково)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Мріяння"
@@ -4194,6 +4199,36 @@
       "translated": "Пароль"
     },
     {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "Користувацькі заголовки (необов’язково)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "Надсилається з кожним підключенням до цього gateway, наприклад заголовки токена сервісу Cloudflare Access. Зберігається в зашифрованому вигляді та застосовується під час наступного повторного підключення."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "Значення заголовка"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "Цей заголовок керується підключенням і не може бути перевизначений."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "Додати заголовок"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "Видалити %1$s"
+    },
+    {
       "id": "native.android.a43f43c1338a6960",
       "source": "Run onboarding again",
       "translated": "Запустити онбординг знову"
@@ -6796,7 +6831,7 @@
     {
       "id": "native.apple.1604352fea16d495",
       "source": "Wake Words",
-      "translated": "Слова активації"
+      "translated": "Слова пробудження"
     },
     {
       "id": "native.apple.698d47c5569f8d3b",

@@ -709,6 +709,11 @@
       "translated": "Lösenord (valfritt)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Drömmer"
@@ -4194,6 +4199,36 @@
       "translated": "Lösenord"
     },
     {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "Anpassade headers (valfritt)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "Skickas med varje anslutning till denna gateway, till exempel Cloudflare Access service token headers. Lagras krypterat och tillämpas vid nästa återanslutning."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "Headervärde"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "Denna header hanteras av anslutningen och kan inte åsidosättas."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "Lägg till header"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "Ta bort %1$s"
+    },
+    {
       "id": "native.android.a43f43c1338a6960",
       "source": "Run onboarding again",
       "translated": "Kör introduktionen igen"
@@ -6871,7 +6906,7 @@
     {
       "id": "native.apple.8584babe715b1133",
       "source": "Discovery Logs",
-      "translated": "Upptäcktsloggar"
+      "translated": "Identifieringsloggar"
     },
     {
       "id": "native.apple.f0a16e985312895b",

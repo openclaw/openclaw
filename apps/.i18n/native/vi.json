@@ -709,6 +709,11 @@
       "translated": "Mật khẩu (không bắt buộc)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Đang mơ"
@@ -4192,6 +4197,36 @@
       "id": "native.android.005e23b33d333f6a",
       "source": "Password",
       "translated": "Mật khẩu"
+    },
+    {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "Tiêu đề tùy chỉnh (không bắt buộc)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "Được gửi cùng mọi kết nối đến gateway này, ví dụ như các tiêu đề mã thông báo dịch vụ Cloudflare Access. Được lưu trữ ở dạng mã hóa và áp dụng trong lần kết nối lại tiếp theo."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "Giá trị tiêu đề"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "Tiêu đề này do kết nối quản lý và không thể bị ghi đè."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "Thêm tiêu đề"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "Xóa %1$s"
     },
     {
       "id": "native.android.a43f43c1338a6960",
