@@ -3297,6 +3297,44 @@ describe("chat model controls", () => {
     });
   });
 
+  it("stages the active agent default instead of the global model default", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai", reasoning: true },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", reasoning: true },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    const props = {
+      ...createChatModelControlsProps(state),
+      agentDefaultModel: "anthropic/claude-opus-4-5",
+      modelOverrides: { main: "openai/gpt-5.4" },
+    };
+    render(renderChatModelControls(props), container);
+
+    container.querySelector<HTMLButtonElement>(".chat-controls__use-default-model")?.click();
+    render(renderChatModelControls(props), container);
+
+    const speedLabels = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+    ).map((button) => button.textContent?.trim());
+    expect(speedLabels).toEqual(["Default", "Fast", "Standard", "Auto"]);
+  });
+
   it("shows canonical OpenAI names for legacy Codex model references", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",

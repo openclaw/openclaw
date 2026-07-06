@@ -263,20 +263,18 @@ function resolveChatModelProvider(
 
 function resolveChatModelTarget(params: {
   catalog: ModelCatalogEntry[];
+  defaultModel: string;
   modelOptions: ChatModelProviderOption[];
-  sessionsResult: SessionsListResult;
   value: string;
 }): { model: string | undefined; provider: string | undefined } {
-  if (!params.value) {
-    return {
-      model: params.sessionsResult.defaults?.model ?? undefined,
-      provider: params.sessionsResult.defaults?.modelProvider ?? undefined,
-    };
+  const targetValue = params.value || params.defaultModel;
+  if (!targetValue) {
+    return { model: undefined, provider: undefined };
   }
   const option = params.modelOptions.find((entry) => entry.value === params.value);
-  const provider = option?.provider ?? resolveChatModelProvider(params.value, params.catalog);
+  const provider = option?.provider ?? resolveChatModelProvider(targetValue, params.catalog);
   const normalizedProvider = normalizeChatModelProviderGroupId(provider);
-  const normalizedValue = params.value.trim().toLowerCase();
+  const normalizedValue = targetValue.trim().toLowerCase();
   const catalogEntry = params.catalog.find((entry) => {
     const entryProvider = normalizeChatModelProviderId(entry.provider);
     const entryProviderGroup = normalizeChatModelProviderGroupId(entry.provider);
@@ -298,8 +296,8 @@ function resolveChatModelTarget(params: {
   return {
     model:
       separator > 0 && qualifiedProvider === normalizedProvider
-        ? params.value.slice(separator + 1)
-        : params.value,
+        ? targetValue.slice(separator + 1)
+        : targetValue,
     provider,
   };
 }
@@ -319,6 +317,7 @@ function resolveDraftFastMode(value: ChatFastModeSelectValue): GatewaySessionRow
 
 function applyChatModelPickerDraft(params: {
   catalog: ModelCatalogEntry[];
+  defaultModel: string;
   draft: ChatModelPickerDraft | undefined;
   modelOptions: ChatModelProviderOption[];
   sessionKey: string;
@@ -331,8 +330,8 @@ function applyChatModelPickerDraft(params: {
   const sessionsResult = params.sessionsResult;
   const target = resolveChatModelTarget({
     catalog: params.catalog,
+    defaultModel: params.defaultModel,
     modelOptions: params.modelOptions,
-    sessionsResult,
     value: draft.modelValue,
   });
   const fastMode = resolveDraftFastMode(draft.fastModeValue);
@@ -513,6 +512,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const selectedModelValue = draft?.modelValue ?? currentOverride;
   const draftSessionsResult = applyChatModelPickerDraft({
     catalog: props.modelCatalog,
+    defaultModel,
     draft,
     modelOptions,
     sessionKey: props.sessionKey,
