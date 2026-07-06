@@ -48,11 +48,13 @@ describe("Claude model contracts", () => {
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-5@20260701" })).toBe(true);
     expect(supportsClaudeNativeMaxEffort({ id: "claude-sonnet-5" })).toBe(true);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-sonnet-5" })).toBe(true);
   });
 
   it("does not classify later numeric model versions as supported aliases", () => {
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-60" })).toBe(false);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-80" })).toBe(false);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-sonnet-50" })).toBe(false);
     expect(readLevelIds(resolveClaudeThinkingProfile("claude-opus-4-80"))).toEqual([
       "off",
       "minimal",

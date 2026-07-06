@@ -68,7 +68,7 @@ export function supportsClaudeNativeMaxEffort(ref: ClaudeModelRef): boolean {
 /** Return whether a Claude model supports native xhigh effort. */
 export function supportsClaudeNativeXhighEffort(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
-  return /(?:^|-)claude-(?:fable-5|opus-4-(?:7|8))(?=$|[^a-z0-9])/.test(modelId);
+  return /(?:^|-)claude-(?:fable-5|opus-4-(?:7|8)|sonnet-5)(?=$|[^a-z0-9])/.test(modelId);
 }
 
 /**
