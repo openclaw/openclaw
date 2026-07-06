@@ -1122,6 +1122,15 @@ export const ko: TranslationMap = {
       session: "세션",
       sessions: "세션",
     },
+    providerUsage: {
+      title: "제공업체 요금제 및 결제",
+      subtitle: "설정된 제공업체에서 보고한 요금제, 할당량, 잔액 및 예산의 실시간 데이터입니다.",
+      balance: "잔액",
+      spend: "사용량",
+      budget: "예산",
+      remaining: "{percent}% 남음",
+      resets: "{date}에 초기화",
+    },
     presets: {
       today: "오늘",
       last7d: "7일",

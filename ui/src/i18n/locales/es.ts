@@ -1131,6 +1131,16 @@ export const es: TranslationMap = {
       session: "sesión",
       sessions: "sesiones",
     },
+    providerUsage: {
+      title: "Planes y facturación de proveedores",
+      subtitle:
+        "Datos en tiempo real de planes, cuotas, saldos y presupuestos proporcionados por los proveedores configurados.",
+      balance: "Saldo",
+      spend: "Uso",
+      budget: "Presupuesto",
+      remaining: "Queda un {percent}%",
+      resets: "Se restablece el {date}",
+    },
     presets: {
       today: "Hoy",
       last7d: "7d",

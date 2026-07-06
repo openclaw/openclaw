@@ -1134,6 +1134,16 @@ export const de: TranslationMap = {
       session: "Sitzung",
       sessions: "Sitzungen",
     },
+    providerUsage: {
+      title: "Anbietertarife & Abrechnung",
+      subtitle:
+        "Live-Daten zu Tarif, Kontingent, Guthaben und Budget von konfigurierten Anbietern.",
+      balance: "Guthaben",
+      spend: "Nutzung",
+      budget: "Budget",
+      remaining: "{percent}% übrig",
+      resets: "Zurücksetzung am {date}",
+    },
     presets: {
       today: "Heute",
       last7d: "7d",

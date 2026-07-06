@@ -1113,6 +1113,15 @@ export const zh_CN: TranslationMap = {
       session: "会话",
       sessions: "会话",
     },
+    providerUsage: {
+      title: "供应商套餐与计费",
+      subtitle: "已配置供应商报告的实时套餐、配额、余额和预算数据。",
+      balance: "余额",
+      spend: "用量",
+      budget: "预算",
+      remaining: "剩余 {percent}%",
+      resets: "于 {date} 重置",
+    },
     presets: {
       today: "今天",
       last7d: "7天",

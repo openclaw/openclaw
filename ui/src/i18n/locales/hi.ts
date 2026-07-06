@@ -1122,6 +1122,15 @@ export const hi: TranslationMap = {
       session: "सेशन",
       sessions: "सेशन",
     },
+    providerUsage: {
+      title: "प्रदाता प्लान और बिलिंग",
+      subtitle: "कॉन्फ़िगर किए गए प्रदाताओं से प्राप्त प्लान, कोटा, शेष राशि और बजट का लाइव डेटा।",
+      balance: "शेष राशि",
+      spend: "उपयोग",
+      budget: "बजट",
+      remaining: "{percent}% शेष",
+      resets: "{date} को रीसेट",
+    },
     presets: {
       today: "आज",
       last7d: "7d",

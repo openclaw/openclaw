@@ -129,7 +129,20 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
-private class GatewayRequestNotEnqueued(
+internal sealed class GatewayRequestDefinitiveFailure(
+  message: String,
+) : IllegalStateException(message)
+
+internal class GatewayRequestNotEnqueued(
+  message: String,
+) : GatewayRequestDefinitiveFailure(message)
+
+internal class GatewayRequestRejected(
+  val gatewayError: GatewaySession.ErrorShape,
+) : GatewayRequestDefinitiveFailure("${gatewayError.code}: ${gatewayError.message}")
+
+/** Request frame was sent, but no response proved whether the gateway applied it. */
+internal class GatewayRequestOutcomeUnknown(
   message: String,
 ) : IllegalStateException(message)
 
@@ -380,8 +393,7 @@ class GatewaySession(
   ): String {
     val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
     if (res.ok) return res.payloadJson ?: ""
-    val err = res.error
-    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
   /** Sends an RPC request and returns the structured success/error payload. */
@@ -390,7 +402,7 @@ class GatewaySession(
     paramsJson: String?,
     timeoutMs: Long = 15_000,
   ): RpcResult {
-    val conn = readyConnection() ?: throw IllegalStateException("not connected")
+    val conn = readyConnection() ?: throw GatewayRequestNotEnqueued("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -506,7 +518,7 @@ class GatewaySession(
         sendJson(buildRequestFrame(id = id, method = method, params = params))
         return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
-        throw IllegalStateException("request timeout")
+        throw GatewayRequestOutcomeUnknown("request timeout")
       } finally {
         pending.remove(id)
         if (connectRequestId == id) connectRequestId = null
@@ -536,6 +548,9 @@ class GatewaySession(
               onError(ErrorShape("UNAVAILABLE", "request timeout"))
               return@launch
             } catch (_: CancellationException) {
+              return@launch
+            } catch (err: GatewayRequestOutcomeUnknown) {
+              onError(ErrorShape("UNAVAILABLE", err.message ?: "request outcome unknown"))
               return@launch
             }
           if (!response.ok) {
@@ -1161,7 +1176,7 @@ class GatewaySession(
           pending.values.toList().also { pending.clear() }
         }
       for (waiter in waiters) {
-        waiter.cancel()
+        waiter.completeExceptionally(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))
       }
     }
   }

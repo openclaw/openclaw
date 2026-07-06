@@ -6664,19 +6664,14 @@
       "translated": "Terminé"
     },
     {
-      "id": "native.apple.948e3fafb80564c9",
-      "source": "Connect to a Gateway?",
-      "translated": "Se connecter à un Gateway ?"
-    },
-    {
       "id": "native.apple.e8f30dffd2d62d96",
       "source": "Connecting…",
       "translated": "Connexion…"
     },
     {
-      "id": "native.apple.a735b07046d583e7",
-      "source": "Connect",
-      "translated": "Se connecter"
+      "id": "native.apple.78d430515e5bb8eb",
+      "source": "Connect to this Gateway",
+      "translated": "Se connecter à ce Gateway"
     },
     {
       "id": "native.apple.102d0ce74e6253f3",
@@ -6684,17 +6679,12 @@
       "translated": "Pas maintenant"
     },
     {
-      "id": "native.apple.88dbf6b7151586b4",
-      "source": "Don’t show this again",
-      "translated": "Ne plus afficher"
+      "id": "native.apple.5204dc0158d98ebf",
+      "source": "Don't show this again",
+      "translated": "Ne plus afficher ceci"
     },
     {
-      "id": "native.apple.51d42270d75ea40a",
-      "source": "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
-      "translated": "Aucune gateway trouvée pour le moment. Assurez-vous que votre gateway est en cours d’exécution et que la découverte Bonjour est activée."
-    },
-    {
-      "id": "native.apple.d2445a87f9cb6ff4",
+      "id": "native.apple.476757fc54c63560",
       "source": "Quick Setup",
       "translated": "Configuration rapide"
     },
@@ -6702,6 +6692,66 @@
       "id": "native.apple.977a6e4a5022184f",
       "source": "Close",
       "translated": "Fermer"
+    },
+    {
+      "id": "native.apple.f2642d91a3ac8c25",
+      "source": "Connect a nearby Gateway",
+      "translated": "Se connecter à un Gateway à proximité"
+    },
+    {
+      "id": "native.apple.63bb4ac4eaf496bc",
+      "source": "Local",
+      "translated": "Local"
+    },
+    {
+      "id": "native.apple.1122855cccc617bd",
+      "source": "Secure",
+      "translated": "Sécurisé"
+    },
+    {
+      "id": "native.apple.052a650dbff9657b",
+      "source": "Discovery",
+      "translated": "Découverte"
+    },
+    {
+      "id": "native.apple.c284afdefb55f224",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.26a7ff6b06dbeb67",
+      "source": "Node",
+      "translated": "Nœud"
+    },
+    {
+      "id": "native.apple.f2c3934d3e670237",
+      "source": "Operator",
+      "translated": "Opérateur"
+    },
+    {
+      "id": "native.apple.33be51249563ed37",
+      "source": "Looking for a Gateway",
+      "translated": "Recherche d’un Gateway"
+    },
+    {
+      "id": "native.apple.0e828048fafce681",
+      "source": "Keep your iPhone on the same LAN or tailnet, then start the Gateway on your host machine.",
+      "translated": "Gardez votre iPhone sur le même LAN ou tailnet, puis démarrez le Gateway sur votre machine hôte."
+    },
+    {
+      "id": "native.apple.c18f5bd36f119282",
+      "source": "Run openclaw gateway --port 18789.",
+      "translated": "Exécutez openclaw gateway --port 18789."
+    },
+    {
+      "id": "native.apple.a4eb9a9b02915961",
+      "source": "Check that Bonjour discovery is enabled.",
+      "translated": "Vérifiez que la découverte Bonjour est activée."
+    },
+    {
+      "id": "native.apple.72083d0b7fc77a6d",
+      "source": "Open Settings if you need a manual host.",
+      "translated": "Ouvrez les réglages si vous avez besoin d’un hôte manuel."
     },
     {
       "id": "native.apple.8ef0909bddf2f9ee",
@@ -6964,24 +7014,54 @@
       "translated": "Même machine (Dev)"
     },
     {
-      "id": "native.apple.8197d399f16b6d15",
-      "source": "Welcome to OpenClaw",
-      "translated": "Bienvenue dans OpenClaw"
+      "id": "native.apple.09e7832b23cf14f6",
+      "source": "Security notice",
+      "translated": "Avis de sécurité"
     },
     {
-      "id": "native.apple.aec45c66e9d1436e",
-      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
-      "translated": "L’agent connecté peut utiliser les fonctionnalités que vous activez, notamment l’appareil photo, le microphone, les photos, les contacts, le calendrier et la localisation. Continuez uniquement si vous faites confiance au gateway et à l’agent."
+      "id": "native.apple.d4d9568dca8ceaa9",
+      "source": "The connected OpenClaw agent can use device capabilities you enable.",
+      "translated": "L’agent OpenClaw connecté peut utiliser les fonctionnalités de l’appareil que vous activez."
     },
     {
-      "id": "native.apple.f755248f69e3e497",
-      "source": "Security",
-      "translated": "Sécurité"
+      "id": "native.apple.fdd93eb6b6eef525",
+      "source": "Camera, microphone, photos, contacts, calendar, and location may be available.",
+      "translated": "L’appareil photo, le microphone, les photos, les contacts, le calendrier et la localisation peuvent être disponibles."
     },
     {
-      "id": "native.apple.116debd4caba7aff",
-      "source": "You can change permissions later in Settings.",
-      "translated": "Vous pourrez modifier les autorisations ultérieurement dans Réglages."
+      "id": "native.apple.7cc0f656abb41f6d",
+      "source": "Continue only if you trust the gateway and agent you connect to.",
+      "translated": "Continuez uniquement si vous faites confiance au gateway et à l’agent auxquels vous vous connectez."
+    },
+    {
+      "id": "native.apple.eae3bd9e4e9112a0",
+      "source": "Copy setup code command",
+      "translated": "Copier la commande du code de configuration"
+    },
+    {
+      "id": "native.apple.e8b4dc00cd23ae73",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.c9419426ba8c2a2e",
+      "source": "Securely connect this iPhone to your gateway.",
+      "translated": "Connectez cet iPhone à votre Gateway en toute sécurité."
+    },
+    {
+      "id": "native.apple.3e233ba3ed3181d4",
+      "source": "Connect to your gateway",
+      "translated": "Se connecter à votre Gateway"
+    },
+    {
+      "id": "native.apple.b6978424ac0a4d14",
+      "source": "Choose device permissions",
+      "translated": "Choisir les autorisations de l’appareil"
+    },
+    {
+      "id": "native.apple.4109460a5b8927d8",
+      "source": "Use OpenClaw from your phone",
+      "translated": "Utiliser OpenClaw depuis votre téléphone"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -6989,94 +7069,44 @@
       "translated": "Continuer"
     },
     {
-      "id": "native.apple.68e933b36353a30c",
+      "id": "native.apple.c686068c2a79bf9e",
       "source": "Connect Gateway",
       "translated": "Connecter la Gateway"
     },
     {
-      "id": "native.apple.9f65b2eadb6aee92",
-      "source": "/pair qr",
-      "translated": "/pair qr"
+      "id": "native.apple.8f76a5962329b43f",
+      "source": "Run this on your gateway host and scan the code",
+      "translated": "Exécutez ceci sur l’hôte de votre Gateway et scannez le code"
     },
     {
-      "id": "native.apple.fe3269c93d6f8524",
-      "source": "Copied",
-      "translated": "Copié"
+      "id": "native.apple.d71a98568b7184a5",
+      "source": "Connecting…",
+      "translated": "Connexion…"
     },
     {
-      "id": "native.apple.bad4a8110ca864e1",
-      "source": "Copy",
-      "translated": "Copier"
+      "id": "native.apple.577764b38b1d903c",
+      "source": "Scan QR",
+      "translated": "Scanner le QR code"
     },
     {
-      "id": "native.apple.b6f3f5c300b28f17",
-      "source": "Copy pair command",
-      "translated": "Copier la commande d’appairage"
+      "id": "native.apple.913a586956440f64",
+      "source": "or",
+      "translated": "ou"
     },
     {
-      "id": "native.apple.7308cbcb1e40d70e",
-      "source": "Pair command copied",
-      "translated": "Commande d’appairage copiée"
+      "id": "native.apple.57614f0c4e59677b",
+      "source": "Connect Manually",
+      "translated": "Se connecter manuellement"
     },
     {
-      "id": "native.apple.b727174424127618",
-      "source": "Run this in your OpenClaw chat, then scan the code.",
-      "translated": "Exécutez ceci dans votre chat OpenClaw, puis scannez le code."
+      "id": "native.apple.4916d34cab45e6c3",
+      "source": "You're connected",
+      "translated": "Vous êtes connecté"
     },
     {
-      "id": "native.apple.429ac70f39c21302",
-      "source": "Scan QR Code",
-      "translated": "Scanner le code QR"
-    },
-    {
-      "id": "native.apple.7ba3027e51acb255",
-      "source": "Set Up Manually",
-      "translated": "Configurer manuellement"
-    },
-    {
-      "id": "native.apple.94c7d6cc4a2cf2dc",
-      "source": "Welcome",
-      "translated": "Bienvenue"
-    },
-    {
-      "id": "native.apple.5e905afc1c8cd46a",
-      "source": "Connect Gateway",
-      "translated": "Connecter la Gateway"
-    },
-    {
-      "id": "native.apple.cef4a6612b762154",
-      "source": "Connection Mode",
-      "translated": "Mode de connexion"
-    },
-    {
-      "id": "native.apple.38d3190134a58030",
-      "source": "Connect",
-      "translated": "Connecter"
-    },
-    {
-      "id": "native.apple.bfee748063f6f82c",
-      "source": "Authentication",
-      "translated": "Authentification"
-    },
-    {
-      "id": "native.apple.71f969ccb10fb5cc",
-      "source": "Connected",
-      "translated": "Connecté"
-    },
-    {
-      "id": "native.apple.e3cc3df936dce84d",
-      "source": "Back",
-      "translated": "Retour"
-    },
-    {
-      "id": "native.apple.e58367cfa71115cc",
-      "source": "Close",
-      "translated": "Fermer"
-    },
-    {
-      "id": "native.apple.7822f4f0f671d841",
-      "source": "Done",
-      "translated": "Terminé"
+      "id": "native.apple.b5e401fa9bfb4b49",
+      "source": "Go to Chat",
+      "translated": "Accéder au chat"
     },
     {
       "id": "native.apple.a62e0764b51937cb",
@@ -7089,9 +7119,9 @@
       "translated": "OK"
     },
     {
-      "id": "native.apple.80a2693bba128a6c",
-      "source": "Scan QR Code",
-      "translated": "Scanner le code QR"
+      "id": "native.apple.d50aa0885c7e064f",
+      "source": "Scan Setup Code",
+      "translated": "Scanner le code de configuration"
     },
     {
       "id": "native.apple.f58429a2d9d3371f",
@@ -7104,9 +7134,34 @@
       "translated": "Photos"
     },
     {
+      "id": "native.apple.09ed26daf34a4c5d",
+      "source": "Back",
+      "translated": "Retour"
+    },
+    {
+      "id": "native.apple.e58367cfa71115cc",
+      "source": "Close",
+      "translated": "Fermer"
+    },
+    {
+      "id": "native.apple.1e60db061979db60",
+      "source": "Dismiss Keyboard",
+      "translated": "Masquer le clavier"
+    },
+    {
+      "id": "native.apple.95e2c98254da2aba",
+      "source": "Home Network",
+      "translated": "Réseau domestique"
+    },
+    {
       "id": "native.apple.d9a6d673aa6693ee",
       "source": "LAN or Tailscale host",
       "translated": "Hôte LAN ou Tailscale"
+    },
+    {
+      "id": "native.apple.431d02f8b68a96cf",
+      "source": "Remote Domain",
+      "translated": "Domaine distant"
     },
     {
       "id": "native.apple.7021301971f631bf",
@@ -7114,9 +7169,19 @@
       "translated": "VPS avec domaine"
     },
     {
+      "id": "native.apple.7451f8d052016642",
+      "source": "Same Machine (Dev)",
+      "translated": "Même machine (Dev)"
+    },
+    {
       "id": "native.apple.22e740296a762256",
       "source": "For local iOS app development",
       "translated": "Pour le développement local d’app iOS"
+    },
+    {
+      "id": "native.apple.e1b1ccbfc9e73df8",
+      "source": "Manual Connection",
+      "translated": "Connexion manuelle"
     },
     {
       "id": "native.apple.b7dc527c2a7e95cb",
@@ -7127,16 +7192,6 @@
       "id": "native.apple.93d3e17fabd5e082",
       "source": "Developer mode",
       "translated": "Mode développeur"
-    },
-    {
-      "id": "native.apple.ac7ea1c7379819d3",
-      "source": "Off",
-      "translated": "Désactivé"
-    },
-    {
-      "id": "native.apple.04df230fe508a665",
-      "source": "On",
-      "translated": "Activé"
     },
     {
       "id": "native.apple.d444d84eb269f529",
@@ -7239,14 +7294,14 @@
       "translated": "L’hôte par défaut est localhost. Utilisez l’adresse IP LAN de votre Mac si la mise en réseau du simulateur l’exige."
     },
     {
-      "id": "native.apple.4cc6c6c21864bff9",
-      "source": "Gateway rejected credentials. Scan a fresh QR code or update token/password.",
-      "translated": "Gateway a rejeté les identifiants. Scannez un nouveau code QR ou mettez à jour le jeton/mot de passe."
+      "id": "native.apple.5847cf494847ed98",
+      "source": "Gateway rejected credentials. Scan a fresh setup code or update token/password.",
+      "translated": "Le Gateway a rejeté les identifiants. Scannez un nouveau code de configuration ou mettez à jour le jeton/mot de passe."
     },
     {
-      "id": "native.apple.5841249e14da136f",
-      "source": "Auth token looks valid.",
-      "translated": "Le jeton d’authentification semble valide."
+      "id": "native.apple.559dccb9f9dfbbad",
+      "source": "OpenClaw is checking gateway and node access.",
+      "translated": "OpenClaw vérifie l’accès au gateway et au nœud."
     },
     {
       "id": "native.apple.4404f435fb496b62",
@@ -7264,9 +7319,9 @@
       "translated": "Approuvez cet appareil sur le gateway.\n1) `\\(commandLine)`\n2) `/pair approve` dans votre chat OpenClaw\n\\(requestLine)\nOpenClaw réessaiera aussi automatiquement lorsque vous reviendrez dans cette app."
     },
     {
-      "id": "native.apple.7ff9099402ff9f21",
-      "source": "Scan QR Code Again",
-      "translated": "Scanner à nouveau le code QR"
+      "id": "native.apple.af3890b1e07c3084",
+      "source": "Scan Setup Code Again",
+      "translated": "Scanner à nouveau le code de configuration"
     },
     {
       "id": "native.apple.0134e9bd57c74d27",
@@ -7274,24 +7329,14 @@
       "translated": "Réessayer la connexion"
     },
     {
-      "id": "native.apple.e674edbcb002aec6",
-      "source": "Go to Chat",
-      "translated": "Aller au chat"
+      "id": "native.apple.abe248e02d451890",
+      "source": "Enter setup code",
+      "translated": "Saisir le code de configuration"
     },
     {
-      "id": "native.apple.4679e949156e07e3",
-      "source": "Paste setup code",
-      "translated": "Coller le code de configuration"
-    },
-    {
-      "id": "native.apple.880898c80cab264e",
-      "source": "Applying...",
-      "translated": "Application en cours..."
-    },
-    {
-      "id": "native.apple.064ae900e9c5b550",
-      "source": "Apply Setup Code",
-      "translated": "Appliquer le code de configuration"
+      "id": "native.apple.d9e6ff8a72f4525b",
+      "source": "Apply",
+      "translated": "Appliquer"
     },
     {
       "id": "native.apple.74d4be2078a04261",
@@ -7299,9 +7344,9 @@
       "translated": "Code de configuration"
     },
     {
-      "id": "native.apple.c522fa3b5b0d812a",
-      "source": "Use this if you received a setup code instead of a QR code.",
-      "translated": "Utilisez cette option si vous avez reçu un code de configuration au lieu d’un code QR."
+      "id": "native.apple.ee24a5a75d7b1e4f",
+      "source": "Use this if you have a setup code instead of scanning.",
+      "translated": "Utilisez cette option si vous disposez d’un code de configuration au lieu de le scanner."
     },
     {
       "id": "native.apple.826c84d7090d253c",
@@ -7337,6 +7382,11 @@
       "id": "native.apple.6c3fe084ab7b318d",
       "source": "Connecting…",
       "translated": "Connexion…"
+    },
+    {
+      "id": "native.apple.ab58b30ddda7aeb0",
+      "source": "Connect",
+      "translated": "Se connecter"
     },
     {
       "id": "native.apple.f2ea327bfea8b8e3",

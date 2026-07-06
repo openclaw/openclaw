@@ -1401,7 +1401,9 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.cwd
+        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+        : {}),
     },
   });
   if (outcome.blocked) {

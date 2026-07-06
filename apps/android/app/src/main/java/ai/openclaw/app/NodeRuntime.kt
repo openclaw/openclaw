@@ -717,8 +717,8 @@ class NodeRuntime private constructor(
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        // Every successful connection refreshes history, including reconnects whose main key did not change.
-        chat.refresh()
+        // Every successful connection refreshes history; reconnects preserve local run ownership.
+        chat.onGatewayConnected()
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null

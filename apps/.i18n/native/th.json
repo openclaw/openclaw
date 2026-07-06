@@ -6664,19 +6664,14 @@
       "translated": "เสร็จสิ้น"
     },
     {
-      "id": "native.apple.948e3fafb80564c9",
-      "source": "Connect to a Gateway?",
-      "translated": "เชื่อมต่อกับ Gateway หรือไม่?"
-    },
-    {
       "id": "native.apple.e8f30dffd2d62d96",
       "source": "Connecting…",
       "translated": "กำลังเชื่อมต่อ…"
     },
     {
-      "id": "native.apple.a735b07046d583e7",
-      "source": "Connect",
-      "translated": "เชื่อมต่อ"
+      "id": "native.apple.78d430515e5bb8eb",
+      "source": "Connect to this Gateway",
+      "translated": "เชื่อมต่อกับ Gateway นี้"
     },
     {
       "id": "native.apple.102d0ce74e6253f3",
@@ -6684,24 +6679,79 @@
       "translated": "ยังไม่ใช่ตอนนี้"
     },
     {
-      "id": "native.apple.88dbf6b7151586b4",
-      "source": "Don’t show this again",
-      "translated": "ไม่ต้องแสดงสิ่งนี้อีก"
+      "id": "native.apple.5204dc0158d98ebf",
+      "source": "Don't show this again",
+      "translated": "ไม่ต้องแสดงอีก"
     },
     {
-      "id": "native.apple.51d42270d75ea40a",
-      "source": "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
-      "translated": "ยังไม่พบ Gateway ตรวจสอบให้แน่ใจว่า Gateway ของคุณกำลังทำงานอยู่และเปิดใช้งานการค้นหา Bonjour แล้ว"
-    },
-    {
-      "id": "native.apple.d2445a87f9cb6ff4",
+      "id": "native.apple.476757fc54c63560",
       "source": "Quick Setup",
-      "translated": "การตั้งค่าอย่างรวดเร็ว"
+      "translated": "ตั้งค่าอย่างรวดเร็ว"
     },
     {
       "id": "native.apple.977a6e4a5022184f",
       "source": "Close",
       "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.f2642d91a3ac8c25",
+      "source": "Connect a nearby Gateway",
+      "translated": "เชื่อมต่อ Gateway ที่อยู่ใกล้เคียง"
+    },
+    {
+      "id": "native.apple.63bb4ac4eaf496bc",
+      "source": "Local",
+      "translated": "ภายในเครื่อง"
+    },
+    {
+      "id": "native.apple.1122855cccc617bd",
+      "source": "Secure",
+      "translated": "ปลอดภัย"
+    },
+    {
+      "id": "native.apple.052a650dbff9657b",
+      "source": "Discovery",
+      "translated": "การค้นหา"
+    },
+    {
+      "id": "native.apple.c284afdefb55f224",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.26a7ff6b06dbeb67",
+      "source": "Node",
+      "translated": "โหนด"
+    },
+    {
+      "id": "native.apple.f2c3934d3e670237",
+      "source": "Operator",
+      "translated": "ผู้ควบคุม"
+    },
+    {
+      "id": "native.apple.33be51249563ed37",
+      "source": "Looking for a Gateway",
+      "translated": "กำลังมองหา Gateway"
+    },
+    {
+      "id": "native.apple.0e828048fafce681",
+      "source": "Keep your iPhone on the same LAN or tailnet, then start the Gateway on your host machine.",
+      "translated": "ให้ iPhone ของคุณอยู่บน LAN หรือ tailnet เดียวกัน จากนั้นเริ่ม Gateway บนเครื่องโฮสต์ของคุณ"
+    },
+    {
+      "id": "native.apple.c18f5bd36f119282",
+      "source": "Run openclaw gateway --port 18789.",
+      "translated": "เรียกใช้ openclaw gateway --port 18789."
+    },
+    {
+      "id": "native.apple.a4eb9a9b02915961",
+      "source": "Check that Bonjour discovery is enabled.",
+      "translated": "ตรวจสอบว่าเปิดใช้งานการค้นหา Bonjour แล้ว"
+    },
+    {
+      "id": "native.apple.72083d0b7fc77a6d",
+      "source": "Open Settings if you need a manual host.",
+      "translated": "เปิดการตั้งค่าหากคุณต้องระบุโฮสต์ด้วยตนเอง"
     },
     {
       "id": "native.apple.8ef0909bddf2f9ee",
@@ -6964,24 +7014,54 @@
       "translated": "เครื่องเดียวกัน (Dev)"
     },
     {
-      "id": "native.apple.8197d399f16b6d15",
-      "source": "Welcome to OpenClaw",
-      "translated": "ยินดีต้อนรับสู่ OpenClaw"
+      "id": "native.apple.09e7832b23cf14f6",
+      "source": "Security notice",
+      "translated": "ประกาศด้านความปลอดภัย"
     },
     {
-      "id": "native.apple.aec45c66e9d1436e",
-      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
-      "translated": "เอเจนต์ที่เชื่อมต่อสามารถใช้ความสามารถที่คุณเปิดใช้งานได้ รวมถึงกล้อง ไมโครโฟน รูปภาพ รายชื่อติดต่อ ปฏิทิน และตำแหน่งที่ตั้ง ดำเนินการต่อเฉพาะเมื่อคุณเชื่อถือ gateway และเอเจนต์เท่านั้น"
+      "id": "native.apple.d4d9568dca8ceaa9",
+      "source": "The connected OpenClaw agent can use device capabilities you enable.",
+      "translated": "เอเจนต์ OpenClaw ที่เชื่อมต่อสามารถใช้ความสามารถของอุปกรณ์ที่คุณเปิดใช้งานได้"
     },
     {
-      "id": "native.apple.f755248f69e3e497",
-      "source": "Security",
-      "translated": "ความปลอดภัย"
+      "id": "native.apple.fdd93eb6b6eef525",
+      "source": "Camera, microphone, photos, contacts, calendar, and location may be available.",
+      "translated": "กล้อง ไมโครโฟน รูปภาพ รายชื่อ ปฏิทิน และตำแหน่งที่ตั้งอาจพร้อมใช้งาน"
     },
     {
-      "id": "native.apple.116debd4caba7aff",
-      "source": "You can change permissions later in Settings.",
-      "translated": "คุณสามารถเปลี่ยนสิทธิ์อนุญาตได้ภายหลังในการตั้งค่า"
+      "id": "native.apple.7cc0f656abb41f6d",
+      "source": "Continue only if you trust the gateway and agent you connect to.",
+      "translated": "ดำเนินการต่อเฉพาะเมื่อคุณเชื่อถือ gateway และเอเจนต์ที่คุณเชื่อมต่ออยู่"
+    },
+    {
+      "id": "native.apple.eae3bd9e4e9112a0",
+      "source": "Copy setup code command",
+      "translated": "คัดลอกคำสั่งรหัสตั้งค่า"
+    },
+    {
+      "id": "native.apple.e8b4dc00cd23ae73",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.c9419426ba8c2a2e",
+      "source": "Securely connect this iPhone to your gateway.",
+      "translated": "เชื่อมต่อ iPhone เครื่องนี้กับ Gateway ของคุณอย่างปลอดภัย"
+    },
+    {
+      "id": "native.apple.3e233ba3ed3181d4",
+      "source": "Connect to your gateway",
+      "translated": "เชื่อมต่อกับ Gateway ของคุณ"
+    },
+    {
+      "id": "native.apple.b6978424ac0a4d14",
+      "source": "Choose device permissions",
+      "translated": "เลือกสิทธิ์ของอุปกรณ์"
+    },
+    {
+      "id": "native.apple.4109460a5b8927d8",
+      "source": "Use OpenClaw from your phone",
+      "translated": "ใช้ OpenClaw จากโทรศัพท์ของคุณ"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -6989,94 +7069,44 @@
       "translated": "ดำเนินการต่อ"
     },
     {
-      "id": "native.apple.68e933b36353a30c",
+      "id": "native.apple.c686068c2a79bf9e",
       "source": "Connect Gateway",
       "translated": "เชื่อมต่อ Gateway"
     },
     {
-      "id": "native.apple.9f65b2eadb6aee92",
-      "source": "/pair qr",
-      "translated": "/pair qr"
+      "id": "native.apple.8f76a5962329b43f",
+      "source": "Run this on your gateway host and scan the code",
+      "translated": "เรียกใช้สิ่งนี้บนโฮสต์ Gateway ของคุณแล้วสแกนโค้ด"
     },
     {
-      "id": "native.apple.fe3269c93d6f8524",
-      "source": "Copied",
-      "translated": "คัดลอกแล้ว"
+      "id": "native.apple.d71a98568b7184a5",
+      "source": "Connecting…",
+      "translated": "กำลังเชื่อมต่อ…"
     },
     {
-      "id": "native.apple.bad4a8110ca864e1",
-      "source": "Copy",
-      "translated": "คัดลอก"
+      "id": "native.apple.577764b38b1d903c",
+      "source": "Scan QR",
+      "translated": "สแกน QR"
     },
     {
-      "id": "native.apple.b6f3f5c300b28f17",
-      "source": "Copy pair command",
-      "translated": "คัดลอกคำสั่งจับคู่"
+      "id": "native.apple.913a586956440f64",
+      "source": "or",
+      "translated": "หรือ"
     },
     {
-      "id": "native.apple.7308cbcb1e40d70e",
-      "source": "Pair command copied",
-      "translated": "คัดลอกคำสั่งจับคู่แล้ว"
+      "id": "native.apple.57614f0c4e59677b",
+      "source": "Connect Manually",
+      "translated": "เชื่อมต่อด้วยตนเอง"
     },
     {
-      "id": "native.apple.b727174424127618",
-      "source": "Run this in your OpenClaw chat, then scan the code.",
-      "translated": "เรียกใช้สิ่งนี้ในแชท OpenClaw ของคุณ จากนั้นสแกนโค้ด"
+      "id": "native.apple.4916d34cab45e6c3",
+      "source": "You're connected",
+      "translated": "คุณเชื่อมต่อแล้ว"
     },
     {
-      "id": "native.apple.429ac70f39c21302",
-      "source": "Scan QR Code",
-      "translated": "สแกนรหัส QR"
-    },
-    {
-      "id": "native.apple.7ba3027e51acb255",
-      "source": "Set Up Manually",
-      "translated": "ตั้งค่าด้วยตนเอง"
-    },
-    {
-      "id": "native.apple.94c7d6cc4a2cf2dc",
-      "source": "Welcome",
-      "translated": "ยินดีต้อนรับ"
-    },
-    {
-      "id": "native.apple.5e905afc1c8cd46a",
-      "source": "Connect Gateway",
-      "translated": "เชื่อมต่อ Gateway"
-    },
-    {
-      "id": "native.apple.cef4a6612b762154",
-      "source": "Connection Mode",
-      "translated": "โหมดการเชื่อมต่อ"
-    },
-    {
-      "id": "native.apple.38d3190134a58030",
-      "source": "Connect",
-      "translated": "เชื่อมต่อ"
-    },
-    {
-      "id": "native.apple.bfee748063f6f82c",
-      "source": "Authentication",
-      "translated": "การยืนยันตัวตน"
-    },
-    {
-      "id": "native.apple.71f969ccb10fb5cc",
-      "source": "Connected",
-      "translated": "เชื่อมต่อแล้ว"
-    },
-    {
-      "id": "native.apple.e3cc3df936dce84d",
-      "source": "Back",
-      "translated": "ย้อนกลับ"
-    },
-    {
-      "id": "native.apple.e58367cfa71115cc",
-      "source": "Close",
-      "translated": "ปิด"
-    },
-    {
-      "id": "native.apple.7822f4f0f671d841",
-      "source": "Done",
-      "translated": "เสร็จสิ้น"
+      "id": "native.apple.b5e401fa9bfb4b49",
+      "source": "Go to Chat",
+      "translated": "ไปที่แชท"
     },
     {
       "id": "native.apple.a62e0764b51937cb",
@@ -7089,9 +7119,9 @@
       "translated": "ตกลง"
     },
     {
-      "id": "native.apple.80a2693bba128a6c",
-      "source": "Scan QR Code",
-      "translated": "สแกน QR Code"
+      "id": "native.apple.d50aa0885c7e064f",
+      "source": "Scan Setup Code",
+      "translated": "สแกนโค้ดตั้งค่า"
     },
     {
       "id": "native.apple.f58429a2d9d3371f",
@@ -7104,9 +7134,34 @@
       "translated": "รูปภาพ"
     },
     {
+      "id": "native.apple.09ed26daf34a4c5d",
+      "source": "Back",
+      "translated": "ย้อนกลับ"
+    },
+    {
+      "id": "native.apple.e58367cfa71115cc",
+      "source": "Close",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.apple.1e60db061979db60",
+      "source": "Dismiss Keyboard",
+      "translated": "ซ่อนแป้นพิมพ์"
+    },
+    {
+      "id": "native.apple.95e2c98254da2aba",
+      "source": "Home Network",
+      "translated": "เครือข่ายภายในบ้าน"
+    },
+    {
       "id": "native.apple.d9a6d673aa6693ee",
       "source": "LAN or Tailscale host",
       "translated": "โฮสต์ LAN หรือ Tailscale"
+    },
+    {
+      "id": "native.apple.431d02f8b68a96cf",
+      "source": "Remote Domain",
+      "translated": "โดเมนระยะไกล"
     },
     {
       "id": "native.apple.7021301971f631bf",
@@ -7114,9 +7169,19 @@
       "translated": "VPS พร้อมโดเมน"
     },
     {
+      "id": "native.apple.7451f8d052016642",
+      "source": "Same Machine (Dev)",
+      "translated": "เครื่องเดียวกัน (Dev)"
+    },
+    {
       "id": "native.apple.22e740296a762256",
       "source": "For local iOS app development",
       "translated": "สำหรับการพัฒนาแอป iOS ในเครื่อง"
+    },
+    {
+      "id": "native.apple.e1b1ccbfc9e73df8",
+      "source": "Manual Connection",
+      "translated": "การเชื่อมต่อด้วยตนเอง"
     },
     {
       "id": "native.apple.b7dc527c2a7e95cb",
@@ -7127,16 +7192,6 @@
       "id": "native.apple.93d3e17fabd5e082",
       "source": "Developer mode",
       "translated": "โหมดนักพัฒนา"
-    },
-    {
-      "id": "native.apple.ac7ea1c7379819d3",
-      "source": "Off",
-      "translated": "ปิด"
-    },
-    {
-      "id": "native.apple.04df230fe508a665",
-      "source": "On",
-      "translated": "เปิด"
     },
     {
       "id": "native.apple.d444d84eb269f529",
@@ -7239,14 +7294,14 @@
       "translated": "โฮสต์เริ่มต้นคือ localhost ใช้ IP LAN ของ Mac หากเครือข่ายของ simulator ต้องการ"
     },
     {
-      "id": "native.apple.4cc6c6c21864bff9",
-      "source": "Gateway rejected credentials. Scan a fresh QR code or update token/password.",
-      "translated": "Gateway ปฏิเสธข้อมูลประจำตัว สแกน QR code ใหม่ หรืออัปเดต token/password"
+      "id": "native.apple.5847cf494847ed98",
+      "source": "Gateway rejected credentials. Scan a fresh setup code or update token/password.",
+      "translated": "Gateway ปฏิเสธข้อมูลรับรอง สแกนรหัสตั้งค่าใหม่หรืออัปเดตโทเคน/รหัสผ่าน"
     },
     {
-      "id": "native.apple.5841249e14da136f",
-      "source": "Auth token looks valid.",
-      "translated": "Auth token ดูเหมือนถูกต้อง"
+      "id": "native.apple.559dccb9f9dfbbad",
+      "source": "OpenClaw is checking gateway and node access.",
+      "translated": "OpenClaw กำลังตรวจสอบ Gateway และการเข้าถึงโหนด"
     },
     {
       "id": "native.apple.4404f435fb496b62",
@@ -7264,9 +7319,9 @@
       "translated": "อนุมัติอุปกรณ์นี้บน gateway\n1) `\\(commandLine)`\n2) `/pair approve` ในแชต OpenClaw ของคุณ\n\\(requestLine)\nOpenClaw จะลองใหม่โดยอัตโนมัติเมื่อคุณกลับมาที่แอปนี้ด้วย"
     },
     {
-      "id": "native.apple.7ff9099402ff9f21",
-      "source": "Scan QR Code Again",
-      "translated": "สแกน QR Code อีกครั้ง"
+      "id": "native.apple.af3890b1e07c3084",
+      "source": "Scan Setup Code Again",
+      "translated": "สแกนรหัสตั้งค่าอีกครั้ง"
     },
     {
       "id": "native.apple.0134e9bd57c74d27",
@@ -7274,24 +7329,14 @@
       "translated": "ลองเชื่อมต่ออีกครั้ง"
     },
     {
-      "id": "native.apple.e674edbcb002aec6",
-      "source": "Go to Chat",
-      "translated": "ไปที่แชท"
+      "id": "native.apple.abe248e02d451890",
+      "source": "Enter setup code",
+      "translated": "ป้อนรหัสตั้งค่า"
     },
     {
-      "id": "native.apple.4679e949156e07e3",
-      "source": "Paste setup code",
-      "translated": "วางรหัสตั้งค่า"
-    },
-    {
-      "id": "native.apple.880898c80cab264e",
-      "source": "Applying...",
-      "translated": "กำลังใช้..."
-    },
-    {
-      "id": "native.apple.064ae900e9c5b550",
-      "source": "Apply Setup Code",
-      "translated": "ใช้รหัสตั้งค่า"
+      "id": "native.apple.d9e6ff8a72f4525b",
+      "source": "Apply",
+      "translated": "ใช้"
     },
     {
       "id": "native.apple.74d4be2078a04261",
@@ -7299,9 +7344,9 @@
       "translated": "รหัสตั้งค่า"
     },
     {
-      "id": "native.apple.c522fa3b5b0d812a",
-      "source": "Use this if you received a setup code instead of a QR code.",
-      "translated": "ใช้ตัวเลือกนี้หากคุณได้รับรหัสตั้งค่าแทน QR code"
+      "id": "native.apple.ee24a5a75d7b1e4f",
+      "source": "Use this if you have a setup code instead of scanning.",
+      "translated": "ใช้ตัวเลือกนี้หากคุณมีรหัสตั้งค่าแทนการสแกน"
     },
     {
       "id": "native.apple.826c84d7090d253c",
@@ -7337,6 +7382,11 @@
       "id": "native.apple.6c3fe084ab7b318d",
       "source": "Connecting…",
       "translated": "กำลังเชื่อมต่อ…"
+    },
+    {
+      "id": "native.apple.ab58b30ddda7aeb0",
+      "source": "Connect",
+      "translated": "เชื่อมต่อ"
     },
     {
       "id": "native.apple.f2ea327bfea8b8e3",

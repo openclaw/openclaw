@@ -8,7 +8,7 @@ title: "Usage tracking"
 
 ## What it is
 
-- Pulls provider usage/quota directly from each provider's usage endpoint. No estimated costs; only provider-reported quota windows, balances, or account-state summaries.
+- Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, or account-state summaries.
 - Human-readable quota-window output is normalized to `X% left`, even when a provider reports consumed quota, remaining quota, or only raw counts. Providers without resettable quota windows show provider summary text instead (for example a balance).
 - Session-level `/status` and the `session_status` tool fall back to the session's transcript log when the live session snapshot is missing token/model data. That fallback fills missing token/cache counters, can recover the active runtime model label, and prefers the larger prompt-oriented total when session metadata is missing or smaller (`totalTokensFresh !== true`, zero, or below the transcript-derived value). Nonzero live values always win over the fallback.
 
@@ -19,6 +19,7 @@ title: "Usage tracking"
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider usage/quota breakdown.
 - CLI: `openclaw models status` lists OAuth/token auth profiles and shows a usage-window summary next to each provider that has one.
+- Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
 `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
@@ -282,19 +283,25 @@ renders e.g. `claude-sonnet-4-6 🌗 🐌 | 📚 [⣿⣿⣿⣿⣧]272k`.
 
 ## Providers + credentials
 
-Usage is hidden when no usable provider usage auth can be resolved. Providers
-supply their own usage-fetch logic; when that is unavailable OpenClaw falls back
-to matching OAuth/API-key credentials from auth profiles, environment variables,
-or config.
+Usage is hidden when no usable provider usage auth can be resolved. OpenClaw
+automatically discovers enabled provider plugins that declare
+`contracts.usageProviders` and implement both `resolveUsageAuth` and
+`fetchUsageSnapshot`; there is no separate core provider allowlist. The static
+contract keeps discovery scoped without importing every provider plugin. Each
+plugin owns its upstream endpoint and response mapping. The
+shared snapshot keeps plan names, quota windows, balances, spend, and budgets
+provider-neutral for CLI, app, and Control UI consumers.
 
 - **Anthropic (Claude)**: OAuth tokens in auth profiles. If the OAuth token lacks
   `user:profile` scope, falls back to a `claude.ai` web session (`CLAUDE_AI_SESSION_KEY`,
   `CLAUDE_WEB_SESSION_KEY`, or a `sessionKey=` cookie in `CLAUDE_WEB_COOKIE`) when set.
+  Model-scoped limits and enabled extra-usage monthly spend/budgets are included
+  when Anthropic reports them.
 - **ClawRouter**: API key (`CLAWROUTER_API_KEY`). Shows a monthly budget window
-  when a budget is configured, otherwise a request/token/cost summary.
+  and typed USD budget when configured; otherwise shows aggregate spend and a
+  request/token/cost summary.
 - **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
-  Shows the provider-reported account balance as text instead of a percent-left
-  quota window.
+  Shows each provider-reported currency balance.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
 - **Gemini CLI**: OAuth tokens in auth profiles.
 - **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
@@ -314,7 +321,17 @@ or config.
     `window_hours` / `window_minutes` fields are absent, and includes the model
     name in the plan label.
 - **OpenAI (Codex/ChatGPT plan)**: OAuth tokens in auth profiles (`ChatGPT-Account-Id`
-  header sent when an account id is present). API-key-only OpenAI usage is not tracked.
+  header sent when an account id is present). Shows the ChatGPT plan, resettable
+  Codex windows, and a credit balance when reported. Credits remain provider
+  credits; OpenClaw does not label them as dollars. API-key-only OpenAI usage is
+  not tracked.
+- **OpenRouter**: API key or OAuth-backed API key (`OPENROUTER_API_KEY` or an auth
+  profile). Combines the account credits endpoint with the key quota endpoint,
+  so account balance/spend, key budget, and daily/weekly/monthly usage appear
+  when the credential can access them. Either endpoint can enrich the snapshot
+  independently.
+- **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
+  DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key
   (`XIAOMI_API_KEY`); the Token Plan uses a separate key (`XIAOMI_TOKEN_PLAN_API_KEY`).
   Neither currently reports quota windows.

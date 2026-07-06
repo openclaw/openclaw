@@ -1131,6 +1131,15 @@ export const uk: TranslationMap = {
       session: "сеанс",
       sessions: "сеанси",
     },
+    providerUsage: {
+      title: "Плани провайдерів і оплата",
+      subtitle: "Актуальні дані про план, квоту, баланс і бюджет від налаштованих провайдерів.",
+      balance: "Баланс",
+      spend: "Використання",
+      budget: "Бюджет",
+      remaining: "Залишилося {percent}%",
+      resets: "Скидання {date}",
+    },
     presets: {
       today: "Сьогодні",
       last7d: "7 дн.",

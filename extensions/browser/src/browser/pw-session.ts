@@ -35,6 +35,7 @@ import {
 } from "./cdp.helpers.js";
 import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
+import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
@@ -45,7 +46,11 @@ import {
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
-import { saveBrowserDownload, type PlaywrightDownload } from "./pw-download-capture.js";
+import {
+  saveBrowserDownload,
+  type BrowserDownloadCaptureOptions,
+  type PlaywrightDownload,
+} from "./pw-download-capture.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 const { chromium } = playwrightCore;
@@ -145,6 +150,14 @@ type DownloadPayload = PlaywrightDownload & {
   path?: () => Promise<string>;
 };
 
+type ActionDownloadCapture = {
+  beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  lastEventAtMs?: number;
+  pending: Array<Promise<BrowserDownloadResult>>;
+  validations: Array<Promise<void>>;
+  waiters: Array<() => void>;
+};
+
 type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
@@ -154,6 +167,7 @@ type PageState = {
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
+  actionDownloadCapture?: ActionDownloadCapture;
   nextObservedDialogId: number;
   pendingDialogs: PendingObservedDialog[];
   recentDialogs: BrowserObservedDialogRecord[];
@@ -234,6 +248,84 @@ export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: st
   return Boolean(
     normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
   );
+}
+
+/** Capture downloads started synchronously by one Browser action. */
+export function beginActionDownloadCaptureOnPage(
+  page: Page,
+  opts: {
+    beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  } = {},
+): {
+  drain: (opts?: {
+    firstEventGraceMs?: number;
+    maxWaitMs?: number;
+    quietMs?: number;
+  }) => Promise<BrowserDownloadResult[] | undefined>;
+  dispose: () => void;
+} {
+  const state = ensurePageState(page);
+  const capture: ActionDownloadCapture = {
+    pending: [],
+    validations: [],
+    waiters: [],
+    ...(opts.beforeSave ? { beforeSave: opts.beforeSave } : {}),
+  };
+  // One page event belongs to one action. A newer overlapping action owns
+  // future events; older captures may still drain saves they already started.
+  state.actionDownloadCapture = capture;
+  const detach = () => {
+    if (state.actionDownloadCapture === capture) {
+      state.actionDownloadCapture = undefined;
+    }
+    for (const finish of capture.waiters.splice(0)) {
+      finish();
+    }
+  };
+
+  return {
+    drain: async (drainOpts = {}) => {
+      const waitForEvent = async (timeoutMs: number) => {
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            capture.waiters = capture.waiters.filter((waiter) => waiter !== finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, timeoutMs);
+          capture.waiters.push(finish);
+        });
+      };
+      const firstEventGraceMs = Math.max(0, drainOpts.firstEventGraceMs ?? 0);
+      const maxWaitMs = Math.max(0, drainOpts.maxWaitMs ?? Number.POSITIVE_INFINITY);
+      const deadlineAtMs = Date.now() + maxWaitMs;
+      const remainingBudgetMs = () => Math.max(0, deadlineAtMs - Date.now());
+      if (capture.pending.length === 0 && firstEventGraceMs > 0) {
+        await waitForEvent(Math.min(firstEventGraceMs, remainingBudgetMs()));
+      }
+      const quietMs = Math.max(0, drainOpts.quietMs ?? 0);
+      if (quietMs > 0) {
+        while (capture.lastEventAtMs !== undefined) {
+          const remainingQuietMs = Math.min(
+            quietMs - (Date.now() - capture.lastEventAtMs),
+            remainingBudgetMs(),
+          );
+          if (remainingQuietMs <= 0) {
+            break;
+          }
+          await waitForEvent(remainingQuietMs);
+        }
+      }
+      // Establish event ownership before awaiting file I/O. Slow saves must not
+      // hold the action window open and absorb unrelated later downloads.
+      detach();
+      const pending = capture.pending.slice();
+      await Promise.all(capture.validations.slice());
+      const downloads = await Promise.all(pending);
+      return downloads.length > 0 ? downloads : undefined;
+    },
+    dispose: detach,
+  };
 }
 
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
@@ -702,9 +794,28 @@ export function ensurePageState(page: Page): PageState {
       if (state.downloadWaiterDepth > 0) {
         return;
       }
-      const managedSave = saveBrowserDownload(download);
+      const actionCapture = state.actionDownloadCapture;
+      const beforeSave = actionCapture?.beforeSave;
+      const captureOptions: BrowserDownloadCaptureOptions | undefined =
+        actionCapture && beforeSave
+          ? {
+              beforeSave: (candidate) => {
+                const validation = Promise.resolve().then(() => beforeSave(candidate));
+                actionCapture.validations.push(validation);
+                return validation;
+              },
+            }
+          : undefined;
+      const managedSave = saveBrowserDownload(download, captureOptions);
       managedSave.catch(() => {});
       download.path = async () => (await managedSave).path;
+      if (actionCapture) {
+        actionCapture.lastEventAtMs = Date.now();
+      }
+      actionCapture?.pending.push(managedSave);
+      for (const finish of actionCapture?.waiters.splice(0) ?? []) {
+        finish();
+      }
     });
     page.on("close", () => {
       clearArmedDialogResponse(state);
@@ -1279,7 +1390,7 @@ export function isPolicyDenyNavigationError(err: unknown): boolean {
 // page we have already proven is non-compliant. This is a pure bookkeeping
 // step; it does NOT close the tab. Read-only paths can call this safely on a
 // user-owned tab without losing the user's content.
-async function quarantineBlockedTarget(opts: {
+export async function quarantineBlockedNavigationTarget(opts: {
   cdpUrl: string;
   page: Page;
   targetId?: string;
@@ -1304,7 +1415,7 @@ export async function closeBlockedNavigationTarget(opts: {
   page: Page;
   targetId?: string;
 }): Promise<void> {
-  await quarantineBlockedTarget(opts);
+  await quarantineBlockedNavigationTarget(opts);
   await opts.page.close().catch(() => {});
 }
 
@@ -1333,7 +1444,7 @@ export async function assertPageNavigationCompletedSafely(
     });
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
-      await quarantineBlockedTarget({
+      await quarantineBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         targetId: opts.targetId,

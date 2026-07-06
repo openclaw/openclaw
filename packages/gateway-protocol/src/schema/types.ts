@@ -31,6 +31,8 @@ export type EnvironmentsListParams = SchemaType<"EnvironmentsListParams">;
 export type EnvironmentsListResult = SchemaType<"EnvironmentsListResult">;
 export type EnvironmentsStatusParams = SchemaType<"EnvironmentsStatusParams">;
 export type EnvironmentsStatusResult = SchemaType<"EnvironmentsStatusResult">;
+export type SystemInfoParams = SchemaType<"SystemInfoParams">;
+export type SystemInfoResult = SchemaType<"SystemInfoResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;

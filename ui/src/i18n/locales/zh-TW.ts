@@ -1113,6 +1113,15 @@ export const zh_TW: TranslationMap = {
       session: "工作階段",
       sessions: "工作階段",
     },
+    providerUsage: {
+      title: "供應商方案與計費",
+      subtitle: "已設定供應商回報的即時方案、配額、餘額與預算資料。",
+      balance: "餘額",
+      spend: "用量",
+      budget: "預算",
+      remaining: "剩餘 {percent}%",
+      resets: "於 {date} 重設",
+    },
     presets: {
       today: "今天",
       last7d: "7 天",

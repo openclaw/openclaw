@@ -1118,6 +1118,15 @@ export const ar: TranslationMap = {
       session: "جلسة",
       sessions: "جلسات",
     },
+    providerUsage: {
+      title: "خطط المزوّدين والفوترة",
+      subtitle: "بيانات مباشرة للخطة والحصة والرصيد والميزانية من المزوّدين الذين تم إعدادهم.",
+      balance: "الرصيد",
+      spend: "الاستخدام",
+      budget: "الميزانية",
+      remaining: "متبقٍ {percent}%",
+      resets: "تتم إعادة التعيين في {date}",
+    },
     presets: {
       today: "اليوم",
       last7d: "7 أيام",

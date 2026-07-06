@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
+  beginActionDownloadCaptureOnPage,
   ensurePageState,
   isDownloadStartingNavigationError,
   refLocator,
@@ -15,6 +16,7 @@ import {
 import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 type MutableDownload = {
+  url?: () => string;
   suggestedFilename: () => string;
   saveAs: ReturnType<typeof vi.fn>;
   path?: () => Promise<string>;
@@ -248,6 +250,312 @@ describe("pw-session ensurePageState", () => {
 
     expect(download).not.toHaveProperty("path");
     expect(download.saveAs).not.toHaveBeenCalled();
+  });
+
+  it("reports all downloads owned by the active action with managed metadata", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const firstSave = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "first-action-download", "utf8");
+    });
+    const secondSave = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "second-action-download", "utf8");
+    });
+
+    for (const download of [
+      {
+        url: () => "https://example.com/first.txt",
+        suggestedFilename: () => "first.txt",
+        saveAs: firstSave,
+      },
+      {
+        url: () => "https://example.com/second.txt",
+        suggestedFilename: () => "second.txt",
+        saveAs: secondSave,
+      },
+    ]) {
+      handlers.get("download")?.[0]?.(download);
+    }
+
+    const result = await capture.drain();
+    capture.dispose();
+
+    expect(result).toEqual([
+      {
+        url: "https://example.com/first.txt",
+        suggestedFilename: "first.txt",
+        path: expect.stringMatching(/-first\.txt$/),
+      },
+      {
+        url: "https://example.com/second.txt",
+        suggestedFilename: "second.txt",
+        path: expect.stringMatching(/-second\.txt$/),
+      },
+    ]);
+    await expect(fs.readFile(result?.[0]?.path ?? "", "utf8")).resolves.toBe(
+      "first-action-download",
+    );
+    await expect(fs.readFile(result?.[1]?.path ?? "", "utf8")).resolves.toBe(
+      "second-action-download",
+    );
+  });
+
+  it("waits only the requested first-event grace for a just-late action download", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "late-action-download", "utf8");
+    });
+    const drain = capture.drain({ firstEventGraceMs: 1_000 });
+
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "https://example.com/late.txt",
+        suggestedFilename: () => "late.txt",
+        saveAs,
+      });
+    });
+
+    await expect(drain).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "late.txt" }),
+    ]);
+    capture.dispose();
+  });
+
+  it("keeps a quiet window open for sibling downloads after the first event", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const save = (contents: string) =>
+      vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, contents, "utf8");
+      });
+
+    handlers.get("download")?.[0]?.({
+      url: () => "https://example.com/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: save("first"),
+    });
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "https://example.com/second.txt",
+        suggestedFilename: () => "second.txt",
+        saveAs: save("second"),
+      });
+    });
+
+    await expect(capture.drain({ quietMs: 1_000 })).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "first.txt" }),
+      expect.objectContaining({ suggestedFilename: "second.txt" }),
+    ]);
+    capture.dispose();
+  });
+
+  it("detaches ownership before waiting for slow file saves", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    let releaseFirstSave: (() => void) | undefined;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const beforeSave = vi.fn(async () => {});
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const firstSave = vi.fn(async (outPath: string) => {
+      await firstSaveGate;
+      await fs.writeFile(outPath, "first", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      url: () => "https://example.com/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: firstSave,
+    });
+
+    const drain = capture.drain();
+    const lateSave = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "late", "utf8");
+    });
+    const lateDownload: MutableDownload = {
+      url: () => "https://example.com/late.txt",
+      suggestedFilename: () => "late.txt",
+      saveAs: lateSave,
+    };
+    handlers.get("download")?.[0]?.(lateDownload);
+    releaseFirstSave?.();
+
+    await expect(drain).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "first.txt" }),
+    ]);
+    await expect(lateDownload.path?.()).resolves.toMatch(/-late\.txt$/);
+    expect(beforeSave).toHaveBeenCalledOnce();
+    expect(lateSave).toHaveBeenCalledOnce();
+    capture.dispose();
+  });
+
+  it("keeps started saves with their owner and assigns future downloads to the latest action", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const first = beginActionDownloadCaptureOnPage(page);
+    const firstSaveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "first-action-download", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      url: () => "https://example.com/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: firstSaveAs,
+    });
+
+    const latest = beginActionDownloadCaptureOnPage(page);
+    first.dispose();
+    const latestSaveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "latest-action-download", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      url: () => "https://example.com/latest.txt",
+      suggestedFilename: () => "latest.txt",
+      saveAs: latestSaveAs,
+    });
+
+    await expect(first.drain()).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "first.txt" }),
+    ]);
+    await expect(latest.drain()).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "latest.txt" }),
+    ]);
+    latest.dispose();
+    expect(firstSaveAs).toHaveBeenCalledOnce();
+    expect(latestSaveAs).toHaveBeenCalledOnce();
+  });
+
+  it("leaves action capture empty while an explicit download owner is armed", async () => {
+    const { page, handlers } = fakePage();
+    const state = ensurePageState(page);
+    state.downloadWaiterDepth = 1;
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const download = {
+      suggestedFilename: () => "explicit.txt",
+      saveAs: vi.fn(async () => {}),
+    };
+
+    handlers.get("download")?.[0]?.(download);
+
+    await expect(capture.drain()).resolves.toBeUndefined();
+    capture.dispose();
+    expect(download).not.toHaveProperty("path");
+    expect(download.saveAs).not.toHaveBeenCalled();
+  });
+
+  it("validates action-owned download URLs before saving bytes", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const blocked = new Error("blocked action download");
+    const beforeSave = vi.fn(async () => {
+      throw blocked;
+    });
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "blocked-action-download", "utf8");
+    });
+
+    handlers.get("download")?.[0]?.({
+      url: () => "http://127.0.0.1/private.txt",
+      suggestedFilename: () => "private.txt",
+      saveAs,
+    });
+
+    await expect(capture.drain()).rejects.toBe(blocked);
+    capture.dispose();
+    expect(beforeSave).toHaveBeenCalledWith({
+      url: "http://127.0.0.1/private.txt",
+      suggestedFilename: "private.txt",
+    });
+    expect(saveAs).not.toHaveBeenCalled();
+  });
+
+  it("drains late siblings before surfacing the first download policy failure", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const blocked = new Error("blocked action download");
+    const beforeSave = vi.fn(async () => {
+      throw blocked;
+    });
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const firstSave = vi.fn(async () => {});
+    const secondSave = vi.fn(async () => {});
+
+    handlers.get("download")?.[0]?.({
+      url: () => "http://127.0.0.1/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: firstSave,
+    });
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "http://127.0.0.1/second.txt",
+        suggestedFilename: () => "second.txt",
+        saveAs: secondSave,
+      });
+    });
+
+    await expect(capture.drain({ quietMs: 1_000 })).rejects.toBe(blocked);
+    capture.dispose();
+    expect(beforeSave).toHaveBeenCalledTimes(2);
+    expect(firstSave).not.toHaveBeenCalled();
+    expect(secondSave).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a sibling policy denial without waiting for an allowed slow save", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const blocked = new Error("blocked sibling download");
+    const beforeSave = vi.fn(async (candidate: { url: string }) => {
+      if (candidate.url.endsWith("/blocked.txt")) {
+        throw blocked;
+      }
+    });
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    let releaseAllowedSave: (() => void) | undefined;
+    const allowedSaveGate = new Promise<void>((resolve) => {
+      releaseAllowedSave = resolve;
+    });
+    const allowedDownload: MutableDownload = {
+      url: () => "https://example.com/allowed.txt",
+      suggestedFilename: () => "allowed.txt",
+      saveAs: vi.fn(async (outPath: string) => {
+        await allowedSaveGate;
+        await fs.writeFile(outPath, "allowed", "utf8");
+      }),
+    };
+    handlers.get("download")?.[0]?.(allowedDownload);
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "https://example.com/blocked.txt",
+        suggestedFilename: () => "blocked.txt",
+        saveAs: vi.fn(async () => {}),
+      });
+    });
+
+    await expect(capture.drain({ quietMs: 100 })).rejects.toBe(blocked);
+    releaseAllowedSave?.();
+    await expect(allowedDownload.path?.()).resolves.toMatch(/-allowed\.txt$/);
+    capture.dispose();
+  });
+
+  it("surfaces action-owned download save failures without an unhandled rejection", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const error = new Error("action download save failed");
+
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "failed.txt",
+      saveAs: vi.fn(async () => {
+        throw error;
+      }),
+    });
+
+    await expect(capture.drain()).rejects.toBe(error);
+    capture.dispose();
   });
 
   it("captures navigation downloads under managed paths", async () => {

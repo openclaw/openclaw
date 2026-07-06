@@ -51,6 +51,8 @@ class MainViewModel(
   val chatDraft: StateFlow<String?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
+  private val _assistantAutoSendInFlight = MutableStateFlow(false)
+  val assistantAutoSendInFlight: StateFlow<Boolean> = _assistantAutoSendInFlight
 
   /**
    * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
@@ -428,8 +430,33 @@ class MainViewModel(
     _chatDraft.value = null
   }
 
-  fun clearPendingAssistantAutoSend() {
-    _pendingAssistantAutoSend.value = null
+  /** Claims an assistant prompt before sending so Compose effect restarts cannot dispatch it twice. */
+  fun dispatchPendingAssistantAutoSend(
+    pendingPrompt: String,
+    thinking: String,
+  ) {
+    val prompt = pendingPrompt.trim().ifEmpty { return }
+    if (!chatHealthOk.value || pendingRunCount.value > 0) return
+    if (!_assistantAutoSendInFlight.compareAndSet(false, true)) return
+    if (_pendingAssistantAutoSend.value != pendingPrompt) {
+      _assistantAutoSendInFlight.value = false
+      return
+    }
+    viewModelScope.launch {
+      try {
+        sendChatAwaitAcceptance(
+          message = prompt,
+          thinking = thinking,
+          attachments = emptyList(),
+        )
+        // A definitive rejection is surfaced by chatError; it must not strand the
+        // one-shot assistant prompt or overwrite text typed into the composer.
+        _pendingAssistantAutoSend.compareAndSet(pendingPrompt, null)
+      } finally {
+        // Observable release wakes a newer prompt queued while this send was in flight.
+        _assistantAutoSendInFlight.value = false
+      }
+    }
   }
 
   fun setMicEnabled(enabled: Boolean) {

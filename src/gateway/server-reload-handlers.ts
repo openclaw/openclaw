@@ -740,6 +740,12 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     subscribeToWrites: params.subscribeToWrites,
     onConfigChange: (plan, nextConfig) => params.reconcileTerminalSessions(plan, nextConfig),
     onConfigApplied: () => params.commitTerminalConfig(),
+    onNoopConfigCommit: async (_plan, nextConfig) => {
+      await params.activateRuntimeSecrets(nextConfig, {
+        reason: "reload",
+        activate: true,
+      });
+    },
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =
         params.sharedGatewaySessionGenerationState.current;

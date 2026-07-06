@@ -1130,6 +1130,16 @@ export const tr: TranslationMap = {
       session: "oturum",
       sessions: "oturumlar",
     },
+    providerUsage: {
+      title: "Sağlayıcı planları ve faturalandırma",
+      subtitle:
+        "Yapılandırılmış sağlayıcıların bildirdiği canlı plan, kota, bakiye ve bütçe verileri.",
+      balance: "Bakiye",
+      spend: "Kullanım",
+      budget: "Bütçe",
+      remaining: "{percent}% kaldı",
+      resets: "{date} tarihinde sıfırlanır",
+    },
     presets: {
       today: "Bugün",
       last7d: "7g",

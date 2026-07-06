@@ -1133,6 +1133,16 @@ export const fr: TranslationMap = {
       session: "session",
       sessions: "sessions",
     },
+    providerUsage: {
+      title: "Forfaits et facturation des fournisseurs",
+      subtitle:
+        "Données en temps réel sur les forfaits, quotas, soldes et budgets communiquées par les fournisseurs configurés.",
+      balance: "Solde",
+      spend: "Utilisation",
+      budget: "Budget",
+      remaining: "{percent}% restant",
+      resets: "Réinitialisation le {date}",
+    },
     presets: {
       today: "Aujourd’hui",
       last7d: "7 j",

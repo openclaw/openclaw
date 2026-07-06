@@ -1114,6 +1114,15 @@ export const th: TranslationMap = {
       session: "เซสชัน",
       sessions: "เซสชัน",
     },
+    providerUsage: {
+      title: "แพ็กเกจและการเรียกเก็บเงินของผู้ให้บริการ",
+      subtitle: "ข้อมูลแพ็กเกจ โควตา ยอดคงเหลือ และงบประมาณแบบเรียลไทม์ที่รายงานโดยผู้ให้บริการที่กำหนดค่าไว้",
+      balance: "ยอดคงเหลือ",
+      spend: "การใช้งาน",
+      budget: "งบประมาณ",
+      remaining: "เหลือ {percent}%",
+      resets: "รีเซ็ต {date}",
+    },
     presets: {
       today: "วันนี้",
       last7d: "7 วัน",

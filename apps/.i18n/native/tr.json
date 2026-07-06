@@ -6664,19 +6664,14 @@
       "translated": "Bitti"
     },
     {
-      "id": "native.apple.948e3fafb80564c9",
-      "source": "Connect to a Gateway?",
-      "translated": "Bir Gateway’e bağlanılsın mı?"
-    },
-    {
       "id": "native.apple.e8f30dffd2d62d96",
       "source": "Connecting…",
       "translated": "Bağlanıyor…"
     },
     {
-      "id": "native.apple.a735b07046d583e7",
-      "source": "Connect",
-      "translated": "Bağlan"
+      "id": "native.apple.78d430515e5bb8eb",
+      "source": "Connect to this Gateway",
+      "translated": "Bu Gateway’e bağlan"
     },
     {
       "id": "native.apple.102d0ce74e6253f3",
@@ -6684,17 +6679,12 @@
       "translated": "Şimdi değil"
     },
     {
-      "id": "native.apple.88dbf6b7151586b4",
-      "source": "Don’t show this again",
+      "id": "native.apple.5204dc0158d98ebf",
+      "source": "Don't show this again",
       "translated": "Bunu bir daha gösterme"
     },
     {
-      "id": "native.apple.51d42270d75ea40a",
-      "source": "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
-      "translated": "Henüz gateway bulunamadı. Gateway’inizin çalıştığından ve Bonjour keşfinin etkin olduğundan emin olun."
-    },
-    {
-      "id": "native.apple.d2445a87f9cb6ff4",
+      "id": "native.apple.476757fc54c63560",
       "source": "Quick Setup",
       "translated": "Hızlı Kurulum"
     },
@@ -6702,6 +6692,66 @@
       "id": "native.apple.977a6e4a5022184f",
       "source": "Close",
       "translated": "Kapat"
+    },
+    {
+      "id": "native.apple.f2642d91a3ac8c25",
+      "source": "Connect a nearby Gateway",
+      "translated": "Yakındaki bir Gateway’e bağlan"
+    },
+    {
+      "id": "native.apple.63bb4ac4eaf496bc",
+      "source": "Local",
+      "translated": "Yerel"
+    },
+    {
+      "id": "native.apple.1122855cccc617bd",
+      "source": "Secure",
+      "translated": "Güvenli"
+    },
+    {
+      "id": "native.apple.052a650dbff9657b",
+      "source": "Discovery",
+      "translated": "Keşif"
+    },
+    {
+      "id": "native.apple.c284afdefb55f224",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.26a7ff6b06dbeb67",
+      "source": "Node",
+      "translated": "Düğüm"
+    },
+    {
+      "id": "native.apple.f2c3934d3e670237",
+      "source": "Operator",
+      "translated": "Operatör"
+    },
+    {
+      "id": "native.apple.33be51249563ed37",
+      "source": "Looking for a Gateway",
+      "translated": "Gateway aranıyor"
+    },
+    {
+      "id": "native.apple.0e828048fafce681",
+      "source": "Keep your iPhone on the same LAN or tailnet, then start the Gateway on your host machine.",
+      "translated": "iPhone’unuzu aynı LAN veya tailnet üzerinde tutun, ardından ana makinenizde Gateway’i başlatın."
+    },
+    {
+      "id": "native.apple.c18f5bd36f119282",
+      "source": "Run openclaw gateway --port 18789.",
+      "translated": "openclaw gateway --port 18789 komutunu çalıştırın."
+    },
+    {
+      "id": "native.apple.a4eb9a9b02915961",
+      "source": "Check that Bonjour discovery is enabled.",
+      "translated": "Bonjour keşfinin etkin olduğunu kontrol edin."
+    },
+    {
+      "id": "native.apple.72083d0b7fc77a6d",
+      "source": "Open Settings if you need a manual host.",
+      "translated": "Manuel ana bilgisayar gerekiyorsa Ayarlar’ı açın."
     },
     {
       "id": "native.apple.8ef0909bddf2f9ee",
@@ -6964,24 +7014,54 @@
       "translated": "Aynı Makine (Geliştirme)"
     },
     {
-      "id": "native.apple.8197d399f16b6d15",
-      "source": "Welcome to OpenClaw",
-      "translated": "OpenClaw’a hoş geldiniz"
+      "id": "native.apple.09e7832b23cf14f6",
+      "source": "Security notice",
+      "translated": "Güvenlik bildirimi"
     },
     {
-      "id": "native.apple.aec45c66e9d1436e",
-      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
-      "translated": "Bağlı aracı; kamera, mikrofon, fotoğraflar, kişiler, takvim ve konum dahil olmak üzere etkinleştirdiğiniz özellikleri kullanabilir. Yalnızca gateway'e ve aracıya güveniyorsanız devam edin."
+      "id": "native.apple.d4d9568dca8ceaa9",
+      "source": "The connected OpenClaw agent can use device capabilities you enable.",
+      "translated": "Bağlı OpenClaw aracısı, etkinleştirdiğiniz cihaz özelliklerini kullanabilir."
     },
     {
-      "id": "native.apple.f755248f69e3e497",
-      "source": "Security",
-      "translated": "Güvenlik"
+      "id": "native.apple.fdd93eb6b6eef525",
+      "source": "Camera, microphone, photos, contacts, calendar, and location may be available.",
+      "translated": "Kamera, mikrofon, fotoğraflar, kişiler, takvim ve konum kullanılabilir olabilir."
     },
     {
-      "id": "native.apple.116debd4caba7aff",
-      "source": "You can change permissions later in Settings.",
-      "translated": "İzinleri daha sonra Ayarlar'da değiştirebilirsiniz."
+      "id": "native.apple.7cc0f656abb41f6d",
+      "source": "Continue only if you trust the gateway and agent you connect to.",
+      "translated": "Yalnızca bağlandığınız gateway’e ve aracıya güveniyorsanız devam edin."
+    },
+    {
+      "id": "native.apple.eae3bd9e4e9112a0",
+      "source": "Copy setup code command",
+      "translated": "Kurulum kodu komutunu kopyala"
+    },
+    {
+      "id": "native.apple.e8b4dc00cd23ae73",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.c9419426ba8c2a2e",
+      "source": "Securely connect this iPhone to your gateway.",
+      "translated": "Bu iPhone'u gateway'inize güvenli bir şekilde bağlayın."
+    },
+    {
+      "id": "native.apple.3e233ba3ed3181d4",
+      "source": "Connect to your gateway",
+      "translated": "Gateway'inize bağlanın"
+    },
+    {
+      "id": "native.apple.b6978424ac0a4d14",
+      "source": "Choose device permissions",
+      "translated": "Cihaz izinlerini seçin"
+    },
+    {
+      "id": "native.apple.4109460a5b8927d8",
+      "source": "Use OpenClaw from your phone",
+      "translated": "OpenClaw'u telefonunuzdan kullanın"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -6989,94 +7069,44 @@
       "translated": "Devam et"
     },
     {
-      "id": "native.apple.68e933b36353a30c",
+      "id": "native.apple.c686068c2a79bf9e",
       "source": "Connect Gateway",
-      "translated": "Gateway'e Bağlan"
+      "translated": "Gateway'i bağla"
     },
     {
-      "id": "native.apple.9f65b2eadb6aee92",
-      "source": "/pair qr",
-      "translated": "/pair qr"
+      "id": "native.apple.8f76a5962329b43f",
+      "source": "Run this on your gateway host and scan the code",
+      "translated": "Bunu gateway ana makinenizde çalıştırın ve kodu tarayın"
     },
     {
-      "id": "native.apple.fe3269c93d6f8524",
-      "source": "Copied",
-      "translated": "Kopyalandı"
+      "id": "native.apple.d71a98568b7184a5",
+      "source": "Connecting…",
+      "translated": "Bağlanıyor…"
     },
     {
-      "id": "native.apple.bad4a8110ca864e1",
-      "source": "Copy",
-      "translated": "Kopyala"
+      "id": "native.apple.577764b38b1d903c",
+      "source": "Scan QR",
+      "translated": "QR'ı tara"
     },
     {
-      "id": "native.apple.b6f3f5c300b28f17",
-      "source": "Copy pair command",
-      "translated": "Eşleştirme komutunu kopyala"
+      "id": "native.apple.913a586956440f64",
+      "source": "or",
+      "translated": "veya"
     },
     {
-      "id": "native.apple.7308cbcb1e40d70e",
-      "source": "Pair command copied",
-      "translated": "Eşleştirme komutu kopyalandı"
+      "id": "native.apple.57614f0c4e59677b",
+      "source": "Connect Manually",
+      "translated": "Manuel Bağlan"
     },
     {
-      "id": "native.apple.b727174424127618",
-      "source": "Run this in your OpenClaw chat, then scan the code.",
-      "translated": "Bunu OpenClaw sohbetinizde çalıştırın, ardından kodu tarayın."
+      "id": "native.apple.4916d34cab45e6c3",
+      "source": "You're connected",
+      "translated": "Bağlandınız"
     },
     {
-      "id": "native.apple.429ac70f39c21302",
-      "source": "Scan QR Code",
-      "translated": "QR Kodunu Tara"
-    },
-    {
-      "id": "native.apple.7ba3027e51acb255",
-      "source": "Set Up Manually",
-      "translated": "Manuel Olarak Kur"
-    },
-    {
-      "id": "native.apple.94c7d6cc4a2cf2dc",
-      "source": "Welcome",
-      "translated": "Hoş geldiniz"
-    },
-    {
-      "id": "native.apple.5e905afc1c8cd46a",
-      "source": "Connect Gateway",
-      "translated": "Gateway'e Bağlan"
-    },
-    {
-      "id": "native.apple.cef4a6612b762154",
-      "source": "Connection Mode",
-      "translated": "Bağlantı Modu"
-    },
-    {
-      "id": "native.apple.38d3190134a58030",
-      "source": "Connect",
-      "translated": "Bağlan"
-    },
-    {
-      "id": "native.apple.bfee748063f6f82c",
-      "source": "Authentication",
-      "translated": "Kimlik Doğrulama"
-    },
-    {
-      "id": "native.apple.71f969ccb10fb5cc",
-      "source": "Connected",
-      "translated": "Bağlandı"
-    },
-    {
-      "id": "native.apple.e3cc3df936dce84d",
-      "source": "Back",
-      "translated": "Geri"
-    },
-    {
-      "id": "native.apple.e58367cfa71115cc",
-      "source": "Close",
-      "translated": "Kapat"
-    },
-    {
-      "id": "native.apple.7822f4f0f671d841",
-      "source": "Done",
-      "translated": "Bitti"
+      "id": "native.apple.b5e401fa9bfb4b49",
+      "source": "Go to Chat",
+      "translated": "Sohbete git"
     },
     {
       "id": "native.apple.a62e0764b51937cb",
@@ -7089,9 +7119,9 @@
       "translated": "Tamam"
     },
     {
-      "id": "native.apple.80a2693bba128a6c",
-      "source": "Scan QR Code",
-      "translated": "QR Kodunu Tara"
+      "id": "native.apple.d50aa0885c7e064f",
+      "source": "Scan Setup Code",
+      "translated": "Kurulum Kodunu Tara"
     },
     {
       "id": "native.apple.f58429a2d9d3371f",
@@ -7104,9 +7134,34 @@
       "translated": "Fotoğraflar"
     },
     {
+      "id": "native.apple.09ed26daf34a4c5d",
+      "source": "Back",
+      "translated": "Geri"
+    },
+    {
+      "id": "native.apple.e58367cfa71115cc",
+      "source": "Close",
+      "translated": "Kapat"
+    },
+    {
+      "id": "native.apple.1e60db061979db60",
+      "source": "Dismiss Keyboard",
+      "translated": "Klavyeyi Kapat"
+    },
+    {
+      "id": "native.apple.95e2c98254da2aba",
+      "source": "Home Network",
+      "translated": "Ev Ağı"
+    },
+    {
       "id": "native.apple.d9a6d673aa6693ee",
       "source": "LAN or Tailscale host",
       "translated": "LAN veya Tailscale ana makinesi"
+    },
+    {
+      "id": "native.apple.431d02f8b68a96cf",
+      "source": "Remote Domain",
+      "translated": "Uzak Etki Alanı"
     },
     {
       "id": "native.apple.7021301971f631bf",
@@ -7114,9 +7169,19 @@
       "translated": "Alan adına sahip VPS"
     },
     {
+      "id": "native.apple.7451f8d052016642",
+      "source": "Same Machine (Dev)",
+      "translated": "Aynı Makine (Dev)"
+    },
+    {
       "id": "native.apple.22e740296a762256",
       "source": "For local iOS app development",
       "translated": "Yerel iOS uygulama geliştirmesi için"
+    },
+    {
+      "id": "native.apple.e1b1ccbfc9e73df8",
+      "source": "Manual Connection",
+      "translated": "Manuel Bağlantı"
     },
     {
       "id": "native.apple.b7dc527c2a7e95cb",
@@ -7127,16 +7192,6 @@
       "id": "native.apple.93d3e17fabd5e082",
       "source": "Developer mode",
       "translated": "Geliştirici modu"
-    },
-    {
-      "id": "native.apple.ac7ea1c7379819d3",
-      "source": "Off",
-      "translated": "Kapalı"
-    },
-    {
-      "id": "native.apple.04df230fe508a665",
-      "source": "On",
-      "translated": "Açık"
     },
     {
       "id": "native.apple.d444d84eb269f529",
@@ -7239,14 +7294,14 @@
       "translated": "Varsayılan host localhost'tur. Simülatör ağ bağlantısı gerektiriyorsa Mac LAN IP adresinizi kullanın."
     },
     {
-      "id": "native.apple.4cc6c6c21864bff9",
-      "source": "Gateway rejected credentials. Scan a fresh QR code or update token/password.",
-      "translated": "Gateway kimlik bilgilerini reddetti. Yeni bir QR kodu tarayın veya token/parolayı güncelleyin."
+      "id": "native.apple.5847cf494847ed98",
+      "source": "Gateway rejected credentials. Scan a fresh setup code or update token/password.",
+      "translated": "Gateway kimlik bilgilerini reddetti. Yeni bir kurulum kodu tarayın veya token/parolayı güncelleyin."
     },
     {
-      "id": "native.apple.5841249e14da136f",
-      "source": "Auth token looks valid.",
-      "translated": "Auth token geçerli görünüyor."
+      "id": "native.apple.559dccb9f9dfbbad",
+      "source": "OpenClaw is checking gateway and node access.",
+      "translated": "OpenClaw, gateway ve node erişimini kontrol ediyor."
     },
     {
       "id": "native.apple.4404f435fb496b62",
@@ -7264,9 +7319,9 @@
       "translated": "Bu cihazı gateway üzerinde onaylayın.\n1) `\\(commandLine)`\n2) OpenClaw sohbetinizde `/pair approve`\n\\(requestLine)\nOpenClaw, bu uygulamaya döndüğünüzde otomatik olarak yeniden deneyecek."
     },
     {
-      "id": "native.apple.7ff9099402ff9f21",
-      "source": "Scan QR Code Again",
-      "translated": "QR Kodunu Tekrar Tara"
+      "id": "native.apple.af3890b1e07c3084",
+      "source": "Scan Setup Code Again",
+      "translated": "Kurulum Kodunu Tekrar Tara"
     },
     {
       "id": "native.apple.0134e9bd57c74d27",
@@ -7274,24 +7329,14 @@
       "translated": "Bağlantıyı Yeniden Dene"
     },
     {
-      "id": "native.apple.e674edbcb002aec6",
-      "source": "Go to Chat",
-      "translated": "Sohbete Git"
+      "id": "native.apple.abe248e02d451890",
+      "source": "Enter setup code",
+      "translated": "Kurulum kodunu girin"
     },
     {
-      "id": "native.apple.4679e949156e07e3",
-      "source": "Paste setup code",
-      "translated": "Kurulum kodunu yapıştır"
-    },
-    {
-      "id": "native.apple.880898c80cab264e",
-      "source": "Applying...",
-      "translated": "Uygulanıyor..."
-    },
-    {
-      "id": "native.apple.064ae900e9c5b550",
-      "source": "Apply Setup Code",
-      "translated": "Kurulum Kodunu Uygula"
+      "id": "native.apple.d9e6ff8a72f4525b",
+      "source": "Apply",
+      "translated": "Uygula"
     },
     {
       "id": "native.apple.74d4be2078a04261",
@@ -7299,9 +7344,9 @@
       "translated": "Kurulum Kodu"
     },
     {
-      "id": "native.apple.c522fa3b5b0d812a",
-      "source": "Use this if you received a setup code instead of a QR code.",
-      "translated": "QR kodu yerine bir kurulum kodu aldıysanız bunu kullanın."
+      "id": "native.apple.ee24a5a75d7b1e4f",
+      "source": "Use this if you have a setup code instead of scanning.",
+      "translated": "Tarama yerine bir kurulum kodunuz varsa bunu kullanın."
     },
     {
       "id": "native.apple.826c84d7090d253c",
@@ -7337,6 +7382,11 @@
       "id": "native.apple.6c3fe084ab7b318d",
       "source": "Connecting…",
       "translated": "Bağlanıyor…"
+    },
+    {
+      "id": "native.apple.ab58b30ddda7aeb0",
+      "source": "Connect",
+      "translated": "Bağlan"
     },
     {
       "id": "native.apple.f2ea327bfea8b8e3",

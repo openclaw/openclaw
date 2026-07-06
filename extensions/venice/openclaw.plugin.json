@@ -5,6 +5,9 @@
   },
   "enabledByDefault": true,
   "providers": ["venice"],
+  "contracts": {
+    "usageProviders": ["venice"]
+  },
   "providerAuthChoices": [
     {
       "provider": "venice",

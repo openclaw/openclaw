@@ -1130,6 +1130,16 @@ export const it: TranslationMap = {
       session: "sessione",
       sessions: "sessioni",
     },
+    providerUsage: {
+      title: "Piani e fatturazione dei provider",
+      subtitle:
+        "Dati in tempo reale su piano, quota, saldo e budget comunicati dai provider configurati.",
+      balance: "Saldo",
+      spend: "Utilizzo",
+      budget: "Budget",
+      remaining: "{percent}% rimanente",
+      resets: "Reimpostazione il {date}",
+    },
     presets: {
       today: "Oggi",
       last7d: "7 gg",

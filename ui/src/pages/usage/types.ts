@@ -1,6 +1,7 @@
 // Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
+  ProviderUsageSummary,
   SessionsUsageEntry,
   SessionsUsageResult,
   SessionsUsageTotals,
@@ -34,6 +35,7 @@ export type UsageDataState = {
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
   cacheStatus: SessionsUsageResult["cacheStatus"];
+  providerUsage: ProviderUsageSummary["providers"];
 };
 
 export type UsageFilterState = {

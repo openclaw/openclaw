@@ -101,6 +101,10 @@ import Testing
         #expect(LocationService.shouldCompleteAuthorizationWait(
             status: .notDetermined,
             requiresDeterminedStatus: false))
+        #expect(LocationService.shouldCompleteAuthorizationWait(
+            status: .notDetermined,
+            requiresDeterminedStatus: true,
+            allowUndeterminedFallback: true))
     }
 
     @MainActor @Test func `off mode stops significant location monitoring`() async {

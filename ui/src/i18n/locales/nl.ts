@@ -1130,6 +1130,16 @@ export const nl: TranslationMap = {
       session: "sessie",
       sessions: "sessies",
     },
+    providerUsage: {
+      title: "Providerabonnementen en facturering",
+      subtitle:
+        "Livegegevens over abonnementen, quota, saldo en budget, gerapporteerd door geconfigureerde providers.",
+      balance: "Saldo",
+      spend: "Gebruik",
+      budget: "Budget",
+      remaining: "{percent}% resterend",
+      resets: "Wordt opnieuw ingesteld op {date}",
+    },
     presets: {
       today: "Vandaag",
       last7d: "7d",

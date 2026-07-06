@@ -1126,6 +1126,15 @@ export const fa: TranslationMap = {
       session: "نشست",
       sessions: "نشست‌ها",
     },
+    providerUsage: {
+      title: "طرح‌ها و صورت‌حساب ارائه‌دهندگان",
+      subtitle: "داده‌های زندهٔ طرح، سهمیه، موجودی و بودجه که ارائه‌دهندگان پیکربندی‌شده گزارش می‌کنند.",
+      balance: "موجودی",
+      spend: "مصرف",
+      budget: "بودجه",
+      remaining: "{percent}٪ باقی‌مانده",
+      resets: "بازنشانی در {date}",
+    },
     presets: {
       today: "امروز",
       last7d: "۷روز",

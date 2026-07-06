@@ -55,7 +55,7 @@ const SkillWorkshopToolSchema = Type.Object(
   {
     action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
       description:
-        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
+        "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
     }),
     proposal_id: Type.Optional(
       Type.String({
@@ -66,7 +66,7 @@ const SkillWorkshopToolSchema = Type.Object(
     name: Type.Optional(
       Type.String({
         description:
-          "Skill/proposal name. Required for action=create; optional resolver for action=inspect or action=revise when proposal_id is unknown.",
+          "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
       }),
     ),
     query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
@@ -86,7 +86,7 @@ const SkillWorkshopToolSchema = Type.Object(
       Type.String({
         maxLength: 160,
         description:
-          "Skill description for action=create, action=update, or action=revise. Keep it concise; max 160 bytes.",
+          "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
       }),
     ),
     skill_name: Type.Optional(

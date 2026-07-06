@@ -1126,6 +1126,16 @@ export const id: TranslationMap = {
       session: "sesi",
       sessions: "sesi",
     },
+    providerUsage: {
+      title: "Paket & penagihan penyedia",
+      subtitle:
+        "Data paket, kuota, saldo, dan anggaran langsung yang dilaporkan oleh penyedia yang dikonfigurasi.",
+      balance: "Saldo",
+      spend: "Penggunaan",
+      budget: "Anggaran",
+      remaining: "Tersisa {percent}%",
+      resets: "Direset {date}",
+    },
     presets: {
       today: "Hari ini",
       last7d: "7h",
