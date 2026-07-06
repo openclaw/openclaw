@@ -324,7 +324,8 @@ describe("deliverLineAutoReply", () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
-    const frozenError = Object.freeze(new Error("push failed"));
+    const frozenError = new Error("push failed");
+    Object.freeze(frozenError);
     const { deps } = createDeps({
       pushMessagesLine: vi.fn(async () => {
         throw frozenError;
