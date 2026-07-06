@@ -1,7 +1,7 @@
 // Codex tests cover attempt diagnostics plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
-import { resolveCodexPluginsPolicy } from "./config.js";
+import { resolveCodexAccountAppsPolicy, resolveCodexPluginsPolicy } from "./config.js";
 import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 
 describe("Codex app-server attempt diagnostics", () => {
@@ -44,12 +44,16 @@ describe("Codex app-server attempt diagnostics", () => {
         },
       },
     });
+    const resolvedAccountAppsPolicy = resolveCodexAccountAppsPolicy({
+      accountApps: { mode: "all" },
+    });
 
     const logData = buildCodexPluginThreadConfigEligibilityLogData({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       pluginThreadConfigRequired: true,
       resolvedPluginPolicy,
+      resolvedAccountAppsPolicy,
       enabledPluginConfigKeys: ["google-calendar"],
       pluginAppCacheKey: buildCodexPluginAppCacheKey({
         appServer,
@@ -69,6 +73,9 @@ describe("Codex app-server attempt diagnostics", () => {
         enabled: true,
         policyConfigured: true,
         policyEnabled: true,
+        accountAppsConfigured: true,
+        accountAppsEnabled: true,
+        accountAppsMode: "all",
         pluginConfigKeys: ["google-calendar"],
         enabledPluginConfigKeys: ["google-calendar"],
         appCacheKeyFingerprint: expect.stringMatching(/^sha256:/),

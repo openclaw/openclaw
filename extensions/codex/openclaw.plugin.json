@@ -129,6 +129,21 @@
           }
         }
       },
+      "accountApps": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode"],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["all"]
+          },
+          "allow_destructive_actions": {
+            "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }],
+            "default": false
+          }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -355,6 +370,21 @@
     "codexPlugins.plugins": {
       "label": "Migrated Plugin Entries",
       "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
+      "advanced": true
+    },
+    "accountApps": {
+      "label": "Connected Account Apps",
+      "help": "Opt in to Codex apps already connected to the authenticated account.",
+      "advanced": true
+    },
+    "accountApps.mode": {
+      "label": "Connected App Selection",
+      "help": "Use all to expose every currently accessible account app when a new Codex thread starts.",
+      "advanced": true
+    },
+    "accountApps.allow_destructive_actions": {
+      "label": "Allow Destructive Account App Actions",
+      "help": "Policy for write or destructive actions from connected account apps. Defaults to false; auto and ask route required approvals through OpenClaw.",
       "advanced": true
     },
     "appServer": {

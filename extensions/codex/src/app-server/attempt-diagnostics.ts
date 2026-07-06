@@ -7,7 +7,11 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
+import type {
+  CodexAppServerRuntimeOptions,
+  resolveCodexAccountAppsPolicy,
+  resolveCodexPluginsPolicy,
+} from "./config.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
@@ -62,6 +66,7 @@ export function buildCodexPluginThreadConfigEligibilityLogData(params: {
   sessionKey: string;
   pluginThreadConfigRequired: boolean;
   resolvedPluginPolicy: ReturnType<typeof resolveCodexPluginsPolicy> | undefined;
+  resolvedAccountAppsPolicy: ReturnType<typeof resolveCodexAccountAppsPolicy> | undefined;
   enabledPluginConfigKeys: string[] | undefined;
   pluginAppCacheKey: string;
   startupAuthProfileId: string | undefined;
@@ -73,6 +78,9 @@ export function buildCodexPluginThreadConfigEligibilityLogData(params: {
     enabled: params.pluginThreadConfigRequired,
     policyConfigured: params.resolvedPluginPolicy?.configured === true,
     policyEnabled: params.resolvedPluginPolicy?.enabled === true,
+    accountAppsConfigured: params.resolvedAccountAppsPolicy?.configured === true,
+    accountAppsEnabled: params.resolvedAccountAppsPolicy?.enabled === true,
+    accountAppsMode: params.resolvedAccountAppsPolicy?.mode,
     pluginConfigKeys: params.resolvedPluginPolicy?.pluginPolicies
       .map((plugin) => plugin.configKey)
       .toSorted(),

@@ -296,6 +296,10 @@ conversation bindings, or any non-Codex harness.
               },
             },
           },
+          accountApps: {
+            mode: "all",
+            allow_destructive_actions: false,
+          },
         },
       },
     },
@@ -340,6 +344,15 @@ host-specific.
 asynchronously when stale. Codex thread app config is computed at Codex harness
 session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
+
+`plugins.entries.codex.config.accountApps` is a separate, explicit opt-in for
+apps already connected to the authenticated Codex account. Set `mode: "all"`
+to snapshot every currently accessible app into each new native Codex thread.
+The setting does not install plugins or apps, and inaccessible apps stay
+excluded. `allow_destructive_actions` accepts the same `true`, `false`,
+`"auto"`, or `"ask"` policies as `codexPlugins` and defaults to `false`.
+Explicit `codexPlugins` entries take precedence when the same app is present in
+both policies. If `app/list` cannot be read, account-wide exposure fails closed.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.

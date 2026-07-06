@@ -18,6 +18,7 @@ import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  resolveCodexAccountAppsPolicy,
   resolveCodexPluginsPolicy,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
@@ -153,9 +154,14 @@ export async function startCodexAttemptThread(params: {
         const resolvedPluginPolicy = pluginThreadConfigRequired
           ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
           : undefined;
+        const resolvedAccountAppsPolicy = pluginThreadConfigRequired
+          ? resolveCodexAccountAppsPolicy(pluginThreadConfigPluginConfig)
+          : undefined;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true ||
+          resolvedAccountAppsPolicy?.enabled === true ||
+          computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
@@ -246,6 +252,7 @@ export async function startCodexAttemptThread(params: {
                 sessionKey: attemptParams.sessionKey ?? "",
                 pluginThreadConfigRequired,
                 resolvedPluginPolicy,
+                resolvedAccountAppsPolicy,
                 enabledPluginConfigKeys,
                 pluginAppCacheKey,
                 startupAuthProfileId: params.startupAuthProfileId,

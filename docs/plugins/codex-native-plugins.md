@@ -188,6 +188,42 @@ plugin through stable ownership: an exact app id from plugin detail, a known
 MCP server name, or unique stable metadata. Display-name-only or ambiguous
 ownership is excluded until the next inventory refresh proves ownership.
 
+## Connected account apps
+
+Owner-operated agents can opt into every app already connected to their Codex
+account without requiring a matching plugin package:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          accountApps: {
+            mode: "all",
+            allow_destructive_actions: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`mode: "all"` takes a complete `app/list` snapshot when a new native Codex
+thread is established and admits only apps marked accessible for that account.
+It does not install, authenticate, or enable apps globally. Existing threads
+keep their persisted app set; use `/new`, `/reset`, or restart the gateway to
+pick up newly connected or revoked apps.
+
+Account app destructive actions default to disabled. The
+`allow_destructive_actions` field accepts `true`, `false`, `"auto"`, or
+`"ask"` with the same approval behavior as plugin-owned apps. Explicit
+`codexPlugins` policies override the account-wide policy for overlapping app
+ids. Inventory failures fail closed instead of falling back to an unrestricted
+default.
+
 ## Thread app config
 
 OpenClaw injects a restrictive `config.apps` patch for the Codex thread:

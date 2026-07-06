@@ -77,6 +77,7 @@ type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
 export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
+export type CodexAccountAppsMode = "all";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -113,6 +114,11 @@ export type CodexPluginsConfig = {
   enabled?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
   plugins?: Record<string, CodexPluginEntryConfig>;
+};
+
+export type CodexAccountAppsConfig = {
+  mode: CodexAccountAppsMode;
+  allow_destructive_actions?: CodexPluginDestructivePolicy;
 };
 
 export type CodexAppServerExperimentalConfig = {
@@ -162,6 +168,14 @@ export type ResolvedCodexPluginsPolicy = {
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
+};
+
+export type ResolvedCodexAccountAppsPolicy = {
+  configured: boolean;
+  enabled: boolean;
+  mode?: CodexAccountAppsMode;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 };
 
 export type CodexAppServerStartOptions = {
@@ -214,6 +228,7 @@ export type CodexPluginConfig = {
   };
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
+  accountApps?: CodexAccountAppsConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
@@ -291,6 +306,8 @@ export const CODEX_PLUGINS_CONFIG_KEYS = [
   "allow_destructive_actions",
   "plugins",
 ] as const;
+
+export const CODEX_ACCOUNT_APPS_CONFIG_KEYS = ["mode", "allow_destructive_actions"] as const;
 
 export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
   "enabled",
@@ -374,6 +391,13 @@ const codexPluginsConfigSchema = z
   })
   .strict();
 
+const codexAccountAppsConfigSchema = z
+  .object({
+    mode: z.literal("all"),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
+  })
+  .strict();
+
 const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
@@ -399,6 +423,7 @@ const codexPluginConfigSchema = z
       .strict()
       .optional(),
     codexPlugins: z.unknown().optional(),
+    accountApps: codexAccountAppsConfigSchema.optional(),
     appServer: z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
@@ -499,6 +524,23 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
     allowDestructiveActions: destructivePolicy.allowDestructiveActions,
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
+  };
+}
+
+/** Resolves the opt-in policy for account-connected Codex apps. */
+export function resolveCodexAccountAppsPolicy(
+  pluginConfig?: unknown,
+): ResolvedCodexAccountAppsPolicy {
+  const config = readCodexPluginConfig(pluginConfig).accountApps;
+  const destructivePolicy = resolveCodexPluginDestructivePolicy(
+    config?.allow_destructive_actions ?? false,
+  );
+  return {
+    configured: config !== undefined,
+    enabled: config?.mode === "all",
+    ...(config ? { mode: config.mode } : {}),
+    allowDestructiveActions: destructivePolicy.allowDestructiveActions,
+    destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
   };
 }
 

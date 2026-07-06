@@ -5,6 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CODEX_ACCOUNT_APPS_CONFIG_KEYS,
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS,
   CODEX_COMPUTER_USE_CONFIG_KEYS,
@@ -15,6 +16,7 @@ import {
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAccountAppsPolicy,
   resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
@@ -1357,6 +1359,38 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
   });
 
+  it("parses opt-in access to all connected account apps", () => {
+    const config = readCodexPluginConfig({
+      accountApps: {
+        mode: "all",
+        allow_destructive_actions: "auto",
+      },
+    });
+
+    expect(config.accountApps).toEqual({
+      mode: "all",
+      allow_destructive_actions: "auto",
+    });
+    expect(resolveCodexAccountAppsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      mode: "all",
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+    });
+  });
+
+  it("defaults connected account apps to read-only and rejects unknown modes", () => {
+    expect(resolveCodexAccountAppsPolicy({ accountApps: { mode: "all" } })).toEqual({
+      configured: true,
+      enabled: true,
+      mode: "all",
+      allowDestructiveActions: false,
+      destructiveApprovalMode: "deny",
+    });
+    expect(readCodexPluginConfig({ accountApps: { mode: "selected" } })).toEqual({});
+  });
+
   it("treats configured and environment commands as explicit overrides", () => {
     expectFields(
       resolveRuntimeForTest({
@@ -2559,6 +2593,10 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configSchema: {
         properties: {
           appServer: { properties: Record<string, unknown> };
+          accountApps: {
+            properties: Record<string, unknown>;
+            additionalProperties: boolean;
+          };
           computerUse: { properties: Record<string, unknown> };
           codexPlugins: {
             properties: Record<string, unknown>;
@@ -2593,6 +2631,14 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(computerUseManifestKeys).toEqual([...CODEX_COMPUTER_USE_CONFIG_KEYS].toSorted());
     for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
       expectUiHintLabel(manifest, `computerUse.${key}`);
+    }
+    const accountAppsProperties = manifest.configSchema.properties.accountApps;
+    expect(Object.keys(accountAppsProperties.properties).toSorted()).toEqual(
+      [...CODEX_ACCOUNT_APPS_CONFIG_KEYS].toSorted(),
+    );
+    expect(accountAppsProperties.additionalProperties).toBe(false);
+    for (const key of CODEX_ACCOUNT_APPS_CONFIG_KEYS) {
+      expectUiHintLabel(manifest, `accountApps.${key}`);
     }
     const codexPluginsProperties = manifest.configSchema.properties.codexPlugins;
     const codexPluginsManifestKeys = Object.keys(codexPluginsProperties.properties).toSorted();
