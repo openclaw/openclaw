@@ -28,6 +28,7 @@ import {
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
+import { recordDiscordSelfReplyContextPolicy } from "./self-reply-context.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
@@ -328,12 +329,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
           }),
       }),
   }),
-  afterDeliverPayload: async ({ target, payload }) => {
+  afterDeliverPayload: async ({ target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,
       to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
       accountId: target.accountId,
     });
+    recordDiscordSelfReplyContextPolicy({ payload, results });
     const threadId = normalizeOptionalStringifiedId(target.threadId);
     if (!threadId) {
       return;

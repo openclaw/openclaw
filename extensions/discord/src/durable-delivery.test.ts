@@ -12,6 +12,10 @@ import {
   installDiscordOutboundModuleSpies,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
+import {
+  resetDiscordSelfReplyContextPolicyForTest,
+  shouldPreserveDiscordSelfReplyBody,
+} from "./self-reply-context.js";
 
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
@@ -25,6 +29,7 @@ beforeAll(async () => {
 describe("durable Discord delivery", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
+    resetDiscordSelfReplyContextPolicyForTest();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -37,11 +42,12 @@ describe("durable Discord delivery", () => {
   });
 
   afterEach(() => {
+    resetDiscordSelfReplyContextPolicyForTest();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("fans out planned text chunks and retries a transient failure on a later chunk", async () => {
+  it("fans out marked notification text chunks and records each chunk for self-reply context", async () => {
     hoisted.sendMessageDiscordMock
       .mockResolvedValueOnce({
         messageId: "msg-chunk-1",
@@ -64,7 +70,18 @@ describe("durable Discord delivery", () => {
       },
       channel: "discord",
       to: "channel:123456",
-      payloads: [{ text: "first chunk\nsecond chunk" }],
+      payloads: [
+        {
+          text: "first chunk\nsecond chunk",
+          channelData: {
+            openclaw: {
+              replyContext: {
+                preserveSelfQuoteBody: true,
+              },
+            },
+          },
+        },
+      ],
       formatting: {
         chunkMode: "newline",
         maxLinesPerMessage: 1,
@@ -100,5 +117,7 @@ describe("durable Discord delivery", () => {
       "second chunk",
       "second chunk",
     ]);
+    expect(shouldPreserveDiscordSelfReplyBody("msg-chunk-1")).toBe(true);
+    expect(shouldPreserveDiscordSelfReplyBody("msg-chunk-2")).toBe(true);
   });
 });

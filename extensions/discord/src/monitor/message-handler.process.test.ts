@@ -9,6 +9,10 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  recordDiscordSelfReplyContextPolicy,
+  resetDiscordSelfReplyContextPolicyForTest,
+} from "../self-reply-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 const sendMocks = vi.hoisted(() => ({
@@ -64,6 +68,19 @@ function createNonTerminalToolWarningPayload(): ReplyPayload {
     },
     { nonTerminalToolErrorWarning: true },
   );
+}
+
+function createSelfQuotePreservablePayload(text: string): ReplyPayload {
+  return {
+    text,
+    channelData: {
+      openclaw: {
+        replyContext: {
+          preserveSelfQuoteBody: true,
+        },
+      },
+    },
+  };
 }
 
 vi.mock("../send.js", () => ({
@@ -500,6 +517,7 @@ beforeEach(() => {
   readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
+  resetDiscordSelfReplyContextPolicyForTest();
 });
 
 function getLastRouteUpdate():
@@ -1432,7 +1450,72 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
     expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
     expect(dispatchCtx.ReplyToBody).toBeUndefined();
-    expect(JSON.stringify(dispatchCtx)).not.toContain("The same stale bot response keeps looping.");
+    expect(dispatchCtx.MediaPath).toBeUndefined();
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
+  });
+
+  it("injects marked bot-authored notification body when users reply to it", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("self-reply media should not be fetched");
+    });
+    const alertBody = "System notification: build failed\nReview the deployment dashboard.";
+    recordDiscordSelfReplyContextPolicy({
+      payload: createSelfQuotePreservablePayload(alertBody),
+      results: [{ messageId: "m-alert" }],
+    });
+    const ctx = await createBaseContext({
+      botUserId: "bot-1",
+      cfg: {
+        channels: { discord: { contextVisibility: "all" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-alert-reply",
+        channelId: "c1",
+        content: "<@bot> please investigate this",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: {
+          type: 0,
+          message_id: "m-alert",
+          channel_id: "c1",
+        },
+        referencedMessage: {
+          id: "m-alert",
+          channelId: "c1",
+          content: alertBody,
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-alert",
+              url: "https://cdn.discordapp.com/attachments/alert.png",
+              content_type: "image/png",
+              filename: "alert.png",
+            },
+          ],
+          author: {
+            id: "bot-1",
+            username: "SnabbelClaw",
+            discriminator: "0",
+            globalName: "SnabbelClaw",
+          },
+        },
+      },
+      baseText: "<@bot> please investigate this",
+      messageText: "<@bot> please investigate this",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dispatchCtx.ReplyToId).toBe("m-alert");
+    expect(dispatchCtx.ReplyToSender).toBe("SnabbelClaw");
+    expect(dispatchCtx.ReplyToBody).toBe(alertBody);
+    expect(dispatchCtx.MediaPath).toBeUndefined();
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {

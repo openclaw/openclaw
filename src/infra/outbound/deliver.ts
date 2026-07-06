@@ -85,6 +85,7 @@ import {
 import type { DeliveryMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
+  hasOutboundTransportChannelData,
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
   type OutboundPayloadPlan,
@@ -800,7 +801,12 @@ function deliveryKindForPayload(
   if (payloadSummary.mediaUrls.length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
     return "media";
   }
-  if (payload.presentation || payload.interactive || payload.channelData || payload.audioAsVoice) {
+  if (
+    payload.presentation ||
+    payload.interactive ||
+    hasOutboundTransportChannelData(payload.channelData) ||
+    payload.audioAsVoice
+  ) {
     return "other";
   }
   return "text";
@@ -856,7 +862,15 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (
+      !hasReplyPayloadContent({
+        ...payload,
+        text,
+        channelData: hasOutboundTransportChannelData(payload.channelData)
+          ? payload.channelData
+          : undefined,
+      })
+    ) {
       return null;
     }
     if (text) {
@@ -2102,7 +2116,9 @@ async function deliverOutboundPayloadsCore(
           hasReplyPayloadContent({
             presentation: effectivePayload.presentation,
             interactive: effectivePayload.interactive,
-            channelData: effectivePayload.channelData,
+            channelData: hasOutboundTransportChannelData(effectivePayload.channelData)
+              ? effectivePayload.channelData
+              : undefined,
           }) ||
           effectivePayload.audioAsVoice === true)
       ) {

@@ -664,6 +664,41 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 
+  it("preserves self-authored quote body when media remains suppressed", async () => {
+    const media = vi.fn(async () => [{ path: "/tmp/self.png", contentType: "image/png" }]);
+    const result = await finalizeChannelInboundContext({
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+      },
+      resolveSupplementalMedia: true,
+      contextVisibility: "all",
+      suppressSelfQuoteBody: false,
+      supplemental: {
+        quote: {
+          id: "reply-1",
+          body: "previous bot reply",
+          sender: "Bot",
+          isSelf: true,
+          media,
+        },
+      },
+    });
+
+    expect(media).not.toHaveBeenCalled();
+    expect(result.context.MediaPath).toBeUndefined();
+    expect(result.context.ReplyToBody).toBe("previous bot reply");
+    expect(result.supplemental?.quote).toEqual({
+      id: "reply-1",
+      body: "previous bot reply",
+      sender: "Bot",
+    });
+  });
+
   it("does not resolve media for hidden quotes", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/hidden.png", contentType: "image/png" }]);
     const result = await finalizeChannelInboundContext({
