@@ -1,10 +1,15 @@
 // Discord tests cover gateway metadata plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordGatewayInfo,
+  fetchDiscordGatewayMetadataGuarded,
   resolveDiscordGatewayInfoTimeoutMs,
   resolveGatewayInfoWithFallback,
 } from "./gateway-metadata.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Discord gateway metadata", () => {
   it("resolves gateway info timeouts from strict integer config and env values", () => {
@@ -51,5 +56,16 @@ describe("Discord gateway metadata", () => {
     expect(logs).toBe(
       "discord: gateway metadata lookup failed transiently; using default gateway url (Failed to get gateway information from Discord: fetch failed | Discord API /gateway/bot failed (429): Error 1015 rate limited)",
     );
+  });
+
+  it("rejects oversized gateway metadata responses before buffering them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("x".repeat(2 * 1024 * 1024))),
+    );
+
+    await expect(
+      fetchDiscordGatewayMetadataGuarded("https://discord.com/api/v10/gateway/bot"),
+    ).rejects.toThrow(/Discord gateway metadata response exceeds/);
   });
 });

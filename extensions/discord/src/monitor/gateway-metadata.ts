@@ -3,6 +3,7 @@ import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
@@ -12,6 +13,7 @@ import { withAbortTimeout } from "./timeouts.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DISCORD_API_HOST = "discord.com";
+const MAX_DISCORD_GATEWAY_METADATA_RESPONSE_BYTES = 1024 * 1024;
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
@@ -57,7 +59,10 @@ function resolveFetchInputUrl(input: RequestInfo | URL): string {
 }
 
 async function materializeGuardedResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer();
+  const body = await readResponseWithLimit(response, MAX_DISCORD_GATEWAY_METADATA_RESPONSE_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Discord gateway metadata response exceeds ${maxBytes} bytes (${size} bytes)`),
+  });
   return new Response(body, {
     status: response.status,
     statusText: response.statusText,
