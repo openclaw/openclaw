@@ -1,4 +1,5 @@
 /** Re-exports legacy state migration helpers used by doctor preflight. */
+export { repairNestedOpenClawHomeStateDir } from "../infra/openclaw-home-state-migration.js";
 export type { LegacyStateDetection } from "../infra/state-migrations.js";
 export {
   autoMigrateLegacyStateDir,

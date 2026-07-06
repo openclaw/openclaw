@@ -304,7 +304,12 @@ export async function runDoctorConfigPreflight(
         ? await measureStartupPreflightStep("state-migrations-import", loadDoctorStateMigrations)
         : undefined;
     if (stateMigrations && stateMigrationsAllowed) {
-      const { autoMigrateLegacyStateDir } = stateMigrations;
+      const { autoMigrateLegacyStateDir, repairNestedOpenClawHomeStateDir } = stateMigrations;
+      if (options.recoverCorruptTargetStore === true) {
+        noteStartupStateMigrationResult(
+          await repairNestedOpenClawHomeStateDir({ env: process.env }),
+        );
+      }
       const stateDirResult = await measureStartupPreflightStep("state-dir-migrations", () =>
         autoMigrateLegacyStateDir({ env: process.env }),
       );
