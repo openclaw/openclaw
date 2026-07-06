@@ -616,12 +616,81 @@ extension SettingsProTab {
     }
 
     var aboutDestination: some View {
-        // Concise public details only; deep hardware identifiers live in Diagnostics.
-        detailListCard {
-            self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
-            self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-            self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
+        Group {
+            Section {
+                VStack(spacing: 12) {
+                    OpenClawProMark(size: 96, shadowRadius: 18)
+                        .accessibilityHidden(true)
+                    VStack(spacing: 2) {
+                        Text("OpenClaw")
+                            .font(OpenClawType.title2SemiBold)
+                        Text("Personal AI on your devices")
+                            .font(OpenClawType.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 4)
+                .accessibilityElement(children: .combine)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            }
+
+            // Concise public details only; deep hardware identifiers live in Diagnostics.
+            detailListCard {
+                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
+                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
+            }
+
+            Section {
+                self.aboutLinkRow(
+                    title: "Website",
+                    icon: "globe",
+                    color: .blue,
+                    url: URL(string: "https://openclaw.ai")!)
+                self.aboutLinkRow(
+                    title: "Docs",
+                    icon: "book.fill",
+                    color: .orange,
+                    url: URL(string: "https://docs.openclaw.ai")!)
+                self.aboutLinkRow(
+                    title: "GitHub",
+                    icon: "chevron.left.slash.chevron.right",
+                    color: .gray,
+                    url: URL(string: "https://github.com/openclaw/openclaw")!)
+                self.aboutLinkRow(
+                    title: "Discord",
+                    icon: "bubble.left.and.bubble.right.fill",
+                    color: .indigo,
+                    url: URL(string: "https://discord.gg/clawd")!)
+            } footer: {
+                Text("© 2026 OpenClaw Foundation — MIT License.")
+                    .font(OpenClawType.footnote)
+            }
         }
+    }
+
+    /// About link row with explicit branded label; shorthand `Link("Title", ...)`
+    /// would bypass the typography audit and OpenClawType styling.
+    func aboutLinkRow(title: String, icon: String, color: Color, url: URL) -> some View {
+        Link(destination: url) {
+            HStack {
+                Label {
+                    Text(title)
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(.primary)
+                } icon: {
+                    SettingsIcon(systemName: icon, color: color)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(title)
     }
 
     func toggleCard(title: String, isOn: Binding<Bool>) -> some View {
