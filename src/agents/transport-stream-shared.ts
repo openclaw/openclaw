@@ -1,9 +1,9 @@
-import { sanitizeSurrogates } from "@openclaw/ai/internal/runtime";
 /**
  * Shared transport-stream normalization helpers.
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
+import { sanitizeSurrogates } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateErrorDetail } from "./provider-http-errors.js";
