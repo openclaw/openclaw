@@ -355,6 +355,16 @@ class MainViewModel(
     }
   }
 
+  /** Per-gateway proxy credential headers; values are secrets and must never be logged. */
+  fun gatewayCustomHeaders(stableId: String): Map<String, String> = prefs.loadGatewayCustomHeaders(stableId)
+
+  fun setGatewayCustomHeaders(
+    stableId: String,
+    headers: Map<String, String>,
+  ) {
+    prefs.saveGatewayCustomHeaders(stableId, headers)
+  }
+
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {

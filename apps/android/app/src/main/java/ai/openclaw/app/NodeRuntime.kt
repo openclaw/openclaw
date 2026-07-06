@@ -809,6 +809,7 @@ class NodeRuntime private constructor(
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
+      customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
   private suspend fun subscribeOperatorSessionEvents() {
@@ -873,6 +874,7 @@ class NodeRuntime private constructor(
       onTlsFingerprint = { stableId, fingerprint ->
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
       },
+      customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
   /**

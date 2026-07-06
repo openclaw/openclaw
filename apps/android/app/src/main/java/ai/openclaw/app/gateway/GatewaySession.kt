@@ -165,6 +165,7 @@ class GatewaySession(
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
+  private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
 ) {
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
@@ -530,8 +531,17 @@ class GatewaySession(
 
     suspend fun connect(): ConnectedGateway {
       val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
-      val request = Request.Builder().url(url).build()
-      socket = client.newWebSocket(request, listener)
+      val builder = Request.Builder().url(url)
+      // Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
+      // request. Read from the provider at connect time so edits apply on the next reconnect
+      // without re-pairing. Values are credentials: never log them.
+      val headers = customHeadersProvider?.invoke(tls?.stableId ?: endpoint.stableId)
+      if (headers != null) {
+        for ((name, value) in GatewayCustomHeaders.sanitized(headers)) {
+          builder.addHeader(name, value)
+        }
+      }
+      socket = client.newWebSocket(builder.build(), listener)
       return connectDeferred.await()
     }
 

@@ -229,4 +229,49 @@ class SecurePrefsTest {
     )
     assertEquals(prefs.modelRecents.value, SecurePrefs(context).modelRecents.value)
   }
+
+  @Test
+  fun gatewayCustomHeaders_roundTripStaysScopedPerGateway() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.headers", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    val stableId = "manual|gw.example.com|443"
+
+    assertTrue(prefs.loadGatewayCustomHeaders(stableId).isEmpty())
+    prefs.saveGatewayCustomHeaders(
+      stableId,
+      mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret"),
+    )
+    assertEquals(
+      mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret"),
+      prefs.loadGatewayCustomHeaders(stableId),
+    )
+    // Headers are per-gateway credentials; another endpoint never observes them.
+    assertTrue(prefs.loadGatewayCustomHeaders("manual|other.example.com|443").isEmpty())
+
+    prefs.saveGatewayCustomHeaders(stableId, emptyMap())
+    assertTrue(prefs.loadGatewayCustomHeaders(stableId).isEmpty())
+    assertFalse(securePrefs.contains("gateway.customHeaders.$stableId"))
+  }
+
+  @Test
+  fun gatewayCustomHeaders_dropsReservedAndUnsafeEntries() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.headers2", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    val stableId = "manual|gw.example.com|443"
+
+    prefs.saveGatewayCustomHeaders(
+      stableId,
+      mapOf(
+        "Host" to "smuggled.example",
+        "Sec-WebSocket-Protocol" to "override",
+        "X-Split" to "a\r\nEvil: b",
+        "X-Allowed" to "yes",
+      ),
+    )
+    assertEquals(mapOf("X-Allowed" to "yes"), prefs.loadGatewayCustomHeaders(stableId))
+  }
 }

@@ -21,6 +21,12 @@
     <string name="use_tls">Use TLS</string>
     <string name="token_optional">Token (optional)</string>
     <string name="password">Password</string>
+    <string name="custom_headers_optional">Custom headers (optional)</string>
+    <string name="custom_headers_explainer">Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.</string>
+    <string name="custom_header_value">Header value</string>
+    <string name="custom_header_reserved">This header is managed by the connection and cannot be overridden.</string>
+    <string name="add_custom_header">Add header</string>
+    <string name="remove_custom_header">Remove %1$s</string>
     <string name="run_onboarding_again">Run onboarding again</string>
     <string name="resolved_endpoint">Resolved endpoint</string>
     <string name="gateway_trust_first_seen">Verify the certificate fingerprint before trusting this gateway.\n\n%1$s</string>
