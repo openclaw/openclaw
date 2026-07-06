@@ -1300,7 +1300,7 @@ describe("package artifact reuse", () => {
     ).toHaveLength(4);
   });
 
-  it("finalizes Testbox delegation even when setup or the remote command fails", () => {
+  it("finalizes dispatched Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
     const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
@@ -1324,7 +1324,7 @@ describe("package artifact reuse", () => {
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
     expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep.if).toBe("always()");
+    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(runArmTestboxStep.if).toBe("always()");
     expect(runBuildArtifactsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.if).toBe("always()");

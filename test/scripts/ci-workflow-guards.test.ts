@@ -141,9 +141,18 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
     );
-    expect(workflow.jobs.check.steps[0]).toMatchObject({
-      name: "Begin Testbox",
+    const beginStep = workflow.jobs.check.steps.find(
+      (step: { name?: string }) => step.name === "Begin Testbox",
+    );
+    const runStep = workflow.jobs.check.steps.find(
+      (step: { name?: string }) => step.name === "Run Testbox",
+    );
+    expect(beginStep).toMatchObject({
+      if: "github.event_name == 'workflow_dispatch'",
       with: { testbox_id: "${{ inputs.testbox_id }}" },
+    });
+    expect(runStep).toMatchObject({
+      if: "github.event_name == 'workflow_dispatch' && always()",
     });
   });
 
