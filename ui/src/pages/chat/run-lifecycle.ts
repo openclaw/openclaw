@@ -409,7 +409,7 @@ export function reconcileChatRunFromSessionRow(
   // Transcript snapshots can briefly lose the active-run projection while the
   // persisted lifecycle is still running. Wait for a real terminal status so
   // tool updates cannot flash an interrupted composer state mid-turn.
-  if (row.status === "running") {
+  if (row.hasActiveRun !== false && row.status === "running") {
     return false;
   }
   const terminalStatus = row.status !== undefined;

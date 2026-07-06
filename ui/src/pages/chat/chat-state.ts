@@ -499,6 +499,19 @@ async function refreshCompatibilityModelCatalog(
   }
 }
 
+async function refreshCompatibilityCommands(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+) {
+  await refreshSlashCommands({
+    client,
+    agentId,
+    shouldApply: () => ownsChatMetadataRequest(host, client, agentId, requestVersion),
+  });
+}
+
 function canUseCompatibilityModelCatalog(
   host: ChatPageHost,
   agentId: string | null | undefined,
@@ -532,7 +545,7 @@ export async function refreshChatMetadata(
         ...(shouldRefreshCompatibilityModels
           ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
           : []),
-        refreshChatCommands(host),
+        refreshCompatibilityCommands(host, client, agentId, requestVersion),
       ]);
       return;
     }
@@ -553,7 +566,9 @@ export async function refreshChatMetadata(
         ...(!metadataApplied.models && shouldRefreshCompatibilityModels
           ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
           : []),
-        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
+        ...(metadataApplied.commands
+          ? []
+          : [refreshCompatibilityCommands(host, client, agentId, requestVersion)]),
       ]);
     }
   } catch {
@@ -565,7 +580,7 @@ export async function refreshChatMetadata(
         ...(shouldRefreshCompatibilityModels
           ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
           : []),
-        refreshChatCommands(host),
+        refreshCompatibilityCommands(host, client, agentId, requestVersion),
       ]);
     }
   } finally {

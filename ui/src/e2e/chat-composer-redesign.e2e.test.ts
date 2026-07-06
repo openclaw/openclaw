@@ -119,6 +119,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       );
       const camera = composerShell.getByRole("button", { name: "Take photo" });
       const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
+      const splitView = composer.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
@@ -174,6 +175,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-option-icon").count())
         .toBe(0);
+      await expect
+        .poll(() => composer.locator(".chat-controls__provider-icon").count())
+        .toBeGreaterThan(0);
       const patchCountBeforeDraft = (await gateway.getRequests("sessions.patch")).length;
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
@@ -376,22 +380,33 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           progress.evaluate((node) => node.closest(".agent-chat__composer-controls") != null),
         )
         .toBe(true);
-      const [activeSettingsBox, activeProgressBox, activeModelBox] = await Promise.all([
-        settings.boundingBox(),
-        progress.boundingBox(),
-        model.boundingBox(),
-      ]);
+      const [activeSettingsBox, activeSplitViewBox, activeProgressBox, activeModelBox] =
+        await Promise.all([
+          settings.boundingBox(),
+          splitView.boundingBox(),
+          progress.boundingBox(),
+          model.boundingBox(),
+        ]);
       expect(activeSettingsBox).not.toBeNull();
+      expect(activeSplitViewBox).not.toBeNull();
       expect(activeProgressBox).not.toBeNull();
       expect(activeModelBox).not.toBeNull();
-      if (!activeSettingsBox || !activeProgressBox || !activeModelBox) {
-        throw new Error("expected settings, progress, and model controls to have layout boxes");
+      if (!activeSettingsBox || !activeSplitViewBox || !activeProgressBox || !activeModelBox) {
+        throw new Error(
+          "expected settings, split view, progress, and model controls to have layout boxes",
+        );
       }
-      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
+      expect(activeSplitViewBox.x).toBeGreaterThanOrEqual(
         activeSettingsBox.x + activeSettingsBox.width - 1,
       );
       expect(
-        activeProgressBox.x - (activeSettingsBox.x + activeSettingsBox.width),
+        activeSplitViewBox.x - (activeSettingsBox.x + activeSettingsBox.width),
+      ).toBeLessThanOrEqual(8);
+      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
+        activeSplitViewBox.x + activeSplitViewBox.width - 1,
+      );
+      expect(
+        activeProgressBox.x - (activeSplitViewBox.x + activeSplitViewBox.width),
       ).toBeLessThanOrEqual(8);
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
         activeProgressBox.x + activeProgressBox.width - 1,
