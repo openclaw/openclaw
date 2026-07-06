@@ -2715,11 +2715,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registry.plugins.find((entry) => entry.id === pluginId);
             // If record lookup fails, check if this might be a bundled plugin accessing
             // its runtime during module initialization before registration completes.
-            // We use a heuristic: bundled plugins have sources within the extensions/ directory.
+            // Bundled plugins are inherently trusted and may access their runtime early
+            // during module loading before createApi() has registered the plugin record.
             if (!record) {
-              // Check if this appears to be a bundled plugin based on typical naming/location patterns.
-              // This is a temporary workaround for initialization timing issues.
-              // TODO: Investigate why bundled plugin runtimes are accessed before registration.
+              // Recognize known bundled plugin IDs to allow keyed state access during
+              // initialization timing windows. This handles edge cases in the plugin
+              // loading sequence where runtime may be accessed before registration completes.
               const likelyBundledPluginIds = new Set([
                 "whatsapp",
                 "telegram",
