@@ -50,10 +50,12 @@ describe("docker sandbox stdin stream errors", () => {
     ({ execDockerRaw } = await import("./docker.js"));
   });
 
-  it("rejects when stdin emits an error", async () => {
+  it("rejects and terminates the child when stdin emits an error", async () => {
+    let capturedChild: MockSpawnChild | undefined;
     spawnMock.mockImplementationOnce(
       (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
         const { child, stdin, stdout, stderr } = createMockSpawnChild();
+        capturedChild = child;
         process.nextTick(() => {
           stdin?.emit("error", new Error("stdin write failed"));
         });
@@ -69,5 +71,6 @@ describe("docker sandbox stdin stream errors", () => {
     await expect(execDockerRaw(["version"], { input: "test" })).rejects.toThrow(
       "stdin write failed",
     );
+    expect(capturedChild?.kill).toHaveBeenCalledWith("SIGTERM");
   });
 });
