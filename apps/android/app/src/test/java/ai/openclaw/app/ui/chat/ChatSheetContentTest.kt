@@ -1,7 +1,9 @@
 package ai.openclaw.app.ui.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatSheetContentTest {
@@ -48,6 +50,24 @@ class ChatSheetContentTest {
       resolveInitialChatLoadSessionKey(
         sessionKey = "session:history",
         mainSessionKey = "agent:ops:device",
+      ),
+    )
+  }
+
+  @Test
+  fun healthyEmptyChatShowsStarterStateInsteadOfLoadingPlaceholder() {
+    assertFalse(
+      showChatLoadingPlaceholder(
+        historyLoading = true,
+        healthOk = true,
+        gatewayOffline = false,
+      ),
+    )
+    assertTrue(
+      showChatLoadingPlaceholder(
+        historyLoading = true,
+        healthOk = false,
+        gatewayOffline = false,
       ),
     )
   }

@@ -924,10 +924,11 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     config.realtime.enabled &&
     config.provider &&
     config.provider !== "twilio" &&
-    config.provider !== "telnyx"
+    config.provider !== "telnyx" &&
+    config.provider !== "mock"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
     );
   }
 

@@ -381,9 +381,15 @@ describe("update.run timeout normalization", () => {
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
     const [updateParams] = firstMockCall(runGatewayUpdateMock, "gateway update") as [
-      { timeoutMs?: number },
+      {
+        timeoutMs?: number;
+        allowGatewayServiceRepair?: boolean;
+        allowGatewayActivation?: boolean;
+      },
     ];
     expect(updateParams?.timeoutMs).toBe(1000);
+    expect(updateParams?.allowGatewayServiceRepair).toBe(false);
+    expect(updateParams?.allowGatewayActivation).toBe(false);
   });
 });
 
@@ -611,6 +617,29 @@ describe("update.run restart scheduling", () => {
     expect(readCapturedPayload().status).toBe("skipped");
   });
 
+  it("hands Windows fallback gateways to the CLI path before doctor activation", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("schtasks");
+    mockGitInstallSurface("C:\\openclaw");
+
+    const payload = await withProcessEnv(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      () => captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supervisor: "schtasks",
+        handoffId: expect.any(String),
+      }),
+    );
+    expect(payload?.ok).toBe(true);
+    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
+  });
+
   it("does not pass the stored stable channel to supervised git handoff CLI", async () => {
     normalizeUpdateChannelMock.mockReturnValueOnce("stable");
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -798,9 +827,10 @@ describe("update.run post-core plugin finalize", () => {
     const [finalizeParams] = firstMockCall(
       runPostCoreFinalizeAfterGatewayUpdateMock,
       "post-core finalize",
-    ) as [{ result?: UpdateRunResult }];
+    ) as [{ result?: UpdateRunResult; serviceRepairPolicy?: string }];
     expect(finalizeParams.result?.mode).toBe("git");
     expect(finalizeParams.result?.status).toBe("ok");
+    expect(finalizeParams.serviceRepairPolicy).toBe("external");
     // Convergence succeeded, so the gateway is allowed to restart onto the new core.
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);

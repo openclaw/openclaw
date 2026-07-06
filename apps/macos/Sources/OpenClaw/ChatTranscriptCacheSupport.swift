@@ -9,6 +9,16 @@ import OpenClawChatUI
 /// classes (the iOS store applies `completeUntilFirstUserAuthentication`);
 /// at-rest protection here is the per-user container permissions plus FileVault.
 enum MacChatTranscriptCache {
+    struct Context {
+        let store: OpenClawChatSQLiteTranscriptCache
+        let routingIdentity: OpenClawChatSessionRoutingIdentity?
+    }
+
+    /// Every chat window for one gateway must share the same outbox actor.
+    /// Otherwise a newly opened window can mistake another live window's
+    /// claimed send for crash residue during its first recovery pass.
+    @MainActor private static var storesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
+
     /// Stable identity of the gateway this app talks to, derivable offline
     /// (the cache pre-paints before any connection is up). Keys must not
     /// collide across gateways:
@@ -73,7 +83,8 @@ enum MacChatTranscriptCache {
     /// resolved, so foreign rows can never leak into another gateway's scope.
     /// Concrete return type: the same SQLite store also backs the offline
     /// command outbox, and callers wire both protocol facets from one instance.
-    static func make() -> OpenClawChatSQLiteTranscriptCache? {
+    @MainActor
+    static func currentGatewayID() -> String? {
         let root = OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root).mode
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
@@ -85,19 +96,45 @@ enum MacChatTranscriptCache {
         let sshRemotePort = RemotePortTunnel.resolveRemotePortOverride(
             defaultRemotePort: defaultRemotePort,
             for: sshHost) ?? defaultRemotePort
-        let gatewayID = self.gatewayID(
+        return self.gatewayID(
             mode: mode,
             localStateDir: OpenClawConfigFile.stateDirURL(),
             remoteTransport: resolution.transport,
             directURL: resolution.directURL,
             sshTarget: sshTarget,
             sshRemotePort: sshRemotePort)
-        guard let gatewayID else { return nil }
+    }
+
+    @MainActor
+    static func make() -> OpenClawChatSQLiteTranscriptCache? {
+        self.makeContext()?.store
+    }
+
+    /// Loads the small process-stable routing fact before Chat constructs its
+    /// view model, so cache partitioning and offline sends never bootstrap
+    /// against a nil agent.
+    @MainActor
+    static func makeContext() -> Context? {
+        guard let gatewayID = currentGatewayID() else { return nil }
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         else {
             return nil
         }
         let databaseURL = base.appendingPathComponent("OpenClaw/chat-cache.sqlite", isDirectory: false)
-        return OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+        return Context(
+            store: self.store(databaseURL: databaseURL, gatewayID: gatewayID),
+            routingIdentity: OpenClawChatSQLiteTranscriptCache.loadSessionRoutingIdentity(
+                databaseURL: databaseURL,
+                gatewayID: gatewayID))
+    }
+
+    @MainActor
+    static func store(databaseURL: URL, gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
+        if let store = storesByGatewayID[gatewayID] {
+            return store
+        }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
+        self.storesByGatewayID[gatewayID] = store
+        return store
     }
 }

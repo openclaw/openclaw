@@ -115,6 +115,65 @@ async function expectPathMissing(filePath: string): Promise<void> {
   throw new Error(`expected ${filePath} to be missing`);
 }
 
+describe("runQaGatewayCliCommand", () => {
+  it("runs CLI commands with the Gateway fixture environment", async () => {
+    const output = await testing.runQaGatewayCliCommand({
+      executablePath: process.execPath,
+      argsPrefix: [
+        "--eval",
+        'process.stdout.write(`${process.env.OPENCLAW_CLI}:${process.env.QA_VALUE}:${process.argv.slice(1).join(",")}`)',
+      ],
+      args: ["voicecall", "start"],
+      cwd: process.cwd(),
+      env: { ...process.env, QA_VALUE: "fixture" },
+    });
+
+    expect(output).toBe("1:fixture:voicecall,start");
+  });
+
+  it("reports CLI stderr when a fixture command fails", async () => {
+    await expect(
+      testing.runQaGatewayCliCommand({
+        executablePath: process.execPath,
+        argsPrefix: ["--eval", 'process.stderr.write("fixture failure"); process.exit(7)'],
+        args: [],
+        cwd: process.cwd(),
+        env: process.env,
+      }),
+    ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
+  });
+});
+
+describe("Gateway child fixture helpers", () => {
+  it("creates an empty transport config seam", () => {
+    expect(testing.createQaGatewayEmptyTransport()).toEqual({
+      requiredPluginIds: [],
+      createGatewayConfig: expect.any(Function),
+    });
+  });
+
+  it("resolves source and built Gateway CLI commands", async () => {
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-command-");
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src", "entry.ts"), "export {};\n", "utf8");
+
+    expect(testing.resolveQaGatewayChildCommand(repoRoot)).toEqual({
+      executablePath: process.execPath,
+      argsPrefix: ["--import", "tsx", path.join(repoRoot, "src", "entry.ts")],
+      cwd: repoRoot,
+    });
+
+    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist", "index.js"), "export {};\n", "utf8");
+    expect(testing.resolveQaGatewayChildCommand(repoRoot)).toEqual({
+      executablePath: process.execPath,
+      argsPrefix: [path.join(repoRoot, "dist", "index.js")],
+      cwd: repoRoot,
+      usePackagedPlugins: true,
+    });
+  });
+});
+
 describe("buildQaRuntimeEnv", () => {
   it("cleans up temp QA gateway roots when node path resolution fails before startup", async () => {
     const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-node-exec-fail-"));

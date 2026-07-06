@@ -9,6 +9,7 @@ import type {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
 const BASE_CLAUDE_THINKING_LEVELS = [
@@ -58,6 +59,7 @@ export function isLatestAdaptiveBedrockModelRef(
   const canonicalModelId = resolveClaudeModelIdentity(modelRef);
   return (
     resolveClaudeFable5ModelIdentity(modelRef) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined ||
     [modelId, canonicalModelId].some(
       (candidate) =>
         isOpus47OrNewerBedrockModelRef(candidate) || isMythosPreviewBedrockModelRef(candidate),
@@ -70,7 +72,10 @@ export function supportsBedrockNativeMaxEffort(
   modelId: string,
   params?: Record<string, unknown>,
 ): boolean {
-  if (resolveClaudeFable5ModelIdentity({ id: modelId, params })) {
+  if (
+    resolveClaudeFable5ModelIdentity({ id: modelId, params }) ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId, params })
+  ) {
     return true;
   }
   const canonicalModelId = resolveClaudeModelIdentity({ id: modelId, params });
@@ -86,6 +91,9 @@ export function resolveBedrockNativeThinkingLevelMap(
 ): ProviderRuntimeModel["thinkingLevelMap"] | undefined {
   const modelRef = { id: modelId, params };
   if (resolveClaudeFable5ModelIdentity(modelRef)) {
+    return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
+  }
+  if (resolveClaudeSonnet5ModelIdentity(modelRef)) {
     return { off: "low", minimal: "low", xhigh: "xhigh", max: "max" };
   }
   if (!supportsBedrockNativeMaxEffort(modelId, params)) {
@@ -106,7 +114,10 @@ export function resolveBedrockClaudeThinkingProfile(
   const trimmed = modelId.trim();
   const canonicalModelId = resolveClaudeModelIdentity({ id: trimmed, params });
   const modelRefs = [trimmed, canonicalModelId];
-  if (resolveClaudeFable5ModelIdentity({ id: trimmed, params })) {
+  if (
+    resolveClaudeFable5ModelIdentity({ id: trimmed, params }) ||
+    resolveClaudeSonnet5ModelIdentity({ id: trimmed, params })
+  ) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
       defaultLevel: "high",

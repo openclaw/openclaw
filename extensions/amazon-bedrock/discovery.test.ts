@@ -198,6 +198,36 @@ describe("bedrock discovery", () => {
     });
   });
 
+  it("applies the Sonnet 5 contract to inference-profile-only discovery", async () => {
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "global.anthropic.claude-sonnet-5",
+          inferenceProfileName: "Global Claude Sonnet 5",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [
+            {
+              modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
+            },
+          ],
+        },
+      ],
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(models[0], {
+      id: "global.anthropic.claude-sonnet-5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      params: { canonicalModelId: "claude-sonnet-5" },
+    });
+  });
+
   it("skips Mythos Preview inference profiles because Mantle owns that route", async () => {
     sendMock
       .mockResolvedValueOnce({

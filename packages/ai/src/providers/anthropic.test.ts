@@ -50,6 +50,32 @@ function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}
   } satisfies Model<"anthropic-messages">;
 }
 
+function makeSonnet5PrefillContext(): Context {
+  return {
+    messages: [
+      { role: "user", content: "Return JSON.", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "{" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    ],
+    tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+  };
+}
+
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
@@ -835,9 +861,10 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
-    ["anthropic", "sk-ant-provider"],
-    ["anthropic-vertex", "vertex-token"],
-  ])("surfaces structured Anthropic streaming refusals for %s", async (provider, apiKey) => {
+    ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
+    ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
+    ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
+  ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
     const client = {
       messages: {
         create: vi.fn(() => ({
@@ -880,8 +907,8 @@ describe("Anthropic provider", () => {
 
     const stream = streamAnthropic(
       makeAnthropicModel({
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
+        id,
+        name,
         provider,
       }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -1996,5 +2023,57 @@ describe("Anthropic provider", () => {
         text: "Stable prefix\nDynamic suffix",
       },
     ]);
+  });
+
+  it.each([
+    {
+      name: "defaults to adaptive high",
+      reasoning: undefined,
+      thinking: { type: "adaptive", display: "summarized" },
+      effort: { effort: "high" },
+      toolChoice: { type: "auto" },
+    },
+    {
+      name: "allows explicit off",
+      reasoning: "off" as const,
+      thinking: { type: "disabled" },
+      effort: undefined,
+      toolChoice: { type: "any" },
+    },
+  ])("supports Claude Sonnet 5: $name", async ({ reasoning, thinking, effort, toolChoice }) => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        maxTokens: 128_000,
+      }),
+      makeSonnet5PrefillContext(),
+      {
+        apiKey: "sk-ant-provider",
+        reasoning,
+        temperature: 0.2,
+        toolChoice: "any",
+        onPayload: (payload) => {
+          capturedPayload = payload as unknown as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      max_tokens: 128_000,
+      messages: [{ role: "user" }],
+      thinking,
+      tool_choice: toolChoice,
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+    if (effort) {
+      expect(capturedPayload).toMatchObject({ output_config: effort });
+    } else {
+      expect(capturedPayload).not.toHaveProperty("output_config");
+    }
   });
 });

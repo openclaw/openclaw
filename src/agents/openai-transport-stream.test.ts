@@ -4268,6 +4268,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4290,6 +4291,7 @@ describe("openai transport stream", () => {
       phase: "commentary",
     });
     expect(assistantMessage?.id).toBeUndefined();
+    expect(assistantMessage?.status).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
       type: "function_call",
@@ -4376,6 +4378,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4395,6 +4398,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       id: "msg_prior",
       phase: "commentary",
+      status: "completed",
     });
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {

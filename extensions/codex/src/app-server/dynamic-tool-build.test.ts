@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSandboxShellDynamicToolsIfAvailable,
   buildDynamicTools,
+  disableCodexPluginThreadConfig,
   filterCodexDynamicToolsForAllowlist,
   hasWildcardCodexToolsAllow,
   includeForcedCodexDynamicToolAllow,
@@ -128,6 +129,24 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("removes account-wide app access when native tools are restricted", () => {
+    expect(
+      disableCodexPluginThreadConfig({
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "auto",
+        },
+      }),
+    ).toEqual({
+      codexPlugins: {
+        enabled: false,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
+    });
+  });
+
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
   });

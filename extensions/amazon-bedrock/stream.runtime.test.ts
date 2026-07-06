@@ -167,6 +167,31 @@ describe("Bedrock profile endpoint resolution", () => {
 });
 
 describe("Bedrock thinking effort mapping", () => {
+  it.each([
+    { reasoning: undefined, expected: "high" },
+    { reasoning: "off" as const, expected: "low" },
+  ])("keeps Sonnet 5 adaptive for reasoning=$reasoning", ({ reasoning, expected }) => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+    expect(options).toMatchObject({ maxTokens: 128_000, reasoning: expected });
+    expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: expected },
+    });
+    expect(testing.buildAdditionalModelRequestFields(model, { reasoning })).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: expected },
+    });
+  });
+
   it("does not force adaptive thinking for optional Claude models when callers omit reasoning", () => {
     const model = bedrockModel({
       id: "anthropic.claude-sonnet-4-6-v1:0",

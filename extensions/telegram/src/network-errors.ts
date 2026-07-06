@@ -141,7 +141,7 @@ export function isTelegramMisdirectedRequestError(err: unknown): boolean {
   return false;
 }
 
-export type TelegramNetworkErrorContext =
+type TelegramNetworkErrorContext =
   | "polling"
   | "send"
   | "webhook"
@@ -150,7 +150,7 @@ export type TelegramNetworkErrorContext =
   | "edit"
   | "action"
   | "unknown";
-export type TelegramNetworkErrorOrigin = {
+type TelegramNetworkErrorOrigin = {
   method?: string | null;
   url?: string | null;
 };

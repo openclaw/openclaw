@@ -18,6 +18,7 @@ import {
 } from "./create.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
+  readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
   type SessionChangedResult,
@@ -183,6 +184,7 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
 };
@@ -465,8 +467,8 @@ function appendSessionResults(
   };
 }
 
-function isSessionEvent(event: GatewayEventFrame): boolean {
-  return event.event === "sessions.changed";
+function isSessionStateEvent(event: GatewayEventFrame): boolean {
+  return event.event === "sessions.changed" || event.event === "session.message";
 }
 
 function canReconcileSessionEvent(options: SessionListOptions): boolean {
@@ -496,6 +498,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   const listeners = new Set<(next: SessionState) => void>();
+  const createdListeners = new Set<(key: string) => void>();
 
   const requestList = async (
     options: SessionListOptions = {},
@@ -648,6 +651,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return null;
       }
       await refresh({ agentId: params.agentId, force: true });
+      // Creation can originate outside the sidebar. Notify presentation owners
+      // after refresh so they can reconcile the new row without guessing from list churn.
+      for (const listener of createdListeners) {
+        listener(key);
+      }
       return key;
     } catch (error) {
       publish({ ...state, error: String(error) });
@@ -970,15 +978,35 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     void refresh();
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (isSessionEvent(event)) {
-      if (!canReconcileSessionEvent(lastListOptions)) {
-        void refresh({ ...lastListOptions, force: true });
-        return;
-      }
+    if (isSessionStateEvent(event)) {
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
         showArchived: lastListOptions.showArchived,
       });
+      const eventInfo = readSessionChangedEvent(event.payload);
+      const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+      const status = reconciled.status ?? eventInfo?.status;
+      const runEnded =
+        hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+      if (event.event === "session.message" && !runEnded) {
+        return;
+      }
+      if (!canReconcileSessionEvent(lastListOptions)) {
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
+      const priorRow =
+        reconciled.row ??
+        (eventInfo
+          ? state.result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, eventInfo.key))
+          : undefined);
+      const activeRunClearNeedsRefresh = runEnded && priorRow?.hasActiveRun === true;
+      if (activeRunClearNeedsRefresh) {
+        // Terminal lifecycle events can omit hasActiveRun. Re-list when the
+        // stale-row guard preserves an active row after the run has ended.
+        void refresh({ ...lastListOptions, force: true });
+        return;
+      }
       if (reconciled.applied) {
         if (reconciled.result !== state.result || reconciled.deletedKey) {
           publish({
@@ -1019,6 +1047,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    subscribeCreated(listener) {
+      createdListeners.add(listener);
+      return () => createdListeners.delete(listener);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1027,6 +1059,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       disposed = true;
       stopGateway();
       stopEvents();
+      createdListeners.clear();
       listeners.clear();
       inFlight = null;
       queuedRefresh = null;

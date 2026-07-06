@@ -211,7 +211,10 @@ export async function resolveMemoryWikiStatus(
   const exists = deps?.pathExists ?? pathExists;
   const vaultExists = await exists(config.vault.path);
   const bridgePublicArtifactCount =
-    deps?.appConfig && config.vaultMode === "bridge" && config.bridge.enabled
+    deps?.appConfig &&
+    config.vaultMode === "bridge" &&
+    config.bridge.enabled &&
+    config.bridge.readMemoryArtifacts
       ? (
           await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
             cfg: deps.appConfig,

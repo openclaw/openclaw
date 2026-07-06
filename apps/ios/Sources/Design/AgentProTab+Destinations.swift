@@ -18,7 +18,15 @@ extension AgentProTab {
             self.usageDestination
         case .dreaming:
             self.dreamingDestination
+        case .files:
+            self.filesDestination
         }
+    }
+
+    var filesDestination: some View {
+        AgentWorkspaceFilesScreen(
+            agentId: self.activeAgentID,
+            headerLeadingAction: self.directHeaderLeadingAction(for: .files))
     }
 
     var agentsDestination: some View {

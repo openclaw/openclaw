@@ -77,6 +77,7 @@ export const SessionFileRelevanceSchema = Type.Union([
 export const SessionFileEntrySchema = Type.Object(
   {
     path: NonEmptyString,
+    workspacePath: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     kind: SessionFileKindSchema,
     missing: Type.Boolean(),

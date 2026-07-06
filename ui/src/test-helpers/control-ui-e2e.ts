@@ -57,7 +57,12 @@ export type ControlUiMockGatewayScenario = {
   featureMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
-  models?: Array<{ id: string; name: string; provider: string }>;
+  models?: Array<{
+    id: string;
+    name: string;
+    provider: string;
+    available?: boolean;
+  }>;
   sessionKey?: string;
   terminalEnabled?: boolean;
   workspaceGit?: boolean;
@@ -298,6 +303,7 @@ function installControlUiMockGateway(input: {
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
+  const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
   let seq = 0;
 
@@ -366,6 +372,35 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  function recordSessionPatch(params: unknown): void {
+    if (!isRecord(params) || typeof params.key !== "string") {
+      return;
+    }
+    const patch = { ...sessionPatches.get(params.key) };
+    for (const key of ["model", "thinkingLevel", "fastMode"] as const) {
+      if (hasOwn(params, key)) {
+        patch[key] = params[key];
+      }
+    }
+    sessionPatches.set(params.key, patch);
+  }
+
+  function applySessionPatches(response: unknown): unknown {
+    if (!isRecord(response) || !Array.isArray(response.sessions)) {
+      return response;
+    }
+    return {
+      ...response,
+      sessions: response.sessions.map((row) => {
+        if (!isRecord(row) || typeof row.key !== "string") {
+          return row;
+        }
+        const patch = sessionPatches.get(row.key);
+        return patch ? { ...row, ...patch } : row;
+      }),
+    };
+  }
+
   function sessionRow() {
     return {
       contextTokens: null,
@@ -383,9 +418,12 @@ function installControlUiMockGateway(input: {
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    if (method === "sessions.patch") {
+      recordSessionPatch(params);
+    }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      return configured.value;
+      return method === "sessions.list" ? applySessionPatches(configured.value) : configured.value;
     }
     switch (method) {
       case "connect":
@@ -505,6 +543,8 @@ function installControlUiMockGateway(input: {
               : "control-ui-e2e-run",
           status: "started",
         };
+      case "chat.abort":
+        return { aborted: true };
       case "commands.list":
         return { commands: [] };
       case "health":
@@ -520,7 +560,7 @@ function installControlUiMockGateway(input: {
       case "models.list":
         return { models: scenario.models };
       case "sessions.list":
-        return {
+        return applySessionPatches({
           count: 1,
           defaults: {
             contextTokens: null,
@@ -530,7 +570,7 @@ function installControlUiMockGateway(input: {
           path: "",
           sessions: [sessionRow()],
           ts: Date.now(),
-        };
+        });
       case "sessions.subscribe":
         return { ok: true };
       default:
@@ -640,6 +680,23 @@ function installControlUiMockGateway(input: {
           payload: buildResponse(method, frame.params),
           type: "res",
         });
+        if (
+          method === "chat.abort" &&
+          isRecord(frame.params) &&
+          typeof frame.params.runId === "string" &&
+          typeof frame.params.sessionKey === "string"
+        ) {
+          this.deliver({
+            event: "chat",
+            payload: {
+              runId: frame.params.runId,
+              sessionKey: frame.params.sessionKey,
+              state: "aborted",
+            },
+            seq: ++seq,
+            type: "event",
+          });
+        }
       }, 0);
     }
 

@@ -828,6 +828,30 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Gateway: ws://127.0.0.1:18789");
   });
 
+  it.each(["ws://0.0.0.0:18789", "ws://[::]:18789"])(
+    "rejects unspecified cleartext setup url %s before issuing setup codes",
+    async (publicUrl) => {
+      const command = registerPairCommand({
+        pluginConfig: {
+          publicUrl,
+        },
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel: "webchat",
+          args: "",
+          commandBody: "/pair",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(requireText(result)).toContain(
+        "Tailscale and public mobile pairing require a secure gateway URL",
+      );
+    },
+  );
+
   it("allows private LAN cleartext setup urls", async () => {
     const command = registerPairCommand({
       pluginConfig: {
@@ -845,6 +869,30 @@ describe("device-pair /pair default setup code", () => {
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(requireText(result)).toContain("Gateway: ws://192.168.1.20:18789");
+  });
+
+  it.each([
+    "ws://[fc00::1]:18789",
+    "ws://[fd7a:115c:a1e0::1]:18789",
+    "ws://[fe80::1]:18789",
+    "ws://[febf::1]:18789",
+  ])("allows IPv6 ULA and link-local cleartext setup url %s", async (publicUrl) => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(requireText(result)).toContain(`Gateway: ${publicUrl}`);
   });
 
   it("allows mdns cleartext setup urls", async () => {
@@ -1014,6 +1062,30 @@ describe("device-pair /pair default setup code", () => {
     expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(requireText(result)).toContain("prefer gateway.tailscale.mode=serve");
   });
+
+  it.each(["ws://[2001:db8::1]:18789", "ws://[fe7f::1]:18789", "ws://[fec0::1]:18789"])(
+    "rejects non-LAN IPv6 cleartext setup url %s before issuing setup codes",
+    async (publicUrl) => {
+      const command = registerPairCommand({
+        pluginConfig: {
+          publicUrl,
+        },
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel: "webchat",
+          args: "",
+          commandBody: "/pair",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+
+      expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(requireText(result)).toContain(
+        "Tailscale and public mobile pairing require a secure gateway URL",
+      );
+    },
+  );
 
   it("uses Tailscale Serve MagicDNS as a secure setup url", async () => {
     vi.mocked(resolveTailnetHostWithRunner).mockResolvedValueOnce("gateway.tailnet.ts.net");

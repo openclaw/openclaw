@@ -23,7 +23,7 @@ function formatTaskError(error: unknown, fallback: string): string {
   return typeof error === "string" && error.trim() ? error.trim() : fallback;
 }
 
-export class TasksPage extends LitElement {
+class TasksPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

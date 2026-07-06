@@ -80,6 +80,21 @@ private func makeProjectedWatchChatRawMessage(
 }
 
 @MainActor
+private final class VoiceNoteCaptureStub: VoiceNoteAudioCapture {
+    func requestPermission() async -> Bool {
+        true
+    }
+
+    func start(url _: URL) throws {}
+
+    func stop() -> TimeInterval {
+        1
+    }
+
+    func cancel() {}
+}
+
+@MainActor
 private func waitForMainActorWork(_ condition: () -> Bool) async {
     for _ in 0..<100 {
         if condition() { return }
@@ -344,6 +359,21 @@ private actor WatchSnapshotSendGate {
     @Test @MainActor func `chat session key defaults to main base`() {
         let appModel = NodeAppModel()
         #expect(appModel.chatSessionKey == "main")
+        #expect(appModel.chatDeliveryAgentId == nil)
+    }
+
+    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+        let appModel = NodeAppModel()
+        #expect(appModel.chatDeliveryAgentId == nil)
+
+        appModel.gatewayDefaultAgentId = " Agent-A "
+        #expect(appModel.chatDeliveryAgentId == "agent-a")
+
+        appModel.setSelectedAgentId(" Agent-B ")
+        #expect(appModel.chatDeliveryAgentId == "agent-b")
+
+        appModel.openChat(sessionKey: "agent:Agent-C:incident")
+        #expect(appModel.chatDeliveryAgentId == "agent-c")
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -707,6 +737,23 @@ private actor WatchSnapshotSendGate {
         #expect(response.error?.message.contains("Gateway not connected") == true)
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `PTT start is refused while a voice note owns the microphone`() async {
+        let voiceNoteRecorder = OpenClawVoiceNoteRecorder(capture: VoiceNoteCaptureStub())
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode, voiceNoteRecorder: voiceNoteRecorder)
+        #expect(await voiceNoteRecorder.start())
+        defer { voiceNoteRecorder.cancel() }
+
+        let request = BridgeInvokeRequest(
+            id: "ptt-start-during-voice-note",
+            command: OpenClawTalkCommand.pttStart.rawValue)
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("Voice note recording is active") == true)
+        #expect(talkMode.isPushToTalkActive == false)
     }
 
     @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {

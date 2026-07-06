@@ -85,7 +85,6 @@ type SlackQaScenarioId =
   | "slack-codex-approval-plugin-native"
   | "slack-mention-gating"
   | "slack-reaction-glyph-native"
-  | "slack-restart-resume"
   | "slack-thread-follow-up"
   | "slack-thread-isolation"
   | "slack-top-level-reply-shape";
@@ -183,15 +182,6 @@ type SlackAuthIdentity = {
   botId?: string;
   teamId?: string;
   userId: string;
-};
-
-type SlackMessage = {
-  bot_id?: string;
-  blocks?: unknown[];
-  text?: string;
-  thread_ts?: string;
-  ts?: string;
-  user?: string;
 };
 
 type SlackObservedMessage = {
@@ -329,6 +319,8 @@ const slackHistoryMessageSchema = z.object({
   ts: z.string().min(1),
   user: z.string().optional(),
 });
+
+type SlackMessage = Omit<z.infer<typeof slackHistoryMessageSchema>, "ts"> & { ts?: string };
 
 const slackHistorySchema = z.object({
   ok: z.boolean().optional(),
@@ -513,42 +505,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       kind: "codex-approval",
       token: `SLACK_QA_CODEX_FILE_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
     }),
-  },
-  {
-    id: "slack-restart-resume",
-    standardId: "restart-resume",
-    title: "Slack replies after gateway restart",
-    timeoutMs: 60_000,
-    buildRun: (sutUserId) => {
-      const token = `SLACK_QA_RESTART_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-        matchText: token,
-        afterReply: async (_message, context) => {
-          const secondToken = `SLACK_QA_RESTART_AFTER_${randomUUID().slice(0, 8).toUpperCase()}`;
-          await context.gateway.restart();
-          await context.waitForReady();
-          const sent = await sendSlackChannelMessage({
-            channelId: context.channelId,
-            client: context.driverClient,
-            text: `<@${context.sutIdentity.userId}> reply with only this exact marker: ${secondToken}`,
-          });
-          await waitForSlackScenarioReply({
-            channelId: context.channelId,
-            client: context.sutReadClient,
-            matchText: secondToken,
-            observedMessages: [],
-            observationScenarioId: "slack-restart-resume",
-            observationScenarioTitle: "Slack replies after gateway restart",
-            sentTs: sent.ts,
-            sutIdentity: context.sutIdentity,
-            timeoutMs: 45_000,
-          });
-          return `post-restart reply matched marker ${secondToken}`;
-        },
-      };
-    },
   },
   {
     id: "slack-thread-follow-up",
@@ -2961,6 +2917,7 @@ export const testing = {
   extractSlackNativeApprovalId,
   findPendingCodexPluginApprovalRecord,
   findScenario,
+  getSlackIdentity,
   isSlackChannelReadyForQa,
   matchesSlackApprovalResolvedUpdate,
   matchesSlackApprovalPromptText,
@@ -2975,9 +2932,12 @@ export const testing = {
   resolveApprovalDecision,
   resolveSlackQaSutAccountId,
   resolveSlackQaRuntimeEnv,
+  sendSlackChannelMessage,
+  listSlackMessages,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
   waitForSlackNoReply,
   waitForSlackReaction,
+  waitForSlackChannelStable,
 };
 export { testing as __testing };

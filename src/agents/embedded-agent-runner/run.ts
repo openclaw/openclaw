@@ -2325,6 +2325,7 @@ async function runEmbeddedAgentInternal(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
           adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
@@ -2502,10 +2503,12 @@ async function runEmbeddedAgentInternal(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
-          // ── Timeout-triggered compaction ──────────────────────────────────
-          // When the LLM times out with high context usage, compact before
-          // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
+          if (
+            timedOut &&
+            !timedOutDuringCompaction &&
+            !timedOutDuringToolExecution &&
+            !timedOutByRunBudget
+          ) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
@@ -2671,8 +2674,15 @@ async function runEmbeddedAgentInternal(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            const preflightEstimatedPromptTokens =
+              typeof preflightRecovery?.estimatedPromptTokens === "number" &&
+              Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
+              preflightRecovery.estimatedPromptTokens > 0
+                ? Math.ceil(preflightRecovery.estimatedPromptTokens)
+                : undefined;
             const overflowTokenCountForCompaction =
               observedOverflowTokens ??
+              preflightEstimatedPromptTokens ??
               (ctxInfo.tokens > 0
                 ? // Confirmed overflow with an unparseable provider message still carries a
                   // minimally over-budget count for compaction engines and diagnostics.
@@ -2684,6 +2694,7 @@ async function runEmbeddedAgentInternal(
                 `messages=${msgCount} sessionFile=${activeSessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
+                `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
                 `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
@@ -3241,6 +3252,7 @@ async function runEmbeddedAgentInternal(
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
               promptTimeoutFallbackSafe,
+              timedOutByRunBudget,
               profileRotated: false,
             });
             if (
@@ -3281,6 +3293,7 @@ async function runEmbeddedAgentInternal(
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
                 promptTimeoutFallbackSafe,
+                timedOutByRunBudget,
                 profileRotated: true,
               });
             }
@@ -3483,6 +3496,7 @@ async function runEmbeddedAgentInternal(
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             harnessOwnsTransport: pluginHarnessOwnsTransport,
+            timedOutByRunBudget,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -3496,6 +3510,7 @@ async function runEmbeddedAgentInternal(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
+            timedOutByRunBudget,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&

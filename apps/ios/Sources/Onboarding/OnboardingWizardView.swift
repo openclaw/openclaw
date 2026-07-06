@@ -1304,17 +1304,14 @@ extension OnboardingWizardView {
 
     private func initializeState() {
         if self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let last = GatewaySettingsStore.loadLastGatewayConnection() {
-                switch last {
-                case let .manual(host, port, useTLS, _):
-                    self.manualHost = host
-                    self.manualPort = port
-                    self.manualTLS = useTLS
-                case .discovered:
-                    self.manualHost = "openclaw.local"
-                    self.manualPort = 18789
-                    self.manualTLS = true
-                }
+            if let active = GatewaySettingsStore.activeGatewayEntry(),
+               active.kind == .manual,
+               let host = active.host,
+               let port = active.port
+            {
+                self.manualHost = host
+                self.manualPort = port
+                self.manualTLS = active.useTLS
             } else {
                 self.manualHost = "openclaw.local"
                 self.manualPort = 18789
@@ -1352,7 +1349,7 @@ extension OnboardingWizardView {
                 targetStableID: stableID)
         }
 
-        let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
+        let hasSavedGateway = GatewaySettingsStore.activeGatewayEntry() != nil
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !hasSavedGateway, !hasToken, !hasPassword {
@@ -1603,11 +1600,11 @@ extension OnboardingWizardView {
         }
         defer { self.connectingGatewayID = nil }
 
-        switch GatewaySettingsStore.loadLastGatewayConnection() {
-        case .some(.discovered):
-            await self.gatewayController.connectLastKnown()
-        case .some(.manual), .none:
-            // connectLastKnown() replays the persisted endpoint and credentials,
+        switch GatewaySettingsStore.activeGatewayEntry()?.kind {
+        case .discovered:
+            await self.gatewayController.connectActiveGateway()
+        case .manual, .none:
+            // connectActiveGateway() replays the persisted endpoint and credentials,
             // so token/host/port edits made on this screen would be ignored and
             // a missing stored connection would silently do nothing. Manual
             // retries must dial the current form input instead.

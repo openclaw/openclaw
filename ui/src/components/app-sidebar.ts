@@ -22,8 +22,8 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
+import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
-import "./session-picker.ts";
 import "./tooltip.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -36,7 +36,11 @@ import {
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
 import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
-import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
+import {
+  compareSessionRowsByUpdatedAt,
+  resolveSessionNavigation,
+  searchForSession,
+} from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
@@ -72,6 +76,16 @@ type SidebarSessionMenuState = {
   submenuLeft: boolean;
 };
 
+type SidebarSessionSortMode = "created" | "updated";
+
+const SIDEBAR_SESSION_SORT_OPTIONS = [
+  { mode: "created", labelKey: "chat.sidebar.sortCreated" },
+  { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
+] as const satisfies ReadonlyArray<{
+  mode: SidebarSessionSortMode;
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+}>;
+
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (
     !event.defaultPrevented &&
@@ -100,6 +114,7 @@ export class AppSidebar extends LitElement {
     DEFAULT_SIDEBAR_PINNED_ROUTES;
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
+  @property({ attribute: false }) onToggleCollapse?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -112,17 +127,22 @@ export class AppSidebar extends LitElement {
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   @state() private sessionGroupSubmenuOpen = false;
+  @state() private sessionSortMode: SidebarSessionSortMode = "created";
+  @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
 
   private stopSessionsSubscription: (() => void) | undefined;
+  private stopSessionCreatedSubscription: (() => void) | undefined;
   private stopAgentsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
   private customizeMenuTrigger: HTMLElement | null = null;
   private sessionMenuTrigger: HTMLElement | null = null;
+  private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
+  private sessionCreatedOrder = new Map<string, number>();
   private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
@@ -138,8 +158,11 @@ export class AppSidebar extends LitElement {
   override disconnectedCallback() {
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
+    this.stopSessionCreatedSubscription?.();
+    this.stopSessionCreatedSubscription = undefined;
     this.stopAgentsSubscription?.();
     this.stopAgentsSubscription = undefined;
     this.stopAgentSelectionSubscription?.();
@@ -159,6 +182,7 @@ export class AppSidebar extends LitElement {
     if (
       !context ||
       this.stopSessionsSubscription ||
+      this.stopSessionCreatedSubscription ||
       this.stopAgentsSubscription ||
       this.stopAgentSelectionSubscription ||
       this.stopGatewaySubscription
@@ -169,6 +193,9 @@ export class AppSidebar extends LitElement {
     this.updateSessions(context.sessions.state);
     this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
       this.updateSessions(snapshot);
+    });
+    this.stopSessionCreatedSubscription = context.sessions.subscribeCreated((key) => {
+      this.promoteCreatedSession(key);
     });
     this.stopAgentsSubscription = context.agents.subscribe(() => {
       this.requestUpdate();
@@ -194,6 +221,13 @@ export class AppSidebar extends LitElement {
     this.sessionsResult = snapshot.result;
     this.sessionsAgentId = snapshot.agentId;
     this.sessionsLoading = snapshot.loading;
+    if (snapshot.result) {
+      for (const row of snapshot.result.sessions) {
+        if (row.key && !this.sessionCreatedOrder.has(row.key)) {
+          this.sessionCreatedOrder.set(row.key, this.sessionCreatedOrder.size);
+        }
+      }
+    }
     if (snapshot.result && snapshot.agentId) {
       this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
     }
@@ -208,11 +242,39 @@ export class AppSidebar extends LitElement {
       return;
     }
     this.sessionRowsByAgent = {};
+    this.sessionCreatedOrder.clear();
     this.gatewayClient = client;
   }
 
   private getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
+  }
+
+  private readonly compareSidebarSessionRows = (
+    a: SessionsListResult["sessions"][number],
+    b: SessionsListResult["sessions"][number],
+  ) => {
+    if (this.sessionSortMode === "updated") {
+      return compareSessionRowsByUpdatedAt(a, b);
+    }
+    return (
+      (this.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+      (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+    );
+  };
+
+  private promoteCreatedSession(sessionKey: string) {
+    const currentOrder = this.sessionCreatedOrder.get(sessionKey);
+    if (currentOrder === 0) {
+      return;
+    }
+    for (const [key, order] of this.sessionCreatedOrder) {
+      if (key !== sessionKey && (currentOrder === undefined || order < currentOrder)) {
+        this.sessionCreatedOrder.set(key, order + 1);
+      }
+    }
+    this.sessionCreatedOrder.set(sessionKey, 0);
+    this.requestUpdate();
   }
 
   private getSessionNavigationState() {
@@ -225,32 +287,26 @@ export class AppSidebar extends LitElement {
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
+      compareSessions: this.compareSidebarSessionRows,
     });
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === navigation.currentSessionKey,
+      active: row.key === navigation.activeRowKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
       category: normalizeOptionalString(row.category),
       unread: row.unread === true,
     });
-    const activeSession = navigation.selectedSession
-      ? toSidebarSession(navigation.selectedSession)
-      : null;
-    const recentSessions = navigation.recentSessions
-      .slice(activeSession ? 1 : 0)
-      .map(toSidebarSession);
+    const recentSessions = navigation.recentSessions.map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
-      defaultAgentId: navigation.defaultAgentId,
-      activeSession,
       recentSessions,
       newSessionDisabled,
       newSessionTitle: !this.connected
@@ -387,6 +443,7 @@ export class AppSidebar extends LitElement {
     const menuWidth = 240;
     const menuMaxHeight = 420;
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
     this.customizeMenuTrigger = trigger;
     this.customizeMenuPosition = {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -419,6 +476,7 @@ export class AppSidebar extends LitElement {
     const menuWidth = 240;
     const menuMaxHeight = 460;
     this.closeCustomizeMenu();
+    this.closeSessionSortMenu();
     this.sessionMenuTrigger = trigger;
     this.sessionGroupSubmenuOpen = false;
     const clampedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
@@ -440,6 +498,34 @@ export class AppSidebar extends LitElement {
     this.sessionMenuTrigger = null;
     this.sessionMenu = null;
     this.sessionGroupSubmenuOpen = false;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private openSessionSortMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+    const menuWidth = 180;
+    const menuMaxHeight = 180;
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.sessionSortMenuTrigger = trigger;
+    this.sessionSortMenuPosition = {
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-session-sort-menu__item")?.focus();
+    });
+  }
+
+  private closeSessionSortMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.sessionSortMenuTrigger;
+    this.sessionSortMenuTrigger = null;
+    this.sessionSortMenuPosition = null;
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -531,12 +617,15 @@ export class AppSidebar extends LitElement {
 
   private readonly handleDocumentPointerDown = (event: PointerEvent) => {
     const path = event.composedPath();
-    const menu = this.querySelector(".sidebar-customize-menu, .sidebar-session-menu");
+    const menu = this.querySelector(
+      ".sidebar-customize-menu, .sidebar-session-menu, .sidebar-session-sort-menu",
+    );
     if (menu && path.includes(menu)) {
       return;
     }
     this.closeCustomizeMenu();
     this.closeSessionMenu();
+    this.closeSessionSortMenu();
   };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -544,6 +633,7 @@ export class AppSidebar extends LitElement {
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
       this.closeSessionMenu({ restoreFocus: true });
+      this.closeSessionSortMenu({ restoreFocus: true });
     }
   };
 
@@ -809,23 +899,50 @@ export class AppSidebar extends LitElement {
     `;
   }
 
+  private renderSessionSortMenu() {
+    const position = this.sessionSortMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="sidebar-session-sort-menu"
+        role="menu"
+        aria-label=${t("chat.sidebar.sortSessions")}
+        style="left: ${position.x}px; top: ${position.y}px;"
+      >
+        ${SIDEBAR_SESSION_SORT_OPTIONS.map(
+          (option) => html`
+            <button
+              type="button"
+              class="sidebar-session-sort-menu__item"
+              role="menuitemradio"
+              aria-checked=${String(this.sessionSortMode === option.mode)}
+              @click=${() => {
+                this.sessionSortMode = option.mode;
+                this.closeSessionSortMenu({ restoreFocus: true });
+              }}
+            >
+              <span class="sidebar-session-menu__check" aria-hidden="true">
+                ${this.sessionSortMode === option.mode ? icons.check : nothing}
+              </span>
+              <span class="sidebar-session-menu__text">${t(option.labelKey)}</span>
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
   private renderRoute(routeId: NavigationRouteId) {
     const active =
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
         : this.activeRouteId === routeId;
-    const enabled = this.isRouteEnabled(routeId);
-    if (!enabled) {
-      return html`
-        <span class="nav-item nav-item--disabled" aria-disabled="true">
-          <span class="nav-item__icon" aria-hidden="true"
-            >${icons[navigationIconForRoute(routeId)]}</span
-          >
-          ${!this.collapsed
-            ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>`
-            : nothing}
-        </span>
-      `;
+    // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
+    // than rendering an inert nav item.
+    if (!this.isRouteEnabled(routeId)) {
+      return nothing;
     }
     const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
     const href =
@@ -1002,8 +1119,6 @@ export class AppSidebar extends LitElement {
     const {
       routeSessionKey,
       selectedAgentId,
-      defaultAgentId,
-      activeSession,
       recentSessions,
       newSessionDisabled,
       newSessionTitle,
@@ -1045,9 +1160,9 @@ export class AppSidebar extends LitElement {
           </div>
         `
       : newSessionButton;
-    // The active session leads whichever pinned/category bucket owns it.
-    const allRows = [...(activeSession ? [activeSession] : []), ...recentSessions];
-    const sections = groupSidebarSessionRows(allRows);
+    // Stable navigation ordering carries through each pinned/category bucket;
+    // selecting a visible row only moves the active highlight.
+    const sections = groupSidebarSessionRows(recentSessions);
     const hasCategorySections = sections.some((section) => section.category !== undefined);
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
@@ -1085,24 +1200,25 @@ export class AppSidebar extends LitElement {
                             ? t("sessionsView.ungrouped")
                             : t("sessionsView.title")}</span
                         >
-                        <openclaw-session-picker
-                          .sessions=${context?.sessions}
-                          .sessionsResult=${this.sessionsResult}
-                          .currentSessionKey=${routeSessionKey}
-                          .agentId=${selectedAgentId}
-                          .defaultAgentId=${defaultAgentId}
-                          .mainKey=${resolveUiConfiguredMainKey({
-                            agentsList: context?.agents.state.agentsList,
-                            hello: context?.gateway.snapshot.hello,
-                          })}
-                          .connected=${this.connected}
-                          .onSelectSession=${this.selectSession}
-                          .onReplaceCurrentSession=${this.replaceCurrentSession}
-                        ></openclaw-session-picker>
+                        ${this.renderAgentScope(routeSessionKey, selectedAgentId)}
+                        <button
+                          type="button"
+                          class="sidebar-session-sort"
+                          title=${t("chat.sidebar.sortSessions")}
+                          aria-label=${t("chat.sidebar.sortSessions")}
+                          aria-haspopup="menu"
+                          aria-expanded=${String(this.sessionSortMenuPosition !== null)}
+                          @click=${(event: MouseEvent) => {
+                            const trigger = event.currentTarget as HTMLElement;
+                            const rect = trigger.getBoundingClientRect();
+                            this.openSessionSortMenu(rect.right - 180, rect.bottom + 4, trigger);
+                          }}
+                        >
+                          ${icons.listFilter}
+                        </button>
                       </div>
-                      ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
                       <div class="sidebar-recent-sessions__list">
-                        ${allRows.length === 0
+                        ${recentSessions.length === 0
                           ? this.renderChatFallback()
                           : section.rows.map((session) => this.renderRecentSession(session))}
                       </div>
@@ -1131,7 +1247,8 @@ export class AppSidebar extends LitElement {
     `;
   }
 
-  private renderAgentFilter(sessionKey: string, selectedAgentId: string) {
+  /** Compact agent scope switcher for the ungrouped session header. */
+  private renderAgentScope(sessionKey: string, selectedAgentId: string) {
     const options = resolveSessionAgentFilterOptions({
       agentsList: this.context?.agents.state.agentsList,
       sessionsResult: this.sessionsResult,
@@ -1143,25 +1260,23 @@ export class AppSidebar extends LitElement {
     const selectedLabel =
       options.find((option) => option.id === selectedAgentId)?.label ?? selectedAgentId;
     return html`
-      <div class="sidebar-agent-filter">
-        <label class="field chat-controls__session chat-controls__agent">
-          <select
-            data-chat-agent-filter="true"
-            aria-label=${t("chat.selectors.agentFilter")}
-            title=${selectedLabel}
-            .value=${selectedAgentId}
-            ?disabled=${!this.connected}
-            @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
-          >
-            ${options.map(
-              (option) =>
-                html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
-                  ${option.label}
-                </option>`,
-            )}
-          </select>
-        </label>
-      </div>
+      <label class="sidebar-agent-scope" title=${selectedLabel}>
+        <select
+          data-chat-agent-filter="true"
+          aria-label=${t("chat.selectors.agentFilter")}
+          .value=${selectedAgentId}
+          ?disabled=${!this.connected}
+          @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
+        >
+          ${options.map(
+            (option) =>
+              html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
+                ${option.label}
+              </option>`,
+          )}
+        </select>
+        <span class="sidebar-agent-scope__chevron" aria-hidden="true">${icons.chevronDown}</span>
+      </label>
     `;
   }
 
@@ -1231,6 +1346,13 @@ export class AppSidebar extends LitElement {
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
+        <!-- macOS app only (CSS-gated on html.openclaw-native-macos): use the
+             otherwise-empty native titlebar strip instead of a sidebar row. -->
+        <img
+          class="sidebar-native-brand"
+          src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
+          alt="OpenClaw"
+        />
         <div class="sidebar-shell">
           <div class="sidebar-shell__body">
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
@@ -1308,10 +1430,21 @@ export class AppSidebar extends LitElement {
               <span class="sidebar-mode-switch">
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </span>
+              <openclaw-tooltip .content=${this.collapsed ? t("nav.expand") : t("nav.collapse")}>
+                <button
+                  class="sidebar-footer-icon sidebar-collapse-toggle"
+                  type="button"
+                  aria-label=${this.collapsed ? t("nav.expand") : t("nav.collapse")}
+                  aria-expanded=${String(!this.collapsed)}
+                  @click=${() => this.onToggleCollapse?.()}
+                >
+                  ${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                </button>
+              </openclaw-tooltip>
             </div>
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()}
+        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionSortMenu()}
       </aside>
     `;
   }

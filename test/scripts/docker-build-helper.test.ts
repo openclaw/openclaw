@@ -20,6 +20,8 @@ const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
+const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
+const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const CLEANUP_DOCKER_SMOKE_PATH = "scripts/test-cleanup-docker.sh";
 const INSTALL_E2E_DOCKER_SMOKE_PATH = "scripts/test-install-sh-e2e-docker.sh";
@@ -3768,6 +3770,26 @@ output="$(cat "$sampler_log")"
 
       expect(runner, path).not.toMatch(/(^|\n)\s*docker rm -f "\$CONTAINER_NAME"/u);
       expect(runner, path).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
+    }
+
+    const composeRunner = readFileSync(COMPOSE_SETUP_E2E_PATH, "utf8");
+    expect(composeRunner).not.toMatch(/(^|\n)\s*docker rm -f "\$CLI_NAME"/u);
+    expect(composeRunner).toContain('docker_e2e_docker_cmd rm -f "$CLI_NAME"');
+
+    const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
+    expect(packageRunner).not.toMatch(/(^|\n)\s*docker rm -f "\$CONTAINER_NAME"/u);
+    expect(packageRunner).toContain('docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"');
+    expect(packageRunner).toContain(
+      'DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"',
+    );
+    expect(packageRunner).toContain(
+      'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d',
+    );
+    expect(packageRunner).not.toMatch(/(^|\n)docker run -d/u);
+    for (const runner of [composeRunner, packageRunner]) {
+      expect(runner).toContain(
+        'node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts"',
+      );
     }
   });
 

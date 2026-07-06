@@ -88,7 +88,7 @@ describe("plugin registry Control UI descriptors", () => {
           });
         },
       });
-      expect(registry.registry.controlUiDescriptors ?? []).toEqual([]);
+      expect(registry.registry.controlUiDescriptors).toEqual([]);
       expect(registry.registry.diagnostics).toContainEqual(
         expect.objectContaining({ level: "error", pluginId: "external-tab" }),
       );
@@ -111,7 +111,7 @@ describe("plugin registry Control UI descriptors", () => {
       },
     });
 
-    expect(registry.registry.controlUiDescriptors ?? []).toEqual([]);
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
     expect(registry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",

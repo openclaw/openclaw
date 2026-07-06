@@ -783,6 +783,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/featherless:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/firecrawl:
     dependencies:
       typebox:
@@ -968,6 +974,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/lmstudio: {}
+
+  extensions/longcat:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/lobster:
     dependencies:

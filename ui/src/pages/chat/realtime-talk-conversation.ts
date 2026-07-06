@@ -201,11 +201,7 @@ function shouldStartNewRealtimeUserEntry(
   return true;
 }
 
-export function mergeRealtimeTranscriptText(
-  existing: string,
-  incoming: string,
-  isFinal: boolean,
-): string {
+function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {
   if (existing.trim() === "") {
     return incoming.trimStart();
   }

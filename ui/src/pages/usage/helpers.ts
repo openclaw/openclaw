@@ -1,7 +1,7 @@
 // Control UI module implements usage helpers behavior.
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
-export type UsageQueryTerm = {
+type UsageQueryTerm = {
   key?: string;
   value: string;
   raw: string;

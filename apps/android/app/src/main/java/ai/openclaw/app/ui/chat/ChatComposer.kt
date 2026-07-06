@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.chat.ChatCommandEntry
+import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -91,11 +93,9 @@ internal data class SheetComposerSendAction(
   val sendMessage: Boolean,
 )
 
-internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection =
-  SheetSlashCommandSelection(input = slashCommandCompletion(command))
+internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection = SheetSlashCommandSelection(input = slashCommandCompletion(command))
 
-internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction =
-  SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
+internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction = SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
 
 /** Applies a draft exactly once so restored prompts do not overwrite user edits. */
 internal fun applyDraftText(
@@ -132,16 +132,22 @@ internal fun applyDraftText(
 
 /** Chat input surface for text, image attachments, thinking level, and run controls. */
 @Composable
-fun ChatComposer(
+internal fun ChatComposer(
   draftText: ChatDraft?,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   commands: List<ChatCommandEntry>,
-  attachments: List<PendingImageAttachment>,
+  attachments: List<PendingAttachment>,
   onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
+  voiceNoteState: VoiceNoteRecorderState,
+  voiceNoteElapsedMs: Long,
+  recordVoiceNoteEnabled: Boolean,
+  onStartVoiceNote: () -> Unit,
+  onCancelVoiceNote: () -> Unit,
+  onFinishVoiceNote: () -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
@@ -178,6 +184,8 @@ fun ChatComposer(
         input.trim().isNotEmpty() && attachments.isEmpty()
       }
   val sendBusy = pendingRunCount > 0
+  val recordingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Recording
+  val preparingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Preparing
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
@@ -194,17 +202,29 @@ fun ChatComposer(
       )
     }
 
-    OutlinedTextField(
-      value = input,
-      onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth(),
-      placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 2,
-      maxLines = 5,
-      textStyle = mobileBodyStyle().copy(color = mobileText),
-      shape = RoundedCornerShape(14.dp),
-      colors = chatTextFieldColors(),
-    )
+    if (recordingVoiceNote) {
+      VoiceNoteRecordingControls(
+        elapsedMs = voiceNoteElapsedMs,
+        onCancel = onCancelVoiceNote,
+        onDone = onFinishVoiceNote,
+      )
+    } else if (preparingVoiceNote) {
+      VoiceNotePreparing()
+    } else {
+      OutlinedTextField(
+        value = input,
+        onValueChange = { input = it },
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
+        minLines = 2,
+        maxLines = 5,
+        textStyle = mobileBodyStyle().copy(color = mobileText),
+        shape = RoundedCornerShape(14.dp),
+        colors = chatTextFieldColors(),
+      )
+    }
+
+    VoiceNoteRecorderError(voiceNoteState)
 
     if (!healthOk) {
       Text(
@@ -268,6 +288,13 @@ fun ChatComposer(
         onClick = onPickImages,
       )
 
+      if (!recordingVoiceNote) {
+        VoiceNoteRecordButton(
+          enabled = recordVoiceNoteEnabled && !preparingVoiceNote,
+          onClick = onStartVoiceNote,
+        )
+      }
+
       SecondaryActionButton(
         label = "Refresh",
         icon = Icons.Default.Refresh,
@@ -302,7 +329,7 @@ fun ChatComposer(
             }
           }
         },
-        enabled = canSend,
+        enabled = canSend && !recordingVoiceNote && !preparingVoiceNote,
         modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),
         contentPadding = PaddingValues(horizontal = 20.dp),
@@ -313,7 +340,11 @@ fun ChatComposer(
             disabledContainerColor = mobileBorderStrong,
             disabledContentColor = mobileTextTertiary,
           ),
-        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
+        border =
+          BorderStroke(
+            1.dp,
+            if (canSend && !recordingVoiceNote && !preparingVoiceNote) mobileAccentBorderStrong else mobileBorderStrong,
+          ),
       ) {
         if (sendBusy) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
@@ -458,7 +489,7 @@ private fun thinkingLabel(raw: String): String =
 
 @Composable
 private fun AttachmentsStrip(
-  attachments: List<PendingImageAttachment>,
+  attachments: List<PendingAttachment>,
   onRemoveAttachment: (id: String) -> Unit,
 ) {
   Row(
@@ -467,7 +498,7 @@ private fun AttachmentsStrip(
   ) {
     for (att in attachments) {
       AttachmentChip(
-        fileName = att.fileName,
+        attachment = att,
         onRemove = { onRemoveAttachment(att.id) },
       )
     }
@@ -476,7 +507,7 @@ private fun AttachmentsStrip(
 
 @Composable
 private fun AttachmentChip(
-  fileName: String,
+  attachment: PendingAttachment,
   onRemove: () -> Unit,
 ) {
   Surface(
@@ -489,8 +520,13 @@ private fun AttachmentChip(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+      if (attachment.mimeType.startsWith("audio/")) {
+        Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(14.dp), tint = mobileTextSecondary)
+      }
       Text(
-        text = fileName,
+        text =
+          attachment.durationMs?.let { duration -> "Voice note · ${formatVoiceNoteDuration(duration)}" }
+            ?: attachment.fileName,
         style = mobileCaption1,
         color = mobileText,
         maxLines = 1,
