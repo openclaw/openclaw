@@ -163,6 +163,121 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
   });
 
+  describe("timeoutSeconds fallback", () => {
+    it("uses timeoutSeconds when timeoutMs is absent", () => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-seconds",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutSeconds: 30 },
+          },
+          config: undefined,
+        }),
+      ).toBe(30_000);
+    });
+
+    it("prefers timeoutMs when both timeoutMs and timeoutSeconds are provided", () => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-both",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutMs: 15_000, timeoutSeconds: 60 },
+          },
+          config: undefined,
+        }),
+      ).toBe(15_000);
+    });
+
+    it("ignores non-number timeoutSeconds", () => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-str-seconds",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutSeconds: "30" },
+          },
+          config: undefined,
+        }),
+      ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+    });
+
+    it("ignores non-positive timeoutSeconds", () => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-zero",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutSeconds: 0 },
+          },
+          config: undefined,
+        }),
+      ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+    });
+
+    it("ignores negative timeoutSeconds", () => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-neg",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutSeconds: -5 },
+          },
+          config: undefined,
+        }),
+      ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+    });
+
+    it("caps timeoutSeconds exceeding the maximum", () => {
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-huge-seconds",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutSeconds: 9999 },
+          },
+          config: undefined,
+        }),
+      ).toBe(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+    });
+
+    it("preserves existing timeoutMs behavior unchanged", () => {
+      const timeoutMs = CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
+      expect(
+        resolveDynamicToolCallTimeoutMs({
+          call: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: "call-ms-only",
+            namespace: null,
+            tool: "session_status",
+            arguments: { timeoutMs },
+          },
+          config: undefined,
+        }),
+      ).toBe(timeoutMs);
+    });
+  });
+
   it("uses a 90 second default for generic Codex dynamic tool calls", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({
