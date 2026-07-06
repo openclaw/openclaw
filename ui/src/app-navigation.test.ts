@@ -286,6 +286,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "automation",
       "mcp",
       "infrastructure",
+      "worktrees",
       "ai-agents",
       "debug",
       "logs",
