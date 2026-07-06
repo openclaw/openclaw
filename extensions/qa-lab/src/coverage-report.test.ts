@@ -143,7 +143,8 @@ function scenarioWithCoverage(params: {
 
 describe("qa coverage report", () => {
   it("groups scenario coverage metadata by theme and surface", () => {
-    const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
+    const scenarios = readQaScenarioPack().scenarios;
+    const inventory = buildQaCoverageInventory(scenarios);
 
     expect(inventory.scenarioCount).toBeGreaterThan(0);
     expect(inventory.coverageIdCount).toBeGreaterThan(0);
@@ -169,6 +170,22 @@ describe("qa coverage report", () => {
     ).toMatchObject({
       channelDriver: "live",
     });
+    for (const [categoryId, scenarioRef] of [
+      ["docker-podman-hosting.container-setup", "qa/scenarios/runtime/compose-setup.yaml"],
+      [
+        "docker-podman-hosting.image-release-and-validation",
+        "qa/scenarios/runtime/docker-package-install.yaml",
+      ],
+    ] as const) {
+      const category = inventory.scorecardTaxonomy.categories.find(
+        (entry) => entry.id === categoryId,
+      );
+      expect(category?.profiles).toContain("release");
+      expect(category?.profiles).not.toContain("smoke-ci");
+      expect(scenarios.find((scenario) => scenario.sourcePath === scenarioRef)?.category).toBe(
+        categoryId,
+      );
+    }
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "all"),
     ).toMatchObject({

@@ -1898,7 +1898,10 @@ export function buildGatewaySessionRow(params: {
   const origin = entry?.origin;
   const originLabel = origin?.label;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
+  // A user-assigned label is an explicit rename; it must win over stored
+  // channel-derived display names or renames silently vanish on refresh.
   const displayName =
+    entry?.label ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -1910,7 +1913,6 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    entry?.label ??
     originLabel;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
@@ -2458,7 +2460,13 @@ function compareSessionEntryPairs(a: SessionEntryPair, b: SessionEntryPair): num
   if (aPinnedAt !== bPinnedAt) {
     return bPinnedAt - aPinnedAt;
   }
-  return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+  const byUpdatedAt = (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+  if (byUpdatedAt !== 0) {
+    return byUpdatedAt;
+  }
+  // Timestamp ties fall back to the key so list order (and offset paging) stays
+  // deterministic across calls; locale-independent code-unit comparison.
+  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
 
 function resolveSessionsListLimit(
