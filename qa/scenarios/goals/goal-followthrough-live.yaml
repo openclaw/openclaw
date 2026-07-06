@@ -27,9 +27,9 @@ scenario:
     - src/agents/tools/goal-tools.ts
   execution:
     kind: flow
-    channel: qa-channel
     summary: Stage a two-step active goal, then require a bare continue turn to write the next artifact without replanning.
     config:
+      requiredChannelDriver: qa-channel
       conversationId: goal-followthrough-live
       senderId: qa-goal-operator
       artifactFilePrefix: goal-continuance-live

@@ -24,9 +24,9 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    channel: qa-channel
     summary: Start a goal, send an unrelated next turn, and inspect the exact mock-provider request payload.
     config:
+      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-next-turn
       senderId: qa-goal-operator

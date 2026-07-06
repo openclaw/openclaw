@@ -32,9 +32,9 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    channel: qa-channel
     summary: Start a goal, compact the session, then inspect the next mock-provider request for active-goal context.
     config:
+      requiredChannelDriver: qa-channel
       requiredProviderMode: mock-openai
       conversationId: goal-context-compaction
       senderId: qa-goal-operator
