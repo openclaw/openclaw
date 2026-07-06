@@ -142,6 +142,7 @@ export async function runGatewayLoop(params: {
   // Defer lifecycle signals from that window until the loop can close and advance.
   let pendingStartupRequest: GatewayRunSignalRequest | null = null;
   let activeRestartRequest: GatewayRunSignalRequest | null = null;
+  let forceActiveRestartExit: (() => void) | null = null;
   let pendingStartupForceExitTimer: ReturnType<typeof setTimeout> | null = null;
   let restartDrainingMarkPromise: Promise<void> | null = null;
   let startupFailedWithoutServerHandle = false;
@@ -456,6 +457,12 @@ export async function runGatewayLoop(params: {
       clearTimeout(forceExitTimer);
       forceExitTimer = null;
     };
+    if (isRestart) {
+      forceActiveRestartExit = () => {
+        clearForceExitTimer();
+        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
+      };
+    }
 
     void (async () => {
       const restartDrainTimeoutMs = isRestart
@@ -667,11 +674,16 @@ export async function runGatewayLoop(params: {
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
       } finally {
-        clearForceExitTimer();
         server = null;
         if (isRestart) {
-          await handleRestartAfterServerClose();
+          try {
+            await handleRestartAfterServerClose();
+          } finally {
+            clearForceExitTimer();
+            forceActiveRestartExit = null;
+          }
         } else {
+          clearForceExitTimer();
           await handleStopAfterServerClose();
         }
       }
@@ -709,12 +721,18 @@ export async function runGatewayLoop(params: {
           ...currentRestartRequest,
           signal,
           restartReason,
-          restartIntent: restartIntent ?? currentRestartRequest.restartIntent,
+          restartIntent: {
+            ...currentRestartRequest.restartIntent,
+            ...restartIntent,
+            force: true,
+            reason: restartReason,
+          },
         };
         if (pendingStartupRequest) {
           pendingStartupRequest = upgradedRequest;
         } else {
           activeRestartRequest = upgradedRequest;
+          forceActiveRestartExit?.();
         }
         gatewayLog.info(`received ${signal} during shutdown; upgrading to ${restartReason}`);
         return;
