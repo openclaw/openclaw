@@ -683,7 +683,9 @@ export async function runSshSandboxCommand(
     const stderrChunks: Buffer[] = [];
 
     child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+    child.stdout.on("error", reject);
     child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+    child.stderr.on("error", reject);
     child.on("error", reject);
     child.on("close", (code) => {
       const stdout = Buffer.concat(stdoutChunks);
@@ -792,8 +794,11 @@ export async function uploadDirectoryToSshTarget(params: {
     let sshCode = 0;
 
     tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
+    tar.stderr.on("error", fail);
     ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
+    ssh.stdout.on("error", fail);
     ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    ssh.stderr.on("error", fail);
 
     const fail = (error: unknown) => {
       tar.kill("SIGKILL");
