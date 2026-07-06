@@ -112,7 +112,8 @@ function isPendingFinalDeliveryRecoveryBackoffActive(params: {
     return false;
   }
   const backoffMs = resolvePendingFinalDeliveryRecoveryBackoffMs(attemptCount);
-  return params.nowMs - lastAttemptAt < backoffMs;
+  const elapsedMs = params.nowMs - lastAttemptAt;
+  return elapsedMs >= 0 && elapsedMs < backoffMs;
 }
 
 function hasCurrentProcessOwner(params: {
@@ -872,6 +873,9 @@ async function recoverStore(params: {
         continue;
       }
       if (isPendingFinalDeliveryRecoveryBackoffActive({ entry, nowMs: Date.now() })) {
+        log.info(
+          `pending final delivery restart recovery backoff active for ${sessionKey} after ${pendingFinalDeliveryAttemptCount}/${maxPendingFinalDeliveryAttempts} attempts`,
+        );
         result.skipped++;
         continue;
       }
