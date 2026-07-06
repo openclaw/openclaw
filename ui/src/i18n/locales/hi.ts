@@ -1399,16 +1399,17 @@ export const hi: TranslationMap = {
         title: "ऑथ आवश्यक",
         summary:
           "Gateway पहुँच योग्य है, लेकिन इस ब्राउज़र के कनेक्ट होने से पहले इसे मिलान करने वाले टोकन या पासवर्ड की आवश्यकता है।",
-        stepPaste: "openclaw dashboard --no-open से टोकन पेस्ट करें या कॉन्फ़िगर किया गया पासवर्ड दर्ज करें।",
-        stepGenerate:
-          "यदि कोई टोकन कॉन्फ़िगर नहीं है, तो gateway होस्ट पर openclaw doctor --generate-gateway-token चलाएँ।",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "क्रेडेंशियल अपडेट करने के बाद फिर से कनेक्ट करें पर क्लिक करें।",
       },
       authFailed: {
         title: "ऑथ मेल नहीं खाया",
         summary:
           "प्रदान किया गया क्रेडेंशियल अस्वीकार कर दिया गया। सबसे आम कारण पुराना टोकन या किसी अन्य Gateway URL से कॉपी किया गया टोकन है।",
-        stepDashboard: "openclaw dashboard --no-open चलाएँ और नया URL खोलें या उसका टोकन पेस्ट करें।",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace: "पुराने टोकन/पासवर्ड मान बदलें; किसी अन्य Gateway URL से टोकन दोबारा उपयोग न करें।",
         stepMode:
           "एक समय में एक मेल खाने वाला auth mode उपयोग करें: token mode के लिए gateway token, password mode के लिए password।",
@@ -1428,8 +1429,8 @@ export const hi: TranslationMap = {
         summary:
           "Control UI का उपयोग करने से पहले इस ब्राउज़र को Gateway host से एक बार की स्वीकृति चाहिए।",
         upgradeSummary: "यह ब्राउज़र पहले से ज्ञात है, लेकिन अनुरोधित access बदल गया है और नई स्वीकृति चाहिए।",
-        stepList: "Gateway host पर openclaw devices list चलाएँ।",
-        stepApproveId: "इस request को स्वीकृत करें: openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "उस सूची से लंबित browser/device request को स्वीकृत करें।",
         stepReconnect: "स्वीकृति पूरी होने के बाद फिर से कनेक्ट करें।",
       },
@@ -1454,8 +1455,8 @@ export const hi: TranslationMap = {
       protocol: {
         title: "प्रोटोकॉल मेल नहीं खाता",
         summary: "सर्व किया गया Control UI और चल रहा Gateway समर्थित कनेक्शन प्रोटोकॉल पर सहमत नहीं हैं।",
-        stepDashboard:
-          "openclaw dashboard के साथ सर्व किया गया dashboard फिर से खोलें ताकि UI और Gateway एक ही install से आएँ।",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "यदि pnpm ui:dev का उपयोग कर रहे हैं, तो वर्तमान checkout के विरुद्ध dev UI को फिर से build या restart करें।",
         stepRestart:
@@ -1465,11 +1466,11 @@ export const hi: TranslationMap = {
         title: "कनेक्ट नहीं हो सका",
         summary:
           "ब्राउज़र Gateway कनेक्शन पूरा नहीं कर सका। credentials दोबारा आज़माने से पहले target और transport जाँचें।",
-        stepGateway: "openclaw status या openclaw gateway run के साथ पुष्टि करें कि Gateway चल रहा है।",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "WebSocket URL जांचें और जब Gateway HTTPS/Tailscale Serve के पीछे हो, तो wss:// का उपयोग करें।",
-        stepDashboard:
-          "मौजूदा URL और auth विवरण फिर से कॉपी करने के लिए openclaw dashboard --no-open के साथ dashboard फिर से खोलें।",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

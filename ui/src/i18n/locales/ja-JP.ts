@@ -1413,18 +1413,17 @@ export const ja_JP: TranslationMap = {
         title: "認証が必要です",
         summary:
           "Gateway には到達できますが、このブラウザーが接続する前に一致するトークンまたはパスワードが必要です。",
-        stepPaste:
-          "openclaw dashboard --no-open のトークンを貼り付けるか、構成済みのパスワードを入力します。",
-        stepGenerate:
-          "トークンが構成されていない場合は、Gateway ホストで openclaw doctor --generate-gateway-token を実行します。",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "認証情報を更新したら、もう一度 Connect をクリックします。",
       },
       authFailed: {
         title: "認証が一致しません",
         summary:
           "指定された認証情報は拒否されました。最も一般的な原因は、古いトークン、または別の Gateway URL からコピーしたトークンです。",
-        stepDashboard:
-          "openclaw dashboard --no-open を実行し、新しい URL を開くか、そのトークンを貼り付けます。",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace:
           "古いトークン/パスワード値を置き換えてください。別の Gateway URL のトークンは再利用しないでください。",
         stepMode:
@@ -1447,8 +1446,8 @@ export const ja_JP: TranslationMap = {
           "このブラウザーで Control UI を使用するには、Gateway ホストからの一度限りの承認が必要です。",
         upgradeSummary:
           "このブラウザーは既に認識されていますが、要求されたアクセスが変わったため、新しい承認が必要です。",
-        stepList: "Gateway ホストで openclaw devices list を実行します。",
-        stepApproveId: "このリクエストを承認します: openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "その一覧から保留中のブラウザー/デバイスリクエストを承認します。",
         stepReconnect: "承認が完了したら再接続します。",
       },
@@ -1476,8 +1475,8 @@ export const ja_JP: TranslationMap = {
         title: "プロトコルが一致しません",
         summary:
           "提供された Control UI と実行中の Gateway で、サポートされる接続プロトコルが一致していません。",
-        stepDashboard:
-          "openclaw dashboard で提供元の dashboard を開き直し、UI と Gateway が同じインストールから来るようにします。",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "pnpm ui:dev を使用している場合は、現在の checkout に対して開発 UI を再ビルドまたは再起動します。",
         stepRestart: "OpenClaw 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
@@ -1486,12 +1485,11 @@ export const ja_JP: TranslationMap = {
         title: "接続できません",
         summary:
           "ブラウザーは Gateway 接続を完了できませんでした。認証情報を再試行する前に、ターゲットとトランスポートを確認してください。",
-        stepGateway:
-          "openclaw status または openclaw gateway run で Gateway が実行中であることを確認します。",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "WebSocket URL を確認し、Gateway が HTTPS/Tailscale Serve の背後にある場合は wss:// を使用します。",
-        stepDashboard:
-          "openclaw dashboard --no-open で dashboard を開き直し、現在の URL と認証詳細を再コピーします。",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

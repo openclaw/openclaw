@@ -1418,17 +1418,17 @@ export const ru: TranslationMap = {
         title: "Требуется аутентификация",
         summary:
           "Gateway доступен, но для подключения этого браузера требуется соответствующий токен или пароль.",
-        stepPaste: "Вставьте токен из openclaw dashboard --no-open или введите настроенный пароль.",
-        stepGenerate:
-          "Если токен не настроен, выполните openclaw doctor --generate-gateway-token на хосте шлюза.",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "Нажмите «Подключиться» еще раз после обновления учетных данных.",
       },
       authFailed: {
         title: "Данные аутентификации не совпали",
         summary:
           "Предоставленные учетные данные были отклонены. Чаще всего причина — устаревший токен или токен, скопированный с другого URL Gateway.",
-        stepDashboard:
-          "Запустите openclaw dashboard --no-open и откройте новый URL или вставьте его токен.",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace:
           "Замените устаревшие значения токена/пароля; не используйте повторно токен с другого URL Gateway.",
         stepMode:
@@ -1452,8 +1452,8 @@ export const ru: TranslationMap = {
           "Этому браузеру требуется одноразовое подтверждение с хоста Gateway, прежде чем он сможет использовать Control UI.",
         upgradeSummary:
           "Этот браузер уже известен, но запрошенный доступ изменился и требует нового подтверждения.",
-        stepList: "Выполните openclaw devices list на хосте Gateway.",
-        stepApproveId: "Подтвердите этот запрос: openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "Подтвердите ожидающий запрос браузера/устройства из этого списка.",
         stepReconnect: "Подключитесь повторно после завершения подтверждения.",
       },
@@ -1480,8 +1480,8 @@ export const ru: TranslationMap = {
         title: "Несоответствие протокола",
         summary:
           "Обслуживаемый Control UI и запущенный Gateway не согласованы по поддерживаемому протоколу подключения.",
-        stepDashboard:
-          "Повторно откройте обслуживаемую панель командой openclaw dashboard, чтобы UI и Gateway были из одной установки.",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "Если используется pnpm ui:dev, пересоберите или перезапустите dev UI для текущей рабочей копии.",
         stepRestart:
@@ -1491,12 +1491,11 @@ export const ru: TranslationMap = {
         title: "Не удалось подключиться",
         summary:
           "Браузер не смог завершить подключение к Gateway. Проверьте цель и транспорт перед повторной попыткой ввода учетных данных.",
-        stepGateway:
-          "Убедитесь, что Gateway запущен, с помощью openclaw status или openclaw gateway run.",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "Проверьте URL WebSocket и используйте wss://, когда Gateway находится за HTTPS/Tailscale Serve.",
-        stepDashboard:
-          "Снова откройте панель управления с помощью openclaw dashboard --no-open, чтобы повторно скопировать текущий URL и данные аутентификации.",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },

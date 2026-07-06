@@ -1411,18 +1411,17 @@ export const nl: TranslationMap = {
         title: "Authenticatie vereist",
         summary:
           "De Gateway is bereikbaar, maar heeft een overeenkomend token of wachtwoord nodig voordat deze browser kan verbinden.",
-        stepPaste:
-          "Plak het token uit openclaw dashboard --no-open of voer het geconfigureerde wachtwoord in.",
-        stepGenerate:
-          "Als er geen token is geconfigureerd, voer dan openclaw doctor --generate-gateway-token uit op de Gateway-host.",
+        stepPasteToken:
+          "Paste the token printed by this command on the Gateway host, or enter the configured password:",
+        stepGenerateToken: "If no token is configured, generate one on the Gateway host:",
         stepConnect: "Klik opnieuw op Connect nadat je de referentie hebt bijgewerkt.",
       },
       authFailed: {
         title: "Authenticatie komt niet overeen",
         summary:
           "De opgegeven referentie is geweigerd. De meest voorkomende oorzaak is een verlopen token of een token dat van een andere Gateway-URL is gekopieerd.",
-        stepDashboard:
-          "Voer openclaw dashboard --no-open uit en open de nieuwe URL of plak het token.",
+        stepFreshDashboard:
+          "Print a fresh dashboard URL on the Gateway host, then open it or paste its token:",
         stepReplace:
           "Vervang verlopen token-/wachtwoordwaarden; hergebruik geen token van een andere Gateway-URL.",
         stepMode:
@@ -1446,8 +1445,8 @@ export const nl: TranslationMap = {
           "Deze browser heeft een eenmalige goedkeuring van de Gateway-host nodig voordat Control UI kan worden gebruikt.",
         upgradeSummary:
           "Deze browser is al bekend, maar de gevraagde toegang is gewijzigd en vereist nieuwe goedkeuring.",
-        stepList: "Voer openclaw devices list uit op de Gateway-host.",
-        stepApproveId: "Keur deze aanvraag goed: openclaw devices approve {requestId}.",
+        stepListDevices: "List the pending device requests on the Gateway host:",
+        stepApproveRequest: "Approve this browser's pairing request:",
         stepApprove: "Keur de openstaande browser-/apparaat aanvraag uit die lijst goed.",
         stepReconnect: "Verbind opnieuw nadat de goedkeuring is voltooid.",
       },
@@ -1475,8 +1474,8 @@ export const nl: TranslationMap = {
         title: "Protocol komt niet overeen",
         summary:
           "De geserveerde Control UI en de draaiende Gateway zijn het niet eens over het ondersteunde verbindingsprotocol.",
-        stepDashboard:
-          "Open het geserveerde dashboard opnieuw met openclaw dashboard zodat UI en Gateway uit dezelfde installatie komen.",
+        stepReopenDashboard:
+          "Reopen the served dashboard so the UI and Gateway come from the same install:",
         stepDevUi:
           "Als je pnpm ui:dev gebruikt, bouw of herstart de dev-UI tegen de huidige checkout.",
         stepRestart:
@@ -1486,11 +1485,11 @@ export const nl: TranslationMap = {
         title: "Kan niet verbinden",
         summary:
           "De browser kon de Gateway-verbinding niet voltooien. Controleer doel en transport voordat je referenties opnieuw probeert.",
-        stepGateway: "Bevestig dat de Gateway draait met openclaw status of openclaw gateway run.",
+        stepCheckStatus: "Confirm the Gateway is running on its host:",
         stepUrl:
           "Controleer de WebSocket-URL en gebruik wss:// wanneer de Gateway achter HTTPS/Tailscale Serve staat.",
-        stepDashboard:
-          "Open het dashboard opnieuw met openclaw dashboard --no-open om de huidige URL en authdetails opnieuw te kopiëren.",
+        stepRecopyDashboard:
+          "Recopy the current URL and auth details from a fresh dashboard command:",
       },
     },
   },
