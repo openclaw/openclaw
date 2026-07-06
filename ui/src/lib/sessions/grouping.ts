@@ -47,7 +47,7 @@ function dateBucketId(updatedAt: number | null | undefined, now: number): string
   return "older";
 }
 
-export function sessionRowChannel(row: GatewaySessionRow): string {
+function sessionRowChannel(row: GatewaySessionRow): string {
   return row.channel ?? parseSessionKeyParts(row.key)?.channel ?? UNGROUPED_ID;
 }
 

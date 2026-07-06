@@ -96,7 +96,7 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
-export class ChatPage extends LitElement {
+class ChatPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ChatPageContext;
   @property({ attribute: false }) data!: ChatRouteData;

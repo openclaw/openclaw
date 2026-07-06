@@ -147,7 +147,7 @@ type NativeControlAuth = {
   password?: string | null;
 };
 
-export type ApplicationStartupSettings = {
+type ApplicationStartupSettings = {
   settings: UiSettings;
   password: string | null;
   pendingGatewayUrl: string | null;

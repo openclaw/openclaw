@@ -93,7 +93,7 @@ export function getCronJobPayload(job: CronJob): CronPayload | null {
   return isCronPayload(payload) ? payload : null;
 }
 
-export function hasCronJobPayload(job: CronJob): boolean {
+function hasCronJobPayload(job: CronJob): boolean {
   return getCronJobPayload(job) !== null;
 }
 
@@ -155,7 +155,7 @@ export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
-export type CronRunsLoadStatus = "ok" | "error" | "skipped";
+type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
   client: GatewayBrowserClient | null;

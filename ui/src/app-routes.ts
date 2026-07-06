@@ -32,9 +32,9 @@ export type ApplicationRouter = Router<
   AppRouteModule,
   unknown
 >;
-export type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
-export const APP_ROUTE_TREE = [
+const APP_ROUTE_TREE = [
   chatPage,
   overviewPage,
   activityPage,
