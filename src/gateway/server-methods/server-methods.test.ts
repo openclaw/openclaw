@@ -1149,6 +1149,36 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("redacts mixed-case data URLs from chat history", () => {
+    const payload = Buffer.from("png-bytes").toString("base64");
+    const image_url = `DATA:image/png;BASE64,${payload}`;
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "input_image", image_url }],
+          timestamp: 1,
+        },
+      ],
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(image_url, "utf8"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("preserves input_image data URLs when inline media redaction is disabled", () => {
     const image_url = "data:image/png;base64,cG5n";
     const result = sanitizeChatHistoryMessages([

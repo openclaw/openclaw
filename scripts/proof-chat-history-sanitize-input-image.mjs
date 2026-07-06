@@ -52,6 +52,36 @@ async function main() {
     "input_image.image_url data URL redacted",
   );
 
+  const mixedCaseDataUrl = `DATA:image/png;BASE64,${payload}`;
+  const mixedCaseInputImageResult = sanitizeChatHistoryMessages(
+    [
+      {
+        role: "assistant",
+        content: [{ type: "input_image", image_url: mixedCaseDataUrl }],
+        timestamp: 1,
+      },
+    ],
+    undefined,
+    REDACT_OPTS,
+  );
+  assertDeepEqual(
+    mixedCaseInputImageResult,
+    [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "input_image",
+            omitted: true,
+            bytes: Buffer.byteLength(mixedCaseDataUrl, "utf8"),
+          },
+        ],
+        timestamp: 1,
+      },
+    ],
+    "mixed-case input_image.image_url data URL redacted",
+  );
+
   const imageUrlResult = sanitizeChatHistoryMessages(
     [
       {

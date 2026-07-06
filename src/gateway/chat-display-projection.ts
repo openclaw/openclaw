@@ -14,6 +14,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -357,6 +358,10 @@ function redactInlineMediaBytes(value: string): { omitted: true; bytes: number }
   return { omitted: true, bytes: Buffer.byteLength(value, "utf8") };
 }
 
+function isInlineDataUrl(value: string): boolean {
+  return classifyMediaReferenceSource(value).isDataUrl;
+}
+
 function sanitizeChatHistoryContentBlock(
   block: unknown,
   opts?: ChatHistorySanitizeOpts,
@@ -432,7 +437,7 @@ function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   if (opts?.redactInlineMedia === true) {
-    if (type === "image" && typeof entry.url === "string" && entry.url.startsWith("data:")) {
+    if (type === "image" && typeof entry.url === "string" && isInlineDataUrl(entry.url)) {
       const redacted = redactInlineMediaBytes(entry.url);
       delete entry.url;
       entry.omitted = redacted.omitted;
@@ -448,7 +453,7 @@ function sanitizeChatHistoryContentBlock(
         source.bytes = redacted.bytes;
         entry.source = source;
         changed = true;
-      } else if (typeof source.url === "string" && source.url.startsWith("data:")) {
+      } else if (typeof source.url === "string" && isInlineDataUrl(source.url)) {
         const redacted = redactInlineMediaBytes(source.url);
         delete source.url;
         source.omitted = redacted.omitted;
@@ -458,7 +463,7 @@ function sanitizeChatHistoryContentBlock(
       }
     }
     if (type === "input_image") {
-      if (typeof entry.image_url === "string" && entry.image_url.startsWith("data:")) {
+      if (typeof entry.image_url === "string" && isInlineDataUrl(entry.image_url)) {
         const redacted = redactInlineMediaBytes(entry.image_url);
         delete entry.image_url;
         entry.omitted = redacted.omitted;
@@ -466,7 +471,7 @@ function sanitizeChatHistoryContentBlock(
         changed = true;
       } else if (entry.image_url && typeof entry.image_url === "object") {
         const imageUrl = { ...(entry.image_url as Record<string, unknown>) };
-        if (typeof imageUrl.url === "string" && imageUrl.url.startsWith("data:")) {
+        if (typeof imageUrl.url === "string" && isInlineDataUrl(imageUrl.url)) {
           const redacted = redactInlineMediaBytes(imageUrl.url);
           delete imageUrl.url;
           imageUrl.omitted = redacted.omitted;
