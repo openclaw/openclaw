@@ -13,6 +13,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.UUID
 
 internal const val VOICE_NOTE_MAX_DURATION_MS = 180_000L
 internal const val VOICE_NOTE_MAX_BYTES = 3_500_000L
@@ -38,10 +39,7 @@ internal data class VoiceNoteRecording(
 )
 
 internal interface VoiceNoteRecordingEngine {
-  fun start(
-    outputFile: File,
-    onMaxDurationReached: () -> Unit,
-  )
+  fun start(outputFile: File)
 
   fun stop(): Long
 
@@ -54,10 +52,10 @@ internal class VoiceNoteRecorderController(
   private val outputDirectory: File,
   private val engine: VoiceNoteRecordingEngine,
   private val requestPermission: suspend () -> Boolean,
-  private val isMicCaptureActive: () -> Boolean,
-  private val onRecordingActiveChanged: (Boolean) -> Unit = {},
+  private val acquireMic: () -> Boolean,
+  private val releaseMic: () -> Unit,
   private val onFinished: (VoiceNoteRecording) -> Unit,
-  private val nowMillis: () -> Long = System::currentTimeMillis,
+  private val elapsedRealtimeMillis: () -> Long = SystemClock::elapsedRealtime,
 ) {
   private val lock = Any()
   private val _state = MutableStateFlow<VoiceNoteRecorderState>(VoiceNoteRecorderState.Idle)
@@ -68,14 +66,11 @@ internal class VoiceNoteRecorderController(
 
   private var outputFile: File? = null
   private var elapsedJob: Job? = null
+  private var ownsMic = false
 
   suspend fun start(): Boolean {
     synchronized(lock) {
       if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) return false
-    }
-    if (isMicCaptureActive()) {
-      fail("Voice capture is already using the microphone.")
-      return false
     }
     if (!requestPermission()) {
       fail("Microphone permission is required to record a voice note.")
@@ -86,20 +81,19 @@ internal class VoiceNoteRecorderController(
       if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) {
         return@synchronized false
       }
-      if (isMicCaptureActive()) {
+      if (!acquireMic()) {
         failLocked("Voice capture is already using the microphone.")
         return@synchronized false
       }
+      ownsMic = true
 
-      val startedAt = nowMillis()
-      val file = File(outputDirectory, "voice-note-$startedAt.m4a")
+      val startedAt = elapsedRealtimeMillis()
+      val file = File(outputDirectory, "voice-note-${UUID.randomUUID()}.m4a")
       try {
-        engine.start(file) {
-          // The platform duration cap and the Done button share one terminal path.
-          scope.launch { finish() }
-        }
+        engine.start(file)
       } catch (_: Throwable) {
         engine.cancel()
+        releaseMicLocked()
         file.delete()
         failLocked("Could not start voice-note recording.")
         return@synchronized false
@@ -108,7 +102,6 @@ internal class VoiceNoteRecorderController(
       outputFile = file
       _elapsedMs.value = 0L
       _state.value = VoiceNoteRecorderState.Recording(startedAtMillis = startedAt)
-      onRecordingActiveChanged(true)
       startElapsedUpdates(startedAt)
       true
     }
@@ -151,7 +144,7 @@ internal class VoiceNoteRecorderController(
         // so cancel() must still be able to delete the handed-off recording.
         _elapsedMs.value = 0L
         _state.value = VoiceNoteRecorderState.Preparing
-        onRecordingActiveChanged(false)
+        releaseMicLocked()
         VoiceNoteRecording(file = file, durationMs = durationMs)
       }
     onFinished(recording)
@@ -173,8 +166,8 @@ internal class VoiceNoteRecorderController(
       elapsedJob = null
       if (_state.value is VoiceNoteRecorderState.Recording) {
         engine.cancel()
-        onRecordingActiveChanged(false)
       }
+      releaseMicLocked()
       outputFile?.delete()
       outputFile = null
       _elapsedMs.value = 0L
@@ -195,7 +188,14 @@ internal class VoiceNoteRecorderController(
     elapsedJob =
       scope.launch {
         while (isActive && state.value is VoiceNoteRecorderState.Recording) {
-          _elapsedMs.value = (nowMillis() - startedAt).coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
+          val elapsed = (elapsedRealtimeMillis() - startedAt).coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
+          _elapsedMs.value = elapsed
+          // MediaRecorder's duration callback races its asynchronous auto-stop.
+          // Own the cap here so every successful finish calls stop() exactly once.
+          if (elapsed >= VOICE_NOTE_MAX_DURATION_MS) {
+            finish()
+            return@launch
+          }
           delay(250L)
         }
       }
@@ -210,10 +210,16 @@ internal class VoiceNoteRecorderController(
   }
 
   private fun finishFailureLocked(message: String) {
+    releaseMicLocked()
     outputFile = null
     _elapsedMs.value = 0L
     _state.value = VoiceNoteRecorderState.Failure(message)
-    onRecordingActiveChanged(false)
+  }
+
+  private fun releaseMicLocked() {
+    if (!ownsMic) return
+    ownsMic = false
+    releaseMic()
   }
 }
 
@@ -238,10 +244,7 @@ internal class AndroidVoiceNoteRecordingEngine(
   private var recorder: MediaRecorder? = null
   private var startedAtElapsedMs = 0L
 
-  override fun start(
-    outputFile: File,
-    onMaxDurationReached: () -> Unit,
-  ) {
+  override fun start(outputFile: File) {
     check(recorder == null)
     val next = MediaRecorder(context)
     try {
@@ -251,13 +254,7 @@ internal class AndroidVoiceNoteRecordingEngine(
       next.setAudioChannels(1)
       next.setAudioEncodingBitRate(32_000)
       next.setAudioSamplingRate(44_100)
-      next.setMaxDuration(VOICE_NOTE_MAX_DURATION_MS.toInt())
       next.setOutputFile(outputFile.absolutePath)
-      next.setOnInfoListener { _, what, _ ->
-        if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) {
-          onMaxDurationReached()
-        }
-      }
       next.prepare()
       next.start()
       startedAtElapsedMs = elapsedRealtime()

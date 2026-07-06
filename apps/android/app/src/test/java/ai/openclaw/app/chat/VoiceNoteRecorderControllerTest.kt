@@ -21,15 +21,10 @@ class VoiceNoteRecorderControllerTest {
     var stopCount = 0
     var cancelCount = 0
     var outputFile: File? = null
-    private var onMaxDurationReached: (() -> Unit)? = null
 
-    override fun start(
-      outputFile: File,
-      onMaxDurationReached: () -> Unit,
-    ) {
+    override fun start(outputFile: File) {
       startCount += 1
       this.outputFile = outputFile
-      this.onMaxDurationReached = onMaxDurationReached
       outputFile.writeBytes(outputBytes)
     }
 
@@ -41,10 +36,6 @@ class VoiceNoteRecorderControllerTest {
     override fun cancel() {
       cancelCount += 1
     }
-
-    fun reachMaxDuration() {
-      onMaxDurationReached?.invoke()
-    }
   }
 
   @Test
@@ -53,7 +44,7 @@ class VoiceNoteRecorderControllerTest {
       val directory = Files.createTempDirectory("voice-note-test").toFile()
       var now = 1_000L
       val engine = FakeEngine()
-      val controller = controller(directory, engine, nowMillis = { now })
+      val controller = controller(directory, engine, elapsedRealtimeMillis = { now })
 
       assertTrue(controller.start())
       assertEquals(VoiceNoteRecorderState.Recording(startedAtMillis = 1_000L), controller.state.value)
@@ -130,15 +121,17 @@ class VoiceNoteRecorderControllerTest {
     }
 
   @Test
-  fun maxDurationCallbackUsesNormalFinishPath() =
+  fun durationCapUsesNormalFinishPath() =
     runTest {
       val directory = Files.createTempDirectory("voice-note-test").toFile()
+      var now = 1_000L
       val engine = FakeEngine(durationMs = VOICE_NOTE_MAX_DURATION_MS)
       val finished = mutableListOf<VoiceNoteRecording>()
-      val controller = controller(directory, engine, onFinished = finished::add)
+      val controller = controller(directory, engine, onFinished = finished::add, elapsedRealtimeMillis = { now })
 
       controller.start()
-      engine.reachMaxDuration()
+      now += VOICE_NOTE_MAX_DURATION_MS
+      advanceTimeBy(250L)
       runCurrent()
 
       assertEquals(1, engine.stopCount)
@@ -250,7 +243,7 @@ class VoiceNoteRecorderControllerTest {
     runTest {
       val directory = Files.createTempDirectory("voice-note-test").toFile()
       val engine = FakeEngine()
-      val controller = controller(directory, engine, isMicCaptureActive = { true })
+      val controller = controller(directory, engine, acquireMic = { false })
 
       assertFalse(controller.start())
 
@@ -283,17 +276,19 @@ class VoiceNoteRecorderControllerTest {
     directory: File,
     engine: FakeEngine,
     requestPermission: suspend () -> Boolean = { true },
-    isMicCaptureActive: () -> Boolean = { false },
+    acquireMic: () -> Boolean = { true },
+    releaseMic: () -> Unit = {},
     onFinished: (VoiceNoteRecording) -> Unit = {},
-    nowMillis: () -> Long = { 1_000L },
+    elapsedRealtimeMillis: () -> Long = { 1_000L },
   ): VoiceNoteRecorderController =
     VoiceNoteRecorderController(
       scope = this,
       outputDirectory = directory,
       engine = engine,
       requestPermission = requestPermission,
-      isMicCaptureActive = isMicCaptureActive,
+      acquireMic = acquireMic,
+      releaseMic = releaseMic,
       onFinished = onFinished,
-      nowMillis = nowMillis,
+      elapsedRealtimeMillis = elapsedRealtimeMillis,
     )
 }

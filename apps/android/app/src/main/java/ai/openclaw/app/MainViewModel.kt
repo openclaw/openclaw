@@ -22,6 +22,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,7 +75,6 @@ class MainViewModel(
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
   val assistantAutoSendInFlight: StateFlow<Boolean> = _assistantAutoSendInFlight
-  private val voiceNoteRecordingActive = MutableStateFlow(false)
 
   /**
    * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
@@ -530,8 +530,6 @@ class MainViewModel(
   }
 
   fun setMicEnabled(enabled: Boolean) {
-    // Voice capture has no mic arbiter; the active composer recording owns it until stop/cancel.
-    if (enabled && voiceNoteRecordingActive.value) return
     ensureRuntime().setMicEnabled(enabled)
   }
 
@@ -540,19 +538,24 @@ class MainViewModel(
   }
 
   fun setTalkModeEnabled(enabled: Boolean) {
-    if (enabled && voiceNoteRecordingActive.value) return
     ensureRuntime().setTalkModeEnabled(enabled)
   }
 
   suspend fun requestVoiceNotePermission(): Boolean {
     val requester = permissionRequester ?: return false
-    return runCatching {
+    return try {
       requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
-    }.getOrDefault(false)
+    } catch (error: CancellationException) {
+      throw error
+    } catch (_: Throwable) {
+      false
+    }
   }
 
-  fun setVoiceNoteRecordingActive(active: Boolean) {
-    voiceNoteRecordingActive.value = active
+  internal fun tryAcquireVoiceNoteMic(): Boolean = runtimeRef.value?.tryAcquireVoiceNoteMic() == true
+
+  internal fun releaseVoiceNoteMic() {
+    runtimeRef.value?.releaseVoiceNoteMic()
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {

@@ -742,6 +742,7 @@ class NodeRuntime private constructor(
   // Keep ownership epochs and their service/capture state transitions atomic.
   // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
   private val voiceCaptureOwnershipLock = Any()
+  private var voiceNoteOwnsMic = false
   private val voiceCapturePreparationMutex = Mutex()
 
   private var didAutoRequestCanvasRehydrate = false
@@ -1865,6 +1866,19 @@ class NodeRuntime private constructor(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
   }
 
+  internal fun tryAcquireVoiceNoteMic(): Boolean =
+    synchronized(voiceCaptureOwnershipLock) {
+      if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return@synchronized false
+      voiceNoteOwnsMic = true
+      true
+    }
+
+  internal fun releaseVoiceNoteMic() {
+    synchronized(voiceCaptureOwnershipLock) {
+      voiceNoteOwnsMic = false
+    }
+  }
+
   fun cancelMicCapture() {
     micCapture.cancelMicCapture()
     setVoiceCaptureMode(VoiceCaptureMode.Off, persistManualMic = false)
@@ -2023,6 +2037,9 @@ class NodeRuntime private constructor(
             talkPttCommandEpoch.get() != commandEpoch
           ) {
             throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          }
+          if (voiceNoteOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: voice note recording is active")
           }
           if (!hasRecordAudioPermission()) {
             throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
@@ -2251,6 +2268,7 @@ class NodeRuntime private constructor(
     persistManualMic: Boolean = true,
   ) {
     synchronized(voiceCaptureOwnershipLock) {
+      if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
       talkPttCommandEpoch.incrementAndGet()
       voiceCaptureOwnershipEpoch.incrementAndGet()
       val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()

@@ -133,7 +133,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val voiceNoteRecorder =
     rememberVoiceNoteRecorderController(
       viewModel = viewModel,
-      isMicCaptureActive = micCaptureActive,
       onFinished = attachments::add,
     )
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()

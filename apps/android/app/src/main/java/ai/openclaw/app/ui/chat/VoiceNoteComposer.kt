@@ -35,6 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,12 +45,11 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun rememberVoiceNoteRecorderController(
   viewModel: MainViewModel,
-  isMicCaptureActive: Boolean,
   onFinished: (PendingAttachment) -> Unit,
 ): VoiceNoteRecorderController {
   val context = LocalContext.current.applicationContext
+  val lifecycleOwner = LocalLifecycleOwner.current
   val scope = rememberCoroutineScope()
-  val currentMicCaptureActive by rememberUpdatedState(isMicCaptureActive)
   val currentOnFinished by rememberUpdatedState(onFinished)
   lateinit var controller: VoiceNoteRecorderController
   controller =
@@ -57,8 +59,8 @@ internal fun rememberVoiceNoteRecorderController(
         outputDirectory = context.cacheDir,
         engine = AndroidVoiceNoteRecordingEngine(context),
         requestPermission = viewModel::requestVoiceNotePermission,
-        isMicCaptureActive = { currentMicCaptureActive },
-        onRecordingActiveChanged = viewModel::setVoiceNoteRecordingActive,
+        acquireMic = viewModel::tryAcquireVoiceNoteMic,
+        releaseMic = viewModel::releaseVoiceNoteMic,
         onFinished = { recording ->
           scope.launch(Dispatchers.IO) {
             val attachment = runCatching { stageVoiceNoteAttachment(recording) }
@@ -75,8 +77,16 @@ internal fun rememberVoiceNoteRecorderController(
         },
       )
     }
-  DisposableEffect(controller) {
-    onDispose { controller.cancel() }
+  DisposableEffect(controller, lifecycleOwner) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_STOP) controller.cancel()
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      controller.cancel()
+    }
   }
   return controller
 }

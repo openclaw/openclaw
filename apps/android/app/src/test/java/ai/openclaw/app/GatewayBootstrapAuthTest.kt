@@ -849,6 +849,32 @@ class GatewayBootstrapAuthTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun voiceNoteMicOwnershipBlocksLocalVoiceAndGatewayPtt() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      try {
+        assertTrue(runtime.tryAcquireVoiceNoteMic())
+
+        runtime.setMicEnabled(true)
+        runtime.setTalkModeEnabled(true)
+        val ptt = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+        assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+        assertEquals("MIC_BUSY", ptt.error?.code)
+        assertEquals("MIC_BUSY: voice note recording is active", ptt.error?.message)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        runtime.releaseVoiceNoteMic()
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
