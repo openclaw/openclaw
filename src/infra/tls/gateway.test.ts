@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { CONFIG_DIR } from "../../utils.js";
 import { normalizeFingerprint } from "./fingerprint.js";
-import { loadGatewayTlsRuntime } from "./gateway.js";
+import { loadGatewayTlsRuntime, upgradeGatewayTlsCert } from "./gateway.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-gateway-tls-test-");
@@ -194,7 +194,7 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.keyPath).not.toContain("gateway-key.pem");
   });
 
-  it("upgrades existing CN-only OpenClaw-generated cert to include subjectAltName", async () => {
+  it("upgrades existing CN-only OpenClaw-generated cert via upgradeGatewayTlsCert", async () => {
     const defaultCertPath = path.join(CONFIG_DIR, "gateway", "tls", "gateway-cert.pem");
     const defaultKeyPath = path.join(CONFIG_DIR, "gateway", "tls", "gateway-key.pem");
     const gatewayTlsDir = path.join(CONFIG_DIR, "gateway", "tls");
@@ -230,14 +230,12 @@ describe("loadGatewayTlsRuntime", () => {
       expect(x509Before.subject).toContain("CN=openclaw-gateway");
       expect(x509Before.subjectAltName).toBeFalsy();
 
-      const result = await loadGatewayTlsRuntime({
-        enabled: true,
-        certPath: "",
-        keyPath: "",
-        autoGenerate: true,
+      // upgradeGatewayTlsCert is called explicitly (not during startup)
+      const upgraded = await upgradeGatewayTlsCert({
+        certPath: defaultCertPath,
+        keyPath: defaultKeyPath,
       });
-      expect(result.enabled).toBe(true);
-      expect(result.error).toBeUndefined();
+      expect(upgraded).toBe(true);
 
       const certPem = await fs.readFile(defaultCertPath, "utf8");
       const x509After = new X509Certificate(certPem);
@@ -330,21 +328,14 @@ describe("loadGatewayTlsRuntime", () => {
     expect(x509Before.subject).toContain("CN=custom-server");
     expect(x509Before.subjectAltName).toBeFalsy();
 
-    const result = await loadGatewayTlsRuntime({
-      enabled: true,
-      certPath,
-      keyPath,
-      autoGenerate: true,
-    });
-
-    expect(result.enabled).toBe(true);
-    expect(result.error).toBeUndefined();
+    // upgradeGatewayTlsCert must not touch custom certs
+    const upgraded = await upgradeGatewayTlsCert({ certPath, keyPath });
+    expect(upgraded).toBe(false);
 
     // Custom cert must not be regenerated — CN and SAN must be unchanged
     const certPem = await (await import("node:fs/promises")).readFile(certPath, "utf8");
     const x509After = new X509Certificate(certPem);
     expect(x509After.subject).toContain("CN=custom-server");
     expect(x509After.subjectAltName).toBeFalsy();
-    expect(result.fingerprintSha256).toBe(normalizeFingerprint(x509After.fingerprint256 ?? ""));
   });
 });

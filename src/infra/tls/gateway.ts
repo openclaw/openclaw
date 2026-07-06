@@ -132,8 +132,13 @@ function isOpenClawGeneratedCnOnlyCert(certPem: string): boolean {
  * cert was regenerated, false when nothing was done.
  *
  * Regeneration is transactional: the old files are renamed to backup paths
- * before generating new ones, and restored if generation fails. */
-async function maybeUpgradeCnOnlyCert(params: {
+ * before generating new ones, and restored if generation fails.
+ *
+ * NOTE: This function is intentionally NOT called during startup in
+ * loadGatewayTlsRuntime — upgrading existing certs at startup changes the
+ * advertised fingerprint and may disrupt clients.  Call it explicitly via
+ * a doctor / migration command when needed. */
+export async function upgradeGatewayTlsCert(params: {
   certPath: string;
   keyPath: string;
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void };
@@ -226,43 +231,6 @@ export async function loadGatewayTlsRuntime(
     const cert = await fs.readFile(certPath, "utf8");
     const key = await fs.readFile(keyPath, "utf8");
     const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
-
-    // Upgrade path: if the loaded cert is an older OpenClaw-generated CN-only
-    // certificate (missing subjectAltName), regenerate with SANs.  Only run
-    // for default cert/key paths — explicit user-provided paths are never
-    // rewritten, even if the certificate happens to be CN=openclaw-gateway.
-    const isDefaultCertPath = !(typeof cfg.certPath === "string" && cfg.certPath.trim());
-    const isDefaultKeyPath = !(typeof cfg.keyPath === "string" && cfg.keyPath.trim());
-    if (autoGenerate && caPath === undefined && isDefaultCertPath && isDefaultKeyPath) {
-      const upgraded = await maybeUpgradeCnOnlyCert({
-        certPath,
-        keyPath,
-        log,
-      }).catch(() => false);
-      if (upgraded) {
-        // Re-read the freshly generated material
-        const freshCert = await fs.readFile(certPath, "utf8");
-        const freshKey = await fs.readFile(keyPath, "utf8");
-        const builtUpgrade = buildTlsResult(
-          certPath,
-          keyPath,
-          undefined,
-          freshCert,
-          freshKey,
-          undefined,
-        );
-        if ("error" in builtUpgrade) {
-          return {
-            enabled: false,
-            required: true,
-            certPath,
-            keyPath,
-            error: builtUpgrade.error,
-          };
-        }
-        return builtUpgrade.ok;
-      }
-    }
 
     const built = buildTlsResult(certPath, keyPath, caPath, cert, key, ca);
     if ("error" in built) {
