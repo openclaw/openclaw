@@ -286,7 +286,8 @@ conversation bindings, or any non-Codex harness.
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "auto",
             plugins: {
               "google-calendar": {
                 enabled: true,
@@ -305,6 +306,9 @@ conversation bindings, or any non-Codex harness.
 
 - `plugins.entries.codex.config.codexPlugins.enabled`: enables native Codex
   plugin/app support for the Codex harness. Default: `false`.
+- `plugins.entries.codex.config.codexPlugins.allow_all_plugins`: exposes every
+  currently accessible app connected to the authenticated Codex account in
+  each new native Codex thread. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
   default destructive-action policy for migrated plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
@@ -340,6 +344,13 @@ host-specific.
 asynchronously when stale. Codex thread app config is computed at Codex harness
 session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
+
+`codexPlugins.allow_all_plugins` snapshots every currently accessible account
+app into each new native Codex thread. It does not install plugins or apps, and
+inaccessible apps stay excluded. Account apps use the global
+`codexPlugins.allow_destructive_actions` policy. Explicit plugin entries take
+precedence when the same app is present in both paths. If `app/list` cannot be
+read, account-wide exposure fails closed.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.

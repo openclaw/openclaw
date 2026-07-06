@@ -4914,6 +4914,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Bonjour (LAN)
   - H3: Tailnet (cross-network)
   - H3: Manual host/port
+  - H2: Multiple gateways
   - H2: Canvas + A2UI
   - H2: Computer Use relationship
   - H3: Canvas eval / snapshot
@@ -5423,6 +5424,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How native plugin setup works
   - H2: V1 support boundary
   - H2: App inventory and ownership
+  - H2: Connected account apps
   - H2: Thread app config
   - H2: Destructive action policy
   - H2: Troubleshooting

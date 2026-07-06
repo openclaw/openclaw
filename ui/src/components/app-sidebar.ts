@@ -939,18 +939,10 @@ export class AppSidebar extends LitElement {
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
         : this.activeRouteId === routeId;
-    const enabled = this.isRouteEnabled(routeId);
-    if (!enabled) {
-      return html`
-        <span class="nav-item nav-item--disabled" aria-disabled="true">
-          <span class="nav-item__icon" aria-hidden="true"
-            >${icons[navigationIconForRoute(routeId)]}</span
-          >
-          ${!this.collapsed
-            ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>`
-            : nothing}
-        </span>
-      `;
+    // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
+    // than rendering an inert nav item.
+    if (!this.isRouteEnabled(routeId)) {
+      return nothing;
     }
     const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
     const href =

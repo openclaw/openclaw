@@ -10,9 +10,13 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.MessageSpeechClient
+import ai.openclaw.app.chat.MessageSpeechController
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.chat.RoomChatTranscriptCache
+import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -59,6 +63,7 @@ import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
+import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
@@ -948,6 +953,20 @@ class NodeRuntime private constructor(
       it.applyMainSessionKey(_mainSessionKey.value)
     }
 
+  private val messageSpeechControllerLazy =
+    lazy {
+      MessageSpeechController(
+        scope = scope,
+        synthesizer = MessageSpeechClient(session = operatorSession, json = json),
+        player = TalkAudioPlayer(appContext),
+        localSpeech = SystemSpeechSpeaker(appContext),
+      )
+    }
+  private val messageSpeechController: MessageSpeechController
+    get() = messageSpeechControllerLazy.value
+  internal val messageSpeechState: StateFlow<MessageSpeechState?>
+    get() = messageSpeechController.state
+
   /**
    * Stable per-gateway scope for the offline chat cache; resolved per call so cached transcripts
    * never leak across gateways. Null (nothing paired/configured) disables cache reads and writes.
@@ -1510,6 +1529,7 @@ class NodeRuntime private constructor(
         refreshExecApprovalsFromGateway()
       }
     } else {
+      stopMessageSpeech()
       stopActiveVoiceSession()
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
     }
@@ -2553,6 +2573,7 @@ class NodeRuntime private constructor(
     notificationOutbox.clear()
     connectAttemptSeq.incrementAndGet()
     chat.onGatewayScopeChanging()
+    stopMessageSpeech()
     stopActiveVoiceSession()
     connectedEndpoint = null
     _gatewayControlPage.value = null
@@ -2705,6 +2726,7 @@ class NodeRuntime private constructor(
   }
 
   fun switchChatSession(sessionKey: String) {
+    stopMessageSpeech()
     chat.switchSession(sessionKey)
   }
 
@@ -2713,7 +2735,19 @@ class NodeRuntime private constructor(
   }
 
   fun startNewChat(worktree: Boolean = false) {
+    stopMessageSpeech()
     chat.startNewChat(worktree = worktree)
+  }
+
+  fun toggleMessageSpeech(
+    messageId: String,
+    text: String,
+  ) {
+    messageSpeechController.toggle(messageId = messageId, text = text)
+  }
+
+  fun stopMessageSpeech() {
+    if (messageSpeechControllerLazy.isInitialized()) messageSpeechController.stop()
   }
 
   fun sendChat(

@@ -892,7 +892,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
         #expect(rootSource.contains("GatewayToastShakeEffect"))
 
-        #expect(actionsSource.contains("await self.gatewayController.connectLastKnown()"))
+        #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
@@ -917,7 +917,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
         #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
         #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
-        #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
+        #expect(rootSource.contains("await self.gatewayController.connectActiveGateway()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
         #expect(onboardingSetupOwnerGuard.lowerBound < consumedGatewaySetup.lowerBound)
