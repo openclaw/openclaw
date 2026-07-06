@@ -289,6 +289,39 @@ describe("uploadFile memex upload hardening", () => {
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects an oversized Memex upload JSON response", async () => {
+    const hugeBody = JSON.stringify({
+      url: "https://uploads.tlon.network/put",
+      filePath: "https://memex.tlon.network/files/uploaded.png",
+      padding: "x".repeat(128 * 1024),
+    });
+    mockGuardedFetch.mockResolvedValueOnce(
+      createGuardedResult(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(hugeBody));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+        "https://memex.tlon.network/v1/zod/upload",
+      ),
+    );
+
+    await expect(
+      uploadFile({
+        blob: new Blob(["image-bytes"], { type: "image/png" }),
+        fileName: "avatar.png",
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow("Memex upload: JSON response exceeds 65536 bytes");
+
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("routes scheme-less hosted ship URLs through the Memex upload path", async () => {
     configureClient({
       shipUrl: "foo.tlon.network",
