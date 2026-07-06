@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - **FTS-only memory startup:** skip plugin capability discovery when `memorySearch.provider` is explicitly `none`, avoiding an unnecessary cold-start scan.
 - **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
 - **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
+- **ACP event dispatch:** contain rejected Gateway event handling at the server callback boundary and emit a diagnostic instead of leaking an unhandled rejection. (#100558) Thanks @ajwan8998.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
 - **Detail-less provider failures:** keep opaque upstream failures from cooling API-key auth profiles while preserving WHAM-backed OpenAI OAuth health checks and configured model fallback. (#100600, #100617) Thanks @fengjikui.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
