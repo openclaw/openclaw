@@ -137,6 +137,151 @@ describe("runHeartbeatOnce idle gate", () => {
     expect(result.status).toBe("ran");
   });
 
+  // ---- Exempted paths: not gated by idle check ---------------------------
+
+  it("does not skip idle session for commitment-only scope", async () => {
+    const result = await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const sessionKey = "agent:main:main";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "none",
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "user",
+        lastInteractionAt: nowMs - sevenDaysMs - 60_000, // idle
+        updatedAt: nowMs - sevenDaysMs - 60_000,
+      });
+
+      return await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        runScope: "commitment-only",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+    });
+    // commitment-only skips the idle gate entirely, so the result must not
+    // be an idle-related skip regardless of session staleness.
+    expect(
+      result.status === "skipped" &&
+        (result as { status: "skipped"; reason: string }).reason === "session-idle",
+    ).toBe(false);
+    expect(
+      result.status === "skipped" &&
+        (result as { status: "skipped"; reason: string }).reason === "backoff-idle",
+    ).toBe(false);
+  });
+
+  it("does not skip idle session for exec-event wake", async () => {
+    const result = await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const sessionKey = "agent:main:main";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "none",
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "user",
+        lastInteractionAt: nowMs - sevenDaysMs - 60_000, // idle
+        updatedAt: nowMs - sevenDaysMs - 60_000,
+      });
+
+      return await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        source: "exec-event",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+    });
+    expect(
+      result.status === "skipped" &&
+        (result as { status: "skipped"; reason: string }).reason === "session-idle",
+    ).toBe(false);
+    expect(
+      result.status === "skipped" &&
+        (result as { status: "skipped"; reason: string }).reason === "backoff-idle",
+    ).toBe(false);
+  });
+
+  it("does not skip idle session for manual intent", async () => {
+    const result = await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const sessionKey = "agent:main:main";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "none",
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "user",
+        lastInteractionAt: nowMs - sevenDaysMs - 60_000, // idle
+        updatedAt: nowMs - sevenDaysMs - 60_000,
+      });
+
+      return await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        intent: "manual",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+    });
+    expect(
+      result.status === "skipped" &&
+        (result as { status: "skipped"; reason: string }).reason === "session-idle",
+    ).toBe(false);
+    expect(
+      result.status === "skipped" &&
+        (result as { status: "skipped"; reason: string }).reason === "backoff-idle",
+    ).toBe(false);
+  });
+
   // ---- No entry -----------------------------------------------------------
 
   it("runs heartbeat when there is no session entry", async () => {

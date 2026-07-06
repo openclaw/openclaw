@@ -1581,17 +1581,26 @@ export async function runHeartbeatOnce(opts: {
   }
 
   // ---- Session idle gate -------------------------------------------------
-  // Skip heartbeat when the resolved session has been idle too long.
-  // A heartbeat on an idle session burns tokens with no user to receive
-  // output and no new context for the agent to act on.
-  if (entry) {
+  // Only gate ordinary scheduled interval heartbeats.  Preserve
+  // commitment-only fan-out, event/exec/cron/hook wakes, and
+  // manual/immediate calls — they serve due commitments, event
+  // notifications, or explicit user/system work.
+  const shouldCheckSessionIdle =
+    runScope !== "commitment-only" &&
+    opts.intent !== "immediate" &&
+    opts.intent !== "manual" &&
+    !preflight.isExecEventWake &&
+    !preflight.isCronWake &&
+    !preflight.isWakePayload &&
+    !preflight.hasTaggedCronEvents;
+
+  if (shouldCheckSessionIdle && entry) {
     const lastRealInteraction =
       entry.lastInteractionAt ?? entry.sessionStartedAt ?? entry.updatedAt;
     const idleMs = startedAt - lastRealInteraction;
 
     if (idleMs > HEARTBEAT_IDLE_FALLBACK_MS) {
-      const consecutiveIdleCount =
-        (heartbeatConsecutiveIdleCount.get(agentId) ?? 0) + 1;
+      const consecutiveIdleCount = (heartbeatConsecutiveIdleCount.get(agentId) ?? 0) + 1;
       heartbeatConsecutiveIdleCount.set(agentId, consecutiveIdleCount);
 
       if (consecutiveIdleCount > HEARTBEAT_CONSECUTIVE_IDLE_LIMIT) {
@@ -1608,10 +1617,11 @@ export async function runHeartbeatOnce(opts: {
       );
       return { status: "skipped", reason: "session-idle" };
     }
+    // Session is active — reset the consecutive idle counter so the next
+    // idle window starts fresh.  Only reset on ordinary scheduled heartbeats;
+    // commitment-only and wake paths leave the counter unchanged.
+    heartbeatConsecutiveIdleCount.set(agentId, 0);
   }
-  // Session is active — reset the consecutive idle counter so the next
-  // idle window starts fresh.
-  heartbeatConsecutiveIdleCount.set(agentId, 0);
 
   const previousUpdatedAt = entry?.updatedAt;
   const dueHeartbeatTasks =
