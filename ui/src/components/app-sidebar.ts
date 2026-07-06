@@ -108,6 +108,14 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
 
+function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
+  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
+  if (value === "just now") {
+    return "now";
+  }
+  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
+}
+
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (
     !event.defaultPrevented &&
@@ -319,7 +327,7 @@ export class AppSidebar extends LitElement {
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
-      meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
+      meta: formatSidebarTimestamp(row.updatedAt),
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.activeRowKey,
       hasActiveRun: Boolean(row.hasActiveRun),
@@ -1370,6 +1378,7 @@ export class AppSidebar extends LitElement {
               >${newSessionControl}</openclaw-tooltip
             >`
           : newSessionControl}
+        ${this.renderSidebarNavigation()}
         ${this.collapsed
           ? nothing
           : html`
@@ -1554,6 +1563,18 @@ export class AppSidebar extends LitElement {
     `;
   }
 
+  private renderSidebarNavigation() {
+    return html`
+      <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
+        ${this.collapsed ? this.renderRoute("chat") : nothing}
+        <div class="nav-section__items">
+          ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+        </div>
+        ${this.renderMoreSection()}
+      </nav>
+    `;
+  }
+
   private renderChatFallback() {
     return html`
       <a
@@ -1592,16 +1613,7 @@ export class AppSidebar extends LitElement {
           alt="OpenClaw"
         />
         <div class="sidebar-shell">
-          <div class="sidebar-shell__body">
-            <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
-              ${this.collapsed ? this.renderRoute("chat") : nothing}
-              <div class="nav-section__items">
-                ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
-              </div>
-              ${this.renderMoreSection()}
-            </nav>
-            ${this.renderSessions()}
-          </div>
+          <div class="sidebar-shell__body">${this.renderSessions()}</div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-footer-bar">
               <openclaw-tooltip .content=${gatewayStatus}>
@@ -1637,9 +1649,7 @@ export class AppSidebar extends LitElement {
                   ${icons.settings}
                 </a>
               </openclaw-tooltip>
-              <openclaw-tooltip
-                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-              >
+              <openclaw-tooltip .content=${t("chat.docsTooltip")}>
                 <a
                   class="sidebar-footer-icon"
                   href="https://docs.openclaw.ai"

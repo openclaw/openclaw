@@ -180,7 +180,7 @@
     flex: 0 0 auto;
     max-height: 60%;
     display: block;
-    padding: 0;
+    padding: 0 var(--sidebar-row-inset);
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: none;

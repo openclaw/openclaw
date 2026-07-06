@@ -101,9 +101,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .not.toContain("Workboard");
 
-      const customizeButton = sidebar.getByRole("button", { name: "Customize sidebar" });
+      const customizeButton = sidebar.getByRole("button", { name: "Edit pinned items" });
       await customizeButton.click();
-      const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
+      const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
@@ -133,7 +133,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "03-persisted-customization.png");
 
       await customizeButton.click();
-      await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
+      await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
 
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });

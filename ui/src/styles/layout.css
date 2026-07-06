@@ -377,6 +377,9 @@
 }
 
 .sidebar {
+  --sidebar-row-gap: 8px;
+  --sidebar-row-inset: 8px;
+  --sidebar-row-padding-x: 9px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -456,19 +459,19 @@
   max-height: 60%;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0;
+  padding: 0 var(--sidebar-row-inset);
   scrollbar-width: none;
 }
 
 .sidebar-sessions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sidebar-row-gap);
   /* Sessions own the leftover height below the pinned nav and scroll inside. */
   flex: 1 1 auto;
   min-height: 0;
-  padding: 0 8px;
-  margin-top: 10px;
+  padding: 0;
+  margin-top: 0;
 }
 
 .sidebar-new-session {
@@ -476,10 +479,11 @@
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  width: 100%;
+  width: calc(100% - (var(--sidebar-row-inset) * 2));
   min-height: 34px;
   box-sizing: border-box;
-  padding: 0 9px;
+  margin: 0 var(--sidebar-row-inset);
+  padding: 0 var(--sidebar-row-padding-x);
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -497,7 +501,12 @@
 .sidebar-new-session-group {
   display: flex;
   align-items: center;
-  width: 100%;
+  width: calc(100% - (var(--sidebar-row-inset) * 2));
+  margin: 0 var(--sidebar-row-inset);
+}
+
+.sidebar-new-session-group .sidebar-new-session {
+  margin: 0;
 }
 
 .sidebar-new-session-group > .sidebar-new-session:first-child {
@@ -514,6 +523,11 @@
 .sidebar-new-session:hover:not(:disabled) {
   background: var(--accent-subtle);
   color: var(--accent-hover);
+}
+
+.sidebar-new-session:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .sidebar-new-session:disabled {
@@ -548,8 +562,10 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 0 -8px;
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+  padding-top: 4px;
 }
 
 .sidebar-recent-sessions__group {
@@ -564,7 +580,7 @@
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px;
+  padding: 0 calc(var(--sidebar-row-inset) + var(--sidebar-row-padding-x));
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1259,13 +1275,14 @@
 .sidebar--collapsed .sidebar-sessions {
   align-items: center;
   padding: 0;
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .sidebar--collapsed .sidebar-new-session {
   justify-content: center;
   width: 44px;
   min-height: 44px;
+  margin: 0;
   padding: 0;
   border-radius: var(--radius-lg);
 }
@@ -1273,6 +1290,8 @@
 .sidebar--collapsed .sidebar-new-session-group {
   flex-direction: column;
   gap: 4px;
+  width: auto;
+  margin: 0;
 }
 
 .sidebar--collapsed .nav-section {
@@ -1287,7 +1306,6 @@
   padding: 0;
   margin: 0 auto;
   border-radius: var(--radius-lg);
-  border-color: transparent;
   box-shadow: none;
 }
 
@@ -1311,14 +1329,7 @@
    the rail look like a floating card, especially in light mode. */
 .sidebar--collapsed .nav-item--active::before,
 .sidebar--collapsed .nav-item.active::before {
-  content: "";
-  position: absolute;
-  left: 8px;
-  top: 10px;
-  bottom: 10px;
-  width: 3px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 86%, transparent);
+  content: none;
 }
 
 /* Single compact icon row: status dot, then utility icons right-aligned.
@@ -1328,7 +1339,7 @@
   align-items: center;
   gap: 2px;
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 var(--sidebar-row-inset);
 }
 
 .sidebar-footer-bar__spacer {
@@ -1361,8 +1372,8 @@
 }
 
 .sidebar-footer-icon:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .sidebar-footer-icon:disabled {

@@ -1579,7 +1579,7 @@ export const id: TranslationMap = {
     gatewayStatus: "Status Gateway: {status}",
     commandPaletteTitle: "Cari atau lompat ke… (⌘K)",
     openCommandPalette: "Buka palet perintah",
-    docsOpensInNewTab: "{label} (terbuka di tab baru)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "Pembaruan tersedia:",
     runningVersion: "menjalankan v{version}",
     updating: "Memperbarui…",

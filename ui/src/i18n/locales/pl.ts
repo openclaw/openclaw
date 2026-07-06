@@ -1582,7 +1582,7 @@ export const pl: TranslationMap = {
     gatewayStatus: "Status Gateway: {status}",
     commandPaletteTitle: "Wyszukaj lub przejdź do… (⌘K)",
     openCommandPalette: "Otwórz paletę poleceń",
-    docsOpensInNewTab: "{label} (otwiera się w nowej karcie)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "Dostępna aktualizacja:",
     runningVersion: "uruchomiona wersja v{version}",
     updating: "Aktualizowanie…",
