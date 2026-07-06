@@ -1036,15 +1036,16 @@ async function resolveFallbackRuntime(
 
 async function assertReplacementPortAvailableForTakeover(params: {
   env: GatewayServiceEnv;
-  command: GatewayServiceCommandConfig;
+  programArguments: string[];
+  environment?: GatewayServiceEnv;
   fallbackPid?: number;
 }): Promise<void> {
   if (!shouldManageGatewayListenerPort(params.env)) {
     return;
   }
   const port =
-    parsePortFromProgramArguments(params.command.programArguments) ??
-    parsePositivePort(params.command.environment?.OPENCLAW_GATEWAY_PORT) ??
+    parsePortFromProgramArguments(params.programArguments) ??
+    parsePositivePort(params.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(params.env);
   if (!port) {
     throw new Error("Could not verify the replacement Windows Scheduled Task port.");
@@ -1070,7 +1071,7 @@ async function assertReplacementPortAvailableForTakeover(params: {
       const replacementPid = findInstalledProcessPid(
         snapshot,
         port,
-        params.command.programArguments,
+        params.programArguments,
         () => true,
       );
       if (replacementPid) {
@@ -1631,11 +1632,8 @@ export async function installScheduledTask(
     }
     await assertReplacementPortAvailableForTakeover({
       env: activationEnv,
-      command: {
-        programArguments: args.programArguments,
-        ...(args.workingDirectory ? { workingDirectory: args.workingDirectory } : {}),
-        ...(args.environment ? { environment: args.environment } : {}),
-      },
+      programArguments: args.programArguments,
+      ...(args.environment ? { environment: args.environment } : {}),
       ...(fallbackPid ? { fallbackPid } : {}),
     });
   }
