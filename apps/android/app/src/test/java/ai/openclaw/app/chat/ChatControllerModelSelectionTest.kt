@@ -175,6 +175,40 @@ class ChatControllerModelSelectionTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun staleHistoryDoesNotOverwriteAcceptedModelSelection() =
+    runTest {
+      val historyStarted = CompletableDeferred<Unit>()
+      val releaseHistory = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "chat.history" -> {
+                historyStarted.complete(Unit)
+                releaseHistory.await()
+                """{"messages":[],"sessionInfo":{"key":"main","modelProvider":"anthropic","model":"claude-opus-4"}}"""
+              }
+              "sessions.list" -> """{"sessions":[]}"""
+              "chat.metadata" -> """{"commands":[],"models":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.load("main")
+      historyStarted.await()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5"))
+
+      releaseHistory.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals("openai/gpt-5", controller.selectedModelRef.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun historyHydratesSelectedModelAndAgentScopedCatalog() =
     runTest {
       val requests = mutableListOf<Pair<String, String?>>()

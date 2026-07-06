@@ -135,6 +135,7 @@ class ChatController internal constructor(
   // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
   private val historyRequestSequence = AtomicLong(0)
+  private val modelSelectionGeneration = AtomicLong(0)
   private val sessionsRequestSequence = AtomicLong(0)
   private val gatewayScopeApplyLock = Any()
   private var latestAppliedHistoryRequest = 0L
@@ -478,6 +479,7 @@ class ChatController internal constructor(
             requestGateway("sessions.patch", params.toString())
             normalizedModelRef?.let(recordModelRecent)
             if (_sessionKey.value == key) {
+              modelSelectionGeneration.incrementAndGet()
               _selectedModelRef.value = normalizedModelRef
             }
             true
@@ -882,6 +884,7 @@ class ChatController internal constructor(
     runIdsToReconcile: Set<String> = emptySet(),
   ): Boolean {
     val requestSequence = historyRequestSequence.incrementAndGet()
+    val requestModelSelectionGeneration = modelSelectionGeneration.get()
     val requestCacheScope = currentCacheScope()
     val history =
       try {
@@ -915,7 +918,9 @@ class ChatController internal constructor(
         latestAppliedHistoryRequest = requestSequence
         if (updateSessionInfo) {
           updateSessionFromHistory(history)
-          _selectedModelRef.value = history.sessionInfo?.providerQualifiedModelRef()
+          if (requestModelSelectionGeneration == modelSelectionGeneration.get()) {
+            _selectedModelRef.value = history.sessionInfo?.providerQualifiedModelRef()
+          }
         }
         transferLostAckOwnershipFromHistory(history)
         resolvePersistedReplies(history.messages)
