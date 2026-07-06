@@ -80,6 +80,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             var name: String
             var provider: String
             var contextWindow: Int?
+            var reasoning: Bool?
         }
     }
 
@@ -224,7 +225,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 modelID: model.id,
                 name: name.isEmpty ? model.id : model.name,
                 provider: model.provider,
-                contextWindow: model.contextWindow)
+                contextWindow: model.contextWindow,
+                reasoning: model.reasoning)
         }
     }
 

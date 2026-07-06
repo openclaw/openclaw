@@ -76,11 +76,17 @@ private actor OutboxTransportState {
 /// every accepted send (what the gateway would persist).
 private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
     let state: OutboxTransportState
+    private let sessions: [OpenClawChatSessionEntry]
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
 
-    init(healthy: Bool, sendFails: Bool = false) {
+    init(
+        healthy: Bool,
+        sendFails: Bool = false,
+        sessions: [OpenClawChatSessionEntry] = [])
+    {
         self.state = OutboxTransportState(healthy: healthy, sendFails: sendFails)
+        self.sessions = sessions
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in cont = c }
         self.continuation = cont
@@ -164,7 +170,12 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
     }
 
     func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
-        OpenClawChatSessionsListResponse(ts: nil, path: nil, count: 0, defaults: nil, sessions: [])
+        OpenClawChatSessionsListResponse(
+            ts: nil,
+            path: nil,
+            count: self.sessions.count,
+            defaults: nil,
+            sessions: self.sessions)
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -174,6 +185,33 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         self.stream
     }
+}
+
+private func outboxSessionEntry(
+    key: String,
+    thinkingLevels: [String]) -> OpenClawChatSessionEntry
+{
+    OpenClawChatSessionEntry(
+        key: key,
+        kind: nil,
+        displayName: nil,
+        surface: nil,
+        subject: nil,
+        room: nil,
+        space: nil,
+        updatedAt: nil,
+        sessionId: nil,
+        systemSent: nil,
+        abortedLastRun: nil,
+        thinkingLevel: nil,
+        verboseLevel: nil,
+        inputTokens: nil,
+        outputTokens: nil,
+        totalTokens: nil,
+        modelProvider: nil,
+        model: nil,
+        contextTokens: nil,
+        thinkingLevels: thinkingLevels.map { OpenClawChatThinkingLevelOption(id: $0, label: $0) })
 }
 
 private func makeOutboxViewModel(
@@ -555,33 +593,51 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentMessages == ["old message"])
     }
 
-    @Test func `flush sends the thinking level captured with the queued command`() async throws {
+    @Test func `flush gates captured thinking using the queued session metadata`() async throws {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
-        // Queued earlier under a session running "high"; the visible session's
-        // current level is "off" and must not leak into the flush.
+        let now = Date().timeIntervalSince1970
         #expect(await store.enqueueCommand(
             OpenClawChatOutboxCommand(
                 id: "c-think",
-                sessionKey: "other-session",
+                sessionKey: "reasoning-session",
                 text: "think hard",
                 thinking: "high",
-                createdAt: Date().timeIntervalSince1970,
+                createdAt: now,
                 status: .queued,
                 retryCount: 0,
                 lastError: nil)))
-        let transport = OutboxTestTransport(healthy: false)
+        #expect(await store.enqueueCommand(
+            OpenClawChatOutboxCommand(
+                id: "c-plain",
+                sessionKey: "plain-session",
+                text: "no thinking",
+                thinking: "medium",
+                createdAt: now + 1,
+                status: .queued,
+                retryCount: 0,
+                lastError: nil)))
+        let sessionEntries = [
+            outboxSessionEntry(key: "main", thinkingLevels: ["off"]),
+            outboxSessionEntry(key: "reasoning-session", thinkingLevels: ["off", "high"]),
+            outboxSessionEntry(key: "plain-session", thinkingLevels: ["off"]),
+        ]
+        let transport = OutboxTestTransport(healthy: false, sessions: sessionEntries)
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
-        #expect(await MainActor.run { vm.thinkingLevel } == "off")
 
         await MainActor.run { vm.load() }
+        await MainActor.run {
+            vm.sessions = sessionEntries
+            vm.syncThinkingLevelOptions()
+        }
+        #expect(await MainActor.run { !vm.showsThinkingPicker })
         await transport.goOnline()
         try await waitUntil("outbox drained") {
             await store.loadCommands().isEmpty
         }
-        #expect(await transport.state.sentThinkingLevels == ["high"])
-        #expect(await transport.state.sentSessionKeys == ["other-session"])
+        #expect(await transport.state.sentThinkingLevels == ["high", "off"])
+        #expect(await transport.state.sentSessionKeys == ["reasoning-session", "plain-session"])
         _ = vm
     }
 
