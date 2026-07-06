@@ -75,9 +75,17 @@ type WikiLinkTargetIndex = {
 };
 
 function normalizeLintPathTarget(value: string): string {
+  return normalizeLintTarget(value, { stripQuery: true });
+}
+
+function normalizeLintAliasTextTarget(value: string): string {
+  return normalizeLintTarget(value, { stripQuery: false });
+}
+
+function normalizeLintTarget(value: string, options: { stripQuery: boolean }): string {
   const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
-  const withoutQuery = withoutFragment.split("?")[0] ?? "";
-  return withoutQuery
+  const target = options.stripQuery ? (withoutFragment.split("?")[0] ?? "") : withoutFragment;
+  return target
     .replace(/\.md$/i, "")
     .replace(/^\.\/+/, "")
     .replace(/^\/+/, "")
@@ -86,7 +94,23 @@ function normalizeLintPathTarget(value: string): string {
 }
 
 function normalizeLintAliasTarget(value: string): string {
-  return normalizeLowercaseStringOrEmpty(normalizeLintPathTarget(value));
+  return normalizeLowercaseStringOrEmpty(normalizeLintAliasTextTarget(value));
+}
+
+function hasLintTargetQuery(value: string): boolean {
+  const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
+  return withoutFragment.includes("?");
+}
+
+function isLintPathStyleTarget(value: string): boolean {
+  const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
+  const withoutQuery = withoutFragment.split("?")[0] ?? "";
+  return (
+    withoutQuery.startsWith("/") ||
+    withoutQuery.startsWith("./") ||
+    withoutQuery.includes("/") ||
+    /\.md$/i.test(withoutQuery)
+  );
 }
 
 function addPathTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
@@ -106,7 +130,7 @@ function addAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
 }
 
 function addSlugAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
-  const normalized = raw ? normalizeLintPathTarget(raw) : "";
+  const normalized = raw ? normalizeLintAliasTextTarget(raw) : "";
   if (normalized) {
     index.aliasTargets.add(slugifyWikiSegment(normalized));
   }
@@ -150,15 +174,18 @@ function hasValidWikiLinkTarget(index: WikiLinkTargetIndex, rawTarget: string): 
   if (!pathTarget) {
     return true;
   }
-  if (index.pathTargets.has(pathTarget)) {
+  if (
+    index.pathTargets.has(pathTarget) &&
+    (!hasLintTargetQuery(rawTarget) || isLintPathStyleTarget(rawTarget))
+  ) {
     return true;
   }
   if (pathTarget.includes("/")) {
     return false;
   }
   return (
-    index.aliasTargets.has(normalizeLintAliasTarget(pathTarget)) ||
-    index.aliasTargets.has(slugifyWikiSegment(pathTarget))
+    index.aliasTargets.has(normalizeLintAliasTarget(rawTarget)) ||
+    index.aliasTargets.has(slugifyWikiSegment(normalizeLintAliasTextTarget(rawTarget)))
   );
 }
 

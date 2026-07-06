@@ -500,6 +500,61 @@ describe("lintMemoryWikiVault", () => {
     ]);
   });
 
+  it("preserves question marks in Obsidian title and slug wikilinks", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-title-query-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources", "syntheses"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "roadmap-source.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.roadmap",
+          title: "Roadmap Source",
+        },
+        body: [
+          "# Roadmap Source",
+          "",
+          "[[Roadmap? v2]]",
+          "[[roadmap? v2]]",
+          "[[syntheses/roadmap?view=compact]]",
+          "[[syntheses/roadmap.md?view=compact]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "roadmap.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.roadmap",
+          title: "Roadmap",
+          sourceIds: ["source.roadmap"],
+        },
+        body: "# Roadmap\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+    const brokenTargets = result.issues
+      .filter((issue) => issue.code === "broken-wikilink")
+      .map((issue) => issue.message);
+
+    expect(brokenTargets).toEqual([
+      "Broken wikilink target `Roadmap? v2`.",
+      "Broken wikilink target `roadmap? v2`.",
+    ]);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
