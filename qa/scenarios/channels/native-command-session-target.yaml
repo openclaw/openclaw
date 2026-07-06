@@ -115,6 +115,6 @@ flow:
             textIncludes:
               expr: config.recoveryMarker
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 90000)
+              expr: liveTurnTimeoutMs(env, 60000)
           saveAs: recoveryReply
       detailsExpr: "`native command reply=${abortReply.text}; recovery reply=${recoveryReply.text}`"
