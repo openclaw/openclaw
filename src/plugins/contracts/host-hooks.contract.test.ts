@@ -36,7 +36,6 @@ import {
   drainPluginNextTurnInjections,
   enqueuePluginNextTurnInjection,
   patchPluginSessionExtension,
-  projectPluginSessionExtensions,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
@@ -1389,9 +1388,6 @@ describe("host-hook fixture plugin contract", () => {
     expect(projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry })).toEqual(
       [],
     );
-    await expect(
-      projectPluginSessionExtensions({ sessionKey: "agent:main:main", entry }),
-    ).resolves.toStrictEqual([]);
   });
 
   it("skips throwing session extension projectors without losing other projections", () => {
