@@ -74,6 +74,7 @@ type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: 
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "specific"; utcOffsetMinutes: number };
+type DateParts = { year: number; monthIndex: number; day: number };
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -139,9 +140,7 @@ function resolveSessionUsageFileOrRespond(
   return { config, entry, agentId, sessionId, sessionFile };
 }
 
-const parseDateParts = (
-  raw: unknown,
-): { year: number; monthIndex: number; day: number } | undefined => {
+const parseDateParts = (raw: unknown): DateParts | undefined => {
   if (typeof raw !== "string" || !raw.trim()) {
     return undefined;
   }
@@ -168,6 +167,22 @@ const parseDateParts = (
     return undefined;
   }
   return { year, monthIndex, day };
+};
+
+const datePartsToEndMs = (parts: DateParts, interpretation: DateInterpretation): number => {
+  const { year, monthIndex, day } = parts;
+  if (interpretation.mode === "gateway") {
+    return new Date(year, monthIndex, day + 1).getTime() - 1;
+  }
+  if (interpretation.mode === "specific") {
+    return Date.UTC(year, monthIndex, day + 1) - interpretation.utcOffsetMinutes * 60 * 1000 - 1;
+  }
+  return Date.UTC(year, monthIndex, day + 1) - 1;
+};
+
+const parseDateEndToMs = (raw: unknown, interpretation: DateInterpretation): number | undefined => {
+  const parts = parseDateParts(raw);
+  return parts ? datePartsToEndMs(parts, interpretation) : undefined;
 };
 
 // usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
@@ -282,6 +297,26 @@ const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number 
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 };
 
+const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
+  const date = new Date(ms);
+  if (interpretation.mode === "gateway") {
+    return formatDateParts(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+  if (interpretation.mode === "specific") {
+    const shifted = new Date(ms + interpretation.utcOffsetMinutes * 60 * 1000);
+    return formatDateParts(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+  }
+  return formatDateParts(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+};
+
+const formatDateParts = (year: number, monthIndex: number, day: number): string =>
+  `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+const formatExplicitDateLabel = (raw: unknown): string | undefined => {
+  const parts = parseDateParts(raw);
+  return parts ? formatDateParts(parts.year, parts.monthIndex, parts.day) : undefined;
+};
+
 const parseDays = (raw: unknown): number | undefined => {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.floor(raw);
@@ -346,8 +381,14 @@ const resolveDateRange = (params: {
     if (startMs > endMs) {
       return { ok: false, error: "startDate must not be after endDate" };
     }
-    // endMs should be end of day
-    return { ok: true, value: { startMs, endMs: endMs + DAY_MS - 1 } };
+    const endOfDayMs = parseDateEndToMs(params.endDate, interpretation);
+    if (endOfDayMs === undefined) {
+      return {
+        ok: false,
+        error: "invalid endDate: expected a valid YYYY-MM-DD calendar date",
+      };
+    }
+    return { ok: true, value: { startMs, endMs: endOfDayMs } };
   }
 
   const rangeDays = resolveRangeDays(params.range);
@@ -978,9 +1019,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = dateRange.value;
-    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(
-      resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset }),
-    );
+    const dateInterpretation = resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset });
+    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1426,12 +1466,6 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
     }
 
-    // Format dates back to YYYY-MM-DD strings
-    const formatDateStr = (ms: number) => {
-      const d = new Date(ms);
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-    };
-
     const tail = buildUsageAggregateTail({
       byChannelMap,
       latencyTotals,
@@ -1469,10 +1503,19 @@ export const usageHandlers: GatewayRequestHandlers = {
       ...tail,
     };
 
+    const explicitStartDate = formatExplicitDateLabel(p.startDate);
+    const explicitEndDate = formatExplicitDateLabel(p.endDate);
+    let responseStartDate = formatDateLabel(startMs, dateInterpretation);
+    let responseEndDate = formatDateLabel(endMs, dateInterpretation);
+    if (explicitStartDate !== undefined && explicitEndDate !== undefined) {
+      responseStartDate = explicitStartDate;
+      responseEndDate = explicitEndDate;
+    }
+
     const result: SessionsUsageResult = {
       updatedAt: now,
-      startDate: formatDateStr(startMs),
-      endDate: formatDateStr(endMs),
+      startDate: responseStartDate,
+      endDate: responseEndDate,
       sessions,
       totals: aggregateTotals,
       aggregates,
