@@ -633,16 +633,55 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
+  const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
+  const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
+  const REPLY_SESSION_INIT_CONFLICT_RE = /reply session initialization conflicted for \S+/u;
+  const retryAttemptsByKey = new Map<string, number>();
+
+  function isRetryableSignalInboundError(error: unknown): boolean {
+    return REPLY_SESSION_INIT_CONFLICT_RE.test(String(error));
+  }
+
+  function buildSignalDebounceKey(entry?: SignalInboundEntry): string | null {
+    if (!entry) return null;
+    const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
+    if (!conversationId || !entry.senderPeerId) return null;
+    return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
+  }
+
+  /** Retry transient session-init conflicts with bounded backoff, matching
+   *  the Slack (#99647) and Telegram retry patterns. Re-enqueues entries via
+   *  `inboundDebouncer` after a delay. Returns `true` when a retry was
+   *  scheduled, `false` when the error is not retryable or retries exhausted. */
+  function retrySignalFlushError(entries: SignalInboundEntry[], sourceError: unknown): boolean {
+    if (!isRetryableSignalInboundError(sourceError)) {
+      return false;
+    }
+    const conflictKey = buildSignalDebounceKey(entries[0]);
+    if (!conflictKey) {
+      return false;
+    }
+    const attempts = (retryAttemptsByKey.get(conflictKey) ?? 0) + 1;
+    if (attempts > RETRYABLE_FLUSH_MAX_ATTEMPTS) {
+      retryAttemptsByKey.delete(conflictKey);
+      return false;
+    }
+    retryAttemptsByKey.set(conflictKey, attempts);
+    const timer = setTimeout(() => {
+      for (const entry of entries) {
+        void inboundDebouncer.enqueue(entry).catch((err: unknown) => {
+          deps.runtime.error?.(`signal retry enqueue failed: ${String(err)}`);
+        });
+      }
+    }, RETRYABLE_FLUSH_RETRY_DELAY_MS);
+    timer.unref?.();
+    return true;
+  }
+
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
-    buildKey: (entry) => {
-      const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
-      if (!conversationId || !entry.senderPeerId) {
-        return null;
-      }
-      return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
-    },
+    buildKey: buildSignalDebounceKey,
     shouldDebounce: (entry) => {
       return shouldDebounceTextInbound({
         text: entry.commandBody,
@@ -651,34 +690,45 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
+      try {
+        const conflictKey = buildSignalDebounceKey(entries[0]);
+        const last = entries.at(-1);
+        if (!last) {
+          return;
+        }
+        if (entries.length === 1) {
+          await handleSignalInboundMessage(last);
+        } else {
+          const combinedText = entries
+            .map((entry) => entry.bodyText)
+            .filter(Boolean)
+            .join("\\n");
+          const combinedCommandBody = entries
+            .map((entry) => entry.commandBody)
+            .filter(Boolean)
+            .join("\\n");
+          if (!combinedText.trim()) {
+            if (conflictKey) retryAttemptsByKey.delete(conflictKey);
+            return;
+          }
+          await handleSignalInboundMessage({
+            ...last,
+            bodyText: combinedText,
+            commandBody: combinedCommandBody,
+            mediaPath: undefined,
+            mediaType: undefined,
+            mediaPaths: undefined,
+            mediaTypes: undefined,
+          });
+        }
+        if (conflictKey) {
+          retryAttemptsByKey.delete(conflictKey);
+        }
+      } catch (err) {
+        if (!retrySignalFlushError(entries, err)) {
+          throw err;
+        }
       }
-      if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
-      });
     },
     onError: (err) => {
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
