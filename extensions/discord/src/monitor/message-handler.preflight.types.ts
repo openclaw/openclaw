@@ -1,6 +1,5 @@
 // Discord type declarations define plugin contracts.
 import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
-import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -103,7 +102,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   threadBindings: DiscordThreadBindingLookup;
   replyTypingFeedback?: DiscordReplyTypingFeedback;
   discordRestFetch?: typeof fetch;
-  botLoopProtection?: ChannelBotLoopProtectionFacts;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {

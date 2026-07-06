@@ -5,6 +5,7 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   logInboundDrop,
+  recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
   recordDroppedChannelInboundHistory,
@@ -773,6 +774,15 @@ export async function preflightDiscordMessage(
           nowMs: resolveTimestampMs(message.timestamp),
         }
       : undefined;
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before media download, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return null;
+    }
+  }
 
   // Discord CDN attachment URLs expire; download now (receipt time) instead
   // of after the run queue, which may delay processing past the URL TTL.
@@ -850,6 +860,5 @@ export async function preflightDiscordMessage(
     inboundEventKind,
     canDetectMention,
     historyEntry,
-    botLoopProtection,
   });
 }
