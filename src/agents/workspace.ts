@@ -93,9 +93,10 @@ async function readWorkspaceFileWithGuards(params: {
           maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
         });
         if (!opened.ok) {
-          // openRootFile reports transient IO as reason "io"; retry those and
-          // let deterministic path/validation failures return unchanged.
-          if (opened.reason === "io" && isTransientWorkspaceReadError(opened.error)) {
+          // Boundary resolution can report transient IO as "validation", while
+          // pinned open failures use "io". Classify the underlying error so
+          // deterministic path and validation failures still return unchanged.
+          if (isTransientWorkspaceReadError(opened.error)) {
             throw opened.error;
           }
           workspaceFileCache.delete(params.filePath);

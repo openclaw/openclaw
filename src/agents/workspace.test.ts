@@ -959,6 +959,41 @@ describe("loadWorkspaceBootstrapFiles", () => {
     }
   });
 
+  it("retries a transient boundary-resolution failure before dropping a bootstrap file", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nboundary retry\n",
+    });
+
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
+    let agentsLstatAttempts = 0;
+    const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
+      target: unknown,
+      options?: unknown,
+    ) => {
+      if (String(target) === agentsPath && ++agentsLstatAttempts === 1) {
+        throw Object.assign(new Error("Unknown system error -11: lstat"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return await originalLstat(target as never, options as never);
+    }) as typeof syncFs.promises.lstat);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(agentsLstatAttempts).toBe(2);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("boundary retry");
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
   it("retries a transient open failure before dropping a bootstrap file", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({
