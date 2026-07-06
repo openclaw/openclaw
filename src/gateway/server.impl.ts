@@ -1178,6 +1178,7 @@ export async function startGatewayServer(
       );
     const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
+        log,
         broadcast,
         broadcastToConnIds,
         nodeSendToSession,
