@@ -4,7 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { renderChatControls, type ChatControlsProps } from "./components/chat-controls.ts";
+import { renderChatControls } from "./components/chat-controls.ts";
 
 vi.mock("../../components/icons.ts", () => ({
   icons: {},
@@ -30,6 +30,8 @@ function createSettings(): UiSettings {
     borderRadius: 50,
   };
 }
+
+type ChatControlsProps = Parameters<typeof renderChatControls>[0];
 
 function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps {
   return {
