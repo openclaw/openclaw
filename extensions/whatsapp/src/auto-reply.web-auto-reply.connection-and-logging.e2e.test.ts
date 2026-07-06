@@ -1027,6 +1027,83 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
+  it("resolves conversation-scoped debounce overrides for direct chats and groups", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          debounceMs: 3000,
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+              direct: {
+                "+15551234567": {
+                  debounceMs: 0,
+                },
+                "*": {
+                  debounceMs: 750,
+                },
+              },
+              groups: {
+                "456@g.us": {
+                  debounceMs: 1200,
+                },
+                "*": {
+                  debounceMs: 1500,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    const resolveDebounceMs = capture.getLastOptions()?.resolveDebounceMs;
+    expect(resolveDebounceMs).toBeTypeOf("function");
+    expect(
+      resolveDebounceMs?.(
+        createTestWebInboundMessage({
+          admission: { conversation: { kind: "direct", id: "+15551234567" } },
+        }),
+      ),
+    ).toBe(0);
+    expect(
+      resolveDebounceMs?.(
+        createTestWebInboundMessage({
+          admission: { conversation: { kind: "direct", id: "+15550001111" } },
+        }),
+      ),
+    ).toBe(750);
+    expect(
+      resolveDebounceMs?.(
+        createTestWebInboundMessage({
+          admission: { conversation: { kind: "group", id: "456@g.us" } },
+        }),
+      ),
+    ).toBe(1200);
+    expect(
+      resolveDebounceMs?.(
+        createTestWebInboundMessage({
+          admission: { conversation: { kind: "group", id: "789@g.us" } },
+        }),
+      ),
+    ).toBe(1500);
+  });
+
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();

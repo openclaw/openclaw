@@ -343,6 +343,8 @@ type MonitorWebInboxOptions = {
   appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
+  /** Optional per-message debounce window override. */
+  resolveDebounceMs?: (msg: AdmittedWebInboundCallbackMessage) => number | undefined;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -366,11 +368,12 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce" | "socketTiming"
+  "onMessage" | "shouldDebounce" | "resolveDebounceMs" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
 };
 
 export async function attachWebInboxToSocket(
@@ -494,6 +497,10 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const resolveInboundDebounceWindowMs = (msg: AdmittedWebInboundCallbackMessage): number => {
+    const resolved = options.resolveDebounceMs?.(msg);
+    return Math.max(0, Math.trunc(resolved ?? inboundDebounceMs));
+  };
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
     entries.toSorted((a, b) => {
       const timestampDiff = (a.event.timestamp ?? 0) - (b.event.timestamp ?? 0);
@@ -546,6 +553,7 @@ export async function attachWebInboxToSocket(
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
+    resolveDebounceMs: resolveInboundDebounceWindowMs,
     onFlush: async (entries) => {
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {
@@ -1512,7 +1520,10 @@ export async function attachWebInboxToSocket(
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
-      if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
+      if (
+        resolveInboundDebounceWindowMs(inboundMessage) > 0 &&
+        shouldDebounceInboundMessage(inboundMessage)
+      ) {
         pendingDebounceKeys.add(debounceKey);
         publishPendingWorkState();
       }
@@ -1843,6 +1854,7 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     throw err;
   }
   const shouldDebounce = options.shouldDebounce;
+  const resolveDebounceMs = options.resolveDebounceMs;
   const normalizeAdmittedWebInboundMessage = (
     msg: WebInboundMessageInput,
   ): AdmittedWebInboundCallbackMessage =>
@@ -1856,6 +1868,9 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     },
     shouldDebounce: shouldDebounce
       ? (msg) => shouldDebounce(normalizeAdmittedWebInboundMessage(msg))
+      : undefined,
+    resolveDebounceMs: resolveDebounceMs
+      ? (msg) => resolveDebounceMs(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
     socketTiming,
     sock,

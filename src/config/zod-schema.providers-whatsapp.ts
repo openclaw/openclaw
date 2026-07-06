@@ -26,6 +26,7 @@ const WhatsAppGroupEntrySchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     systemPrompt: z.string().optional(),
+    debounceMs: z.number().int().nonnegative().optional(),
   })
   .strict()
   .optional();
@@ -35,6 +36,7 @@ const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).opti
 const WhatsAppDirectEntrySchema = z
   .object({
     systemPrompt: z.string().optional(),
+    debounceMs: z.number().int().nonnegative().optional(),
   })
   .strict()
   .optional();
