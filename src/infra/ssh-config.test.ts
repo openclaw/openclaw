@@ -139,6 +139,21 @@ describe("ssh-config", () => {
     await expect(resolveSshConfig({ user: "me", host: "bad-host", port: 22 })).resolves.toBeNull();
   });
 
+  it("returns null and terminates ssh when stdout emits an error", async () => {
+    let capturedChild: MockSpawnChild | undefined;
+    spawnMock.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const { child, stdout } = createMockSpawnChild();
+        capturedChild = child;
+        process.nextTick(() => stdout?.emit("error", new Error("stdout boom")));
+        return child as unknown as ChildProcess;
+      },
+    );
+
+    await expect(resolveSshConfig({ user: "me", host: "bad-host", port: 22 })).resolves.toBeNull();
+    expect(capturedChild?.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
   it("rejects oversized ssh -G output while preserving the parser contract", () => {
     expect(appendSshConfigOutput("user bob", "\nhostname example.com", 128)).toEqual({
       ok: true,

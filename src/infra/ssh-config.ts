@@ -106,14 +106,15 @@ export async function resolveSshConfig(
     });
 
     const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        resolve(null);
-      }
-    }, timeoutMs);
+    let timer: ReturnType<typeof setTimeout>;
+    const terminate = () => {
+      clearTimeout(timer);
+      child.kill("SIGKILL");
+      resolve(null);
+    };
+    timer = setTimeout(terminate, timeoutMs);
 
+    child.stdout?.on("error", terminate);
     child.once("error", () => {
       clearTimeout(timer);
       resolve(null);
