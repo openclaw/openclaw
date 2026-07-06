@@ -150,6 +150,7 @@ struct ChatProTab: View {
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: self.talkControl,
+                voiceNoteControl: self.voiceNoteControl,
                 speech: self.speech)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                     .environment(\.openClawAssistantBubblesInCleanChrome, true)
@@ -243,6 +244,12 @@ struct ChatProTab: View {
                 self.appModel.focusChatSession(sessionKey)
                 self.appModel.setTalkEnabled(!self.appModel.talkMode.isEnabled)
             })
+    }
+
+    private var voiceNoteControl: OpenClawChatVoiceNoteControl {
+        OpenClawChatVoiceNoteControl(
+            recorder: self.appModel.voiceNoteRecorder,
+            isTalkActive: self.appModel.talkMode.isEnabled || self.appModel.talkMode.isPushToTalkActive)
     }
 
     private var activeAgentID: String {

@@ -6,7 +6,29 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import OpenClawChatUI
 
+private actor AttachmentSendCapture {
+    private(set) var attachments: [OpenClawChatAttachmentPayload] = []
+
+    func store(_ attachments: [OpenClawChatAttachmentPayload]) {
+        self.attachments = attachments
+    }
+
+    func count() -> Int {
+        self.attachments.count
+    }
+
+    func first() -> OpenClawChatAttachmentPayload? {
+        self.attachments.first
+    }
+}
+
 private struct AttachmentProcessingTransport: OpenClawChatTransport {
+    let capture: AttachmentSendCapture?
+
+    init(capture: AttachmentSendCapture? = nil) {
+        self.capture = capture
+    }
+
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
         throw NSError(domain: "ChatViewModelAttachmentTests", code: 1)
     }
@@ -15,10 +37,11 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         sessionKey _: String,
         message _: String,
         thinking _: String,
-        idempotencyKey _: String,
-        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        throw NSError(domain: "ChatViewModelAttachmentTests", code: 2)
+        await self.capture?.store(attachments)
+        return OpenClawChatSendResponse(runId: idempotencyKey, status: "started")
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -105,5 +128,117 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertLessThanOrEqual(max(dimensions.width, dimensions.height), ChatImageProcessor.maxLongEdgePx)
         let errorText = await MainActor.run { viewModel.errorText }
         XCTAssertNil(errorText)
+    }
+
+    func testVoiceNoteAttachmentStagesAudioAndDeletesTemporaryFile() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-20260706-120000.m4a")
+        let data = Data("voice-note-data".utf8)
+        try data.write(to: fileURL)
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 8.4)
+
+        let attachment = try await MainActor.run { () throws -> (Data, String, String, String, Double?, Bool) in
+            let attachment = try XCTUnwrap(viewModel.attachments.first)
+            return (
+                attachment.data,
+                attachment.fileName,
+                attachment.mimeType,
+                attachment.type,
+                attachment.durationSeconds,
+                attachment.preview == nil)
+        }
+        XCTAssertEqual(attachment.0, data)
+        XCTAssertEqual(attachment.1, "voice-note-20260706-120000.m4a")
+        XCTAssertEqual(attachment.2, "audio/mp4")
+        XCTAssertEqual(attachment.3, "file")
+        XCTAssertEqual(attachment.4, 8.4)
+        XCTAssertTrue(attachment.5)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    func testOversizeVoiceNoteIsRejectedAndDeleted() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-oversize.m4a")
+        try Data(repeating: 0x41, count: 5_000_001).write(to: fileURL)
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 180)
+
+        let result = await MainActor.run { (viewModel.attachments.count, viewModel.errorText) }
+        XCTAssertEqual(result.0, 0)
+        XCTAssertEqual(result.1, "Voice note exceeds the 5 MB attachment limit")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    func testVoiceNoteSendUsesExistingAttachmentPayloadAndOptimisticDuration() async throws {
+        let capture = AttachmentSendCapture()
+        let transport = AttachmentProcessingTransport(capture: capture)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-20260706-120001.m4a")
+        let data = Data("encoded-voice-note".utf8)
+        try data.write(to: fileURL)
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
+
+        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 21.2)
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("voice note sent") {
+            await capture.count() == 1
+        }
+
+        let capturedPayload = await capture.first()
+        let payload = try XCTUnwrap(capturedPayload)
+        XCTAssertEqual(payload.type, "file")
+        XCTAssertEqual(payload.mimeType, "audio/mp4")
+        XCTAssertEqual(payload.fileName, "voice-note-20260706-120001.m4a")
+        XCTAssertEqual(payload.content, data.base64EncodedString())
+
+        let optimisticAudio = await MainActor.run {
+            viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }
+        }
+        XCTAssertEqual(optimisticAudio?.type, "file")
+        XCTAssertEqual(optimisticAudio?.mimeType, "audio/mp4")
+        XCTAssertEqual(optimisticAudio?.durationSeconds, 21.2)
+    }
+
+    @MainActor
+    func testCanonicalVoiceNotePreservesOptimisticDuration() throws {
+        let localAudio = OpenClawChatMessageContent(
+            type: "file",
+            text: nil,
+            mimeType: "audio/mp4",
+            fileName: "voice-note-local.m4a",
+            durationSeconds: 14.6,
+            content: AnyCodable("local"))
+        let canonicalAudio = OpenClawChatMessageContent(
+            type: "file",
+            text: nil,
+            mimeType: "audio/mp4",
+            fileName: "media-1.m4a",
+            content: AnyCodable("canonical"))
+        let existing = OpenClawChatMessage(
+            role: "user",
+            content: [localAudio],
+            timestamp: nil,
+            idempotencyKey: "run:user")
+        let incoming = OpenClawChatMessage(
+            role: "user",
+            content: [canonicalAudio],
+            timestamp: nil,
+            idempotencyKey: "run:user")
+
+        let adopted = OpenClawChatViewModel.adoptingCanonicalMessage(incoming, over: existing)
+
+        let audio = try XCTUnwrap(adopted.content.first)
+        XCTAssertEqual(audio.fileName, "media-1.m4a")
+        XCTAssertEqual(audio.content, AnyCodable("canonical"))
+        XCTAssertEqual(audio.durationSeconds, 14.6)
     }
 }

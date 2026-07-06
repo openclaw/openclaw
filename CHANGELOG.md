@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)
+- **iOS voice notes:** record and send bounded AAC voice notes from the chat composer, with duration-aware bubbles and coordinated Talk, push-to-talk, and Voice Wake microphone ownership. (#100946)
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
 - **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.

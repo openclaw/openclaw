@@ -255,6 +255,7 @@ final class NodeAppModel {
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
+    let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
@@ -500,7 +501,8 @@ final class NodeAppModel {
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
-        talkMode: TalkModeManager = TalkModeManager())
+        talkMode: TalkModeManager = TalkModeManager(),
+        voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder())
     {
         self.screen = screen
         self.camera = camera
@@ -515,6 +517,7 @@ final class NodeAppModel {
         self.motionService = motionService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
+        self.voiceNoteRecorder = voiceNoteRecorder
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
@@ -574,6 +577,9 @@ final class NodeAppModel {
             } catch {
                 // Best-effort only.
             }
+        }
+        self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
+            self?.voiceWake.setSuppressedByVoiceNote(isActive)
         }
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
@@ -881,6 +887,9 @@ final class NodeAppModel {
         }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                self.voiceNoteRecorder.cancel()
+            }
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
@@ -1973,6 +1982,20 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        if req.command == OpenClawTalkCommand.pttOnce.rawValue ||
+            req.command == OpenClawTalkCommand.pttStart.rawValue
+        {
+            // Composer recording and PTT use separate AVAudio stacks. Refuse the
+            // second owner before it can reconfigure the shared audio session.
+            guard !self.voiceNoteRecorder.isRecording,
+                  !self.voiceNoteRecorder.isRequestingPermission
+            else {
+                throw NSError(domain: "TalkMode", code: 8, userInfo: [
+                    NSLocalizedDescriptionKey: "Voice note recording is active",
+                ])
+            }
+        }
+
         if req.command == OpenClawTalkCommand.pttOnce.rawValue {
             self.acquirePttVoiceWakeLease()
             defer { self.releasePttVoiceWakeLease() }
