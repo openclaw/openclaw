@@ -47,7 +47,7 @@ import {
   createAssistantMessageDiagnostic,
   formatThrownValue,
 } from "../utils/diagnostics.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
 import {
@@ -520,7 +520,7 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
 > = (model: Model<"openai-chatgpt-responses">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);

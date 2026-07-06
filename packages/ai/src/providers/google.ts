@@ -2,7 +2,7 @@
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
@@ -49,15 +49,7 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
 ) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    const stream = new AssistantMessageEventStream();
-    const output = createGoogleAssistantOutput(model, "google-generative-ai");
-    output.errorMessage = `No API key for provider: ${model.provider}`;
-    output.stopReason = "error";
-    process.nextTick(() => {
-      stream.push({ type: "error", reason: "error", error: output });
-      stream.end();
-    });
-    return stream;
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);

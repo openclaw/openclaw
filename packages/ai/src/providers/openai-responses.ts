@@ -12,7 +12,7 @@ import type {
   StreamOptions,
   Usage,
 } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -111,30 +111,7 @@ export const streamSimpleOpenAIResponses: StreamFunction<
 > = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    const stream = new AssistantMessageEventStream();
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "error" as const,
-      errorMessage: `No API key for provider: ${model.provider}`,
-      timestamp: Date.now(),
-    };
-    process.nextTick(() => {
-      stream.push({ type: "error", reason: "error", error: output });
-      stream.end();
-    });
-    return stream;
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);

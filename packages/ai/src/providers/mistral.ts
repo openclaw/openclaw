@@ -23,7 +23,7 @@ import type {
   Tool,
   ToolCall,
 } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -191,30 +191,7 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
 ) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    const stream = new AssistantMessageEventStream();
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "error" as const,
-      errorMessage: `No API key for provider: ${model.provider}`,
-      timestamp: Date.now(),
-    };
-    process.nextTick(() => {
-      stream.push({ type: "error", reason: "error", error: output });
-      stream.end();
-    });
-    return stream;
+    return createMissingApiKeyStream(model);
   }
 
   const base = buildBaseOptions(model, options, apiKey);
