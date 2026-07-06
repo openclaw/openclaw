@@ -1585,6 +1585,13 @@ export const nl: TranslationMap = {
     updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
+    splitView: {
+      open: "Gesplitste weergave openen",
+      splitRight: "Rechts splitsen",
+      splitDown: "Omlaag splitsen",
+      closePane: "Deelvenster sluiten",
+      sessionSelect: "Deelvenstersessie",
+    },
     sidebar: {
       allSessions: "Alle sessies",
       openSessionMenu: "Open session menu",

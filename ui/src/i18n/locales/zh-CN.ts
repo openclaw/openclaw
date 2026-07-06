@@ -1541,6 +1541,13 @@ export const zh_CN: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
+    splitView: {
+      open: "打开拆分视图",
+      splitRight: "向右拆分",
+      splitDown: "向下拆分",
+      closePane: "关闭窗格",
+      sessionSelect: "窗格会话",
+    },
     sidebar: {
       allSessions: "所有会话",
       openSessionMenu: "Open session menu",

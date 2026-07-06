@@ -1586,6 +1586,13 @@ export const tr: TranslationMap = {
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
+    splitView: {
+      open: "Bölünmüş görünümü aç",
+      splitRight: "Sağa böl",
+      splitDown: "Aşağı böl",
+      closePane: "Bölmeyi kapat",
+      sessionSelect: "Bölme oturumu",
+    },
     sidebar: {
       allSessions: "Tüm oturumlar",
       openSessionMenu: "Open session menu",

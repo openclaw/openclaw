@@ -1590,6 +1590,13 @@ export const it: TranslationMap = {
     updateNow: "Aggiorna ora",
     dismissUpdateBanner: "Ignora banner di aggiornamento",
     switchedSession: "Passato a {session}",
+    splitView: {
+      open: "Apri vista divisa",
+      splitRight: "Dividi a destra",
+      splitDown: "Dividi in basso",
+      closePane: "Chiudi riquadro",
+      sessionSelect: "Sessione del riquadro",
+    },
     sidebar: {
       allSessions: "Tutte le sessioni",
       openSessionMenu: "Open session menu",

@@ -46,6 +46,7 @@ import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
 export type ChatProps = {
+  paneId: string;
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
@@ -150,9 +151,9 @@ export type ChatProps = {
   sessionWorkspace?: SessionWorkspaceProps;
 };
 
-export function resetChatViewState() {
-  resetChatComposerState();
-  resetChatThreadPresentationState();
+export function resetChatViewState(paneId?: string) {
+  resetChatComposerState(paneId);
+  resetChatThreadPresentationState(paneId);
 }
 
 export function renderChat(props: ChatProps) {
@@ -163,6 +164,7 @@ export function renderChat(props: ChatProps) {
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
+    paneId: props.paneId,
     sessionKey: props.sessionKey,
     loading: props.loading,
     messages: props.messages,
@@ -204,6 +206,7 @@ export function renderChat(props: ChatProps) {
   });
 
   const chatColumnFooter = renderChatComposer({
+    paneId: props.paneId,
     sessionKey: props.sessionKey,
     currentAgentId: props.currentAgentId,
     connected: props.connected,
@@ -280,14 +283,14 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (event.key === "Escape" && props.sideResult && !isChatThreadSearchOpen()) {
+        if (event.key === "Escape" && props.sideResult && !isChatThreadSearchOpen(props.paneId)) {
           event.preventDefault();
           props.onDismissSideResult?.();
           return;
         }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
           event.preventDefault();
-          toggleChatThreadSearch(requestUpdate);
+          toggleChatThreadSearch(props.paneId, requestUpdate);
         }
       }}
     >
@@ -327,9 +330,10 @@ export function renderChat(props: ChatProps) {
             </openclaw-tooltip>
           `
         : nothing}
-      ${renderChatSearchBar(requestUpdate)}
+      ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
+          paneId: props.paneId,
           sessionKey: props.sessionKey,
           messages: props.messages,
           userName: props.userName,
