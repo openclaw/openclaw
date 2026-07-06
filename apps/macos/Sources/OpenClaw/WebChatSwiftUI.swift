@@ -20,9 +20,21 @@ private enum WebChatSwiftUILayout {
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
     private let outboxGatewayID: String?
+    private let defaultGlobalAgentID: String?
 
-    init(outboxGatewayID: String? = nil) {
+    init(outboxGatewayID: String? = nil, defaultGlobalAgentID: String? = nil) {
         self.outboxGatewayID = outboxGatewayID
+        let normalized = defaultGlobalAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.defaultGlobalAgentID = normalized?.isEmpty == false ? normalized : nil
+    }
+
+    /// Bare alias keys ("global") do not name their owner; the gateway
+    /// resolves an omitted agentId to the default agent, so scope them to the
+    /// window's agent explicitly, mirroring the iOS transport.
+    private func selectedGlobalAgentID(for sessionKey: String) -> String? {
+        sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
+            ? self.defaultGlobalAgentID
+            : nil
     }
 
     var outboxRequiresSessionRoutingContract: Bool {
@@ -266,7 +278,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "scope": AnyCodable("text"),
             "includeArgs": AnyCodable(true),
         ]
-        if let agentID = Self.agentID(fromSessionKey: sessionKey) {
+        if let agentID = Self.agentID(fromSessionKey: sessionKey) ?? self.defaultGlobalAgentID {
             params["agentId"] = AnyCodable(agentID)
         }
         let data = try await GatewayConnection.shared.request(
@@ -288,6 +300,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         ]
         if let agentID = Self.agentID(fromSessionKey: key)
             ?? parentSessionKey.flatMap(Self.agentID(fromSessionKey:))
+            ?? self.defaultGlobalAgentID
         {
             params["agentId"] = AnyCodable(agentID)
         }
@@ -318,6 +331,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         var params: [String: AnyCodable] = [
             "key": AnyCodable(key),
         ]
+        if let agentID = self.selectedGlobalAgentID(for: key) {
+            params["agentId"] = AnyCodable(agentID)
+        }
         if let label {
             params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
@@ -340,12 +356,16 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func deleteSession(key: String) async throws {
+        var params: [String: AnyCodable] = [
+            "key": AnyCodable(key),
+            "deleteTranscript": AnyCodable(true),
+        ]
+        if let agentID = self.selectedGlobalAgentID(for: key) {
+            params["agentId"] = AnyCodable(agentID)
+        }
         _ = try await GatewayConnection.shared.request(
             method: "sessions.delete",
-            params: [
-                "key": AnyCodable(key),
-                "deleteTranscript": AnyCodable(true),
-            ],
+            params: params,
             timeoutMs: 15000)
     }
 
@@ -541,7 +561,9 @@ final class WebChatSwiftUIWindowController {
         self.init(
             sessionKey: sessionKey,
             presentation: presentation,
-            transport: MacGatewayChatTransport(outboxGatewayID: store?.gatewayID),
+            transport: MacGatewayChatTransport(
+                outboxGatewayID: store?.gatewayID,
+                defaultGlobalAgentID: context?.routingIdentity?.defaultAgentID),
             initialActiveAgentID: context?.routingIdentity?.defaultAgentID,
             initialSessionRoutingContract: context?.routingIdentity?.contract,
             transcriptCache: store,
