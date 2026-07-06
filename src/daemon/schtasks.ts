@@ -603,10 +603,11 @@ function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null
   return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
-function findNodeHostProcessPid(
+function findInstalledProcessPid(
   entries: WindowsProcessSnapshotEntry[],
   port: number,
   installedArguments: string[],
+  matchesProcess: (argv: string[]) => boolean,
 ): number | null {
   for (const entry of entries) {
     const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
@@ -615,7 +616,7 @@ function findNodeHostProcessPid(
     }
     const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
     if (
-      !isNodeHostArgv(argv) ||
+      !matchesProcess(argv) ||
       parsePortFromProgramArguments(argv) !== port ||
       !matchesInstalledProgramArguments(argv, installedArguments)
     ) {
@@ -649,7 +650,7 @@ async function resolveScheduledTaskNodeHostProcess(env: GatewayServiceEnv): Prom
   if (!snapshot) {
     return null;
   }
-  const pid = findNodeHostProcessPid(snapshot, port, installedArguments);
+  const pid = findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv);
   if (!pid) {
     return null;
   }
@@ -880,9 +881,15 @@ function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | null {
   );
 }
 
-async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewayServiceRuntime> {
+async function resolveFallbackRuntime(
+  env: GatewayServiceEnv,
+  installedCommand?: GatewayServiceCommandConfig | null,
+): Promise<GatewayServiceRuntime> {
+  const command =
+    installedCommand === undefined
+      ? await readScheduledTaskCommand(env).catch(() => null)
+      : installedCommand;
   if (!shouldManageGatewayListenerPort(env)) {
-    const command = await readScheduledTaskCommand(env).catch(() => null);
     const installedArguments = command?.programArguments;
     const port =
       parsePortFromProgramArguments(installedArguments) ??
@@ -902,7 +909,7 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       };
     }
     const pid = installedArguments?.length
-      ? findNodeHostProcessPid(snapshot, port, installedArguments)
+      ? findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv)
       : null;
     if (pid) {
       return {
@@ -916,7 +923,10 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       detail: `Startup-folder login item installed; no node host process detected for gateway port ${port}.`,
     };
   }
-  const port = (await resolveScheduledTaskPort(env)) ?? resolveConfiguredGatewayPort(env);
+  const port =
+    parsePortFromProgramArguments(command?.programArguments) ??
+    parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
+    resolveConfiguredGatewayPort(env);
   if (!port) {
     return {
       status: "unknown",
@@ -931,6 +941,20 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
     };
   }
+  const installedArguments = command?.programArguments;
+  const shouldInspectProcess = process.platform === "win32" && Boolean(installedArguments?.length);
+  const snapshot = shouldInspectProcess ? readWindowsProcessSnapshot() : null;
+  const processPid =
+    snapshot && installedArguments
+      ? findInstalledProcessPid(snapshot, port, installedArguments, () => true)
+      : null;
+  if (processPid) {
+    return {
+      status: "running",
+      pid: processPid,
+      detail: `Startup-folder login item installed; matching gateway process detected for port ${port}.`,
+    };
+  }
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (!diagnostics) {
     return {
@@ -939,9 +963,15 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
     };
   }
   if (diagnostics.status !== "busy") {
+    const processInspectionUnavailable = shouldInspectProcess && !snapshot;
+    const status =
+      diagnostics.status === "free" && !processInspectionUnavailable ? "stopped" : "unknown";
     return {
-      status: diagnostics.status === "free" ? "stopped" : "unknown",
-      detail: `Startup-folder login item installed; no gateway listener detected on port ${port}.`,
+      status,
+      detail:
+        status === "unknown" && diagnostics.status === "free"
+          ? `Startup-folder login item installed; no listener detected on port ${port}, but process inspection was unavailable.`
+          : `Startup-folder login item installed; no gateway listener detected on port ${port}.`,
     };
   }
   const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
@@ -1255,7 +1285,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
 
     if (!manageGatewayPort) {
       return installedArguments?.length
-        ? findNodeHostProcessPid(entries, taskPort, installedArguments) != null
+        ? findInstalledProcessPid(entries, taskPort, installedArguments, isNodeHostArgv) != null
         : false;
     }
 
@@ -1427,8 +1457,14 @@ export async function installScheduledTask(
   // script. A repair can change the port or profile that locates the old process.
   const startupEntryInstalled = await isStartupEntryInstalled(fallbackEnv);
   const startupRuntime = startupEntryInstalled
-    ? await resolveFallbackRuntime(fallbackEnv).catch(() => null)
+    ? await resolveFallbackRuntime(fallbackEnv, installedCommand).catch(() => null)
     : null;
+  if (startupEntryInstalled && (!startupRuntime || startupRuntime.status === "unknown")) {
+    throw new Error(
+      startupRuntime?.detail ??
+        "Could not verify the existing Windows login item before Scheduled Task migration.",
+    );
+  }
   const staged = await writeScheduledTaskScript(args);
   const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
   const activation = await activateScheduledTask({
@@ -1441,11 +1477,18 @@ export async function installScheduledTask(
   if (activation !== "scheduled-task") {
     return { scriptPath: staged.scriptPath };
   }
-  if (startupRuntime?.status === "running") {
+  // Config writes can briefly drop the old listener before the service script
+  // is replaced. Re-probe through the captured command so a resumed fallback
+  // cannot be hidden by the newly staged port or entrypoint.
+  const takeoverRuntime =
+    startupRuntime?.status === "stopped"
+      ? await resolveFallbackRuntime(fallbackEnv, installedCommand).catch(() => startupRuntime)
+      : startupRuntime;
+  if (takeoverRuntime?.status === "running") {
     // The old launcher can still own the listener after the task is created.
     // Terminate its captured PID, then restart and prove the replacement.
-    if (startupRuntime.pid) {
-      await terminateGatewayProcessTree(startupRuntime.pid, 300);
+    if (takeoverRuntime.pid) {
+      await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
       try {
         await restartScheduledTask({ env: activationEnv, stdout: args.stdout });
       } catch (err) {
@@ -1456,7 +1499,7 @@ export async function installScheduledTask(
       }
     }
   } else if (
-    startupRuntime?.status === "stopped" &&
+    takeoverRuntime?.status === "stopped" &&
     (await waitForScheduledTaskRunningEvidence(activationEnv))
   ) {
     await removeStartupEntries(activationEnv, args.stdout);
