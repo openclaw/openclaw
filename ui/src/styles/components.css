@@ -940,6 +940,11 @@
     box-shadow var(--duration-fast) ease;
 }
 
+.field input:not([type="checkbox"]):not([type="radio"]),
+.field select {
+  height: 38px;
+}
+
 @media (hover: none) and (pointer: coarse) {
   .field input,
   .field textarea,
