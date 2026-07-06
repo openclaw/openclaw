@@ -18,6 +18,7 @@ export {
 } from "../../../../src/agents/tools/common.js";
 export type { AnyAgentTool } from "../../../../src/agents/tools/common.js";
 export {
+  computeSharedScopeHash,
   resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   type ResolvedMemorySearchConfig,

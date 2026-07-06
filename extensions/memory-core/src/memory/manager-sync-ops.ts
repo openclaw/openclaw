@@ -601,8 +601,6 @@ export abstract class MemoryManagerSyncOps {
       providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
         multimodal: {
           enabled: this.settings.multimodal.enabled,
           modalities: this.settings.multimodal.modalities,
@@ -2437,8 +2435,6 @@ export abstract class MemoryManagerSyncOps {
       providerAliases: this.resolveProviderIndexIdentities().slice(1),
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
         multimodal: {
           enabled: this.settings.multimodal.enabled,
           modalities: this.settings.multimodal.modalities,
@@ -2760,8 +2756,6 @@ export abstract class MemoryManagerSyncOps {
         providerKey: this.providerKey!,
         sources: resolveConfiguredSourcesForMeta(this.sources),
         scopeHash: resolveConfiguredScopeHash({
-          workspaceDir: this.workspaceDir,
-          extraPaths: this.settings.extraPaths,
           multimodal: {
             enabled: this.settings.multimodal.enabled,
             modalities: this.settings.multimodal.modalities,

@@ -51,6 +51,11 @@ export {
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
+export {
+  ensureRegistrySchema,
+  registerAgentForStore,
+  getStoresForAgent,
+} from "./host/shared-store-registry.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
   closeMemorySqliteWalMaintenance,
