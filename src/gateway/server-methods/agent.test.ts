@@ -1285,10 +1285,7 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.sessionFile).toBeUndefined();
   });
 
-  it.each([
-    { name: "status terminal row", status: "done" as const },
-    { name: "endedAt-only terminal row" },
-  ])(
+  it.each([{ name: "endedAt-only terminal row" }])(
     "rotates a terminal main session from a $name when its transcript is newer",
     async (scenario) => {
       const now = Date.parse("2026-05-18T09:47:00.000Z");
@@ -1354,6 +1351,50 @@ describe("gateway agent handler", () => {
       );
     },
   );
+
+  it("reuses a terminal main session with status done when its transcript is newer", async () => {
+    const now = Date.parse("2026-05-18T09:47:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(now);
+
+    await withTempDir(
+      { prefix: "openclaw-gateway-terminal-main-done-newer-transcript-" },
+      async (root) => {
+        const sessionsDir = `${root}/sessions`;
+        await fs.mkdir(sessionsDir, { recursive: true });
+        const sessionFile = "done-main-session.jsonl";
+        const transcriptPath = `${sessionsDir}/${sessionFile}`;
+        await fs.writeFile(
+          transcriptPath,
+          `${JSON.stringify({ type: "session", id: "done-main-session" })}\n`,
+          "utf8",
+        );
+        await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+        mocks.loadSessionEntry.mockReturnValue({
+          cfg: {},
+          storePath: `${sessionsDir}/sessions.json`,
+          entry: {
+            sessionId: "done-main-session",
+            sessionFile,
+            status: "done" as const,
+            updatedAt: now - 10_000,
+            sessionStartedAt: now - 60_000,
+            lastInteractionAt: now - 10_000,
+          },
+          canonicalKey: "agent:main:main",
+        });
+
+        const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-done-newer-transcript");
+
+        const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+        // A successful status=done session stays reusable; do not force
+        // a spurious rollover just because the transcript mtime is newer.
+        expect(call.sessionId).toBe("done-main-session");
+        expect(capturedEntry?.sessionId).toBe("done-main-session");
+      },
+    );
+  });
 
   it("reuses terminal main sessions when the fresh store row has the transcript marker", async () => {
     const now = Date.parse("2026-05-18T09:47:30.000Z");

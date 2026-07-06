@@ -218,6 +218,12 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
     // Callers already rotate failed rows when the transcript is missing.
     return undefined;
   }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable.  Transcript mtime can naturally be
+    // newer than the registry timestamp after post-run transcript writes,
+    // which would force a spurious rollover on the next inbound message.
+    return undefined;
+  }
   // updatedAt is touched after managed transcript appends; endedAt can predate
   // healthy post-run transcript writes and would rotate valid sessions.
   const registryTimestampMs = resolvePositiveTimestamp(params.entry.updatedAt);
