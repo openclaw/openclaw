@@ -31,7 +31,8 @@ function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | 
 }
 
 type ChatScrollOptions = {
-  source?: "auto" | "manual";
+  contentChanged?: boolean;
+  source?: "auto" | "manual" | "resize";
 };
 
 export function scheduleChatScroll(
@@ -72,6 +73,7 @@ export function scheduleChatScroll(
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
       const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
       host.chatLastScrollHeight = target.scrollHeight;
+      const contentChanged = options.contentChanged ?? options.source !== "resize";
       const autoScrollMode = normalizeChatAutoScrollMode(host.settings?.chatAutoScroll);
       const manualScroll = options.source === "manual";
 
@@ -87,8 +89,7 @@ export function scheduleChatScroll(
               (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
 
       if (!shouldStick) {
-        if (contentGrew) {
-          // Only show the indicator when the thread actually gained content below.
+        if (contentChanged || (options.source === "resize" && contentGrew)) {
           host.chatNewMessagesBelow = true;
         }
         return;

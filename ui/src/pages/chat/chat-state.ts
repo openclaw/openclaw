@@ -1195,6 +1195,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatStream: string | null = null;
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
   private scrollAfterUpdate = false;
+  private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
   private chatThreadResizeObserver: ResizeObserver | null = null;
   private chatThreadResizeTargets:
@@ -1272,6 +1273,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     this.scrollAfterUpdate = true;
+    this.scrollContentChangedAfterUpdate ||= messagesChanged || streamChanged;
     this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
   }
 
@@ -1304,7 +1306,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       if (!currentState || currentState.chatManualRefreshInFlight) {
         return;
       }
-      scheduleChatScroll(currentState);
+      scheduleChatScroll(currentState, false, false, { source: "resize" });
     });
     this.chatThreadResizeObserver.observe(thread);
     this.chatThreadResizeObserver.observe(content);
@@ -1320,12 +1322,14 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     const force = this.forceScrollAfterUpdate;
+    const contentChanged = this.scrollContentChangedAfterUpdate;
     this.scrollAfterUpdate = false;
+    this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
     if (!state || state.chatManualRefreshInFlight) {
       return;
     }
-    scheduleChatScroll(state, force);
+    scheduleChatScroll(state, force, false, { contentChanged });
   }
 
   restoreComposer(options: { preserveCurrent?: boolean } = {}) {
@@ -1383,6 +1387,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.stopChatEffects();
     this.stateValue = undefined;
     this.scrollAfterUpdate = false;
+    this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
     this.pendingCreatedSessionComposer = null;
   }

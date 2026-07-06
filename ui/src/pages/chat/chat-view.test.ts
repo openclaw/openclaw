@@ -3598,6 +3598,60 @@ describe("chat model controls", () => {
     });
   });
 
+  it("preserves staged settings when a save step fails", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    });
+    const onThinkingSelect = vi.fn().mockResolvedValue(false);
+    const onFastModeSelect = vi.fn();
+    const props = {
+      ...createChatModelControlsProps(state),
+      onFastModeSelect,
+      onThinkingSelect,
+    };
+    const container = document.createElement("div");
+    render(renderChatModelControls(props), container);
+
+    const slider = getThinkingSlider(container);
+    expect(slider).toBeInstanceOf(HTMLInputElement);
+    if (slider) {
+      slider.value = "0";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    render(renderChatModelControls(props), container);
+    const fastButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+    ).find((button) => button.textContent?.trim() === "Fast");
+    fastButton?.click();
+
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
+    await vi.waitFor(() => {
+      expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
+    });
+    expect(onFastModeSelect).not.toHaveBeenCalled();
+
+    render(renderChatModelControls(props), container);
+    expect(getThinkingReasoningValueLabel(container)).toBe("Low");
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"))
+        .find((button) => button.textContent?.trim() === "Fast")
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
   it("clears staged model settings when the active session changes", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -3648,7 +3702,7 @@ describe("chat model controls", () => {
     ).toBe("true");
   });
 
-  it("discards staged model settings when the model save fails", async () => {
+  it("preserves staged model settings when the model save fails", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3677,10 +3731,9 @@ describe("chat model controls", () => {
     });
     await vi.waitFor(() => {
       render(renderChatModelControls(props), container);
-      expect(getChatModelSelect(container).textContent).toContain("GPT-5.5");
       expect(
         container
-          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
           ?.getAttribute("aria-selected"),
       ).toBe("true");
     });
