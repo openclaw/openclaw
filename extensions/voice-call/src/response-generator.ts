@@ -412,8 +412,11 @@ export async function generateVoiceResponse(
               return;
             }
             const text = extractSpokenTextFromPayloads(pendingPayloads);
+            if (!text) {
+              return;
+            }
             lastFlushedText = text;
-            deliveredEarly = Boolean(text) && (await deliverEarlyText(onEarlyText, text));
+            deliveredEarly = await deliverEarlyText(onEarlyText, text);
           },
         });
 

@@ -328,7 +328,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         options?.assistantMessageIndex ??
         getReplyPayloadMetadata(taggedPayload)?.assistantMessageIndex;
       const context = assistantMessageIndex === undefined ? undefined : { assistantMessageIndex };
-      const maybeTask = params.onBlockReply(taggedPayload, context);
+      const maybeTask = context
+        ? params.onBlockReply(taggedPayload, context)
+        : params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
         return true;
       }

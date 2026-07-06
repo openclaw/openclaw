@@ -1016,8 +1016,8 @@ export class VoiceCallWebhookServer {
         userMessage,
         onEarlyText: async (text) => {
           console.log(`[voice-call] Early AI response: "${text}"`);
-          const result = await this.manager.speak(callId, text, { listenAfterPlayback: true });
-          return result.success;
+          const speakResult = await this.manager.speak(callId, text, { listenAfterPlayback: true });
+          return speakResult.success;
         },
       });
 
