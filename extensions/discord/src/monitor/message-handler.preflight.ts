@@ -783,7 +783,11 @@ export async function preflightDiscordMessage(
     totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
     abortSignal: params.abortSignal,
   };
-  const preflightMediaList = await resolveMediaList(
+  const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const forwardedMedia = await resolveForwardedMediaList(
     message,
     params.mediaMaxBytes,
     mediaResolveOptions,
@@ -791,14 +795,7 @@ export async function preflightDiscordMessage(
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
-  const preflightForwardedMediaList = await resolveForwardedMediaList(
-    message,
-    params.mediaMaxBytes,
-    mediaResolveOptions,
-  );
-  if (isPreflightAborted(params.abortSignal)) {
-    return null;
-  }
+  preparedMedia.push(...forwardedMedia);
 
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
@@ -822,8 +819,7 @@ export async function preflightDiscordMessage(
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
-    preflightMediaList,
-    preflightForwardedMediaList,
+    preparedMedia,
     wasMentioned,
     route: effectiveRoute,
     threadBinding,

@@ -60,10 +60,9 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   baseText: string;
   messageText: string;
   preflightAudioTranscript?: string;
-  // Fetched at receipt time, before the run queue may delay processing, so
-  // Discord's expiring CDN attachment URLs are still valid when downloaded.
-  preflightMediaList?: DiscordMediaInfo[];
-  preflightForwardedMediaList?: DiscordMediaInfo[];
+  // Keep one required receipt-time snapshot: queued processing must never
+  // fall back to Discord's expiring attachment URLs.
+  preparedMedia: DiscordMediaInfo[];
   wasMentioned: boolean;
 
   route: ReturnType<typeof resolveAgentRoute>;

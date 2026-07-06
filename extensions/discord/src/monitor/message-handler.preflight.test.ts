@@ -600,14 +600,13 @@ describe("preflightDiscordMessage", () => {
 
     expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
     const preflight = expectPreflightResult(result);
-    expect(preflight.preflightMediaList).toEqual([
+    expect(preflight.preparedMedia).toEqual([
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
         placeholder: "<media:image>",
       },
     ]);
-    expect(preflight.preflightForwardedMediaList).toEqual([]);
   });
 
   it("keeps no-guild messages direct when channel lookup is unavailable", async () => {

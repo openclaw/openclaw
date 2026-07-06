@@ -1323,12 +1323,6 @@ describe("processDiscordMessage ack reactions", () => {
 
 describe("processDiscordMessage session routing", () => {
   it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(new Uint8Array([1, 2, 3, 4]), {
-          headers: { "content-type": "audio/ogg" },
-        }),
-    );
     const ctx = await createBaseContext({
       message: {
         id: "m-audio-preflight",
@@ -1347,8 +1341,13 @@ describe("processDiscordMessage session routing", () => {
       baseText: "<media:audio>",
       messageText: "<media:audio>",
       preflightAudioTranscript: "hello from discord voice",
-      discordRestFetch: fetchImpl,
-      mediaMaxBytes: 1024 * 1024,
+      preparedMedia: [
+        {
+          path: "/tmp/openclaw-discord-test/voice.ogg",
+          contentType: "audio/ogg",
+          placeholder: "<media:audio>",
+        },
+      ],
     });
 
     await runProcessDiscordMessage(ctx);
@@ -1361,7 +1360,7 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
-  it("reuses preflight-resolved media instead of re-downloading after the run queue", async () => {
+  it("uses prepared media instead of re-downloading after the run queue", async () => {
     // Regression for #96165: Discord CDN attachment URLs expire, so process
     // must not re-fetch attachments preflight already downloaded at receipt
     // time. A throwing fetchImpl here proves no re-fetch happens.
@@ -1385,16 +1384,14 @@ describe("processDiscordMessage session routing", () => {
       },
       baseText: "look",
       messageText: "look",
-      preflightMediaList: [
+      preparedMedia: [
         {
           path: "/tmp/openclaw-discord-test/photo.png",
           contentType: "image/png",
           placeholder: "<media:image>",
         },
       ],
-      preflightForwardedMediaList: [],
       discordRestFetch: fetchImpl,
-      mediaMaxBytes: 1024 * 1024,
     });
 
     await runProcessDiscordMessage(ctx);
