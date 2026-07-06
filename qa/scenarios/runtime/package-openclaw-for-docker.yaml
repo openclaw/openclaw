@@ -7,21 +7,29 @@ scenario:
     secondary:
       - docker.package-artifact-generation
       - cli.package-manager-installs
-      - runtime.package-update
-  objective: Exercise bounded OpenClaw package artifact generation through QA Lab evidence.
+  objective: Build the real OpenClaw package artifact, install and execute it in the scheduler-selected bare container image, and record exact package, image, and container identities.
   successCriteria:
-    - Package artifact output flags are parsed strictly.
-    - The Docker package path uses the single bounded build-all step before npm pack.
-    - Changelog trimming is restored after successful and failed ignore-scripts packaging.
-    - Timed-out and externally terminated child process groups are cleaned up without leaked descendants.
-    - Captured command output is bounded.
+    - The canonical Docker package helper builds and validates the real npm tarball.
+    - The scheduler prepares the package and bare target image through the shared planner and catalog.
+    - A clean target container installs the tarball with npm and executes the installed OpenClaw CLI.
+    - The installed package name and version match the tarball metadata.
+    - Evidence records the package digest and version, bare image ID, target container ID, installed package root, and executed CLI version.
   docsRefs:
     - docs/install/updating.md
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts
+    - scripts/package-openclaw-for-docker.mjs
+    - scripts/e2e/package-openclaw-for-docker.sh
+    - scripts/lib/docker-e2e-scenarios.mjs
+    - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts
-    summary: Vitest coverage for Docker package artifact creation and cleanup behavior.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    summary: Builds the real package artifact, installs and executes it in a clean target container, and records artifact identities.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --lane
+      - package-openclaw-for-docker

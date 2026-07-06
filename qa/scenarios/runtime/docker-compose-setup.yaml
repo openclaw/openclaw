@@ -7,22 +7,29 @@ scenario:
   coverage:
     secondary:
       - docker.compose
-      - docker.local-image-setup-script
-      - docker.only-first-run-notes
-  objective: Link Docker Compose setup e2e coverage to Docker maturity accounting.
+  objective: Launch the documented Docker Compose topology from the package-backed functional image and record the exact package, image, and service container identities.
   successCriteria:
-    - The Docker setup script builds local images, reuses preloaded GHCR images in offline mode, and preserves BuildKit behavior.
-    - First-run setup emits Docker-only post-start notes without printing the gateway token.
-    - Docker Compose gateway and CLI service command shape stays in sync.
-    - Compose service env, token, auth-profile, timezone, and optional env-file defaults stay aligned.
-    - Container-side state, config, and workspace paths override host `.env` values.
+    - The scheduler builds the real package artifact and package-backed functional image through the canonical Docker planner.
+    - "`docker compose up` starts the documented `openclaw-gateway` service with isolated state, config, workspace, and auth-profile mounts."
+    - The Gateway reaches healthy state and the documented container-side health command passes.
+    - "The `openclaw-cli` Compose service runs successfully in the Gateway network namespace."
+    - Evidence records the package digest and version, functional image ID, and Gateway and CLI container IDs.
   docsRefs:
     - docs/install/docker.md
     - docs/help/testing.md
   codeRefs:
-    - scripts/docker/setup.sh
-    - src/docker-setup.e2e.test.ts
+    - docker-compose.yml
+    - scripts/e2e/docker-compose-setup-docker.sh
+    - scripts/lib/docker-e2e-scenarios.mjs
+    - scripts/package-openclaw-for-docker.mjs
+    - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
   execution:
-    kind: vitest
-    path: src/docker-setup.e2e.test.ts
-    summary: Vitest e2e coverage for Docker setup script, first-run notes, Compose service shape, and mount/env contracts.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    summary: Builds the package-backed functional image, launches the documented Compose services, validates health, and records artifact identities.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}
+      - --lane
+      - docker-compose-setup

@@ -262,6 +262,24 @@ function kitchenSinkRpcLane() {
 }
 
 export const mainLanes = [
+  serviceLane(
+    "docker-compose-setup",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:docker-compose-setup",
+    {
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  npmLane(
+    "package-openclaw-for-docker",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-openclaw-for-docker",
+    {
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "google-gemini-cli"],
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
