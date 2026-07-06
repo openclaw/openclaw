@@ -4867,6 +4867,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 7. Canvas + camera
   - H4: Gateway Canvas Host (recommended for web content)
   - H3: 8. Voice + expanded Android command surface
+  - H3: 9. Workspace files (read-only)
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
