@@ -509,7 +509,7 @@ function isEd25519PublicKeyConfig(value: string): boolean {
   }
 }
 
-const MarketplaceFeedSigningKeySchema = z
+const MarketplaceFeedTrustedPublicKeySchema = z
   .object({
     keyId: z.string().trim().min(1),
     publicKey: z
@@ -532,7 +532,7 @@ const MarketplaceVerificationSchema = z.union([
   z
     .object({
       mode: z.literal("signed"),
-      keys: z.array(MarketplaceFeedSigningKeySchema).min(1),
+      keys: z.array(MarketplaceFeedTrustedPublicKeySchema).min(1),
       threshold: z.number().int().positive().optional(),
     })
     .strict()
@@ -545,7 +545,7 @@ const MarketplaceVerificationSchema = z.union([
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["keys", index, "keyId"],
-            message: "Signed marketplace feed key IDs must be unique",
+            message: "Signed marketplace feed publisher key IDs must be unique",
           });
         } else {
           seenKeyIds.set(key.keyId, index);
@@ -559,7 +559,7 @@ const MarketplaceVerificationSchema = z.union([
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["keys", index, "publicKey"],
-            message: "Signed marketplace feed public keys must be unique",
+            message: "Signed marketplace feed publisher public keys must be unique",
           });
         } else {
           seenPublicKeys.set(normalizedPublicKey, index);

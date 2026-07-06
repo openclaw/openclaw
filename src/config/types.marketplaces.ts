@@ -5,11 +5,11 @@ export type MarketplaceFeedVerificationConfig =
     }
   | {
       mode: "signed";
-      keys: readonly MarketplaceFeedSigningKeyConfig[];
+      keys: readonly MarketplaceFeedTrustedPublicKeyConfig[];
       threshold?: number;
     };
 
-export type MarketplaceFeedSigningKeyConfig = {
+export type MarketplaceFeedTrustedPublicKeyConfig = {
   keyId: string;
   publicKey: string;
 };
