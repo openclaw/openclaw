@@ -165,6 +165,10 @@ import {
   ConnectParamsSchema,
   type CronAddParams,
   CronAddParamsSchema,
+  type CronAddResult,
+  CronAddResultSchema,
+  type CronDeclarativeAddResult,
+  CronDeclarativeAddResultSchema,
   type CronGetParams,
   CronGetParamsSchema,
   type CronJob,
@@ -190,6 +194,9 @@ import {
   DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
+  type DevicePairSetupCodeParams,
+  DevicePairSetupCodeParamsSchema,
+  type DevicePairSetupCodeResult,
   type DeviceTokenRevokeParams,
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
@@ -234,6 +241,10 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type SystemInfoParams,
+  SystemInfoParamsSchema,
+  type SystemInfoResult,
+  SystemInfoResultSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -247,6 +258,36 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
+  type TerminalAckResult,
+  TerminalAckResultSchema,
+  type TerminalAttachParams,
+  TerminalAttachParamsSchema,
+  type TerminalAttachResult,
+  TerminalAttachResultSchema,
+  type TerminalCloseParams,
+  TerminalCloseParamsSchema,
+  type TerminalDataEvent,
+  TerminalDataEventSchema,
+  type TerminalEvent,
+  TerminalEventSchema,
+  type TerminalExitEvent,
+  TerminalExitEventSchema,
+  type TerminalInputParams,
+  TerminalInputParamsSchema,
+  type TerminalListResult,
+  TerminalListResultSchema,
+  type TerminalOpenParams,
+  TerminalOpenParamsSchema,
+  type TerminalOpenResult,
+  TerminalOpenResultSchema,
+  type TerminalResizeParams,
+  TerminalResizeParamsSchema,
+  type TerminalSessionInfo,
+  TerminalSessionInfoSchema,
+  type TerminalTextParams,
+  TerminalTextParamsSchema,
+  type TerminalTextResult,
+  TerminalTextResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -342,8 +383,10 @@ import {
   type SessionFileRelevance,
   SessionFileRelevanceSchema,
   type SessionOperationEvent,
+  SessionWorktreeInfoSchema,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
+  SessionsCreateResultSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
@@ -472,6 +515,18 @@ import {
   WebLoginStartParamsSchema,
   type WebLoginWaitParams,
   WebLoginWaitParamsSchema,
+  type CrestodianChatParams,
+  CrestodianChatParamsSchema,
+  type CrestodianChatResult,
+  CrestodianChatResultSchema,
+  type CrestodianSetupDetectParams,
+  CrestodianSetupDetectParamsSchema,
+  type CrestodianSetupDetectResult,
+  CrestodianSetupDetectResultSchema,
+  type CrestodianSetupActivateParams,
+  CrestodianSetupActivateParamsSchema,
+  type CrestodianSetupActivateResult,
+  CrestodianSetupActivateResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -488,6 +543,24 @@ import {
   WizardStatusResultSchema,
   type WizardStep,
   WizardStepSchema,
+  type WorktreeRecord,
+  WorktreeRecordSchema,
+  type WorktreesListParams,
+  WorktreesListParamsSchema,
+  type WorktreesListResult,
+  WorktreesListResultSchema,
+  type WorktreesCreateParams,
+  WorktreesCreateParamsSchema,
+  type WorktreesRemoveParams,
+  WorktreesRemoveParamsSchema,
+  type WorktreesRemoveResult,
+  WorktreesRemoveResultSchema,
+  type WorktreesRestoreParams,
+  WorktreesRestoreParamsSchema,
+  type WorktreesGcParams,
+  WorktreesGcParamsSchema,
+  type WorktreesGcResult,
+  WorktreesGcResultSchema,
 } from "./schema.js";
 
 /** Normalized validation error shape exposed by every protocol validator. */
@@ -567,6 +640,18 @@ export const validateAgentIdentityParams =
 export const validateAgentWaitParams = lazyCompile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = lazyCompile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = lazyCompile<AgentsListParams>(AgentsListParamsSchema);
+export const validateWorktreesListParams =
+  lazyCompile<WorktreesListParams>(WorktreesListParamsSchema);
+export const validateWorktreesCreateParams = lazyCompile<WorktreesCreateParams>(
+  WorktreesCreateParamsSchema,
+);
+export const validateWorktreesRemoveParams = lazyCompile<WorktreesRemoveParams>(
+  WorktreesRemoveParamsSchema,
+);
+export const validateWorktreesRestoreParams = lazyCompile<WorktreesRestoreParams>(
+  WorktreesRestoreParamsSchema,
+);
+export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(WorktreesGcParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -609,6 +694,8 @@ export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams
 export const validateEnvironmentsStatusParams = lazyCompile<EnvironmentsStatusParams>(
   EnvironmentsStatusParamsSchema,
 );
+export const validateSystemInfoParams = lazyCompile<SystemInfoParams>(SystemInfoParamsSchema);
+export const validateSystemInfoResult = lazyCompile<SystemInfoResult>(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -715,6 +802,15 @@ export const validateConfigSchemaLookupParams = lazyCompile<ConfigSchemaLookupPa
 );
 export const validateConfigSchemaLookupResult = lazyCompile<ConfigSchemaLookupResult>(
   ConfigSchemaLookupResultSchema,
+);
+export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
+  CrestodianChatParamsSchema,
+);
+export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
+  CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
+  CrestodianSetupActivateParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
@@ -860,6 +956,9 @@ export const validateDevicePairRejectParams = lazyCompile<DevicePairRejectParams
 export const validateDevicePairRemoveParams = lazyCompile<DevicePairRemoveParams>(
   DevicePairRemoveParamsSchema,
 );
+export const validateDevicePairSetupCodeParams = lazyCompile<DevicePairSetupCodeParams>(
+  DevicePairSetupCodeParamsSchema,
+);
 export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
 );
@@ -906,6 +1005,19 @@ export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
+export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
+export const validateTerminalInputParams =
+  lazyCompile<TerminalInputParams>(TerminalInputParamsSchema);
+export const validateTerminalResizeParams = lazyCompile<TerminalResizeParams>(
+  TerminalResizeParamsSchema,
+);
+export const validateTerminalCloseParams =
+  lazyCompile<TerminalCloseParams>(TerminalCloseParamsSchema);
+export const validateTerminalAttachParams = lazyCompile<TerminalAttachParams>(
+  TerminalAttachParamsSchema,
+);
+export const validateTerminalTextParams = lazyCompile<TerminalTextParams>(TerminalTextParamsSchema);
+export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
@@ -1005,6 +1117,8 @@ export {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
+  SystemInfoParamsSchema,
+  SystemInfoResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -1055,7 +1169,9 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
+  SessionsCreateResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1084,6 +1200,12 @@ export {
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
+  CrestodianChatParamsSchema,
+  CrestodianChatResultSchema,
+  CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResultSchema,
+  CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1182,12 +1304,29 @@ export {
   CronStatusParamsSchema,
   CronGetParamsSchema,
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
+  TerminalOpenParamsSchema,
+  TerminalOpenResultSchema,
+  TerminalInputParamsSchema,
+  TerminalResizeParamsSchema,
+  TerminalCloseParamsSchema,
+  TerminalAttachParamsSchema,
+  TerminalAttachResultSchema,
+  TerminalSessionInfoSchema,
+  TerminalListResultSchema,
+  TerminalTextParamsSchema,
+  TerminalTextResultSchema,
+  TerminalAckResultSchema,
+  TerminalDataEventSchema,
+  TerminalExitEventSchema,
+  TerminalEventSchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -1200,6 +1339,15 @@ export {
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
+  WorktreeRecordSchema,
+  WorktreesListParamsSchema,
+  WorktreesListResultSchema,
+  WorktreesCreateParamsSchema,
+  WorktreesRemoveParamsSchema,
+  WorktreesRemoveResultSchema,
+  WorktreesRestoreParamsSchema,
+  WorktreesGcParamsSchema,
+  WorktreesGcResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -1234,12 +1382,20 @@ export type {
   DevicePairListParams,
   DevicePairApproveParams,
   DevicePairRejectParams,
+  DevicePairSetupCodeParams,
+  DevicePairSetupCodeResult,
   ConfigGetParams,
   ConfigSetParams,
   ConfigApplyParams,
   ConfigPatchParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
+  CrestodianChatParams,
+  CrestodianChatResult,
+  CrestodianSetupDetectParams,
+  CrestodianSetupDetectResult,
+  CrestodianSetupActivateParams,
+  CrestodianSetupActivateResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1359,6 +1515,8 @@ export type {
   EnvironmentsListResult,
   EnvironmentsStatusParams,
   EnvironmentsStatusResult,
+  SystemInfoParams,
+  SystemInfoResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,
@@ -1397,6 +1555,8 @@ export type {
   CronStatusParams,
   CronGetParams,
   CronAddParams,
+  CronAddResult,
+  CronDeclarativeAddResult,
   CronUpdateParams,
   CronRemoveParams,
   CronRunParams,
@@ -1410,6 +1570,21 @@ export type {
   ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
+  TerminalOpenParams,
+  TerminalOpenResult,
+  TerminalInputParams,
+  TerminalResizeParams,
+  TerminalCloseParams,
+  TerminalAttachParams,
+  TerminalAttachResult,
+  TerminalSessionInfo,
+  TerminalListResult,
+  TerminalTextParams,
+  TerminalTextResult,
+  TerminalAckResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalEvent,
   PollParams,
   WebPushVapidPublicKeyParams,
   WebPushSubscribeParams,
@@ -1418,6 +1593,15 @@ export type {
   UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
+  WorktreeRecord,
+  WorktreesListParams,
+  WorktreesListResult,
+  WorktreesCreateParams,
+  WorktreesRemoveParams,
+  WorktreesRemoveResult,
+  WorktreesRestoreParams,
+  WorktreesGcParams,
+  WorktreesGcResult,
 };
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
