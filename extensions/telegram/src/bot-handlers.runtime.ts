@@ -1755,7 +1755,7 @@ export const registerTelegramHandlers = ({
     if (typeof submitText !== "string") {
       return undefined;
     }
-    const trimmed = submitText?.trim();
+    const trimmed = submitText.trim();
     return trimmed ? trimmed : undefined;
   };
 
@@ -1770,7 +1770,7 @@ export const registerTelegramHandlers = ({
     syntheticCtx: Parameters<typeof processMessageWithReplyChain>[0]["ctx"];
     syntheticMessage: Parameters<typeof processMessageWithReplyChain>[0]["msg"];
     storeAllowFrom: Parameters<typeof processMessageWithReplyChain>[0]["storeAllowFrom"];
-  }): Promise<void> => {
+  }): Promise<"completed" | "skipped"> => {
     for (let attempt = 0; ; attempt++) {
       try {
         const result = await processMessageWithReplyChain({
@@ -1785,15 +1785,14 @@ export const registerTelegramHandlers = ({
           },
         });
         if (result.kind === "completed") {
-          return;
+          return "completed";
+        }
+        if (result.kind === "skipped") {
+          return "skipped";
         }
         const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
         if (!isReplySessionInitConflictResult(result) || retryDelayMs === undefined) {
-          throw new TelegramRetryableCallbackError(
-            result.kind === "failed-retryable"
-              ? result.error
-              : new Error("telegram plugin callback submitText was skipped"),
-          );
+          throw new TelegramRetryableCallbackError(result.error);
         }
         logVerbose(
           `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
@@ -2762,12 +2761,17 @@ export const registerTelegramHandlers = ({
               text: submitText,
               isForum,
             });
-          await processPluginCallbackSubmitText({
+          const submitOutcome = await processPluginCallbackSubmitText({
             callbackId: callback.id,
             syntheticCtx,
             syntheticMessage,
             storeAllowFrom,
           });
+          if (submitOutcome === "skipped") {
+            return;
+          }
+          // The agent turn already completed. Cleanup failure must not release
+          // callback dedupe and replay the submitted turn.
           await clearCallbackButtons().catch((err: unknown) => {
             logVerbose(`telegram plugin callback button cleanup skipped: ${String(err)}`);
           });

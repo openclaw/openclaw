@@ -93,6 +93,28 @@ function waitForReplyCalls(count: number) {
   return done.promise;
 }
 
+function setTelegramPluginStateRuntimeForTests() {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: ((options) =>
+        createPluginStateKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: ((options) =>
+        createPluginStateSyncKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
+}
+
+function getTelegramCallbackHandlerForTests() {
+  return getOnHandler("callback_query") as (ctx: Record<string, unknown>) => Promise<void>;
+}
+
 async function loadEnvelopeTimestampHelpers() {
   return await import("openclaw/plugin-sdk/channel-test-helpers");
 }
@@ -3972,21 +3994,7 @@ describe("createTelegramBot", () => {
       namespace: "openclaw-smart-replies",
       handler: async () => ({ handled: true, submitText: "Fix a broken tool" }),
     } satisfies TelegramInteractiveHandlerRegistration);
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-        openSyncKeyedStore: ((options) =>
-          createPluginStateSyncKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramPluginStateRuntimeForTests();
 
     try {
       createTelegramBot({
@@ -4000,9 +4008,7 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getOnHandler("callback_query") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
+      const callbackHandler = getTelegramCallbackHandlerForTests();
 
       await callbackHandler({
         callbackQuery: {
@@ -4044,21 +4050,7 @@ describe("createTelegramBot", () => {
       namespace: "openclaw-smart-replies",
       handler,
     } satisfies TelegramInteractiveHandlerRegistration);
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-        openSyncKeyedStore: ((options) =>
-          createPluginStateSyncKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramPluginStateRuntimeForTests();
 
     try {
       createTelegramBot({
@@ -4072,9 +4064,7 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getOnHandler("callback_query") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
+      const callbackHandler = getTelegramCallbackHandlerForTests();
 
       await callbackHandler({
         callbackQuery: {
@@ -4103,6 +4093,54 @@ describe("createTelegramBot", () => {
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
   });
 
+  it("does not retry plugin-owned callback text skipped by inbound policy", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    const handler = vi.fn(async () => ({ handled: true, submitText: "Do not submit this" }));
+    registerPluginInteractiveHandler("smart-replies-plugin", {
+      channel: "telegram",
+      namespace: "openclaw-smart-replies",
+      handler,
+    } satisfies TelegramInteractiveHandlerRegistration);
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "disabled",
+            capabilities: { inlineButtons: "dm" },
+          },
+        },
+      },
+    });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+
+    const callbackContext = {
+      callbackQuery: {
+        id: "cbq-smart-reply-policy-skip",
+        data: "openclaw-smart-replies:v1:RG8gbm90IHN1Ym1pdCB0aGlz",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 9, type: "private" },
+          date: 1736380800,
+          message_id: 11,
+          text: "Pick a direction",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
+    await expect(callbackHandler(callbackContext)).resolves.toBeUndefined();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+  });
+
   it("submits plugin-owned callback text in mention-required group topics", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -4113,21 +4151,7 @@ describe("createTelegramBot", () => {
       namespace: "openclaw-smart-replies",
       handler: async () => ({ handled: true, submitText: "Investigate topic callback" }),
     } satisfies TelegramInteractiveHandlerRegistration);
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-        openSyncKeyedStore: ((options) =>
-          createPluginStateSyncKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramPluginStateRuntimeForTests();
 
     try {
       createTelegramBot({
@@ -4144,9 +4168,7 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getOnHandler("callback_query") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
+      const callbackHandler = getTelegramCallbackHandlerForTests();
 
       await callbackHandler({
         callbackQuery: {
@@ -4200,21 +4222,7 @@ describe("createTelegramBot", () => {
       namespace: "openclaw-smart-replies",
       handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
     } satisfies TelegramInteractiveHandlerRegistration);
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-        openSyncKeyedStore: ((options) =>
-          createPluginStateSyncKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramPluginStateRuntimeForTests();
 
     try {
       createTelegramBot({
@@ -4228,9 +4236,7 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getOnHandler("callback_query") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
+      const callbackHandler = getTelegramCallbackHandlerForTests();
 
       await callbackHandler({
         callbackQuery: {
@@ -4283,21 +4289,7 @@ describe("createTelegramBot", () => {
       namespace: "openclaw-smart-replies",
       handler,
     } satisfies TelegramInteractiveHandlerRegistration);
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: ((options) =>
-          createPluginStateKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openKeyedStore"],
-        openSyncKeyedStore: ((options) =>
-          createPluginStateSyncKeyedStoreForTests(
-            "telegram",
-            options,
-          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
+    setTelegramPluginStateRuntimeForTests();
 
     try {
       createTelegramBot({
@@ -4311,9 +4303,7 @@ describe("createTelegramBot", () => {
           },
         },
       });
-      const callbackHandler = getOnHandler("callback_query") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
+      const callbackHandler = getTelegramCallbackHandlerForTests();
       const createCallbackUpdate = (updateId: number) => ({
         update_id: updateId,
         callbackQuery: {

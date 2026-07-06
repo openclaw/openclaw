@@ -80,6 +80,8 @@ export async function dispatchPluginInteractiveHandler<
   try {
     await params.onMatched?.();
     const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    // Channel post-processing stays inside the dedupe claim. Committing first
+    // would swallow a retry after a retryable post-handler failure.
     await params.afterInvoke?.(resolved);
     if (dedupeKey) {
       commitPluginInteractiveCallbackDedupe(dedupeKey);
