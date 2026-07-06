@@ -718,8 +718,12 @@ export class ModelRegistry {
       return { configured: true, source: "models_json_command" };
     }
 
-    if (process.env[providerApiKey]) {
-      return { configured: true, source: "environment", label: providerApiKey };
+    if (providerApiKey in process.env) {
+      const value = process.env[providerApiKey];
+      if (value) {
+        return { configured: true, source: "environment", label: providerApiKey };
+      }
+      return { configured: false };
     }
 
     return { configured: true, source: "models_json_key" };
