@@ -223,4 +223,12 @@ describe("HTTP 429 overload wording (#98101)", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+
+  it("preserves actionable retry details when a rate limit also mentions overload", () => {
+    expect(
+      formatRateLimitOrOverloadedErrorCopy(
+        "429 rate limit: service overloaded, try again in 30 seconds",
+      ),
+    ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
+  });
 });
