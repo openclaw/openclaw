@@ -376,6 +376,63 @@ describe("talk.catalog handler", () => {
     expect(responsePayload).not.toContain("live-key");
   });
 
+  it("advertises agent-consult for gateway realtime providers without native tool calls", async () => {
+    mocks.listRealtimeVoiceProviders.mockReturnValue([
+      {
+        id: "anvil",
+        label: "Anvil Voice",
+        resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
+        isConfigured: vi.fn(() => true),
+        capabilities: {
+          transports: ["gateway-relay"],
+          inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+          outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+          supportsBrowserSession: false,
+          supportsToolCalls: false,
+        },
+        createBridge: vi.fn(),
+      } as never,
+    ]);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: { id: "anvil" },
+      providerConfig: { realtimeUrl: "ws://127.0.0.1:8765/v1/realtime" },
+    } as never);
+    const respond = vi.fn();
+
+    await talkHandlers["talk.catalog"]({
+      req: { type: "req", id: "1", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "anvil",
+                providers: {
+                  anvil: { realtimeUrl: "ws://127.0.0.1:8765/v1/realtime" },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    const payload = expectRespondOk(respond);
+    const provider = (
+      payload as {
+        realtime: { providers: Array<Record<string, unknown>> };
+      }
+    ).realtime.providers[0];
+    expect(provider).toMatchObject({
+      id: "anvil",
+      brains: ["agent-consult"],
+      supportsToolCalls: false,
+    });
+  });
+
   it("reports the runtime-selected automatic providers instead of registry row order", async () => {
     const transcriptionSlow = {
       id: "transcription-slow",

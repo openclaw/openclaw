@@ -1,9 +1,10 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceProviderPlugin,
-  RealtimeVoiceToolCallEvent,
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  type RealtimeVoiceBridge,
+  type RealtimeVoiceProviderPlugin,
+  type RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
@@ -607,6 +608,9 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(createBridge).toHaveBeenCalled();
         });
+        expect(createBridge.mock.calls[0]?.[0].audioFormat).toEqual(
+          REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+        );
 
         callbacks?.onReady?.();
 
