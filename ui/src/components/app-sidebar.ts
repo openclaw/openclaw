@@ -31,11 +31,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import {
-  compareSessionRowsByUpdatedAt,
-  resolveSessionNavigation,
-  searchForSession,
-} from "../lib/sessions/index.ts";
+import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
   canArchiveSessionRow,
@@ -59,7 +55,6 @@ type SidebarRecentSession = {
   hasActiveRun: boolean;
   kind?: string;
   pinned: boolean;
-  pinnedAt?: number | null;
 };
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -221,14 +216,12 @@ export class AppSidebar extends LitElement {
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
-      pinnedAt: row.pinnedAt,
     });
     const activeSession = navigation.selectedSession
       ? toSidebarSession(navigation.selectedSession)
       : null;
     const recentSessions = navigation.recentSessions
       .slice(activeSession ? 1 : 0)
-      .toSorted(compareSessionRowsByUpdatedAt)
       .map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
@@ -685,7 +678,7 @@ export class AppSidebar extends LitElement {
         ${this.collapsed
           ? nothing
           : html`
-              <div class="sidebar-recent-sessions" aria-label=${t("overview.cards.recentSessions")}>
+              <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
                 ${pinnedRows.length === 0
                   ? nothing
                   : html`
@@ -877,6 +870,12 @@ export class AppSidebar extends LitElement {
                   href=${pathForRoute("config", this.basePath)}
                   class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
                   aria-label=${titleForRoute("config")}
+                  aria-current=${settingsActive ? "page" : nothing}
+                  @focus=${(event: Event) => this.preloadRoute("config", event)}
+                  @blur=${this.cancelPreload}
+                  @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
+                  @pointerleave=${this.cancelPreload}
+                  @touchstart=${(event: TouchEvent) => this.preloadRoute("config", event, true)}
                   @click=${(event: MouseEvent) => {
                     if (!shouldHandleNavigationClick(event)) {
                       return;

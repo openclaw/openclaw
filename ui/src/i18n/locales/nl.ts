@@ -447,6 +447,7 @@ export const nl: TranslationMap = {
     collapse: "Zijbalk samenvouwen",
     resize: "Zijbalkgrootte aanpassen",
     more: "Meer",
+    chats: "Chats",
     customize: "Zijbalk aanpassen",
     customizeReset: "Standaardinstellingen herstellen",
   },

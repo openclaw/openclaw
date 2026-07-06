@@ -445,6 +445,7 @@ export const vi: TranslationMap = {
     collapse: "Thu gọn thanh bên",
     resize: "Thay đổi kích thước thanh bên",
     more: "Thêm",
+    chats: "Chats",
     customize: "Tùy chỉnh thanh bên",
     customizeReset: "Đặt lại về mặc định",
   },
