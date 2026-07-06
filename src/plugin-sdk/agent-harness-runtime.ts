@@ -15,6 +15,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
   type AbortAndDrainEmbeddedAgentRunResult,
+  type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
@@ -59,6 +60,7 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/embedded-agent-runner/run/types.js";
+export type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/runs.js";
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
