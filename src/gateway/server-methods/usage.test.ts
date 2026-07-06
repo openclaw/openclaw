@@ -89,6 +89,20 @@ describe("gateway usage helpers", () => {
     return result.value;
   }
 
+  function withTimeZone<T>(timeZone: string, run: () => T): T {
+    const previous = process.env.TZ;
+    process.env.TZ = timeZone;
+    try {
+      return run();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previous;
+      }
+    }
+  }
+
   beforeEach(() => {
     testApi.costUsageCache.clear();
     vi.useRealTimers();
@@ -191,6 +205,36 @@ describe("gateway usage helpers", () => {
       endDate: "2026-02-02",
     });
     expectUtcDateRange(result, "2026-02-01", "2026-02-02");
+  });
+
+  it("resolveDateRange honors a startDate-only range through today", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
+    expectUtcDateRange(
+      testApi.resolveDateRange({ startDate: "2026-02-03" }),
+      "2026-02-03",
+      "2026-02-05",
+    );
+  });
+
+  it("resolveDateRange honors an endDate-only range ending on that day", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
+    expectUtcDateRange(
+      testApi.resolveDateRange({ endDate: "2026-02-05" }),
+      "2026-01-07",
+      "2026-02-05",
+    );
+  });
+
+  it("resolveDateRange keeps endDate-only gateway ranges on calendar days across DST", () => {
+    withTimeZone("America/New_York", () => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({ endDate: "2026-03-10", mode: "gateway" }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 1, 9).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 11).getTime() - 1);
+    });
   });
 
   it("resolveDateRange uses explicit UTC mode", () => {

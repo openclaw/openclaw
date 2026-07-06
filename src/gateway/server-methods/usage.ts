@@ -74,6 +74,7 @@ type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: 
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "specific"; utcOffsetMinutes: number };
+type DateParts = { year: number; monthIndex: number; day: number };
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -139,9 +140,7 @@ function resolveSessionUsageFileOrRespond(
   return { config, entry, agentId, sessionId, sessionFile };
 }
 
-const parseDateParts = (
-  raw: unknown,
-): { year: number; monthIndex: number; day: number } | undefined => {
+const parseDateParts = (raw: unknown): DateParts | undefined => {
   if (typeof raw !== "string" || !raw.trim()) {
     return undefined;
   }
@@ -168,6 +167,34 @@ const parseDateParts = (
     return undefined;
   }
   return { year, monthIndex, day };
+};
+
+const shiftDateParts = (parts: DateParts, days: number): DateParts => {
+  const shifted = new Date(Date.UTC(parts.year, parts.monthIndex, parts.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+};
+
+const getDatePartsForDate = (date: Date, interpretation: DateInterpretation): DateParts => {
+  if (interpretation.mode === "gateway") {
+    return { year: date.getFullYear(), monthIndex: date.getMonth(), day: date.getDate() };
+  }
+  if (interpretation.mode === "specific") {
+    const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+    return {
+      year: shifted.getUTCFullYear(),
+      monthIndex: shifted.getUTCMonth(),
+      day: shifted.getUTCDate(),
+    };
+  }
+  return {
+    year: date.getUTCFullYear(),
+    monthIndex: date.getUTCMonth(),
+    day: date.getUTCDate(),
+  };
 };
 
 // usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
@@ -255,31 +282,29 @@ const parseDateToMs = (
   if (!parts) {
     return undefined;
   }
+  return datePartsToMs(parts, interpretation);
+};
+
+const datePartsToMs = (
+  parts: DateParts,
+  interpretation: DateInterpretation = { mode: "utc" },
+): number => {
   const { year, monthIndex, day } = parts;
   if (interpretation.mode === "gateway") {
-    const ms = new Date(year, monthIndex, day).getTime();
-    return Number.isNaN(ms) ? undefined : ms;
+    return new Date(year, monthIndex, day).getTime();
   }
   if (interpretation.mode === "specific") {
-    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
-    return Number.isNaN(ms) ? undefined : ms;
+    return Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
   }
-  const ms = Date.UTC(year, monthIndex, day);
-  return Number.isNaN(ms) ? undefined : ms;
+  return Date.UTC(year, monthIndex, day);
 };
 
 const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
-  if (interpretation.mode === "gateway") {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  }
-  if (interpretation.mode === "specific") {
-    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-    return (
-      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
-      interpretation.utcOffsetMinutes * 60 * 1000
-    );
-  }
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return datePartsToMs(getDatePartsForDate(now, interpretation), interpretation);
+};
+
+const getDayEndMs = (parts: DateParts, interpretation: DateInterpretation): number => {
+  return datePartsToMs(shiftDateParts(parts, 1), interpretation) - 1;
 };
 
 const parseDays = (raw: unknown): number | undefined => {
@@ -336,18 +361,50 @@ const resolveDateRange = (params: {
 
   const now = new Date();
   const interpretation = resolveDateInterpretation(params);
+  const todayDateParts = getDatePartsForDate(now, interpretation);
   const todayStartMs = getTodayStartMs(now, interpretation);
-  const todayEndMs = todayStartMs + DAY_MS - 1;
+  const todayEndMs = getDayEndMs(todayDateParts, interpretation);
 
   const startMs = parseDateToMs(params.startDate, interpretation);
   const endMs = parseDateToMs(params.endDate, interpretation);
 
   if (startMs !== undefined && endMs !== undefined) {
-    if (startMs > endMs) {
+    const resolvedStartMs = startMs;
+    const resolvedEndMs = endMs;
+    if (resolvedStartMs > resolvedEndMs) {
       return { ok: false, error: "startDate must not be after endDate" };
     }
-    // endMs should be end of day
-    return { ok: true, value: { startMs, endMs: endMs + DAY_MS - 1 } };
+    const endDateParts = parseDateParts(params.endDate);
+    if (!endDateParts) {
+      return {
+        ok: false,
+        error: "invalid endDate: expected a valid YYYY-MM-DD calendar date",
+      };
+    }
+    return {
+      ok: true,
+      value: { startMs: resolvedStartMs, endMs: getDayEndMs(endDateParts, interpretation) },
+    };
+  }
+  if (startMs !== undefined) {
+    if (startMs > todayStartMs) {
+      return { ok: false, error: "startDate must not be after endDate" };
+    }
+    return { ok: true, value: { startMs, endMs: todayEndMs } };
+  }
+  if (endMs !== undefined) {
+    const endDateParts = parseDateParts(params.endDate);
+    if (!endDateParts) {
+      return {
+        ok: false,
+        error: "invalid endDate: expected a valid YYYY-MM-DD calendar date",
+      };
+    }
+    const resolvedStartMs = datePartsToMs(shiftDateParts(endDateParts, -29), interpretation);
+    return {
+      ok: true,
+      value: { startMs: resolvedStartMs, endMs: getDayEndMs(endDateParts, interpretation) },
+    };
   }
 
   const rangeDays = resolveRangeDays(params.range);
