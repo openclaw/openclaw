@@ -631,7 +631,6 @@ describe("edit tool", () => {
       "call-json-array",
       {
         path: filePath,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON string edits from models are normalized by prepareEditArguments
         edits: JSON.stringify([{ oldText: "original text", newText: "updated text" }]) as any,
       },
       undefined,
@@ -648,7 +647,6 @@ describe("edit tool", () => {
       "call-json-object",
       {
         path: filePath,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON string edits from models are normalized by prepareEditArguments
         edits: JSON.stringify({
           edits: [{ oldText: "original text", newText: "unwrapped" }],
         }) as any,
@@ -666,7 +664,6 @@ describe("edit tool", () => {
     await expect(
       tool.execute(
         "call-malformed",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON string edits from models are normalized by prepareEditArguments
         { path: filePath, edits: "{malformed json" as any },
         undefined,
       ),
