@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { flushExitAfterOneShotOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 
 describe("one-shot CLI exit", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("defers requested exits until the top-level flush", async () => {
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
 
