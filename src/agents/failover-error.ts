@@ -413,6 +413,19 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
     return false;
   }
   if (isEmbeddedAttemptSessionTakeover(err)) {
+    // A wrapper like EmbeddedAttemptPromptErrorWithCleanupTakeoverError sets
+    // name="EmbeddedAttemptSessionTakeoverError" but preserves the real cause in
+    // .promptError. If the underlying prompt error is a provider-level failure
+    // (timeout / rate_limit / auth / …), fallback must still be allowed — the
+    // takeover is a downstream cleanup side-effect, not the root cause.
+    if (
+      err &&
+      typeof err === "object" &&
+      "promptError" in err &&
+      resolveFailoverClassificationFromError(err.promptError) !== null
+    ) {
+      return false;
+    }
     return true;
   }
   return resolveFailoverClassificationFromError(err) === null;

@@ -1335,6 +1335,49 @@ describe("failover-error", () => {
         ),
       ).toBe(false);
     });
+
+    it("returns false when takeover wrapper holds a classifiable provider timeout in promptError", () => {
+      // Simulates EmbeddedAttemptPromptErrorWithCleanupTakeoverError: name matches
+      // EmbeddedAttemptSessionTakeoverError, but the real cause is in .promptError.
+      const timeoutPromptErr = Object.assign(new Error("request timed out"), {
+        name: "TimeoutError",
+      });
+      const wrapper = Object.assign(new Error("request timed out"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError: timeoutPromptErr,
+      });
+      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+    });
+
+    it("returns false when takeover wrapper holds rate_limit in promptError", () => {
+      const rateLimitPromptErr = {
+        status: 429,
+        code: "RATE_LIMITED",
+        message: "too many requests",
+      };
+      const wrapper = Object.assign(new Error("rate limited"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError: rateLimitPromptErr,
+      });
+      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+    });
+
+    it("returns true when takeover wrapper holds an unclassifiable promptError", () => {
+      const unknownPromptErr = { weirdField: "something unknown" };
+      const wrapper = Object.assign(new Error("unknown"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError: unknownPromptErr,
+      });
+      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(true);
+    });
+
+    it("returns true for pure takeover error without promptError (regression)", () => {
+      const pureTakeover = Object.assign(
+        new Error("session file changed while embedded prompt lock was released"),
+        { name: "EmbeddedAttemptSessionTakeoverError" },
+      );
+      expect(isNonProviderRuntimeCoordinationError(pureTakeover)).toBe(true);
+    });
   });
 });
 
