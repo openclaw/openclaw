@@ -240,6 +240,13 @@ export type EmbeddedRunAttemptResult = {
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
+  /** Per-attempt replay metadata that reflects side effects from the current
+   *  attempt only, independent of prior-turn accumulated replay state. Used
+   *  to gate silent provider-error retries so a transient 5xx after earlier
+   *  tool calls is still retryable when the failed attempt itself produced no
+   *  side effects. Absent for legacy harnesses — callers fall back to
+   *  `replayMetadata` (conservative). */
+  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;

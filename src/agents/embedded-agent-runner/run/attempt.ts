@@ -3667,6 +3667,7 @@ export async function runEmbeddedAttempt(
         getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
         getReplayState,
+        getCurrentAttemptReplayState,
         didSendViaMessagingTool,
         didSendDeterministicApprovalPrompt,
         getLastToolError,
@@ -5544,6 +5545,12 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
+      // Per-attempt metadata for silent-error retry gating: starts clean
+      // for every attempt and only reflects the current attempt's side
+      // effects (tools, messaging, spawns, cron), not prior-turn history.
+      const currentAttemptReplayMetadata = replayMetadataFromState(
+        observeReplayMetadata(getCurrentAttemptReplayState(), observedReplayMetadata),
+      );
       const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
         slot.completed && slot.params
           ? [
@@ -5717,6 +5724,7 @@ export async function runEmbeddedAttempt(
 
       return {
         replayMetadata,
+        currentAttemptReplayMetadata,
         itemLifecycle: getItemLifecycle(),
         setTerminalLifecycleMeta,
         aborted,

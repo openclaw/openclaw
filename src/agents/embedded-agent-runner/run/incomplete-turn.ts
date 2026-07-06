@@ -536,6 +536,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
     | "replayMetadata"
+    | "currentAttemptReplayMetadata"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -545,7 +546,14 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+  // Prefer per-attempt metadata when available so prior-turn tool side
+  // effects don't permanently block retry of a transient provider error.
+  // Fall back to cumulative replayMetadata for legacy harnesses that
+  // haven't started returning currentAttemptReplayMetadata yet
+  // (conservative: treat absent per-attempt metadata as unsafe).
+  const attemptReplayMeta =
+    params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata;
+  if (resolveAttemptReplayMetadata({ replayMetadata: attemptReplayMeta }).hadPotentialSideEffects) {
     return false;
   }
 

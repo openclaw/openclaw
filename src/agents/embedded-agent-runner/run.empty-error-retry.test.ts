@@ -138,35 +138,55 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it.each([["timeout", "LLM request timed out."]] as const)(
+    "does not intercept recognized %s failover errors",
+    async (reason, errorMessage) => {
+      mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        emptyErrorAttempt(
+          "anthropic",
+          "claude-opus-4-8",
+          1120,
+          [
+            {
+              type: "thinking",
+              thinking: "internal reasoning before provider error",
+              thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+            },
+          ],
+          errorMessage,
+        ),
+      );
+
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        runId: `run-empty-error-retry-${reason}`,
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("retries empty server_error failover errors (#97877)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("server_error");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      emptyErrorAttempt(
-        "anthropic",
-        "claude-opus-4-8",
-        1120,
-        [
-          {
-            type: "thinking",
-            thinking: "internal reasoning before provider error",
-            thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
-          },
-        ],
-        errorMessage,
-      ),
+      emptyErrorAttempt("openrouter", "minimax/minimax-m3", 0, [], "Internal Server Error"),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      successAttempt("openrouter", "minimax/minimax-m3"),
     );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      runId: "run-empty-error-retry-server-error",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {

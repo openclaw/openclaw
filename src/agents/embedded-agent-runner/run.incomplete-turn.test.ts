@@ -2787,6 +2787,94 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("retries clean provider errors when cumulative metadata is dirty from prior turns (#97877)", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    // Cumulative metadata is dirty (prior-turn tools), but per-attempt
+    // metadata is clean — the failed provider call itself had no side
+    // effects, so it should be retried.
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: false,
+            replaySafe: true,
+          },
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry when per-attempt metadata is dirty from same-attempt tools", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    // Both cumulative and per-attempt metadata agree: current attempt
+    // produced side effects (tools/messaging/spawns), so retry is unsafe.
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          currentAttemptReplayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back conservatively when per-attempt metadata is missing (legacy harness)", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openrouter",
+      model: "minimax/minimax-m3",
+      content: [],
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    // Legacy harnesses don't emit currentAttemptReplayMetadata — fall
+    // back to cumulative replayMetadata (conservative: no retry).
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+          // No currentAttemptReplayMetadata — legacy fallback
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
   it("detects empty openai-compatible stop turns with non-zero output usage", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "llamacpp",
