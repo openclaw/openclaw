@@ -2,9 +2,9 @@
  * Summarization and fallback helpers for transcript compaction.
  */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { isAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildOversizedFallbackPlanWithWorker,
@@ -386,10 +386,16 @@ export async function summarizeInStages(params: {
     return partialSummaries[0];
   }
 
-  const summaryMessages: AgentMessage[] = partialSummaries.map((summary) => ({
+  // Preserve the relative chronological ordering of the source chunks
+  // in the synthetic merge messages so the LLM merger can distinguish
+  // older history from newer history during final assembly.
+  const summaryMessages: AgentMessage[] = partialSummaries.map((summary, idx) => ({
     role: "user",
     content: summary,
-    timestamp: Date.now(),
+    timestamp:
+      plan.chunks[idx]?.[0]?.timestamp ??
+      plan.chunks[idx]?.[plan.chunks[idx].length - 1]?.timestamp ??
+      Date.now(),
   }));
 
   const custom = params.customInstructions?.trim();
