@@ -12,6 +12,7 @@ import {
   type SessionHeader,
   type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
+import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import { pathExists } from "../../infra/fs-safe.js";
@@ -44,9 +45,9 @@ function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasBackendSession(entry: StoredSessionEntry): boolean {
+function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
   return (
-    Boolean(entry.acp) ||
+    hasStoredAcpSession ||
     hasNonEmptyString(entry.claudeCliSessionId) ||
     Object.values(entry.cliSessionBindings ?? {}).some(
       (binding) => hasNonEmptyString(binding?.sessionId),
@@ -58,8 +59,9 @@ function hasBackendSession(entry: StoredSessionEntry): boolean {
 function isBackendDelegatedSession(
   entry: StoredSessionEntry,
   entries: AgentSessionEntry[],
+  hasStoredAcpSession: boolean,
 ): boolean {
-  if (!hasBackendSession(entry)) {
+  if (!hasBackendSession(entry, hasStoredAcpSession)) {
     return false;
   }
   if (entries.length === 0) {
@@ -298,7 +300,15 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   });
 
   // 4. Prepare session data
-  const backendWarning = isBackendDelegatedSession(entry, entries)
+  const hasStoredAcpSession =
+    Boolean(entry.acp) ||
+    Boolean(
+      readAcpSessionMetaForEntry({
+        sessionKey: params.sessionKey,
+        entry,
+      }),
+    );
+  const backendWarning = isBackendDelegatedSession(entry, entries, hasStoredAcpSession)
     ? BACKEND_DELEGATED_WARNING
     : undefined;
   const sessionData: SessionData = {

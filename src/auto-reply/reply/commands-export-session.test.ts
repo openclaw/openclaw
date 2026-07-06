@@ -22,10 +22,17 @@ const hoisted = await vi.hoisted(async () => {
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
+    readAcpSessionMetaForEntryMock: vi.fn<
+      (params: { sessionKey: string; entry?: { sessionId?: string } }) => unknown
+    >(() => undefined),
     exportHtmlTemplateContents: new Map<string, string>(),
     sessionTranscriptContent: "",
   };
 });
+
+vi.mock("../../acp/runtime/session-meta.js", () => ({
+  readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
+}));
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
@@ -200,6 +207,7 @@ describe("buildExportSessionReply", () => {
     });
     hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.pathExistsMock.mockResolvedValue(true);
+    hoisted.readAcpSessionMetaForEntryMock.mockReturnValue(undefined);
     hoisted.exportHtmlTemplateContents.clear();
     hoisted.sessionTranscriptContent = "";
   });
@@ -592,6 +600,38 @@ describe("buildExportSessionReply", () => {
     const data = sessionDataFromHtml(writtenHtml());
     expect(typeof data.warning).toBe("string");
     expect(data.warning).toContain("backend runtime");
+  });
+
+  it("warns when persisted ACP metadata is stored outside the session entry", async () => {
+    hoisted.readAcpSessionMetaForEntryMock.mockReturnValue({
+      backend: "acpx",
+      mode: "persistent",
+      agent: "claude",
+      runtimeSessionName: "backend-session-1",
+      state: "idle",
+      lastActivityAt: 1,
+    });
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "hello" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(hoisted.readAcpSessionMetaForEntryMock).toHaveBeenCalledWith({
+      sessionKey: "agent:target:session",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    });
+    expect(reply.text).toContain("backend runtime");
+    expect(sessionDataFromHtml(writtenHtml()).warning).toContain("backend runtime");
   });
 
   it("does not warn for a normal user-only transcript without backend session metadata", async () => {
