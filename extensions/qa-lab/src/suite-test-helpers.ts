@@ -1,5 +1,5 @@
 // Qa Lab helper module supports suite test helpers behavior.
-import type { QaTransportPolicy } from "./qa-transport-registry.js";
+import type { QaTransportPolicy } from "./qa-transport.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 type QaSuiteTestScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];

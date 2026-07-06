@@ -19,7 +19,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
-import type { QaTransportPolicy } from "./qa-transport-registry.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -31,6 +30,7 @@ import type {
   QaTransportNativeCommandInput,
   QaTransportOutboundEvent,
   QaTransportOutboundSequenceMatch,
+  QaTransportPolicy,
   QaTransportReportParams,
   QaTransportState,
 } from "./qa-transport.js";

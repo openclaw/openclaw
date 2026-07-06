@@ -5,7 +5,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
-import type { QaTransportPolicy } from "./qa-transport-registry.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -16,6 +15,7 @@ import type {
   QaTransportGatewayClient,
   QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
+  QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
