@@ -253,10 +253,35 @@ function looksLikeUtf8Text(buffer?: Buffer): boolean {
   const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(sample);
-    return isMostlyPrintable(text);
+    // Enhanced text detection: handle terminal outputs with paths, URLs, and ANSI codes
+    if (isMostlyPrintable(text)) {
+      return true;
+    }
+    // Additional check for terminal outputs that may contain ANSI escape sequences
+    // or mixed content (paths, URLs, command outputs)
+    const strippedText = stripAnsiAndControlChars(text);
+    return getTextStats(strippedText).printableRatio > 0.7;
   } catch {
     return looksLikeLegacyTextBytes(sample);
   }
+}
+
+/** Strip ANSI escape sequences and control characters for text analysis */
+function stripAnsiAndControlChars(text: string): string {
+  // Remove ANSI escape sequences (common in terminal outputs)
+  const ansiPattern = /\x1b\[[0-9;]*[a-zA-Z]/g;
+  let stripped = text.replace(ansiPattern, "");
+
+  // Remove other control characters except common whitespace
+  let result = "";
+  for (const char of stripped) {
+    const code = char.codePointAt(0) ?? 0;
+    // Keep printable chars and common whitespace (tab, newline, carriage return, space)
+    if (code >= 32 || code === 9 || code === 10 || code === 13) {
+      result += char;
+    }
+  }
+  return result;
 }
 
 function hasSuspiciousBinarySignal(buffer?: Buffer): boolean {
@@ -293,6 +318,79 @@ function decodeTextSample(buffer?: Buffer): string {
   return new TextDecoder("utf-8").decode(sample);
 }
 
+/** Detect if content looks like terminal/command output */
+function isLikelyTerminalOutput(text: string): boolean {
+  if (!text || text.length < 10) {
+    return false;
+  }
+
+  // Common terminal output patterns
+  const terminalPatterns = [
+    // PowerShell patterns
+    /\r?\n\s*Mode\s+LastWriteTime\s+Length\s+Name\s*\r?\n/i,
+    /\r?\n\s*----\s+-------------\s+------\s+----\s*\r?\n/,
+    /Directory:\s*/i,
+    /Get-Content|gc\s+/i,
+    /Select-String|sls\s+/i,
+
+    // Unix ls patterns - more permissive
+    /^[d-][rwx-]{9}\s+\d+\s+\w+\s+\w+\s+\d+\s+/m,
+    /^l[rwx-]{9}\s+\d+\s+\w+\s+\w+\s+\d+\s+/m,
+    /total\s+\d+/m,
+
+    // curl/wget patterns
+    /^HTTP\/\d\.\d\s+\d{3}\s+/m,
+    /^<\s+\w+[-\w]*:\s*/m,
+    /^>\s+\w+[-\w]*:\s*/m,
+    /%\s+Total.*%.*Received/m,
+    /Receiving.*bytes/m,
+    /Transferred.*bytes/m,
+
+    // Generic command output
+    /\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\]/,
+    /\b(?:ERROR|WARNING|INFO|DEBUG):\s*/i,
+    /\b(?:Success|Failed|Error):\s*/i,
+
+    // Path patterns (Windows and Unix)
+    /[A-Z]:\\[^\s\r\n]+/i,
+    /(?:^|\s)\/[^\s\r\n]+(?:\/[^\s\r\n]+)+/m,
+  ];
+
+  // Check for terminal output patterns
+  const hasTerminalPattern = terminalPatterns.some((pattern) => pattern.test(text));
+  if (hasTerminalPattern) {
+    return true;
+  }
+
+  // Check for mixed content typical of terminal outputs
+  const lines = text.split(/\r?\n/);
+  if (lines.length >= 3) {
+    // Multiple lines with varying content types
+    const hasPaths = lines.some(
+      (line) => /[A-Z]:\\/i.test(line) || /^\//.test(line) || /\/\w+/.test(line),
+    );
+    const hasNumbers = lines.some((line) => /\d+\s+(?:bytes?|files?|dirs?)/i.test(line));
+    const hasTimestamps = lines.some((line) => /\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}/.test(line));
+
+    if (hasPaths && (hasNumbers || hasTimestamps)) {
+      return true;
+    }
+
+    // Additional check: lines that look like file listings
+    const fileListingPattern = /^\s*[-d][rwx-]{9}\s+\d+\s+\w+\s+\w+\s+\d+\s+/m;
+    if (fileListingPattern.test(text)) {
+      return true;
+    }
+  }
+
+  // Check for curl-like percentage progress
+  if (/\d{1,3}\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d/.test(text)) {
+    return true;
+  }
+
+  return false;
+}
+
 function guessDelimitedMime(text: string): string | undefined {
   if (!text) {
     return undefined;
@@ -314,7 +412,60 @@ function resolveTextMimeFromName(name?: string): string | undefined {
     return undefined;
   }
   const ext = normalizeLowercaseStringOrEmpty(path.extname(name));
-  return TEXT_EXT_MIME.get(ext);
+  if (!ext) {
+    return undefined;
+  }
+
+  // Direct mapping for known text extensions
+  const directMime = TEXT_EXT_MIME.get(ext);
+  if (directMime) {
+    return directMime;
+  }
+
+  // Additional common text file extensions that should always be text/plain
+  const textExtensions = new Set([
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish", // Shell scripts
+    ".ps1",
+    ".psm1",
+    ".psd1", // PowerShell
+    ".bat",
+    ".cmd", // Windows batch
+    ".py",
+    ".rb",
+    ".pl",
+    ".php", // Scripting languages
+    ".java",
+    ".cs",
+    ".go",
+    ".rs", // Compiled languages (source)
+    ".ts",
+    ".tsx",
+    ".jsx", // JavaScript variants
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp", // C/C++
+    ".swift",
+    ".kt",
+    ".scala", // Modern languages
+    ".r",
+    ".m",
+    ".sql", // Data/scripting
+    ".toml",
+    ".graphql",
+    ".gql", // Config/query
+    ".diff",
+    ".patch", // Diffs
+  ]);
+
+  if (textExtensions.has(ext)) {
+    return "text/plain";
+  }
+
+  return undefined;
 }
 
 function buildSyntheticSkippedAudioOutputs(
@@ -347,35 +498,71 @@ function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
   }
-  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
-    return true;
+  const normalized = mime.toLowerCase();
+
+  // Explicit text types are never binary
+  if (normalized.startsWith("text/")) {
+    return false;
   }
-  if (mime === "application/octet-stream") {
-    return true;
-  }
+
+  // Media types (image, audio, video) are binary
   if (
-    mime === "application/zip" ||
-    mime === "application/x-zip-compressed" ||
-    mime === "application/gzip" ||
-    mime === "application/x-gzip" ||
-    mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed" ||
-    mime === "application/msword" ||
-    mime === "application/x-cfb"
+    normalized.startsWith("image/") ||
+    normalized.startsWith("audio/") ||
+    normalized.startsWith("video/")
   ) {
     return true;
   }
-  if (mime.endsWith("+zip")) {
+
+  // Known binary application types
+  if (
+    normalized === "application/octet-stream" ||
+    normalized === "application/zip" ||
+    normalized === "application/x-zip-compressed" ||
+    normalized === "application/gzip" ||
+    normalized === "application/x-gzip" ||
+    normalized === "application/x-rar-compressed" ||
+    normalized === "application/x-7z-compressed" ||
+    normalized === "application/msword" ||
+    normalized === "application/x-cfb" ||
+    normalized.endsWith("+zip")
+  ) {
     return true;
   }
-  if (mime.startsWith("application/vnd.")) {
-    // Keep vendor +json/+xml payloads eligible for text extraction while
-    // treating the common binary vendor family (Office, archives, etc.) as binary.
-    if (mime.endsWith("+json") || mime.endsWith("+xml")) {
+
+  // Conservative handling of application/vnd.* types
+  // Only treat as binary if clearly a container format
+  if (normalized.startsWith("application/vnd.")) {
+    // Text-friendly vendor types
+    if (
+      normalized.endsWith("+json") ||
+      normalized.endsWith("+xml") ||
+      normalized.endsWith("+yaml") ||
+      normalized.endsWith("+txt")
+    ) {
       return false;
     }
-    return true;
+
+    // Known binary vendor formats (Office documents, etc.)
+    const binaryVendorPatterns = [
+      ".word",
+      ".excel",
+      ".powerpoint",
+      ".wordprocessingml",
+      ".spreadsheetml",
+      ".presentationml",
+      ".officedocument",
+    ];
+    if (binaryVendorPatterns.some((pattern) => normalized.includes(pattern))) {
+      return true;
+    }
+
+    // Default to non-binary for unknown vendor types to avoid false positives
+    return false;
   }
+
+  // Default: unknown MIME types are not assumed binary
+  // This prevents text outputs from being misclassified
   return false;
 }
 
@@ -443,11 +630,24 @@ async function extractFileContext(params: {
     // Do not coerce real PDFs into text/plain via printable-byte heuristics.
     // PDFs have a dedicated extraction path in extractFileContentFromSource.
     const allowTextHeuristic = normalizedRawMime !== "application/pdf";
+
+    // Enhanced text detection: check for terminal/command outputs first
+    const isTerminalOutput = allowTextHeuristic && isLikelyTerminalOutput(textSample);
     const textLike =
-      allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
+      allowTextHeuristic &&
+      (isTerminalOutput || Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
+
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
-    const textHint =
-      forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
+
+    // Terminal outputs should always be treated as text/plain
+    let textHint: string | undefined;
+    if (isTerminalOutput) {
+      textHint = "text/plain";
+    } else {
+      textHint =
+        forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
+    }
+
     const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
     // Log when MIME type is overridden from non-text to text for auditability
     if (textHint && rawMime && !rawMime.startsWith("text/")) {
