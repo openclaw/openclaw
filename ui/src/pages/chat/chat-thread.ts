@@ -382,6 +382,13 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
 }
 
+function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    const provenance = asRecord(asRecord(message)?.provenance);
+    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  });
+}
+
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -395,7 +402,11 @@ function annotateToolTurnOutcome(
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
-      if (assistantGroupHasReplyText(item)) {
+      if (assistantGroupIsForwardedBoundary(item)) {
+        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
+        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
+        sawAssistantReply = false;
+      } else if (assistantGroupHasReplyText(item)) {
         sawAssistantReply = true;
       }
     } else if (role === "tool") {

@@ -1499,6 +1499,67 @@ describe("tool turn outcome annotation (#89683)", () => {
     expect(tools[0].turnSucceeded).toBe(false);
   });
 
+  it("scopes adjacent autonomous turns at an empty forwarded boundary", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [],
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        senderLabel: "Forwarded from main",
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("Recovered on the next autonomous turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it("does not treat a forwarded message as the prior turn's reply", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Start the next autonomous task." }],
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        senderLabel: "Forwarded from main",
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("Recovered on the next autonomous turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it("treats an ordinary labeled assistant message as a reply", () => {
+    const tools = toolGroups([
+      userMsg("check the service", 1),
+      failedTool(2),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Parzival recovered the service." }],
+        senderLabel: "Parzival",
+        timestamp: 3,
+      },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it("does not treat non-text assistant content as a turn boundary", () => {
+    const tools = toolGroups([
+      userMsg("make a preview", 1),
+      failedTool(2),
+      {
+        role: "assistant",
+        content: [createAssistantCanvasBlock({ suffix: "tool_turn_outcome" })],
+        timestamp: 3,
+      },
+      failedTool(4),
+      assistantReply("Done.", 5),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, true]);
+  });
+
   it("scopes the outcome per turn at user boundaries", () => {
     const tools = toolGroups([
       userMsg("first", 1),

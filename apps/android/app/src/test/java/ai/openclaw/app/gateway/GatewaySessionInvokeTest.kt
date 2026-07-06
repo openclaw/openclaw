@@ -484,7 +484,6 @@ class GatewaySessionInvokeTest {
                     secondConnectAuth.complete(auth)
                   }
                   webSocket.send(connectResponseFrame(id))
-                  webSocket.close(1000, "done")
                 }
               }
             }

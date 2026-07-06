@@ -1164,7 +1164,12 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      output = result;
+      // The terminal result can be empty after Claude already streamed text.
+      // Keep that delivered text; a genuinely empty turn still remains empty.
+      output =
+        result.text || result.errorText
+          ? result
+          : { ...result, text: assistantText.trim() || texts.join("\n").trim() };
       return;
     }
 
@@ -1412,7 +1417,12 @@ export function parseCliJsonl(
         usage,
       });
       if (claudeResult) {
-        return claudeResult;
+        if (claudeResult.text || claudeResult.errorText) {
+          return claudeResult;
+        }
+        // Live sessions reparse the completed JSONL transcript, so preserve
+        // streamed text here as well as in the incremental parser above.
+        return { ...claudeResult, text: streamJsonText.trim() || texts.join("\n").trim() };
       }
 
       const claudeDelta = parseClaudeCliStreamingDelta({
