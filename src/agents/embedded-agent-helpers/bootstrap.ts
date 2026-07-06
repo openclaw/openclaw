@@ -1,7 +1,6 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -118,13 +117,6 @@ type PolicyDigest = {
   omittedLines: number;
 };
 
-let lastAgentsPolicyDigestCache:
-  | {
-      key: string;
-      digest: PolicyDigest;
-    }
-  | undefined;
-
 export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
   const raw =
     cfg && agentId
@@ -183,23 +175,9 @@ function normalizePolicyDigestLine(line: string): string {
   return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
 }
 
-function agentsPolicyDigestCacheKey(content: string, budget: number): string {
-  return `${budget}:${content.length}:${createHash("sha256").update(content).digest("base64url")}`;
-}
-
-function rememberAgentsPolicyDigest(key: string, digest: PolicyDigest): PolicyDigest {
-  lastAgentsPolicyDigestCache = { key, digest };
-  return digest;
-}
-
 function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest {
   if (budget <= 0) {
     return { text: "", omittedLines: 0 };
-  }
-
-  const cacheKey = agentsPolicyDigestCacheKey(content, budget);
-  if (lastAgentsPolicyDigestCache?.key === cacheKey) {
-    return lastAgentsPolicyDigestCache.digest;
   }
 
   const candidates = content
@@ -234,10 +212,10 @@ function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest 
     .filter((candidate) => selected.has(candidate.index))
     .toSorted((a, b) => a.index - b.index)
     .map((candidate) => candidate.line);
-  return rememberAgentsPolicyDigest(cacheKey, {
+  return {
     text: lines.join("\n"),
     omittedLines: Math.max(0, candidates.length - lines.length),
-  });
+  };
 }
 
 function trimAgentsBootstrapContent(content: string, maxChars: number): TrimBootstrapResult {
