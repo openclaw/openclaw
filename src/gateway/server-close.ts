@@ -12,6 +12,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   abortTrackedChatRunById,
   type ChatAbortControllerEntry,
@@ -866,6 +867,7 @@ export function createGatewayCloseHandler(
         ]);
       });
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+      await shutdownStep("state-db", () => closeOpenClawStateDatabase(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );

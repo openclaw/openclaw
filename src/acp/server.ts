@@ -21,6 +21,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createSqliteAcpEventLedger,
   migrateFileAcpEventLedgerToSqlite,
@@ -121,6 +122,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     stopped = true;
     resolveGatewayReady();
     gateway.stop();
+    closeOpenClawStateDatabase();
     // If no WebSocket is active (e.g. between reconnect attempts),
     // gateway.stop() won't trigger onClose, so resolve directly.
     onClosed();

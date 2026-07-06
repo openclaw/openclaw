@@ -37,6 +37,7 @@ const mockState = vi.hoisted(() => ({
   routeLogsToStderr: vi.fn(),
   startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
+  closeOpenClawStateDatabase: vi.fn(),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -154,6 +155,13 @@ vi.mock("../infra/is-main.js", () => ({
 
 vi.mock("../logging/console.js", () => ({
   routeLogsToStderr: () => mockState.routeLogsToStderr(),
+}));
+
+vi.mock("../state/openclaw-state-db.js", async () => ({
+  ...(await vi.importActual<typeof import("../state/openclaw-state-db.js")>(
+    "../state/openclaw-state-db.js",
+  )),
+  closeOpenClawStateDatabase: () => mockState.closeOpenClawStateDatabase(),
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -287,6 +295,7 @@ describe("serveAcpGateway startup", () => {
     mockState.routeLogsToStderr.mockReset();
     mockState.startProxy.mockReset();
     mockState.stopProxy.mockReset();
+    mockState.closeOpenClawStateDatabase.mockReset();
     mockState.startProxy.mockResolvedValue(null);
     mockState.stopProxy.mockResolvedValue(undefined);
     mockState.resolveGatewayClientBootstrap.mockReset();
@@ -310,6 +319,21 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("closes the shared state database on signal shutdown", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledTimes(1);
     } finally {
       onceSpy.mockRestore();
     }

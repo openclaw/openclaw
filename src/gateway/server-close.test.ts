@@ -15,6 +15,8 @@ const mocks = {
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
+  closePluginStateDatabase: vi.fn(() => undefined),
+  closeOpenClawStateDatabase: vi.fn(() => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -67,6 +69,17 @@ vi.mock("../logging/subsystem.js", () => ({
     info: mocks.logInfo,
     warn: mocks.logWarn,
   })),
+}));
+
+vi.mock("../plugin-state/plugin-state-store.js", () => ({
+  closePluginStateDatabase: mocks.closePluginStateDatabase,
+}));
+
+vi.mock("../state/openclaw-state-db.js", async () => ({
+  ...(await vi.importActual<typeof import("../state/openclaw-state-db.js")>(
+    "../state/openclaw-state-db.js",
+  )),
+  closeOpenClawStateDatabase: mocks.closeOpenClawStateDatabase,
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
@@ -158,6 +171,8 @@ describe("createGatewayCloseHandler", () => {
     mocks.triggerInternalHook.mockResolvedValue(undefined);
     mocks.disposeAllBundleLspRuntimes.mockClear();
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
+    mocks.closePluginStateDatabase.mockClear();
+    mocks.closeOpenClawStateDatabase.mockClear();
   });
 
   afterEach(() => {
@@ -181,6 +196,8 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledTimes(1);
+    expect(mocks.closeOpenClawStateDatabase).toHaveBeenCalledTimes(1);
   });
 
   it("stops plugin services before channel runtimes", async () => {
