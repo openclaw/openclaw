@@ -8,7 +8,6 @@ import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 type TalkSelectOption = { label: string; value: string };
 
 const TALK_VOICE_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
   { label: "Alloy", value: "alloy" },
   { label: "Ash", value: "ash" },
   { label: "Ballad", value: "ballad" },
@@ -19,12 +18,6 @@ const TALK_VOICE_OPTIONS: TalkSelectOption[] = [
   { label: "Verse", value: "verse" },
   { label: "Marin", value: "marin" },
   { label: "Cedar", value: "cedar" },
-];
-const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Low", value: "0.65" },
-  { label: "Medium", value: "0.5" },
-  { label: "High", value: "0.35" },
 ];
 export type RealtimeTalkOptions = {
   model: string;
@@ -56,13 +49,14 @@ type ChatRealtimeTalkConversationProps = {
 };
 
 function renderNativeTalkSelect(params: {
+  id: "sensitivity" | "voice";
   label: string;
   value: string;
   options: TalkSelectOption[];
   onSelect: (value: string) => void;
 }) {
   return html`
-    <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
+    <label class="agent-chat__talk-field" data-talk-select=${params.id}>
       <span>${params.label}</span>
       <select
         .value=${params.value}
@@ -88,6 +82,19 @@ function renderNativeTalkSelect(params: {
   `;
 }
 
+function getTalkVoiceOptions(): TalkSelectOption[] {
+  return [{ label: t("chat.composer.talkDefault"), value: "" }, ...TALK_VOICE_OPTIONS];
+}
+
+function getTalkSensitivityOptions(): TalkSelectOption[] {
+  return [
+    { label: t("chat.composer.talkDefault"), value: "" },
+    { label: t("chat.composer.talkSensitivityLow"), value: "0.65" },
+    { label: t("chat.composer.talkSensitivityMedium"), value: "0.5" },
+    { label: t("chat.composer.talkSensitivityHigh"), value: "0.35" },
+  ];
+}
+
 export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
   const options = props.realtimeTalkOptions;
   const onChange = props.onRealtimeTalkOptionsChange;
@@ -101,25 +108,27 @@ export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
     >
       <div class="agent-chat__talk-options-primary">
         ${renderNativeTalkSelect({
-          label: "Voice",
+          id: "voice",
+          label: t("chat.composer.talkVoice"),
           value: options.voice,
-          options: TALK_VOICE_OPTIONS,
+          options: getTalkVoiceOptions(),
           onSelect: (voice) => onChange({ voice }),
         })}
         <label class="agent-chat__talk-field">
-          <span>Model</span>
+          <span>${t("chat.composer.talkModel")}</span>
           <input
             .value=${options.model}
             @input=${(event: Event) =>
               onChange({ model: (event.currentTarget as HTMLInputElement).value })}
-            placeholder="Auto"
+            placeholder=${t("chat.composer.talkModelAuto")}
             spellcheck="false"
           />
         </label>
         ${renderNativeTalkSelect({
-          label: "Sensitivity",
+          id: "sensitivity",
+          label: t("chat.composer.talkSensitivity"),
           value: options.vadThreshold,
-          options: TALK_SENSITIVITY_OPTIONS,
+          options: getTalkSensitivityOptions(),
           onSelect: (vadThreshold) => onChange({ vadThreshold }),
         })}
       </div>
@@ -131,12 +140,12 @@ export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
               @click=${props.onOpenRealtimeTalkSettings}
               ?disabled=${props.canOpenRealtimeTalkSettings === false}
               title=${props.canOpenRealtimeTalkSettings === false
-                ? "Advanced Talk settings require operator.admin access."
+                ? t("chat.composer.talkAdvancedSettingsRequiresAdminTitle")
                 : ""}
             >
               ${props.canOpenRealtimeTalkSettings === false
-                ? "Advanced settings require admin"
-                : "More in Settings"}
+                ? t("chat.composer.talkAdvancedSettingsRequiresAdmin")
+                : t("chat.composer.talkMoreInSettings")}
             </button>
           `
         : nothing}
