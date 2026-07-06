@@ -268,6 +268,9 @@ class SecurePrefsTest {
       mapOf(
         "Host" to "smuggled.example",
         "Sec-WebSocket-Protocol" to "override",
+        "X Bad" to "space",
+        "X:Bad" to "colon",
+        "X-Bad-é" to "unicode",
         "X-Split" to "a\r\nEvil: b",
         "X-Allowed" to "yes",
       ),

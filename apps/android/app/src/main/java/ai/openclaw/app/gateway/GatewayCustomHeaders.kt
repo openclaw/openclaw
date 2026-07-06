@@ -11,6 +11,7 @@ object GatewayCustomHeaders {
   private val reservedNames =
     setOf("connection", "content-length", "host", "proxy-connection", "upgrade")
   private const val RESERVED_PREFIX = "sec-websocket-"
+  private const val TOKEN_PUNCTUATION = "!#$%&'*+-.^_`|~"
 
   fun isReservedName(name: String): Boolean {
     val normalized = name.trim().lowercase()
@@ -18,19 +19,25 @@ object GatewayCustomHeaders {
   }
 
   /**
-   * Drops entries that cannot travel as a single well-formed header: empty or reserved names,
-   * and names/values outside printable ASCII. OkHttp throws IllegalArgumentException on such
-   * characters, so dropping here keeps one bad stored entry from wedging every reconnect.
+   * Drops entries that cannot travel as a single well-formed header: empty, reserved, or
+   * non-token names, and values outside printable ASCII. Dropping invalid entries keeps one bad
+   * stored value from wedging every reconnect or being interpreted differently by a proxy.
    */
   fun sanitized(headers: Map<String, String>): Map<String, String> {
     val result = LinkedHashMap<String, String>()
     for ((rawName, value) in headers) {
       val name = rawName.trim()
       if (name.isEmpty() || isReservedName(name)) continue
-      if (!name.all { it in '!'..'~' }) continue
+      if (!name.all(::isTokenCharacter)) continue
       if (!value.all { it in ' '..'~' }) continue
       result[name] = value
     }
     return result
   }
+
+  private fun isTokenCharacter(character: Char): Boolean =
+    character in '0'..'9' ||
+      character in 'A'..'Z' ||
+      character in 'a'..'z' ||
+      character in TOKEN_PUNCTUATION
 }
