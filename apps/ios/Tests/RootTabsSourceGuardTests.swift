@@ -792,13 +792,23 @@ struct RootTabsSourceGuardTests {
             settingsPendingSetupHandler.range(of: "self.scannerResultHandoff.cancel()"))
         let settingsSetupStaging = try #require(
             settingsPendingSetupHandler.range(of: "self.stagedGatewaySetupLink = link"))
-        let scannerDelivery = try Self.extract(
+        let scannerMake = try Self.extract(
             scannerSource,
-            from: "private func deliver(_ result: QRScannerResult",
-            to: "func dataScanner(_: DataScannerViewController, didRemove")
-        let stopScanning = try #require(scannerDelivery.range(of: "scanner.stopScanning()"))
-        let deliverResult = try #require(scannerDelivery.range(of: "self.parent.onResult(result)"))
+            from: "func makeUIViewController",
+            to: "func updateUIViewController")
+        let scannerLifecycle = try Self.extract(
+            scannerSource,
+            from: "final class QRScannerContainerViewController",
+            to: "final class Coordinator")
+        let stopScanning = try #require(scannerSource.range(of: "scanner.stopScanning()"))
+        let deliverResult = try #require(scannerSource.range(of: "self.parent.onResult(result)"))
         #expect(scannerSource.contains("static let defaultSettlingNanoseconds: UInt64 = 1_200_000_000"))
+        #expect(scannerSource.contains("QRScannerContainerViewController(coordinator: context.coordinator)"))
+        #expect(!scannerMake.contains("startScanning()"))
+        #expect(scannerLifecycle.contains("override func viewDidAppear"))
+        #expect(scannerLifecycle.contains("try self.scanner.startScanning()"))
+        #expect(scannerLifecycle.contains("override func viewWillDisappear"))
+        #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
         let activeProblemToast = try Self.extract(
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",

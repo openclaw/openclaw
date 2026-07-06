@@ -394,6 +394,10 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         }
     }
 
+    private struct ConnectionBorrow: @unchecked Sendable {
+        let raw: OpaquePointer
+    }
+
     private let databaseURL: URL
     public nonisolated let gatewayID: String
     private var db: Connection?
@@ -951,6 +955,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         guard !self.isRetired, let db = await handle() else { return .unavailable }
+        let borrowedDB = ConnectionBorrow(raw: db)
         guard self.execute(db, sql: "BEGIN IMMEDIATE", bindings: []) else { return .unavailable }
         var committed = false
         defer {
@@ -968,7 +973,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             agentID = foundAgentID
         case .missing:
             return self.canonicalMessageProofHub.withProofDecision(for: messageKey) { isProven in
-                committed = self.execute(db, sql: "COMMIT", bindings: [])
+                committed = self.execute(borrowedDB.raw, sql: "COMMIT", bindings: [])
                 guard committed else { return .unavailable }
                 return isProven ? .confirmed : .missing
             }
@@ -986,18 +991,18 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         guard sqlite3_changes(db) > 0 else { return .unavailable }
         let result = self.canonicalMessageProofHub.withProofDecision(for: messageKey) { isProven in
             if isProven {
-                committed = self.execute(db, sql: "COMMIT", bindings: [])
+                committed = self.execute(borrowedDB.raw, sql: "COMMIT", bindings: [])
                 return committed ? OpenClawChatOutboxUpdateResult.confirmed : .unavailable
             }
             guard self.removeCachedMessage(
-                db,
+                borrowedDB.raw,
                 sessionKey: sessionKey,
                 agentID: Self.transcriptCacheAgentID(
                     sessionKey: sessionKey,
                     agentID: agentID),
                 idempotencyKey: messageKey)
             else { return .unavailable }
-            committed = self.execute(db, sql: "COMMIT", bindings: [])
+            committed = self.execute(borrowedDB.raw, sql: "COMMIT", bindings: [])
             return committed ? .updated : .unavailable
         }
         if result == .confirmed {
@@ -1510,7 +1515,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     // MARK: - Statement helpers
 
     @discardableResult
-    private func execute(_ db: OpaquePointer, sql: String, bindings: [Any]) -> Bool {
+    private nonisolated func execute(_ db: OpaquePointer, sql: String, bindings: [Any]) -> Bool {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             cacheLogger.error("cache statement prepare failed")
@@ -1633,7 +1638,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         return payload
     }
 
-    private func bind(_ statement: OpaquePointer?, bindings: [Any]) -> Bool {
+    private nonisolated func bind(_ statement: OpaquePointer?, bindings: [Any]) -> Bool {
         // SQLITE_TRANSIENT: sqlite copies the buffer before the Swift string dies.
         let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         for (offset, value) in bindings.enumerated() {
