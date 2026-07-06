@@ -1228,13 +1228,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await gateway.waitForRequest("chat.metadata");
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill("/");
-      await gateway.waitForRequest("commands.list");
+      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
@@ -1610,9 +1611,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       };
       const selectModel = async (value: string) => {
         await main.locator('[data-chat-model-select="true"]').click();
+        const provider = value.split("/", 1)[0];
+        await main.locator(`[data-chat-model-provider="${provider}"]`).click();
         const option = main.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
+        await main.getByRole("button", { name: "Save", exact: true }).click();
       };
 
       let modelSelect = await openModelSelect();
@@ -1733,7 +1737,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await modelSelect.click();
+      await main.locator('[data-chat-model-provider="openai"]').click();
       await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      await main.getByRole("button", { name: "Save", exact: true }).click();
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -1742,7 +1748,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
       await modelSelect.click();
-      await main.locator('[data-chat-model-option=""]').click();
+      await main.getByRole("button", { name: "Use default model", exact: true }).click();
+      await main.getByRole("button", { name: "Save", exact: true }).click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -1912,7 +1919,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("shows a pending send while a model override save is still pending", async () => {
+  it("shows a pending send while a model override update is still pending", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -1936,7 +1943,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
+      await main.locator('[data-chat-model-provider="bedrock"]').click();
       await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
+      await main.getByRole("button", { name: "Save", exact: true }).click();
       await gateway.waitForRequest("sessions.patch");
 
       const prompt = "send while the model save is pending";

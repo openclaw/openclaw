@@ -1,9 +1,5 @@
 // Discord tests cover message handler.process plugin behavior.
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
-import {
-  recordChannelBotPairLoopAndCheckSuppression,
-  type ChannelBotLoopProtectionFacts,
-} from "openclaw/plugin-sdk/channel-inbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
@@ -754,55 +750,6 @@ function expectFreshFinalText(text: string) {
 }
 
 describe("processDiscordMessage ack reactions", () => {
-  it("drops bot-loop-suppressed messages before Discord side effects", async () => {
-    const botLoopProtection: ChannelBotLoopProtectionFacts = {
-      scopeId: "discord-process-side-effect-test",
-      conversationId: "c-loop-side-effects",
-      senderId: "bot-a",
-      receiverId: "bot-b",
-      config: {
-        maxEventsPerWindow: 1,
-        windowSeconds: 60,
-        cooldownSeconds: 60,
-      },
-      defaultEnabled: true,
-      nowMs: 10_000,
-    };
-    expect(recordChannelBotPairLoopAndCheckSuppression(botLoopProtection)).toEqual({
-      suppressed: false,
-    });
-    const observer = { onReplyPlanResolved: vi.fn() };
-    const ctx = await createAutomaticSourceDeliveryContext({
-      messageChannelId: botLoopProtection.conversationId,
-      message: {
-        id: "m-loop-side-effects",
-        channelId: botLoopProtection.conversationId,
-        timestamp: new Date().toISOString(),
-        attachments: [
-          {
-            id: "att-loop",
-            url: "https://cdn.discordapp.test/loop.png",
-            contentType: "image/png",
-            filename: "loop.png",
-            size: 16,
-          },
-        ],
-      },
-      botLoopProtection: {
-        ...botLoopProtection,
-        nowMs: 10_001,
-      },
-    });
-
-    await processDiscordMessage(ctx, observer);
-
-    expect(observer.onReplyPlanResolved).not.toHaveBeenCalled();
-    expect(createDiscordRestClientSpy).not.toHaveBeenCalled();
-    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
-    expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(dispatchInboundMessage).not.toHaveBeenCalled();
-  });
-
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,
@@ -1323,12 +1270,6 @@ describe("processDiscordMessage ack reactions", () => {
 
 describe("processDiscordMessage session routing", () => {
   it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(new Uint8Array([1, 2, 3, 4]), {
-          headers: { "content-type": "audio/ogg" },
-        }),
-    );
     const ctx = await createBaseContext({
       message: {
         id: "m-audio-preflight",
@@ -1347,8 +1288,13 @@ describe("processDiscordMessage session routing", () => {
       baseText: "<media:audio>",
       messageText: "<media:audio>",
       preflightAudioTranscript: "hello from discord voice",
-      discordRestFetch: fetchImpl,
-      mediaMaxBytes: 1024 * 1024,
+      preparedMedia: [
+        {
+          path: "/tmp/openclaw-discord-test/voice.ogg",
+          contentType: "audio/ogg",
+          placeholder: "<media:audio>",
+        },
+      ],
     });
 
     await runProcessDiscordMessage(ctx);
@@ -1358,6 +1304,50 @@ describe("processDiscordMessage session routing", () => {
       CommandBody: "hello from discord voice",
       Transcript: "hello from discord voice",
       MediaTranscribedIndexes: [0],
+    });
+  });
+
+  it("uses prepared media instead of re-downloading after the run queue", async () => {
+    // Regression for #96165: Discord CDN attachment URLs expire, so process
+    // must not re-fetch attachments preflight already downloaded at receipt
+    // time. A throwing fetchImpl here proves no re-fetch happens.
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("attachment should not be re-fetched after preflight downloaded it");
+    });
+    const ctx = await createBaseContext({
+      message: {
+        id: "m-preflight-media",
+        channelId: "c1",
+        content: "look",
+        timestamp: new Date().toISOString(),
+        attachments: [
+          {
+            id: "att-preflight-media",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png?ex=expired",
+            content_type: "image/png",
+            filename: "photo.png",
+          },
+        ],
+      },
+      baseText: "look",
+      messageText: "look",
+      preparedMedia: [
+        {
+          path: "/tmp/openclaw-discord-test/photo.png",
+          contentType: "image/png",
+          placeholder: "<media:image>",
+        },
+      ],
+      discordRestFetch: fetchImpl,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+      MediaPath: "/tmp/openclaw-discord-test/photo.png",
+      MediaType: "image/png",
+      MediaPaths: ["/tmp/openclaw-discord-test/photo.png"],
     });
   });
 

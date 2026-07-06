@@ -5,6 +5,34 @@ import { t } from "../../../i18n/index.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 
+type TalkSelectOption = { label: string; value: string };
+
+const TALK_VOICE_OPTIONS: TalkSelectOption[] = [
+  { label: "Alloy", value: "alloy" },
+  { label: "Ash", value: "ash" },
+  { label: "Ballad", value: "ballad" },
+  { label: "Coral", value: "coral" },
+  { label: "Echo", value: "echo" },
+  { label: "Sage", value: "sage" },
+  { label: "Shimmer", value: "shimmer" },
+  { label: "Verse", value: "verse" },
+  { label: "Marin", value: "marin" },
+  { label: "Cedar", value: "cedar" },
+];
+export type RealtimeTalkOptions = {
+  model: string;
+  voice: string;
+  vadThreshold: string;
+};
+
+export type ChatRealtimeTalkOptionsProps = {
+  realtimeTalkOptions?: RealtimeTalkOptions;
+  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  canOpenRealtimeTalkSettings?: boolean;
+  onOpenRealtimeTalkSettings?: () => void;
+  embedded?: boolean;
+};
+
 type ChatRealtimeTalkInputProps = {
   realtimeTalkInputOpen?: boolean;
   realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
@@ -19,6 +47,111 @@ type ChatRealtimeTalkConversationProps = {
   userName?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
 };
+
+function renderNativeTalkSelect(params: {
+  id: "sensitivity" | "voice";
+  label: string;
+  value: string;
+  options: TalkSelectOption[];
+  onSelect: (value: string) => void;
+}) {
+  return html`
+    <label class="agent-chat__talk-field" data-talk-select=${params.id}>
+      <span>${params.label}</span>
+      <select
+        .value=${params.value}
+        @change=${(event: Event) =>
+          params.onSelect((event.currentTarget as HTMLSelectElement).value)}
+      >
+        ${repeat(
+          params.options,
+          (entry) => entry.value,
+          (entry) => html`
+            <option
+              value=${entry.value}
+              data-talk-select-option=${entry.value}
+              ?selected=${entry.value === params.value}
+              @click=${() => params.onSelect(entry.value)}
+            >
+              ${entry.label}
+            </option>
+          `,
+        )}
+      </select>
+    </label>
+  `;
+}
+
+function getTalkVoiceOptions(): TalkSelectOption[] {
+  return [{ label: t("chat.composer.talkDefault"), value: "" }, ...TALK_VOICE_OPTIONS];
+}
+
+function getTalkSensitivityOptions(): TalkSelectOption[] {
+  return [
+    { label: t("chat.composer.talkDefault"), value: "" },
+    { label: t("chat.composer.talkSensitivityLow"), value: "0.65" },
+    { label: t("chat.composer.talkSensitivityMedium"), value: "0.5" },
+    { label: t("chat.composer.talkSensitivityHigh"), value: "0.35" },
+  ];
+}
+
+export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
+  const options = props.realtimeTalkOptions;
+  const onChange = props.onRealtimeTalkOptionsChange;
+  if (!options || !onChange) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="agent-chat__talk-options ${props.embedded ? "agent-chat__talk-options--settings" : ""}"
+      aria-label=${t("chat.composer.voiceOptions")}
+    >
+      <div class="agent-chat__talk-options-primary">
+        ${renderNativeTalkSelect({
+          id: "voice",
+          label: t("chat.composer.talkVoice"),
+          value: options.voice,
+          options: getTalkVoiceOptions(),
+          onSelect: (voice) => onChange({ voice }),
+        })}
+        <label class="agent-chat__talk-field">
+          <span>${t("chat.composer.talkModel")}</span>
+          <input
+            .value=${options.model}
+            @input=${(event: Event) =>
+              onChange({ model: (event.currentTarget as HTMLInputElement).value })}
+            placeholder=${t("chat.composer.talkModelAuto")}
+            spellcheck="false"
+          />
+        </label>
+        ${renderNativeTalkSelect({
+          id: "sensitivity",
+          label: t("chat.composer.talkSensitivity"),
+          value: options.vadThreshold,
+          options: getTalkSensitivityOptions(),
+          onSelect: (vadThreshold) => onChange({ vadThreshold }),
+        })}
+      </div>
+      ${props.onOpenRealtimeTalkSettings
+        ? html`
+            <button
+              type="button"
+              class="agent-chat__talk-settings-link"
+              @click=${props.onOpenRealtimeTalkSettings}
+              ?disabled=${props.canOpenRealtimeTalkSettings === false}
+              title=${props.canOpenRealtimeTalkSettings === false
+                ? t("chat.composer.talkAdvancedSettingsRequiresAdminTitle")
+                : ""}
+            >
+              ${props.canOpenRealtimeTalkSettings === false
+                ? t("chat.composer.talkAdvancedSettingsRequiresAdmin")
+                : t("chat.composer.talkMoreInSettings")}
+            </button>
+          `
+        : nothing}
+    </div>
+  `;
+}
 
 export function renderRealtimeTalkInputPicker(props: ChatRealtimeTalkInputProps, menuId: string) {
   if (!props.realtimeTalkInputOpen || !props.onRealtimeTalkInputSelect) {
@@ -97,7 +230,11 @@ export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversati
     return nothing;
   }
   return html`
-    <div class="agent-chat__voice-turns" role="log" aria-label=${t("chat.composer.talkTranscript")}>
+    <div
+      class="agent-chat__voice-turns"
+      role="log"
+      aria-label=${t("chat.composer.voiceTranscript")}
+    >
       ${repeat(
         entries,
         (entry) => entry.id,

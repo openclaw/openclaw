@@ -1562,6 +1562,8 @@ export const es: TranslationMap = {
     archivedSessionDisabled: "Restaura esta sesión para enviar mensajes.",
     refreshTitle: "Actualizar datos del chat",
     settings: "Configuración del chat",
+    usageRemaining: "Uso restante",
+    voiceSettings: "Voz",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
     commentaryToggle: "Mantener los comentarios después de la respuesta final",
@@ -1630,6 +1632,12 @@ export const es: TranslationMap = {
       retrySend: "Reintentar envío",
       retryQueuedMessage: "Reintentar mensaje en cola",
     },
+    modelPicker: {
+      discard: "Descartar",
+      faster: "Más rápido",
+      smarter: "Más inteligente",
+      useDefaultModel: "Usar modelo predeterminado",
+    },
     pairingQrExpired: {
       title: "Código QR de emparejamiento caducado",
       reason: "Ejecuta /pair qr de nuevo para generar un código de configuración nuevo.",
@@ -1639,7 +1647,10 @@ export const es: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      addAttachment: "Añadir archivo adjunto",
+      attachPhoto: "Foto",
       attachFile: "Attach file",
+      attachFileOption: "Archivo",
       contextUsage: {
         title: "Detalles de uso del contexto",
         open: "Abrir detalles de uso del contexto",
@@ -1648,7 +1659,8 @@ export const es: TranslationMap = {
         latestRunTokens: "Tokens de la ejecución más reciente",
         estimatedCost: "Costo est.",
       },
-      dismissTalkError: "Descartar error de Talk",
+      takePhoto: "Tomar foto",
+      dismissVoiceInputError: "Descartar error de entrada de voz",
       loadingMicrophones: "Cargando micrófonos…",
       microphoneAccessFailed: "No se puede acceder a las entradas de micrófono.",
       microphoneBusy:
@@ -1662,14 +1674,29 @@ export const es: TranslationMap = {
         "Las entradas de micrófono no están disponibles mientras esta página está inactiva.",
       microphonePermissionBlocked:
         "El acceso al micrófono está bloqueado. Permítelo en la configuración del sitio del navegador para listar las entradas.",
-      realtimeTalkRequiresMicrophone: "Realtime Talk requiere acceso al micrófono del navegador.",
+      realtimeTalkRequiresMicrophone:
+        "La entrada de voz en tiempo real requiere acceso al micrófono del navegador.",
       selectedMicrophoneUnavailable:
         "El micrófono seleccionado no está disponible. Elige otra entrada o la opción predeterminada del sistema.",
-      startTalk: "Start Talk",
+      startVoiceInput: "Iniciar entrada de voz",
       stillListening: "Sigo escuchando",
+      stopVoiceInput: "Detener entrada de voz",
       systemDefaultMicrophone: "Predeterminado del sistema",
-      talkTranscript: "Transcripción de voz",
-      stopTalk: "Stop Talk",
+      talkAdvancedSettingsRequiresAdmin:
+        "La configuración avanzada requiere acceso de administrador",
+      talkAdvancedSettingsRequiresAdminTitle:
+        "La configuración avanzada de Talk requiere acceso operator.admin.",
+      talkDefault: "Predeterminado",
+      talkModel: "Modelo",
+      talkModelAuto: "Automático",
+      talkMoreInSettings: "Más en Configuración",
+      talkSensitivity: "Sensibilidad",
+      talkSensitivityHigh: "Alta",
+      talkSensitivityLow: "Baja",
+      talkSensitivityMedium: "Media",
+      talkVoice: "Voz",
+      voiceOptions: "Opciones de voz",
+      voiceTranscript: "Transcripción de voz",
     },
     selectors: {
       agentFilter: "Filtrar sesiones por agente",

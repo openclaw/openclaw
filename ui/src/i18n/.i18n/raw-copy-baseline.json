@@ -2033,17 +2033,10 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Faster"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Model"
+      "text": "Speed"
     },
     {
       "count": 1,
@@ -2057,14 +2050,77 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Smarter"
+      "text": "Speed"
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Speed"
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Alloy"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Ash"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Ballad"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Cedar"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Coral"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Echo"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Marin"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Sage"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Shimmer"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
+      "text": "Verse"
     },
     {
       "count": 1,

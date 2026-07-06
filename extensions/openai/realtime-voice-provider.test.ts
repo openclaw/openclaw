@@ -302,6 +302,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
     });
   });
@@ -1628,7 +1629,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
 
     expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
     expect(parseSent(socket).slice(-2)).toEqual([
       expectedResponseCancelEvent(),
       {
@@ -2515,7 +2516,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
 
-    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
     expect(parseSent(socket).slice(-2)).toEqual([
       expectedResponseCancelEvent(),
       {

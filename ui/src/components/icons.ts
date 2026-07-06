@@ -319,6 +319,14 @@ export const icons = {
       <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
     </svg>
   `,
+  camera: html`
+    <svg viewBox="0 0 24 24">
+      <path
+        d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"
+      />
+      <circle cx="12" cy="13" r="3" />
+    </svg>
+  `,
   smartphone: html`
     <svg viewBox="0 0 24 24">
       <rect width="14" height="20" x="5" y="2" rx="2" ry="2" />
