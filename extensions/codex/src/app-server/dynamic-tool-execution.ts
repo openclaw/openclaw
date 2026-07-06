@@ -19,6 +19,12 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+/**
+ * Headroom added to timeoutSeconds-derived watchdog values so the tool's own
+ * structured timeout (e.g. sessions_send returning { runId, sentBeforeError })
+ * wins the race over the outer generic hard-timeout response.
+ */
+const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS = 10_000;
 /** Default timeout for Codex dynamic tool calls. */
 export const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 /** Hard cap for per-call Codex dynamic tool timeout overrides. */
@@ -443,10 +449,13 @@ function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | un
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return (
-    readPositiveFiniteTimeoutMs(value.timeoutMs) ??
-    readTimeoutSecondsAsMs(value.timeoutSeconds)
-  );
+  const fromMs = readPositiveFiniteTimeoutMs(value.timeoutMs);
+  if (fromMs !== undefined) return fromMs;
+  const fromSeconds = readTimeoutSecondsAsMs(value.timeoutSeconds);
+  if (fromSeconds !== undefined) {
+    return fromSeconds + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS;
+  }
+  return undefined;
 }
 
 function readConfiguredDynamicToolTimeoutMs(
