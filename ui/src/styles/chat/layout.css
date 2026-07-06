@@ -978,7 +978,8 @@ openclaw-chat-page {
   margin: 0;
 }
 
-/* Settings stays left while the model picker uses the remaining footer space. */
+/* Keep settings and run status adjacent while the model picker uses the
+   remaining footer space; split view stays in the left control cluster. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
@@ -1000,6 +1001,12 @@ openclaw-chat-page {
 }
 
 .agent-chat__composer-controls .chat-composer-model-control {
+  order: 3;
+}
+
+/* openclaw-tooltip renders as display: contents, so this button participates
+   directly in the parent flex layout. */
+.agent-chat__composer-controls .chat-open-split-view {
   order: 2;
 }
 
@@ -1044,7 +1051,7 @@ openclaw-chat-page {
   min-width: 0;
   max-width: 70vw;
   margin-left: auto;
-  order: 2;
+  order: 3;
 }
 
 .chat-composer-model-control .chat-controls__model {

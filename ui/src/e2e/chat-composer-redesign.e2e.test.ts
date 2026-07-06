@@ -114,7 +114,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
       const textarea = composer.locator("textarea");
-      const attach = composer.getByRole("button", { name: "Add attachment" });
+      const attach = composer.locator(
+        'summary.agent-chat__input-btn--attach[aria-label="Add attachment"]',
+      );
       const camera = composerShell.getByRole("button", { name: "Take photo" });
       const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
       const voice = page.getByRole("button", { name: "Start voice input" });
@@ -171,7 +173,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toEqual(["Standard", "Fast"]);
       await expect
         .poll(() => composer.locator(".chat-controls__model-option-icon").count())
-        .toBeGreaterThan(0);
+        .toBe(0);
       const patchCountBeforeDraft = (await gateway.getRequests("sessions.patch")).length;
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
