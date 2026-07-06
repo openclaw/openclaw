@@ -1977,4 +1977,92 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
+
+  it("retries debounced direct messages on reply session initialization conflict", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchInboundMessageMock.mockRejectedValueOnce(
+        new Error("Signal dispatch failed", {
+          cause: new Error(
+            "reply session initialization conflicted for agent:main:signal:direct:+15550002222",
+          ),
+        }),
+      );
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 10 } },
+            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+          } as any,
+          historyLimit: 0,
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000001,
+          dataMessage: { message: "follow-up", attachments: [] },
+        }),
+      );
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+      // Debounce timer fires → dispatch fails with conflict → retry scheduled
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      // Retry delay (1s) + debounce (10ms) → retry fires
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying session init conflicts after max attempts", async () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        dispatchInboundMessageMock.mockRejectedValueOnce(
+          new Error(
+            "reply session initialization conflicted for agent:main:signal:direct:+15550002222",
+          ),
+        );
+      }
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 0 } },
+            channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+          } as any,
+          historyLimit: 0,
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000001,
+          dataMessage: { message: "follow-up", attachments: [] },
+        }),
+      );
+
+      // 1 initial + 3 retries = 4 attempts total, then stops
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersByTimeAsync(10);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(attempt);
+      }
+
+      // 5th attempt should NOT happen (max 3 retries = 4 total)
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
