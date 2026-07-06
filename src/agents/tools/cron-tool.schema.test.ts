@@ -224,7 +224,9 @@ describe("createCronToolSchema", () => {
           displayName: null,
           sessionKey: null,
           payload: {
+            model: null,
             toolsAllow: null,
+            fallbacks: null,
           },
         },
       }),
@@ -261,6 +263,8 @@ describe("createCronToolSchema", () => {
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
     expect(patchProps?.payload?.properties?.model?.type).toBe("string");
     expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
+    expect(patchProps?.payload?.properties?.fallbacks?.type).toBe("array");
+    expect(patchProps?.payload?.properties?.fallbacks?.description).toMatch(/null to clear/i);
   });
 
   it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {
@@ -271,6 +275,9 @@ describe("createCronToolSchema", () => {
       type: "string",
     });
     expect(propertyAt(jjccGeminiSchemaRecord, "patch.payload.toolsAllow")).toMatchObject({
+      type: "array",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.payload.fallbacks")).toMatchObject({
       type: "array",
     });
     expect(propertyAt(jjccGeminiSchemaRecord, "patch.delivery.channel")).toMatchObject({
