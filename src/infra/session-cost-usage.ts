@@ -1227,6 +1227,9 @@ async function* readJsonlRecords(
         // Ignore malformed lines
       }
     }
+  } catch {
+    // Mid-stream read errors are swallowed so callers see a truncated but
+    // stable iterator, matching the behavior for missing/empty transcript files.
   } finally {
     rl.close();
     fileStream.destroy();
