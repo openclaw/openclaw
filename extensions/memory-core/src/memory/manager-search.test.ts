@@ -999,7 +999,7 @@ describe("searchVector sqlite-vec KNN", () => {
     }
   });
 
-  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
+  it("falls back when filters hide matches beyond sqlite-vec's KNN cap", async () => {
     const db = new DatabaseSync(":memory:", { allowExtension: true });
     try {
       const loaded = await loadSqliteVecExtension({ db });
@@ -1022,11 +1022,16 @@ describe("searchVector sqlite-vec KNN", () => {
       const insertVector = db.prepare(
         "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
       );
-      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+      const addChunk = (params: {
+        id: string;
+        model: string;
+        source: "memory" | "sessions";
+        vector: [number, number];
+      }) => {
         insertChunk.run(
           params.id,
           `memory/${params.id}.md`,
-          "memory",
+          params.source,
           1,
           1,
           params.id,
@@ -1039,13 +1044,27 @@ describe("searchVector sqlite-vec KNN", () => {
       };
 
       for (let i = 0; i < 20; i += 1) {
-        addChunk({ id: `other-${i}`, model: "other-model", vector: [1, i / 1000] });
+        addChunk({
+          id: `other-${i}`,
+          model: "other-model",
+          source: "memory",
+          vector: [1, 0],
+        });
       }
-      addChunk({ id: "target-1", model: "target-model", vector: [0.5, 0.5] });
-      addChunk({ id: "target-2", model: "target-model", vector: [0.4, 0.6] });
-      addChunk({ id: "alias-1", model: "alias-model", vector: [0.45, 0.55] });
+      addChunk({
+        id: "target",
+        model: "target-model",
+        source: "memory",
+        vector: [0.5, 0.5],
+      });
+      addChunk({
+        id: "alias",
+        model: "alias-model",
+        source: "memory",
+        vector: [0.4, 0.6],
+      });
 
-      const results = await searchVector({
+      const belowCapResults = await searchVector({
         db,
         vectorTable: "memory_index_chunks_vec",
         providerModel: "target-model",
@@ -1057,82 +1076,48 @@ describe("searchVector sqlite-vec KNN", () => {
         sourceFilterVec: { sql: "", params: [] },
         sourceFilterChunks: { sql: "", params: [] },
       });
+      expect(belowCapResults.map((row) => row.id)).toEqual(["target", "alias"]);
 
-      expect(results.map((row) => row.id)).toEqual(["target-1", "alias-1"]);
+      db.exec("BEGIN");
+      for (let i = 20; i < 4097; i += 1) {
+        addChunk({
+          id: `other-${i}`,
+          model: "other-model",
+          source: "memory",
+          vector: [1, 0],
+        });
+      }
+      addChunk({
+        id: "wrong-source",
+        model: "target-model",
+        source: "sessions",
+        vector: [0.6, 0.4],
+      });
+      db.exec("COMMIT");
+
+      const overLimitQuery = db.prepare(
+        "SELECT id FROM memory_index_chunks_vec WHERE embedding MATCH ? AND k = ?",
+      );
+      expect(() => overLimitQuery.all(vectorToBlob([1, 0]), 4097)).toThrow(
+        "k value in knn query too large, provided 4097 and the limit is 4096",
+      );
+
+      const results = await searchVector({
+        db,
+        vectorTable: "memory_index_chunks_vec",
+        providerModel: "target-model",
+        providerModelAliases: ["alias-model"],
+        queryVec: [1, 0],
+        limit: 2,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => true,
+        sourceFilterVec: { sql: " AND c.source IN (?)", params: ["memory"] },
+        sourceFilterChunks: { sql: " AND source IN (?)", params: ["memory"] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target", "alias"]);
     } finally {
       db.close();
     }
-  });
-
-  // ===== Widen-fallback kNN clamp =====
-  //
-  // sqlite-vec hard-caps the KNN `k` parameter at 4096 (v0.1.9: a `k` above the
-  // ceiling raises "k out of range"). When the oversampled first pass returns
-  // fewer rows than `limit` and the vector table is larger than the oversample
-  // window, searchVector widens the re-query to `vectorCount`. On a table with
-  // >4096 vectors that re-query would pass an out-of-range `k` and throw,
-  // killing the whole memory search. The fix clamps the widen `k` to 4096.
-  //
-  // These use a prepare-mock instead of a real >4096-row sqlite-vec table: the
-  // assertion is purely on the `k` argument handed to the widen re-query, and a
-  // mock pins that without the cost (and flakiness) of materializing 4097+
-  // vectors and loading the native extension.
-  function runWidenWithVectorCount(vectorCount: number): Promise<number[]> {
-    const widenRow = {
-      id: "hit",
-      path: "memory/hit.md",
-      start_line: 1,
-      end_line: 1,
-      text: "chunk hit",
-      source: "memory",
-      dist: 0.1,
-    };
-    // `k` is the 3rd positional bind of the KNN query (qBlob, qBlob, k, ...).
-    const knnKValues: number[] = [];
-    const prepare = vi.fn((sql: string) => {
-      if (sql.includes("vec_distance_cosine")) {
-        return {
-          all: (...binds: unknown[]) => {
-            knnKValues.push(binds[2] as number);
-            // First (oversample) pass returns < limit so the widen branch runs;
-            // the widen pass returns a row so the search still resolves.
-            return knnKValues.length === 1 ? [] : [widenRow];
-          },
-        };
-      }
-      if (sql.includes("COUNT(*)")) {
-        // Both COUNTs (matching-chunk count and total vectorCount) resolve to
-        // the full table size here: every chunk matches and is indexed, which
-        // is the scenario that triggers the widen.
-        return { get: () => ({ count: vectorCount }) };
-      }
-      throw new Error(`unexpected SQL: ${sql}`);
-    });
-
-    return searchVector({
-      db: { prepare } as unknown as Parameters<typeof searchVector>[0]["db"],
-      vectorTable: "memory_index_chunks_vec",
-      providerModel: "target-model",
-      queryVec: [1, 0],
-      limit: 2,
-      snippetMaxChars: 200,
-      ensureVectorReady: async () => true,
-      sourceFilterVec: { sql: "", params: [] },
-      sourceFilterChunks: { sql: "", params: [] },
-    }).then(() => knnKValues);
-  }
-
-  it("clamps the widen-fallback kNN k to the sqlite-vec 4096 ceiling", async () => {
-    // 5000 vectors → oversample window is limit*8 = 16, so the widen branch
-    // would ask for k=5000 without the clamp. Assert it is capped at 4096.
-    const kValues = await runWidenWithVectorCount(5000);
-    expect(kValues).toEqual([16, 4096]);
-  });
-
-  it("does not over-clamp a widen below the 4096 ceiling", async () => {
-    // A legitimate widen to 30 (> oversample 16, < 4096) must pass through
-    // untouched, proving the clamp is a ceiling and not a fixed value.
-    const kValues = await runWidenWithVectorCount(30);
-    expect(kValues).toEqual([16, 30]);
   });
 });
