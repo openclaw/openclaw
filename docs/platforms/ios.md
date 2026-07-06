@@ -51,6 +51,12 @@ creation has a token or password auth path.
 4. The official app connects automatically. If **Devices** shows a pending
    request, review its role and scopes before approving it.
 
+The Apple Watch companion does not have a separate OpenClaw pairing approval.
+Pair the Watch with the iPhone in Apple's Watch app, install OpenClaw from
+**Watch app -> My Watch -> Available Apps**, then open OpenClaw once on both
+devices. OpenClaw follows Apple Watch pairing and install changes immediately;
+the Gateway's device approval covers the iPhone node.
+
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable
 Manual Host and enter host/port), then approve the request on the Gateway host:
@@ -231,6 +237,12 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
 - `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
+- Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
+  and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
+  Watch in Apple's Watch app. If installation is false, install the companion
+  from **My Watch -> Available Apps**. After either change, open OpenClaw on the
+  Watch once; immediate reachability still requires both apps to be running,
+  while queued updates can arrive later in the background.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 
 ## Related docs
