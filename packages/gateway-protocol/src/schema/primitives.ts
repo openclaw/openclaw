@@ -44,9 +44,13 @@ export const HandshakeBootstrapTokenString = Type.String({
 // (`auth.approvalRuntimeToken`, `auth.agentRuntimeIdentityToken`). The
 // approval token is a 43-char base64url HMAC; the agent runtime identity
 // token is `<base64url JSON payload>.<base64url HMAC>` whose payload carries
-// an agentId and sessionKey, so it needs headroom above the bootstrap cap.
-// Both are minted locally from base64url alphabets, so the printable-ASCII
-// shape keeps the cap a true byte bound with zero compatibility risk.
+// an agentId and sessionKey, so it needs headroom above the bootstrap cap:
+// the longest chat-send-supported session key (CHAT_SEND_SESSION_KEY_MAX_LENGTH,
+// 512) serializes to a ~900-char token. `mintAgentRuntimeIdentityToken`
+// enforces this same cap at the mint boundary, so a token that validates
+// there can never be rejected here. Both tokens are minted locally from
+// base64url alphabets, so the printable-ASCII shape keeps the cap a true
+// byte bound with zero compatibility risk.
 export const HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH = 2048;
 export const HandshakeRuntimeTokenString = Type.String({
   maxLength: HANDSHAKE_RUNTIME_TOKEN_MAX_LENGTH,
