@@ -3665,17 +3665,20 @@ public struct CrestodianSetupDetectParams: Codable, Sendable {}
 
 public struct CrestodianSetupDetectResult: Codable, Sendable {
     public let candidates: [[String: AnyCodable]]
+    public let manualproviders: [[String: AnyCodable]]
     public let workspace: String
     public let configuredmodel: String?
     public let setupcomplete: Bool
 
     public init(
         candidates: [[String: AnyCodable]],
+        manualproviders: [[String: AnyCodable]],
         workspace: String,
         configuredmodel: String?,
         setupcomplete: Bool)
     {
         self.candidates = candidates
+        self.manualproviders = manualproviders
         self.workspace = workspace
         self.configuredmodel = configuredmodel
         self.setupcomplete = setupcomplete
@@ -3683,6 +3686,7 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case candidates
+        case manualproviders = "manualProviders"
         case workspace
         case configuredmodel = "configuredModel"
         case setupcomplete = "setupComplete"
@@ -3691,25 +3695,25 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
 
 public struct CrestodianSetupActivateParams: Codable, Sendable {
     public let kind: AnyCodable
-    public let provider: String?
+    public let authchoice: String?
     public let apikey: String?
     public let workspace: String?
 
     public init(
         kind: AnyCodable,
-        provider: String?,
+        authchoice: String?,
         apikey: String?,
         workspace: String?)
     {
         self.kind = kind
-        self.provider = provider
+        self.authchoice = authchoice
         self.apikey = apikey
         self.workspace = workspace
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
-        case provider
+        case authchoice = "authChoice"
         case apikey = "apiKey"
         case workspace
     }
