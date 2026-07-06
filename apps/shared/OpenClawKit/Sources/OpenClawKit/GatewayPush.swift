@@ -1,5 +1,16 @@
 import OpenClawProtocol
 
+public enum GatewayServerCapability: String, CaseIterable, Sendable {
+    case chatSendRoutingContract = "chat-send-routing-contract"
+}
+
+extension HelloOk {
+    public func supportsServerCapability(_ capability: GatewayServerCapability) -> Bool {
+        let values = features["capabilities"]?.value as? [AnyCodable] ?? []
+        return values.contains { ($0.value as? String) == capability.rawValue }
+    }
+}
+
 /// Server-push messages from the gateway websocket.
 ///
 /// This is the in-process replacement for the legacy `NotificationCenter` fan-out.

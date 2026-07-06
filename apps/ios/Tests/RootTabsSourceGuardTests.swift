@@ -298,10 +298,12 @@ struct RootTabsSourceGuardTests {
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
-        #expect(diagnosticsDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(diagnosticsDestination
+            .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(diagnosticsDestination
             .contains("SettingsDetailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
-        #expect(diagnosticsDestination.contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+        #expect(diagnosticsDestination
+            .contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -630,7 +632,8 @@ struct RootTabsSourceGuardTests {
         #expect(activitySource.contains("struct IPadActivityScreen: View"))
         #expect(activitySource.contains("self.appModel.makeChatTransport()"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
-        #expect(appModelSource.contains("globalAgentId: self.chatAgentId"))
+        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
+        #expect(!appModelSource.contains("defaultAgentId: self.gatewayDefaultAgentId"))
         #expect(activitySource.contains("IPadSidebarScreenChrome("))
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
@@ -1237,10 +1240,13 @@ struct RootTabsSourceGuardTests {
         let appModelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
         let transportSource = try String(contentsOf: Self.iOSGatewayChatTransportSourceURL(), encoding: .utf8)
 
-        #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
-        #expect(chatSource.contains("self.viewModelTransportAgentID != transportAgentID"))
+        #expect(chatSource.contains(
+            "self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID)"))
+        #expect(chatSource.contains("activeAgentId: self.appModel.chatDeliveryAgentId"))
+        #expect(chatSource.contains("Self.requiresViewModelRebuild("))
+        #expect(chatSource.contains("viewModel.syncSessionRoutingContract"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
-        #expect(appModelSource.contains("globalAgentId: self.chatAgentId"))
+        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
         #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
         #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 3)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))

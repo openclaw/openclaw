@@ -10,13 +10,13 @@ struct ChatProTab: View {
 
     @Environment(NodeAppModel.self) private var appModel
     @State private var viewModel: OpenClawChatViewModel?
-    @State private var viewModelTransportModeID = ""
+    @State private var viewModelOwnerID = ""
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
     // Transport can start unscoped while the UI uses its "main" fallback.
-    // Track the real agent separately so gateway metadata always rebuilds it.
+    // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
-    @State private var viewModelAgentID = ""
+    @State private var viewModelRoutingContract = ""
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
@@ -50,18 +50,22 @@ struct ChatProTab: View {
             }
         }
         .task {
+            await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.chatSessionKey) { _, _ in
             self.syncChatViewModel()
         }
-        .onChange(of: self.appModel.chatViewModelIdentityID) { _, _ in
+        .onChange(of: self.appModel.chatViewModelOwnerID) { _, _ in
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.chatAgentId) { _, _ in
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.gatewayDefaultAgentId) { _, _ in
+            self.syncChatViewModel()
+        }
+        .onChange(of: self.appModel.chatSessionRoutingContract) { _, _ in
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
@@ -133,7 +137,8 @@ struct ChatProTab: View {
                 assistantAvatarTint: OpenClawBrand.accent,
                 showsAssistantAvatars: false,
                 composerChrome: .clean,
-                isComposerEnabled: self.gatewayConnected,
+                isComposerEnabled: self.gatewayConnected || self.canQueueOffline,
+                isAttachmentInputEnabled: self.gatewayConnected,
                 messagePlaceholder: self.messagePlaceholder,
                 emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
@@ -166,38 +171,48 @@ struct ChatProTab: View {
         let sessionKey = self.appModel.chatSessionKey
         // Includes the cache gateway identity so switching paired gateways
         // rebuilds the view model even while the transport mode stays the same.
-        let transportModeID = self.appModel.chatViewModelIdentityID
-        let transportAgentID = Self.transportAgentID(self.appModel.chatAgentId)
-        let agentID = self.activeAgentID
+        let ownerID = self.appModel.chatViewModelOwnerID
+        let deliveryAgentID = self.appModel.chatDeliveryAgentId
+        let transportAgentID = Self.transportAgentID(deliveryAgentID)
+        let routingContract = self.appModel.chatSessionRoutingContract ?? ""
         guard let viewModel else {
-            self.viewModelTransportModeID = transportModeID
+            self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
-            self.viewModelAgentID = agentID
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey, activeAgentId: agentID)
+            self.viewModelRoutingContract = routingContract
+            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
             return
         }
-        if self.viewModelTransportModeID != transportModeID ||
-            self.viewModelTransportAgentID != transportAgentID ||
-            self.viewModelAgentID != agentID
+        if Self.requiresViewModelRebuild(
+            currentOwnerID: self.viewModelOwnerID,
+            nextOwnerID: ownerID,
+            currentTransportAgentID: self.viewModelTransportAgentID,
+            nextTransportAgentID: transportAgentID)
         {
-            self.viewModelTransportModeID = transportModeID
+            self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
-            self.viewModelAgentID = agentID
-            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey, activeAgentId: agentID)
+            self.viewModelRoutingContract = routingContract
+            self.viewModel = self.makeChatViewModel(sessionKey: sessionKey)
             return
+        }
+        if self.viewModelRoutingContract != routingContract {
+            self.viewModelRoutingContract = routingContract
+            viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
         }
         guard viewModel.sessionKey != sessionKey else { return }
         viewModel.syncSession(to: sessionKey)
     }
 
-    private func makeChatViewModel(sessionKey: String, activeAgentId: String? = nil) -> OpenClawChatViewModel {
+    private func makeChatViewModel(sessionKey: String) -> OpenClawChatViewModel {
         // One store instance backs both seams so the transcript cache and the
         // offline outbox share a single SQLite connection.
         let offlineStore = self.appModel.makeChatOfflineStore()
         return OpenClawChatViewModel(
             sessionKey: sessionKey,
-            transport: self.appModel.makeChatTransport(),
-            activeAgentId: activeAgentId,
+            // Bind durable rows and their transport lease to the exact same
+            // gateway owner even if app state switches between these calls.
+            transport: self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID),
+            activeAgentId: self.appModel.chatDeliveryAgentId,
+            sessionRoutingContract: self.appModel.chatSessionRoutingContract,
             transcriptCache: offlineStore,
             outbox: offlineStore,
             onSessionChanged: { sessionKey in
@@ -362,7 +377,18 @@ struct ChatProTab: View {
     }
 
     private var messagePlaceholder: String {
-        self.gatewayConnected ? "Message \(self.agentDisplayName)..." : "Connect to a gateway"
+        if self.gatewayConnected {
+            return String(localized: "Message \(self.agentDisplayName)...")
+        }
+        if self.canQueueOffline {
+            return String(localized: "Message \(self.agentDisplayName); sends when connected")
+        }
+        return String(localized: "Connect to a gateway")
+    }
+
+    private var canQueueOffline: Bool {
+        self.viewModel?.supportsOfflineTextOutbox == true &&
+            self.appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 
     private var headerDisplayTitle: String {
@@ -411,6 +437,15 @@ struct ChatProTab: View {
 
     nonisolated static func transportAgentID(_ value: String?) -> String {
         value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    nonisolated static func requiresViewModelRebuild(
+        currentOwnerID: String,
+        nextOwnerID: String,
+        currentTransportAgentID: String,
+        nextTransportAgentID: String) -> Bool
+    {
+        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
