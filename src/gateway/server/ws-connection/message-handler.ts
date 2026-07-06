@@ -1443,6 +1443,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     allowSetupCodeMobileBootstrapPairing,
             });
             const context = buildRequestContext();
+            // A replacement request obsoletes older pending requestIds; tell approval
+            // UIs so they drop the stale prompts instead of stacking alerts forever.
+            const supersededResolvedAt = Date.now();
+            for (const superseded of pairing.superseded ?? []) {
+              context.broadcast(
+                "device.pair.resolved",
+                {
+                  requestId: superseded.requestId,
+                  deviceId: superseded.deviceId,
+                  decision: "rejected",
+                  ts: supersededResolvedAt,
+                },
+                { dropIfSlow: true },
+              );
+            }
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
             let recoveryRequestId: string | undefined;
