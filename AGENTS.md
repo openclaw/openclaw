@@ -183,6 +183,8 @@ Skills own workflows; root owns hard policy and routing.
 ## Code
 
 - TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters. For catch blocks, catch `unknown` (or omit annotation) and narrow system errors via `(err as NodeJS.ErrnoException | undefined)?.code` checks.
+- Catch Binding: In catch blocks where the error variable is not referenced, omit the catch binding parameter entirely (use `catch {` instead of `catch (err) {`) to satisfy eslint `no-unused-vars` and `prefer-optional-catch-binding` rules.
+- Test Mock Types: In unit tests (especially AI provider and LLM core tests), ensure that mock conversation history message objects fully satisfy their strictly typed interfaces (e.g. `AssistantMessage`, `ToolResultMessage`). In particular, `AssistantMessage` requires `api`, `provider`, `model`, `usage` (with nested `totalTokens` and structured `cost: { input, output, cacheRead, cacheWrite, total }`), and `stopReason` fields. `ToolResultMessage` requires `role: "toolResult"`, `toolCallId`, `toolName`, `isError`, `content`, and `timestamp`. The role `tool` is invalid.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
