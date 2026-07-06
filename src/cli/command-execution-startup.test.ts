@@ -111,6 +111,37 @@ describe("command-execution-startup", () => {
     ).toBe(true);
   });
 
+  it("distinguishes ACP bridge options from the interactive client in raw argv", () => {
+    for (const argv of [
+      ["node", "openclaw", "acp", "--url", "wss://gateway.example.test"],
+      ["node", "openclaw", "acp", "--session", "client"],
+      ["node", "openclaw", "--profile", "work", "acp", "--reset-session", "--verbose"],
+    ]) {
+      expect(
+        mod.resolveCliExecutionStartupContext({
+          argv,
+          jsonOutputMode: false,
+          env: {},
+        }).startupPolicy.suppressDoctorStdout,
+        argv.join(" "),
+      ).toBe(true);
+    }
+
+    for (const argv of [
+      ["node", "openclaw", "acp", "client", "--cwd", "/tmp/workspace"],
+      ["node", "openclaw", "acp", "--verbose", "client", "--server", "openclaw"],
+    ]) {
+      expect(
+        mod.resolveCliExecutionStartupContext({
+          argv,
+          jsonOutputMode: false,
+          env: {},
+        }).startupPolicy.suppressDoctorStdout,
+        argv.join(" "),
+      ).toBe(false);
+    }
+  });
+
   it("routes logs to stderr and emits banner only when allowed", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {

@@ -45,6 +45,10 @@ export type CliCommandPathPolicy = {
 export type CliCommandCatalogEntry = {
   commandPath: readonly string[];
   exact?: boolean;
+  argvMatch?: {
+    booleanFlags?: readonly string[];
+    valueFlags?: readonly string[];
+  };
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
     id: CliRoutedCommandId;
@@ -259,7 +263,24 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["acp"], exact: true, policy: { ownsProtocolStdout: true } },
+  {
+    commandPath: ["acp"],
+    exact: true,
+    argvMatch: {
+      booleanFlags: ["--require-existing", "--reset-session", "--no-prefix-cwd", "--verbose", "-v"],
+      valueFlags: [
+        "--url",
+        "--token",
+        "--token-file",
+        "--password",
+        "--password-file",
+        "--session",
+        "--session-label",
+        "--provenance",
+      ],
+    },
+    policy: { ownsProtocolStdout: true },
+  },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },

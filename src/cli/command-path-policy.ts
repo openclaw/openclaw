@@ -6,7 +6,7 @@ import {
   type CliCommandPathPolicy,
   type CliNetworkProxyPolicy,
 } from "./command-catalog.js";
-import { matchesCommandPath } from "./command-path-matches.js";
+import { matchesArgvCommandPath, matchesCommandPath } from "./command-path-matches.js";
 import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
@@ -20,14 +20,24 @@ const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   networkProxy: "default",
 };
 
-export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPathPolicy {
+export function resolveCliCommandPathPolicy(
+  commandPath: string[],
+  argv?: string[],
+): CliCommandPathPolicy {
   // Later catalog entries can refine broader root policies with exact subcommand overrides.
   const resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
   for (const entry of cliCommandCatalog) {
     if (!entry.policy) {
       continue;
     }
-    if (!matchesCommandPath(commandPath, entry.commandPath, { exact: entry.exact })) {
+    const matchesEntry =
+      argv && entry.argvMatch
+        ? matchesArgvCommandPath(argv, entry.commandPath, {
+            exact: entry.exact,
+            ...entry.argvMatch,
+          })
+        : matchesCommandPath(commandPath, entry.commandPath, { exact: entry.exact });
+    if (!matchesEntry) {
       continue;
     }
     Object.assign(resolvedPolicy, entry.policy);
