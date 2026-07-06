@@ -7,7 +7,6 @@ import { beforeEach, vi } from "vitest";
 let currentPage: Record<string, unknown> | null = null;
 let currentRefLocator: Record<string, unknown> | null = null;
 type HarnessManagedDownload = {
-  triggered: true;
   url: string;
   suggestedFilename: string;
   path: string;
@@ -44,31 +43,6 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-  createManagedDownloadCaptureForPage: vi.fn(
-    (_page?: unknown, _timeoutMs?: unknown, opts?: HarnessDownloadCaptureOptions) => {
-      const capture =
-        currentDownloadCapture ??
-        ({
-          armed: true,
-          promise: new Promise<HarnessManagedDownload>(() => {}),
-          cancel: vi.fn(),
-        } satisfies HarnessDownloadCapture);
-      if (!opts?.beforeSave) {
-        return capture;
-      }
-      return {
-        ...capture,
-        promise: capture.promise.then(async (download) => {
-          await opts.beforeSave?.({
-            triggered: true,
-            url: download.url,
-            suggestedFilename: download.suggestedFilename,
-          });
-          return download;
-        }),
-      };
-    },
-  ),
   gotoPageWithNavigationGuard: vi.fn(
     async (opts: {
       url: string;
@@ -116,12 +90,44 @@ const sessionMocks = vi.hoisted(() => ({
   rememberRoleRefsForTarget: vi.fn(() => {}),
 }));
 
+const downloadCaptureMocks = vi.hoisted(() => ({
+  createDownloadCaptureForPage: vi.fn(),
+}));
+
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => ({ ssrfPolicy })),
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);
+vi.mock("./pw-download-capture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pw-download-capture.js")>();
+  downloadCaptureMocks.createDownloadCaptureForPage.mockImplementation(
+    (page, state, timeoutMs, opts?: HarnessDownloadCaptureOptions) => {
+      const capture = currentDownloadCapture;
+      if (!capture) {
+        return actual.createDownloadCaptureForPage(page, state, timeoutMs, opts);
+      }
+      if (!opts?.beforeSave) {
+        return capture;
+      }
+      return {
+        ...capture,
+        promise: capture.promise.then(async (download) => {
+          await opts.beforeSave?.({
+            url: download.url,
+            suggestedFilename: download.suggestedFilename,
+          });
+          return download;
+        }),
+      };
+    },
+  );
+  return {
+    ...actual,
+    createDownloadCaptureForPage: downloadCaptureMocks.createDownloadCaptureForPage,
+  };
+});
 vi.mock("./navigation-guard.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -142,6 +148,10 @@ export function getPwToolsCoreNavigationGuardMocks() {
 
 /** Sets the current mocked page returned by getPageForTargetId. */
 export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
+  if (page) {
+    page.on ??= vi.fn();
+    page.off ??= vi.fn();
+  }
   currentPage = page;
 }
 
@@ -168,6 +178,9 @@ export function installPwToolsCoreTestHooks() {
     };
 
     for (const fn of Object.values(sessionMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(downloadCaptureMocks)) {
       fn.mockClear();
     }
     for (const fn of Object.values(navigationGuardMocks)) {

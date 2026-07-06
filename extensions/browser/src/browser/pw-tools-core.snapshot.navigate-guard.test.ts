@@ -88,7 +88,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
   it("returns managed download metadata when navigation starts an attachment download", async () => {
     const download = {
-      triggered: true as const,
       url: "https://example.com/export.csv",
       suggestedFilename: "export.csv",
       path: "/tmp/openclaw/downloads/export.csv",
@@ -127,7 +126,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
   it("returns managed download metadata for matching ERR_ABORTED attachment navigations", async () => {
     const download = {
-      triggered: true as const,
       url: "http://127.0.0.1:3333/download",
       suggestedFilename: "proof.txt",
       path: "/tmp/openclaw/downloads/proof.txt",
@@ -184,7 +182,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
   it("closes the tab when captured navigation download resolves to a blocked URL", async () => {
     const download = {
-      triggered: true as const,
       url: "http://127.0.0.1:18080/export.csv",
       suggestedFilename: "export.csv",
       path: "/tmp/openclaw/downloads/export.csv",

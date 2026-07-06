@@ -193,6 +193,11 @@ describe("browser client", () => {
               ok: true,
               targetId: "t1",
               url: "https://y",
+              download: {
+                url: "https://y/report.csv",
+                suggestedFilename: "report.csv",
+                path: "/tmp/openclaw/downloads/report.csv",
+              },
             }),
           } as unknown as Response;
         }
@@ -331,6 +336,11 @@ describe("browser client", () => {
     });
     expect(navigation.ok).toBe(true);
     expect(navigation.targetId).toBe("t1");
+    expect(navigation.download).toEqual({
+      url: "https://y/report.csv",
+      suggestedFilename: "report.csv",
+      path: "/tmp/openclaw/downloads/report.csv",
+    });
 
     const act = await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
     expect(act.ok).toBe(true);

@@ -12,12 +12,14 @@ import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
+import type { BrowserDownloadResult } from "./download-types.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -27,9 +29,7 @@ import {
 } from "./pw-role-snapshot.js";
 import {
   assertPageNavigationCompletedSafely,
-  type BrowserManagedDownload,
   closeBlockedNavigationTarget,
-  createManagedDownloadCaptureForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -401,7 +401,7 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string; download?: BrowserManagedDownload }> {
+}): Promise<{ url: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -428,7 +428,7 @@ export async function navigateViaPlaywright(opts: {
   });
   const timeout = resolveNavigationTimeoutMs(opts.timeoutMs);
   let page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  let pageState = ensurePageState(page);
   const navigate = async () =>
     await gotoPageWithNavigationGuard({
       cdpUrl: opts.cdpUrl,
@@ -441,9 +441,11 @@ export async function navigateViaPlaywright(opts: {
     });
   const navigateWithDownloadCapture = async (): Promise<{
     response: Awaited<ReturnType<typeof navigate>> | null;
-    download?: BrowserManagedDownload;
+    download?: BrowserDownloadResult;
   }> => {
-    const downloadCapture = createManagedDownloadCaptureForPage(page, timeout, {
+    const downloadCapture = createDownloadCaptureForPage(page, pageState, timeout, {
+      mode: "passive",
+      timeoutMessage: "Timeout waiting for navigation download",
       beforeSave: async (download) => {
         await assertBrowserNavigationResultAllowed({
           url: download.url || url,
@@ -498,7 +500,7 @@ export async function navigateViaPlaywright(opts: {
       reason: "retry navigate after detached frame",
     }).catch(() => {});
     page = await getPageForTargetId(opts);
-    ensurePageState(page);
+    pageState = ensurePageState(page);
     navigationResult = await navigateWithDownloadCapture();
   }
   try {

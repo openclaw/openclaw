@@ -4,8 +4,8 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
-  createManagedDownloadCaptureForPage,
   ensurePageState,
   isDownloadStartingNavigationError,
   refLocator,
@@ -252,8 +252,8 @@ describe("pw-session ensurePageState", () => {
 
   it("captures navigation downloads under managed paths", async () => {
     const { page, handlers } = fakePage();
-    ensurePageState(page);
-    const capture = createManagedDownloadCaptureForPage(page, 1_000);
+    const state = ensurePageState(page);
+    const capture = createDownloadCaptureForPage(page, state, 1_000);
     const saveAs = vi.fn(async (outPath: string) => {
       await fs.writeFile(outPath, "attachment", "utf8");
     });
@@ -268,7 +268,6 @@ describe("pw-session ensurePageState", () => {
     }
 
     const result = await capture.promise;
-    expect(result.triggered).toBe(true);
     expect(result.url).toBe("https://example.com/export.csv");
     expect(result.suggestedFilename).toBe("export.csv");
     expect(path.dirname(result.path)).toBe(DEFAULT_DOWNLOAD_DIR);
@@ -279,12 +278,12 @@ describe("pw-session ensurePageState", () => {
 
   it("validates captured navigation downloads before saving managed bytes", async () => {
     const { page, handlers } = fakePage();
-    ensurePageState(page);
+    const state = ensurePageState(page);
     const blocked = new Error("blocked download");
     const beforeSave = vi.fn(async () => {
       throw blocked;
     });
-    const capture = createManagedDownloadCaptureForPage(page, 1_000, { beforeSave });
+    const capture = createDownloadCaptureForPage(page, state, 1_000, { beforeSave });
     const saveAs = vi.fn(async (outPath: string) => {
       await fs.writeFile(outPath, "blocked", "utf8");
     });
@@ -300,11 +299,25 @@ describe("pw-session ensurePageState", () => {
 
     await expect(capture.promise).rejects.toBe(blocked);
     expect(beforeSave).toHaveBeenCalledWith({
-      triggered: true,
       url: "http://127.0.0.1:18080/export.csv",
       suggestedFilename: "export.csv",
     });
     expect(saveAs).not.toHaveBeenCalled();
+  });
+
+  it("lets explicit download owners arm while passive capture yields", () => {
+    const { page } = fakePage();
+    const state = ensurePageState(page);
+    state.downloadWaiterDepth = 1;
+
+    const passive = createDownloadCaptureForPage(page, state, 1_000);
+    const explicit = createDownloadCaptureForPage(page, state, 1_000, { mode: "explicit" });
+
+    expect(passive.armed).toBe(false);
+    expect(explicit.armed).toBe(true);
+    expect(state.downloadWaiterDepth).toBe(2);
+    explicit.cancel();
+    expect(state.downloadWaiterDepth).toBe(1);
   });
 
   it("recognizes Playwright download-starting navigation aborts", () => {

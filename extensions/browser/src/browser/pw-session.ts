@@ -4,8 +4,6 @@
  * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
  * console/network/page state, role refs, and safe navigation handling.
  */
-import crypto from "node:crypto";
-import path from "node:path";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -46,11 +44,9 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { writeViaSiblingTempPath } from "./output-atomic.js";
-import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
+import { saveBrowserDownload, type PlaywrightDownload } from "./pw-download-capture.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
-import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 const { chromium } = playwrightCore;
 
@@ -145,24 +141,7 @@ type ConnectedBrowser = {
   onDisconnected?: () => void;
 };
 
-export type BrowserManagedDownloadCandidate = {
-  triggered: true;
-  url: string;
-  suggestedFilename: string;
-};
-
-export type BrowserManagedDownload = BrowserManagedDownloadCandidate & {
-  path: string;
-};
-
-export type BrowserManagedDownloadCaptureOptions = {
-  beforeSave?: (download: BrowserManagedDownloadCandidate) => Promise<void> | void;
-};
-
-type DownloadPayload = {
-  url?: () => string;
-  suggestedFilename?: () => string;
-  saveAs?: (outPath: string) => Promise<void>;
+type DownloadPayload = PlaywrightDownload & {
   path?: () => Promise<string>;
 };
 
@@ -246,37 +225,6 @@ function resolveCdpConnectRetryDelayMs(attempt: number): number {
   return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
 }
 
-function buildManagedDownloadPath(fileName: string): string {
-  const id = crypto.randomUUID();
-  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
-  return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
-}
-
-async function saveManagedDownloadPayload(
-  download: DownloadPayload,
-  opts: BrowserManagedDownloadCaptureOptions = {},
-): Promise<BrowserManagedDownload> {
-  const suggestedFilename = download.suggestedFilename?.() || "download.bin";
-  const candidate: BrowserManagedDownloadCandidate = {
-    triggered: true,
-    url: download.url?.() || "",
-    suggestedFilename,
-  };
-  await opts.beforeSave?.(candidate);
-  const managedPath = buildManagedDownloadPath(suggestedFilename);
-  await writeViaSiblingTempPath({
-    rootDir: DEFAULT_DOWNLOAD_DIR,
-    targetPath: managedPath,
-    writeTemp: async (tempPath) => {
-      await download.saveAs?.(tempPath);
-    },
-  });
-  return {
-    ...candidate,
-    path: managedPath,
-  };
-}
-
 export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: string): boolean {
   const message = formatErrorMessage(err).toLowerCase();
   if (message.includes("download is starting")) {
@@ -286,82 +234,6 @@ export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: st
   return Boolean(
     normalizedUrl && message.includes("net::err_aborted") && message.includes(normalizedUrl),
   );
-}
-
-export function createManagedDownloadCaptureForPage(
-  page: Page,
-  timeoutMs: number,
-  opts: BrowserManagedDownloadCaptureOptions = {},
-): {
-  armed: boolean;
-  promise: Promise<BrowserManagedDownload>;
-  cancel: () => void;
-} {
-  const state = ensurePageState(page);
-  if (state.downloadWaiterDepth > 0) {
-    return {
-      armed: false,
-      promise: new Promise<BrowserManagedDownload>(() => {}),
-      cancel: () => {},
-    };
-  }
-
-  state.downloadWaiterDepth += 1;
-  let done = false;
-  let depthReleased = false;
-  let timer: NodeJS.Timeout | undefined;
-  let handler: ((download: unknown) => void) | undefined;
-
-  const cleanup = () => {
-    if (!depthReleased) {
-      depthReleased = true;
-      state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
-    }
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-    if (handler) {
-      page.off("download", handler as never);
-      handler = undefined;
-    }
-  };
-
-  const promise = new Promise<BrowserManagedDownload>((resolve, reject) => {
-    handler = (download: unknown) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-      void saveManagedDownloadPayload(download as DownloadPayload, opts).then(resolve, reject);
-    };
-    page.on("download", handler as never);
-    timer = setTimeout(
-      () => {
-        if (done) {
-          return;
-        }
-        done = true;
-        cleanup();
-        reject(new Error("Timeout waiting for navigation download"));
-      },
-      Math.max(1, timeoutMs),
-    );
-    timer.unref?.();
-  });
-
-  return {
-    armed: true,
-    promise,
-    cancel: () => {
-      if (done) {
-        return;
-      }
-      done = true;
-      cleanup();
-    },
-  };
 }
 
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
@@ -830,7 +702,7 @@ export function ensurePageState(page: Page): PageState {
       if (state.downloadWaiterDepth > 0) {
         return;
       }
-      const managedSave = saveManagedDownloadPayload(download);
+      const managedSave = saveBrowserDownload(download);
       managedSave.catch(() => {});
       download.path = async () => (await managedSave).path;
     });
