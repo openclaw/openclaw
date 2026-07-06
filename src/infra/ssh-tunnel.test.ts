@@ -205,4 +205,24 @@ describe("startSshPortForward", () => {
     await rejection;
     expect(kill).toHaveBeenCalledWith("SIGTERM");
   });
+
+  it("does not crash when stderr emits a stream error during teardown", async () => {
+    vi.useFakeTimers();
+    spawnFakeSshListening();
+
+    const tunnel = await startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: 43210,
+      remotePort: 18789,
+      timeoutMs: 1000,
+    });
+
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
+      stderr: EventEmitter;
+    };
+    // Emitting an error on stderr must not throw an unhandled error.
+    child.stderr.emit("error", new Error("stderr EPIPE"));
+
+    await expect(tunnel.stop()).resolves.toBeUndefined();
+  });
 });

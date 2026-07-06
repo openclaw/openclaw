@@ -170,6 +170,9 @@ export async function startSshPortForward(opts: {
     const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
+  // stderr is only diagnostic; ignore its own stream errors so ssh teardown
+  // does not crash the gateway with an unhandled "error" event.
+  child.stderr?.on("error", () => {});
 
   const stop = async () => {
     if (child.killed || !child.kill("SIGTERM")) {
