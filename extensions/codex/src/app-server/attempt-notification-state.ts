@@ -94,6 +94,7 @@ export function applyCodexTurnNotificationState(params: {
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
   activeCompletionBlockerItemIds: Set<string>;
+  completedCompletionBlockerItemIds: Set<string>;
   activeAppServerTurnRequests: number;
   pendingOpenClawDynamicToolCompletionIds: Set<string>;
   turnCrossedToolHandoff: boolean;
@@ -123,7 +124,11 @@ export function applyCodexTurnNotificationState(params: {
     });
     params.onReportExecutionNotification(notification);
     updateActiveTurnItemIds(notification, params.activeTurnItemIds);
-    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
+    updateActiveCompletionBlockerItemIds(
+      notification,
+      params.activeCompletionBlockerItemIds,
+      params.completedCompletionBlockerItemIds,
+    );
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
       params.onScheduleTerminalDynamicToolReleaseCheck();
     }

@@ -66,6 +66,7 @@ export function updateActiveTurnItemIds(
 export function updateActiveCompletionBlockerItemIds(
   notification: CodexServerNotification,
   activeItemIds: Set<string>,
+  completedItemIds?: Set<string>,
 ): void {
   if (notification.method !== "item/started" && notification.method !== "item/completed") {
     return;
@@ -76,6 +77,14 @@ export function updateActiveCompletionBlockerItemIds(
   }
   if (notification.method === "item/completed") {
     activeItemIds.delete(itemId);
+    // Remember completed ids so an out-of-order item/started (correlation is
+    // plain string equality with no sequence numbers) cannot resurrect an
+    // already-completed item as a phantom blocker for the rest of the turn.
+    completedItemIds?.add(itemId);
+    return;
+  }
+  // Ignore a late item/started for an item we already saw complete.
+  if (completedItemIds?.has(itemId)) {
     return;
   }
   const item = readCodexNotificationItem(notification.params);

@@ -323,4 +323,47 @@ describe("Codex completion blocker item tracking", () => {
       expect(activeItemIds).toEqual(new Set());
     },
   );
+
+  it("ignores a late item/started for an already-completed item", () => {
+    const activeItemIds = new Set<string>();
+    const completedItemIds = new Set<string>();
+
+    // item/completed arrives before its item/started (ordering inversion).
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/completed", params: { item: { id: "item-1", type: "commandExecution" } } },
+      activeItemIds,
+      completedItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+    expect(completedItemIds).toEqual(new Set(["item-1"]));
+
+    // The late item/started must not resurrect the completed item as a phantom
+    // blocker that would suppress the completion/terminal watches for the turn.
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/started", params: { item: { id: "item-1", type: "commandExecution" } } },
+      activeItemIds,
+      completedItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+  });
+
+  it("still tracks a normal started->completed pair when completed ids are provided", () => {
+    const activeItemIds = new Set<string>();
+    const completedItemIds = new Set<string>();
+
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/started", params: { item: { id: "item-1", type: "mcpToolCall" } } },
+      activeItemIds,
+      completedItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set(["item-1"]));
+
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/completed", params: { item: { id: "item-1", type: "mcpToolCall" } } },
+      activeItemIds,
+      completedItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+    expect(completedItemIds).toEqual(new Set(["item-1"]));
+  });
 });
