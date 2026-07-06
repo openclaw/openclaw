@@ -1944,12 +1944,6 @@ class NodeRuntime private constructor(
     }
   }
 
-  private fun finishTalkCaptureIfIdle(ownershipEpoch: Long) {
-    synchronized(voiceCaptureOwnershipLock) {
-      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
-    }
-  }
-
   private fun finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch: Long) {
     if (ownershipEpoch == 0L || voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return
     if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
