@@ -40,6 +40,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toStrictEqual([]);
   });
 
+  it("strips provider reasoning close tags from streamed assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>Scan complete. No new actionable inbox items."],
+    });
+
+    expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
+  });
+
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
     const payloads = buildPayloads({
       lastAssistant: {
