@@ -137,6 +137,7 @@ const XAI_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
 const XAI_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const XAI_REALTIME_BASE_RECONNECT_DELAY_MS = 1000;
 const XAI_REALTIME_MAX_PENDING_TOOL_RESULTS = 128;
+const XAI_REALTIME_MAX_PENDING_USER_MESSAGES = 128;
 const XAI_REALTIME_DEFAULT_VAD_THRESHOLD = 0.85;
 const XAI_REALTIME_DEFAULT_PREFIX_PADDING_MS = 333;
 const XAI_REALTIME_DEFAULT_SILENCE_DURATION_MS = 500;
@@ -265,7 +266,7 @@ function hasXaiRealtimeApiKeyInput(
 
 class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly DEFAULT_MODEL = XAI_REALTIME_DEFAULT_MODEL;
-  readonly supportsToolResultContinuation = true;
+  readonly supportsToolResultContinuation = false;
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -278,6 +279,7 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
     result: unknown;
     options?: RealtimeVoiceToolResultOptions;
   }> = [];
+  private pendingUserMessages: string[] = [];
   private markQueue: string[] = [];
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
@@ -327,6 +329,20 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   sendUserMessage(text: string): void {
+    if (!this.canSubmitInput()) {
+      if (this.pendingUserMessages.length < XAI_REALTIME_MAX_PENDING_USER_MESSAGES) {
+        this.pendingUserMessages.push(text);
+      } else {
+        this.config.onError?.(
+          new Error("xAI realtime voice pending user message queue overflow during reconnect"),
+        );
+      }
+      return;
+    }
+    this.sendUserMessageNow(text);
+  }
+
+  private sendUserMessageNow(text: string): void {
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -368,6 +384,9 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
+    if (options?.willContinue === true) {
+      return;
+    }
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -376,10 +395,6 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
         output: JSON.stringify(result),
       },
     });
-    if (options?.willContinue === true) {
-      this.continuingToolCallIds.add(callId);
-      return;
-    }
     this.continuingToolCallIds.delete(callId);
     this.pendingToolCallIds.delete(callId);
     if (options?.suppressResponse === true) {
@@ -393,6 +408,9 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return;
     }
     this.markQueue.shift();
+    if (this.markQueue.length === 0) {
+      this.flushPendingResponseCreate();
+    }
   }
 
   close(): void {
@@ -792,6 +810,9 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
             pendingToolResult.options,
           );
         }
+        for (const pendingUserMessage of this.pendingUserMessages.splice(0)) {
+          this.sendUserMessageNow(pendingUserMessage);
+        }
         if (!this.sessionReadyFired) {
           this.sessionReadyFired = true;
           this.config.onReady?.();
@@ -993,6 +1014,7 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.responseActive ||
       this.responseCreateInFlight ||
       this.responseCancelInFlight ||
+      this.markQueue.length > 0 ||
       this.continuingToolCallIds.size > 0 ||
       this.pendingToolCallIds.size > 0
     ) {
@@ -1068,6 +1090,10 @@ class XaiRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private canSubmitToolResult(): boolean {
+    return this.connected && this.sessionConfigured && this.canSendEvent();
+  }
+
+  private canSubmitInput(): boolean {
     return this.connected && this.sessionConfigured && this.canSendEvent();
   }
 

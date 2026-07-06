@@ -145,7 +145,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
-  it("advertises continuing realtime tool results", () => {
+  it("does not advertise continuing realtime tool results", () => {
     const provider = buildXaiRealtimeVoiceProvider();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
@@ -153,7 +153,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    expect(bridge.supportsToolResultContinuation).toBe(true);
+    expect(bridge.supportsToolResultContinuation).toBe(false);
   });
 
   it("requires xAI credentials for native realtime websocket bridges", async () => {
@@ -888,6 +888,106 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("does not send unsupported interim willContinue tool results to xAI", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "item_call_1",
+          name: "openclaw_agent_consult",
+          call_id: "call_1",
+          arguments: JSON.stringify({ question: "call_1" }),
+        }),
+      ),
+    );
+
+    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    expect(
+      parseSent(socket).filter((event) => event.type === "conversation.item.create"),
+    ).toEqual([]);
+
+    bridge.submitToolResult("call_1", { text: "final" });
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ text: "final" }),
+        },
+      },
+      { type: "response.create" },
+    ]);
+  });
+
+  it("defers response.create for tool results until queued playback marks drain", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_audio_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.function_call_arguments.done",
+          item_id: "item_call_1",
+          name: "openclaw_agent_consult",
+          call_id: "call_1",
+          arguments: JSON.stringify({ question: "call_1" }),
+        }),
+      ),
+    );
+
+    bridge.submitToolResult("call_1", { text: "final" });
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+
+    bridge.acknowledgeMark?.();
+    expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
+  });
+
   it("preserves pending parallel tool calls across resumed reconnects", async () => {
     vi.useFakeTimers();
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
@@ -1028,6 +1128,57 @@ describe("buildXaiRealtimeVoiceProvider", () => {
           type: "function_call_output",
           call_id: "call_2",
           output: JSON.stringify({ text: "second" }),
+        },
+      },
+      { type: "response.create" },
+    ]);
+    bridge.close();
+  });
+
+  it("queues text turns submitted while a resumed session is reconnecting", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test", sessionResumption: true }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const firstSocket = FakeWebSocket.instances[0];
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_text_queue" } }),
+      ),
+    );
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    firstSocket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const secondSocket = FakeWebSocket.instances[1];
+    expect(String(secondSocket.args[0])).toContain("conversation_id=conv_text_queue");
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+
+    bridge.sendUserMessage?.("OpenClaw finished checking.");
+    expect(parseSent(secondSocket).filter((event) => event.type === "conversation.item.create"))
+      .toEqual([]);
+
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    expect(parseSent(secondSocket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "OpenClaw finished checking." }],
         },
       },
       { type: "response.create" },
