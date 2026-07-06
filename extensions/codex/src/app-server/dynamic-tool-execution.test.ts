@@ -314,7 +314,7 @@ describe("dynamic tool execution helpers", () => {
       tool: "sessions_send",
       arguments: { sessionKey: "agent:child", message: "ping", timeoutSeconds: 1 },
     };
-    const structuredTimeout = {
+    const structuredTimeout: CodexDynamicToolCallResponse = {
       success: true,
       contentItems: [
         {

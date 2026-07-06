@@ -77,7 +77,6 @@ import {
 } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexDynamicToolCallParams,
   type CodexServerNotification,
   type CodexThreadForkParams,
   type CodexTurn,
