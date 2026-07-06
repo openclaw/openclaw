@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  resetChatSlashCommandMetadataForTest,
+} from "./chat-commands.ts";
 import { refreshChatMetadata, resolveChatAvatarUrl, type ChatPageHost } from "./chat-state.ts";
 
 vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/assistant-identity.ts")>()),
   loadLocalAssistantIdentity: () => ({ avatar: "data:image/png;base64,bG9jYWw=" }),
 }));
+
+afterEach(() => {
+  resetChatSlashCommandMetadataForTest();
+});
 
 describe("resolveChatAvatarUrl", () => {
   it("prefers the authenticated avatar blob over persisted and protected URLs", () => {
@@ -308,5 +317,80 @@ describe("refreshChatMetadata", () => {
     expect(state.chatModelCatalog).toEqual([]);
     expect(state.chatModelsLoading).toBe(false);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply compatibility commands after switching agents", async () => {
+    let resolveCommands: (value: {
+      commands: Array<{
+        name: string;
+        textAliases: string[];
+        description: string;
+        source: string;
+        scope: string;
+        acceptsArgs: boolean;
+      }>;
+    }) => void = () => {};
+    const commands = new Promise<{
+      commands: Array<{
+        name: string;
+        textAliases: string[];
+        description: string;
+        source: string;
+        scope: string;
+        acceptsArgs: boolean;
+      }>;
+    }>((resolve) => {
+      resolveCommands = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      expect(method).toBe("commands.list");
+      return await commands;
+    });
+    applyRemoteSlashCommandsResult({
+      client: null,
+      agentId: "other",
+      result: {
+        commands: [
+          {
+            name: "other-command",
+            textAliases: ["/other-command"],
+            description: "Command for the newly selected agent.",
+            source: "plugin",
+            scope: "text",
+            acceptsArgs: false,
+          },
+        ],
+      },
+    });
+    const state = {
+      agentsList: { defaultId: "main" },
+      assistantAgentId: "main",
+      chatMetadataRequestVersion: 0,
+      chatModelCatalog: [],
+      chatModelsLoading: false,
+      client: { request },
+      connected: true,
+      hello: { features: { methods: [] } },
+      sessionKey: "agent:work:main",
+    } as unknown as ChatPageHost;
+
+    const refresh = refreshChatMetadata(state);
+    state.sessionKey = "agent:other:main";
+    resolveCommands({
+      commands: [
+        {
+          name: "work-command",
+          textAliases: ["/work-command"],
+          description: "Stale command for the previous agent.",
+          source: "plugin",
+          scope: "text",
+          acceptsArgs: false,
+        },
+      ],
+    });
+    await refresh;
+
+    expect(SLASH_COMMANDS.some((command) => command.name === "other-command")).toBe(true);
+    expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
   });
 });

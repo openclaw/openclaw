@@ -162,18 +162,19 @@ export function applyRemoteSlashCommandsResult(params: {
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
+  shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
   if (!params.client) {
-    if (seq !== refreshSeq) {
+    if (seq !== refreshSeq || params.shouldApply?.() === false) {
       return;
     }
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
   const commands = await loadRemoteSlashCommands(params.client, agentId);
-  if (seq !== refreshSeq) {
+  if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
   replaceSlashCommands(commands);
