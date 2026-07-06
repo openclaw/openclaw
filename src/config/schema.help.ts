@@ -422,9 +422,9 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy.hostnameAllowlist":
     "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
   "browser.remoteCdpTimeoutMs":
-    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
+    "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. The larger of this value and remoteCdpHandshakeTimeoutMs also bounds persistent remote tab enumeration. Increase for high-latency tunnels, or lower for faster failure detection.",
   "browser.remoteCdpHandshakeTimeoutMs":
-    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
+    "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. The larger of this value and remoteCdpTimeoutMs also bounds persistent remote tab enumeration. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   discovery:

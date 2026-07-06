@@ -912,7 +912,7 @@ extension OnboardingWizardView {
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
 
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         self.setupCode = ""
         self.setupCodeStatus = "Setup code applied. Connecting..."
         self.connectMessage = "Connecting via setup code..."
@@ -955,7 +955,7 @@ extension OnboardingWizardView {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
@@ -996,7 +996,7 @@ extension OnboardingWizardView {
         await self.appModel.resetGatewaySessionsForTargetSwitch()
         guard self.setupLinkStaging.link == link else { return }
         _ = self.setupLinkStaging.take()
-        self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)
+        await self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)
         self.setupCodeStatus = "Setup link applied. Connecting..."
         self.issue = .none
         self.connectMessage = "Connecting to \(link.host)…"
@@ -1014,7 +1014,7 @@ extension OnboardingWizardView {
 
     private func applyGatewayLink(
         _ link: GatewayConnectDeepLink,
-        disconnectExistingGatewayForBootstrap: Bool = true)
+        disconnectExistingGatewayForBootstrap: Bool = true) async
     {
         self.manualHost = link.host
         self.manualPort = link.port
@@ -1023,7 +1023,7 @@ extension OnboardingWizardView {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            GatewayOnboardingReset.prepareForBootstrapPairing(
+            await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: GatewaySettingsStore.currentInstanceID(),
                 gatewayStableID: setupAuth.targetStableID,
@@ -1542,7 +1542,7 @@ extension OnboardingWizardView {
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
         if problem.suggestsOnboardingReset {
-            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+            await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
             self.gatewayToken = ""
             self.gatewayPassword = ""
             self.gatewayCredentialFieldStableID = nil
