@@ -11,6 +11,7 @@ import type {
 } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
@@ -99,6 +100,9 @@ export type SessionsProps = {
   onDeselectPage: (keys: string[]) => void;
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
+  deleteConfirmOpen: boolean;
+  onConfirmDeleteSelected: () => void;
+  onCancelDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
   workboardSessionKeys?: Set<string>;
   workboardBusySessionKey?: string | null;
@@ -1016,6 +1020,48 @@ export function renderSessions(props: SessionsProps) {
           : nothing}
       </div>
     </section>
+    ${renderDeleteSelectedConfirmation(props)}
+  `;
+}
+
+function renderDeleteSelectedConfirmation(props: SessionsProps) {
+  if (!props.deleteConfirmOpen || props.selectedKeys.size === 0) {
+    return nothing;
+  }
+  const count = props.selectedKeys.size;
+  const title = `Delete ${count} ${count === 1 ? "session" : "sessions"}?`;
+  const description = "This will delete the session entries and archive their transcripts.";
+  return html`
+    <openclaw-modal-dialog
+      label=${title}
+      description=${description}
+      @modal-cancel=${() => {
+        if (!props.loading) {
+          props.onCancelDeleteSelected();
+        }
+      }}
+    >
+      <div class="exec-approval-card">
+        <div class="exec-approval-header">
+          <div>
+            <div class="exec-approval-title">${title}</div>
+            <div class="exec-approval-sub">${description}</div>
+          </div>
+        </div>
+        <div class="exec-approval-actions">
+          <button
+            class="btn danger"
+            ?disabled=${props.loading}
+            @click=${props.onConfirmDeleteSelected}
+          >
+            ${count === 1 ? "Delete session" : "Delete sessions"}
+          </button>
+          <button class="btn" ?disabled=${props.loading} @click=${props.onCancelDeleteSelected}>
+            ${t("common.cancel")}
+          </button>
+        </div>
+      </div>
+    </openclaw-modal-dialog>
   `;
 }
 

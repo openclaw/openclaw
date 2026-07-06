@@ -3,6 +3,11 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
+import {
+  getRenderedModalDialog,
+  installDialogPolyfill,
+  nextFrame,
+} from "../../test-helpers/modal-dialog.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 function buildResult(
@@ -72,6 +77,9 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
+    deleteConfirmOpen: false,
+    onConfirmDeleteSelected: () => undefined,
+    onCancelDeleteSelected: () => undefined,
     onToggleCheckpointDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
     onRestoreCheckpoint: () => undefined,
@@ -109,6 +117,49 @@ const SESSION_TABLE_HEADERS = [
 ];
 
 describe("sessions view", () => {
+  it("renders a modal delete confirmation for selected sessions", async () => {
+    const restoreDialog = installDialogPolyfill();
+    try {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const onConfirmDeleteSelected = vi.fn();
+      const onCancelDeleteSelected = vi.fn();
+      render(
+        renderSessions({
+          ...buildProps(
+            buildResult({
+              key: "agent:main:dashboard:1",
+              kind: "direct",
+              updatedAt: Date.now(),
+            }),
+          ),
+          selectedKeys: new Set(["agent:main:dashboard:1", "agent:main:dashboard:2"]),
+          deleteConfirmOpen: true,
+          onConfirmDeleteSelected,
+          onCancelDeleteSelected,
+        }),
+        container,
+      );
+      await Promise.resolve();
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
+      expect(container.textContent).toContain("Delete 2 sessions?");
+
+      const buttons = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+      );
+      buttons[0]?.click();
+      buttons[1]?.click();
+      await nextFrame();
+
+      expect(onConfirmDeleteSelected).toHaveBeenCalledTimes(1);
+      expect(onCancelDeleteSelected).toHaveBeenCalledTimes(1);
+      container.remove();
+    } finally {
+      restoreDialog();
+    }
+  });
+
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
     const onFiltersChange = vi.fn();

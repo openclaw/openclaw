@@ -100,6 +100,7 @@ export class SessionsPage extends LitElement {
   @state() private checkpointLoadingKey: string | null = null;
   @state() private checkpointBusyKey: string | null = null;
   @state() private checkpointErrorByKey: Record<string, string> = {};
+  @state() private deleteConfirmOpen = false;
 
   private stopSessionSubscription?: () => void;
   private stopAgentIdentitySubscription?: () => void;
@@ -470,19 +471,28 @@ export class SessionsPage extends LitElement {
     void this.loadSessions();
   }
 
+  private requestDeleteSelected() {
+    if (this.selectedKeys.size === 0 || this.loading) {
+      return;
+    }
+    this.deleteConfirmOpen = true;
+  }
+
+  private cancelDeleteSelected() {
+    if (this.loading) {
+      return;
+    }
+    this.deleteConfirmOpen = false;
+  }
+
   private async deleteSelected() {
     const context = this.context;
     const keys = [...this.selectedKeys];
     if (!context || keys.length === 0 || this.loading) {
+      this.deleteConfirmOpen = false;
       return;
     }
-    if (
-      !window.confirm(
-        `Delete ${keys.length} ${keys.length === 1 ? "session" : "sessions"}?\n\nThis will delete the session entries and archive their transcripts.`,
-      )
-    ) {
-      return;
-    }
+    this.deleteConfirmOpen = false;
     this.sessionMutationPending = true;
     const result = await context.sessions
       .deleteMany(
@@ -818,8 +828,12 @@ export class SessionsPage extends LitElement {
         },
         onDeselectAll: () => {
           this.selectedKeys = new Set();
+          this.deleteConfirmOpen = false;
         },
-        onDeleteSelected: () => void this.deleteSelected(),
+        onDeleteSelected: () => this.requestDeleteSelected(),
+        deleteConfirmOpen: this.deleteConfirmOpen,
+        onConfirmDeleteSelected: () => void this.deleteSelected(),
+        onCancelDeleteSelected: () => this.cancelDeleteSelected(),
         onNavigateToChat: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
         onAddToWorkboard: canCapture
