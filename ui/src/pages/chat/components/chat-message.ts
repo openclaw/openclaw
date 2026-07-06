@@ -635,6 +635,7 @@ type RenderMessageGroupOptions = {
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
+type MessageFooterActionOptions = Pick<GroupedMessageRenderOptions, "sessionKey" | "agentId">;
 
 function buildGroupedMessageRenderOptions(
   group: MessageGroup,
@@ -664,6 +665,91 @@ function buildGroupedMessageRenderOptions(
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
   };
+}
+
+function renderMessageFooterActions(
+  message: unknown,
+  opts: MessageFooterActionOptions,
+  onOpenSidebar?: (content: SidebarContent) => void,
+) {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role : "unknown";
+  if (role !== "assistant") {
+    return nothing;
+  }
+
+  const normalizedMessage = normalizeMessage(message);
+  const markdown = normalizedMessage.content
+    .reduce<string[]>((lines, item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        lines.push(item.text);
+      }
+      return lines;
+    }, [])
+    .join("\n")
+    .trim();
+  if (!markdown) {
+    return nothing;
+  }
+
+  const transcriptMeta =
+    m["__openclaw"] && typeof m["__openclaw"] === "object" && !Array.isArray(m["__openclaw"])
+      ? (m["__openclaw"] as Record<string, unknown>)
+      : null;
+  const sidebarMessageId =
+    typeof transcriptMeta?.id === "string"
+      ? transcriptMeta.id
+      : typeof m.messageId === "string"
+        ? m.messageId
+        : undefined;
+  const shouldFetchFullMessage = Boolean(
+    sidebarMessageId &&
+    !m.openclawMessageToolMirror &&
+    (transcriptMeta?.truncated === true || markdown.includes("\n...(truncated)...")),
+  );
+
+  return html`
+    ${onOpenSidebar
+      ? renderExpandButton(markdown, onOpenSidebar, {
+          sessionKey: opts.sessionKey,
+          agentId: opts.agentId,
+          messageId: shouldFetchFullMessage ? sidebarMessageId : undefined,
+        })
+      : nothing}
+    ${renderCopyAsMarkdownButton(markdown)}
+  `;
+}
+
+function renderAssistantFooterActions(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  let actionableMessage: MessageGroup["messages"][number] | null = null;
+  for (let index = group.messages.length - 1; index >= 0; index -= 1) {
+    const item = group.messages[index]!;
+    const m = item.message as Record<string, unknown>;
+    const role = typeof m.role === "string" ? m.role : "unknown";
+    if (role !== "assistant") {
+      continue;
+    }
+    const normalizedMessage = normalizeMessage(item.message);
+    if (
+      normalizedMessage.content.some(
+        (contentItem) => contentItem.type === "text" && Boolean(contentItem.text?.trim()),
+      )
+    ) {
+      actionableMessage = item;
+      break;
+    }
+  }
+  if (!actionableMessage) {
+    return nothing;
+  }
+  return renderMessageFooterActions(
+    actionableMessage.message,
+    {
+      sessionKey: opts.sessionKey,
+      agentId: opts.agentId,
+    },
+    opts.onOpenSidebar,
+  );
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -762,10 +848,14 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 `
               : nothing}
           </div>
-          <div class="chat-group-footer">
-            <span class="chat-sender-name">Activity</span>
-            ${renderChatTimestamp(group.timestamp)}
-            ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
+          <div class="chat-group-footer chat-group-footer--tool">
+            <span class="chat-group-footer__meta">
+              <span class="chat-sender-name">Activity</span>
+              ${renderChatTimestamp(group.timestamp)}
+            </span>
+            <span class="chat-group-footer__actions">
+              ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
+            </span>
           </div>
         </div>
       </div>
@@ -796,12 +886,29 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             opts.onOpenSidebar,
           ),
         )}
-        <div class="chat-group-footer">
-          <span class="chat-sender-name">${who}</span>
-          ${renderMessageMeta(group.timestamp, meta)}
-          ${opts.onDelete
-            ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
-            : nothing}
+        <div class="chat-group-footer chat-group-footer--${roleClass}">
+          ${normalizedRole === "user"
+            ? html`
+                <span class="chat-group-footer__actions">
+                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
+                </span>
+                <span class="chat-group-footer__meta">
+                  ${renderMessageMeta(group.timestamp, meta)}
+                  <span class="chat-sender-name">${who}</span>
+                </span>
+              `
+            : html`
+                <span class="chat-group-footer__meta">
+                  <span class="chat-sender-name">${who}</span>
+                  ${renderMessageMeta(group.timestamp, meta)}
+                </span>
+                <span class="chat-group-footer__actions">
+                  ${normalizedRole === "assistant"
+                    ? renderAssistantFooterActions(group, opts)
+                    : nothing}
+                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
+                </span>
+              `}
         </div>
       </div>
     </div>
@@ -1929,34 +2036,12 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const markdownRenderOptions = role === "user" ? { codeBlockChrome: "none" as const } : undefined;
-  const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
-  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
-  const hasActions = canCopyMarkdown || canExpand;
-  const transcriptMeta =
-    m["__openclaw"] && typeof m["__openclaw"] === "object" && !Array.isArray(m["__openclaw"])
-      ? (m["__openclaw"] as Record<string, unknown>)
-      : null;
-  const sidebarMessageId =
-    typeof transcriptMeta?.id === "string"
-      ? transcriptMeta.id
-      : typeof m.messageId === "string"
-        ? m.messageId
-        : undefined;
-  const shouldFetchFullMessage = Boolean(
-    sidebarMessageId &&
-    !m.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
-  );
-
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const reserveActionSpace = hasActions && !isToolShell;
   const bubbleClasses = [
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
-    hasActions ? "has-copy" : "",
-    reserveActionSpace ? "chat-bubble--has-actions" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -2043,18 +2128,6 @@ function renderGroupedMessage(
       data-message-text=${extractedText || nothing}
     >
       ${renderReplyPill(normalizedMessage.replyTarget)}
-      ${hasActions
-        ? html`<div class="chat-bubble-actions">
-            ${canExpand
-              ? renderExpandButton(markdown!, onOpenSidebar!, {
-                  sessionKey: opts.sessionKey,
-                  agentId: opts.agentId,
-                  messageId: shouldFetchFullMessage ? sidebarMessageId : undefined,
-                })
-              : nothing}
-            ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
-          </div>`
-        : nothing}
       ${isStandaloneToolMessage
         ? html`
             <div

@@ -575,7 +575,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
-  it("reserves bubble space when assistant message actions render", () => {
+  it("renders assistant message actions in the role-scoped footer", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       role: "assistant",
@@ -588,8 +588,24 @@ describe("grouped chat rendering", () => {
       ".chat-group.assistant .chat-bubble",
       HTMLElement,
     );
-    expect(assistantBubble.classList.contains("has-copy")).toBe(true);
-    expect(assistantBubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLElement);
+    expect(assistantBubble.classList.contains("has-copy")).toBe(false);
+    expect(assistantBubble.classList.contains("chat-bubble--has-actions")).toBe(false);
+    expect(assistantBubble.querySelector(".chat-bubble-actions")).toBeNull();
+
+    const assistantFooter = expectElement(
+      container,
+      ".chat-group.assistant .chat-group-footer--assistant",
+      HTMLElement,
+    );
+    const assistantFooterActions = expectElement(
+      assistantFooter,
+      ".chat-group-footer__actions",
+      HTMLElement,
+    );
+    expect(assistantFooterActions.querySelector(".chat-copy-btn")).toBeInstanceOf(
+      HTMLButtonElement,
+    );
+    expect(assistantFooterActions.querySelector(".chat-expand-btn")).toBeNull();
 
     renderGroupedMessage(
       container,
@@ -604,6 +620,37 @@ describe("grouped chat rendering", () => {
     const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
     expect(userBubble.classList.contains("has-copy")).toBe(false);
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(container.querySelector(".chat-group.user .chat-copy-btn")).toBeNull();
+  });
+
+  it("keeps user footer actions inside the user footer boundary before timestamp and name", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            role: "user",
+            content: "hello from user",
+            timestamp: 1000,
+          },
+          "user",
+        ),
+      ],
+      { onDelete: vi.fn(), userName: "Ada" },
+    );
+
+    const footer = expectElement(
+      container,
+      ".chat-group.user .chat-group-footer--user",
+      HTMLElement,
+    );
+    const actions = expectElement(footer, ".chat-group-footer__actions", HTMLElement);
+    const meta = expectElement(footer, ".chat-group-footer__meta", HTMLElement);
+    expect(actions.querySelector(".chat-group-delete")).toBeInstanceOf(HTMLButtonElement);
+    expect(meta.querySelector(".chat-group-timestamp")).toBeInstanceOf(HTMLTimeElement);
+    expect(meta.querySelector(".chat-sender-name")?.textContent?.trim()).toBe("Ada");
+    expect([...footer.children]).toEqual([actions, meta]);
   });
 
   it("renders user markdown without code-block copy chrome", () => {
@@ -2879,7 +2926,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
   });
 
-  it("reserves layout space for assistant message actions", () => {
+  it("keeps assistant message actions out of the bubble chrome", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       id: "assistant-action-space",
@@ -2889,8 +2936,9 @@ describe("grouped chat rendering", () => {
     });
 
     const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
-    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(true);
-    expect(bubble?.querySelector(".chat-bubble-actions")).not.toBeNull();
+    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(false);
+    expect(bubble?.querySelector(".chat-bubble-actions")).toBeNull();
+    expect(container.querySelector(".chat-group-footer--assistant .chat-copy-btn")).not.toBeNull();
   });
 
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {

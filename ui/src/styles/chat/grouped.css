@@ -38,10 +38,6 @@
   max-width: min(980px, calc(100% - 46px));
 }
 
-.chat-group.user .chat-group-footer {
-  justify-content: flex-end;
-}
-
 /* Footer at bottom of message group (role + time) */
 .chat-group-footer {
   display: flex;
@@ -50,6 +46,46 @@
   align-items: center;
   flex-wrap: wrap;
   margin-top: 6px;
+}
+
+.chat-group-footer--assistant,
+.chat-group-footer--tool {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.chat-group-footer--user {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+
+.chat-group-footer__meta,
+.chat-group-footer__actions {
+  display: inline-flex;
+  gap: 8px;
+  row-gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.chat-group-footer__actions:empty {
+  display: none;
+}
+
+.chat-group-footer--assistant .chat-group-footer__actions,
+.chat-group-footer--tool .chat-group-footer__actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.chat-group-footer--user .chat-group-footer__actions {
+  order: 1;
+}
+
+.chat-group-footer--user .chat-group-footer__meta {
+  order: 2;
+  justify-content: flex-end;
 }
 
 .chat-sender-name {
@@ -86,7 +122,8 @@
   justify-content: center;
 }
 
-.chat-group:hover .chat-group-footer button {
+.chat-group:hover .chat-group-footer button,
+.chat-group:focus-within .chat-group-footer button {
   opacity: 0.6;
   pointer-events: auto;
 }
@@ -236,14 +273,6 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-.chat-bubble.has-copy {
-  padding-right: 70px;
-}
-
-.chat-bubble--has-actions {
-  padding-right: 70px;
-}
-
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
@@ -265,45 +294,16 @@ img.chat-avatar {
   color: color-mix(in srgb, var(--foreground) 80%, var(--primary) 20%);
 }
 
-.chat-bubble-actions {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease-out;
-}
-
-.chat-bubble:hover .chat-bubble-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-bubble-actions {
-    opacity: 1;
+  .chat-group-footer button {
+    opacity: 0.72;
     pointer-events: auto;
   }
 
-  .chat-bubble--has-actions {
-    display: flex;
-    flex-direction: column;
-    padding-right: 14px;
-  }
-
-  .chat-bubble--has-actions .chat-bubble-actions {
-    position: static;
-    order: 2;
-    justify-content: flex-end;
-    margin-top: 8px;
-  }
-
-  .chat-bubble--has-actions .chat-copy-btn,
-  .chat-bubble--has-actions .chat-expand-btn {
+  .chat-group-footer .chat-copy-btn,
+  .chat-group-footer .chat-expand-btn {
     min-width: 44px;
     min-height: 44px;
   }
@@ -372,23 +372,10 @@ img.chat-avatar {
   height: 14px;
 }
 
-.chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-}
-
-:root[data-theme-mode="light"] .chat-bubble:not(:where(.chat-bubble--tool-shell)):hover {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
   background: var(--accent-subtle);
   border-color: transparent;
-}
-
-.chat-group.user .chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 /* Light mode: restore borders. Order contract: stays below the role variants
