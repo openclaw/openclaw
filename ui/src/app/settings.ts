@@ -36,6 +36,7 @@ import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import {
@@ -110,6 +111,7 @@ export type UiSettings = {
   chatAutoScroll?: ChatAutoScrollMode;
   chatSendShortcut?: ChatSendShortcut;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
+  chatSplitLayout?: ChatSplitLayout;
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
@@ -528,6 +530,7 @@ export function loadSettings(): UiSettings {
         parsed.splitRatio <= 0.7
           ? parsed.splitRatio
           : defaults.splitRatio,
+      chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -642,6 +645,7 @@ function persistSettings(next: UiSettings) {
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),
     splitRatio: next.splitRatio,
+    ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,

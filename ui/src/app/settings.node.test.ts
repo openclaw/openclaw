@@ -494,6 +494,42 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(persisted.navWidth).toBe(320);
   });
 
+  it("persists and parses a chat split layout", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const settings = loadSettings();
+    const chatSplitLayout = {
+      columns: [
+        { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
+        { id: "c2", panes: [{ id: "p2", sessionKey: "agent:main:work" }], paneWeights: [1] },
+      ],
+      columnWeights: [0.4, 0.6],
+      activePaneId: "p2",
+    };
+
+    saveSettings({ ...settings, chatSplitLayout });
+
+    expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
+  });
+
+  it("omits an invalid stored chat split layout", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({ gatewayUrl: gwUrl, chatSplitLayout: { columns: "invalid" } }),
+    );
+
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
+  });
+
   it("persists the browser-local custom theme payload when present", () => {
     setTestLocation({
       protocol: "https:",

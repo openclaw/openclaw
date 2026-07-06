@@ -29,13 +29,18 @@ import {
 } from "./attachment-payload-store.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { renderChat, resetChatViewState } from "./chat-view.ts";
-import { renderChatQueue } from "./components/chat-composer.ts";
+import { renderChatQueue, resetChatComposerState } from "./components/chat-composer.ts";
 import {
   renderChatModelControls,
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
+import {
+  isChatThreadSearchOpen,
+  resetChatThreadPresentationState,
+  toggleChatThreadSearch,
+} from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
@@ -561,6 +566,7 @@ function createChatProps(
   overrides: Partial<Parameters<typeof renderChat>[0]> = {},
 ): Parameters<typeof renderChat>[0] {
   return {
+    paneId: "single",
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
@@ -1285,6 +1291,54 @@ afterEach(() => {
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
   vi.unstubAllGlobals();
+});
+
+describe("per-pane chat presentation state", () => {
+  it("keeps slash menus independent and resets only the targeted pane", () => {
+    const paneA = document.createElement("div");
+    const paneB = document.createElement("div");
+    const renderPane = (container: HTMLElement, paneId: string, draft: string) => {
+      render(renderChat(createChatProps({ paneId, draft, getDraft: () => draft })), container);
+    };
+    const openSlashMenu = (container: HTMLElement) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (!textarea) {
+        throw new Error("expected composer textarea");
+      }
+      textarea.value = "/";
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    };
+
+    renderPane(paneA, "pane-a", "");
+    renderPane(paneB, "pane-b", "");
+    openSlashMenu(paneA);
+    renderPane(paneA, "pane-a", "/");
+
+    expect(paneA.querySelector(".slash-menu")).not.toBeNull();
+    expect(paneB.querySelector(".slash-menu")).toBeNull();
+
+    openSlashMenu(paneB);
+    renderPane(paneB, "pane-b", "/");
+    expect(paneA.querySelector(".slash-menu")?.id).toBe("chat-pane-a-slash-menu-listbox");
+    expect(paneB.querySelector(".slash-menu")?.id).toBe("chat-pane-b-slash-menu-listbox");
+    resetChatComposerState("pane-a");
+    renderPane(paneA, "pane-a", "/");
+
+    expect(paneA.querySelector(".slash-menu")).toBeNull();
+    expect(paneB.querySelector(".slash-menu")).not.toBeNull();
+  });
+
+  it("keeps thread search independent and resets only the targeted pane", () => {
+    toggleChatThreadSearch("pane-a", vi.fn());
+    expect(isChatThreadSearchOpen("pane-a")).toBe(true);
+    expect(isChatThreadSearchOpen("pane-b")).toBe(false);
+
+    toggleChatThreadSearch("pane-b", vi.fn());
+    resetChatThreadPresentationState("pane-a");
+
+    expect(isChatThreadSearchOpen("pane-a")).toBe(false);
+    expect(isChatThreadSearchOpen("pane-b")).toBe(true);
+  });
 });
 
 describe("chat transcript rendering cache", () => {
@@ -2428,7 +2482,7 @@ describe("chat slash menu accessibility", () => {
 
     const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
     expect(wrapper?.hasAttribute("role")).toBe(false);
@@ -2438,10 +2492,10 @@ describe("chat slash menu accessibility", () => {
     expect(textarea?.hasAttribute("role")).toBe(false);
     expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
     expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(textarea?.getAttribute("aria-controls")).toBe("chat-slash-menu-listbox");
+    expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
     expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
     expect(listbox?.getAttribute("role")).toBe("listbox");
-    expect(activeId).toMatch(/^chat-slash-option-command-/u);
+    expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
   });
 
@@ -2466,7 +2520,7 @@ describe("chat slash menu accessibility", () => {
     const activeOption = nextActiveId
       ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
       : null;
-    const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
+    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
 
     if (!nextActiveId) {
       throw new Error("Expected command navigation to set aria-activedescendant");
@@ -2499,11 +2553,11 @@ describe("chat slash menu accessibility", () => {
     container = renderChatView({ draft, onDraftChange });
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
     expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
-    expect(activeId).toBe("chat-slash-option-arg-tools-compact");
+    expect(activeId).toBe("chat-single-slash-option-arg-tools-compact");
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
   });
 

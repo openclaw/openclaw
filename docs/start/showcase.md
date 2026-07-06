@@ -19,6 +19,48 @@ Recent standouts across coding, devtools, mobile, and chat-native product buildi
 
 <CardGroup cols={2}>
 
+<Card title="Dropage instant HTML deploy" icon="cloud-arrow-up" href="https://clawhub.ai/jiantoucn/skills/dropage-deploy">
+  **@jiantoucn** • `deploy` `hosting` `skill`
+
+Tell your agent "deploy this HTML" and get a public URL back in about a second. Pages self-expire after an hour — no server, no config, no signup.
+</Card>
+
+<Card title="Anti-scam URL checker" icon="shield-halved" href="https://clawhub.ai/phishguard-niki/anti-scam-guard">
+  **@phishguard-niki** • `security` `phishing` `skill`
+
+Paste any URL, get a verdict. 2.5M+ scam domains from 38 feeds (PhishTank, OpenPhish, CERT.PL, and more), matched locally so browsing history never leaves the machine.
+</Card>
+
+<Card title="Product-design reasoning skills" icon="pen-ruler" href="https://clawhub.ai/monikazapisekstudio/skills/socratic-dialog">
+  **@monikazapisekstudio** • `product` `reasoning` `skills`
+
+A trio for product work: [Socratic Dialogue](https://clawhub.ai/monikazapisekstudio/skills/socratic-dialog) cross-examines a question before answering, [Kano Model Strategist](https://clawhub.ai/monikazapisekstudio/skills/kano-model-strategist) sorts features into what earns its place, and [Legible Agent Output](https://clawhub.ai/monikazapisekstudio/skills/legible-agent-output) rewrites agent output into plain language.
+</Card>
+
+<Card title="Mailbox broker for sub-agents" icon="inbox" href="https://clawhub.ai/albzhu/skills/miab-broker">
+  **@albzhu** • `multi-agent` `async` `skill`
+
+Stops orchestrators from idling while sub-agents work: an async callback mechanism where results land in a mailbox instead of blocking the parent agent.
+</Card>
+
+<Card title="lite-mode for low-RAM machines" icon="feather" href="https://clawhub.ai/skills/lite-mode">
+  **@mirajmahmudul** • `performance` `skill`
+
+Keeps OpenClaw usable on 2-4 GB machines: checks free memory and trims heavy features before the box starts swapping. [Source on GitHub](https://github.com/mirajmahmudul/openclaw-lite-mode).
+</Card>
+
+<Card title="ClawEval model rankings" icon="ranking-star" href="https://github.com/AIgenteur/ClawEval">
+  **@AIgenteur** • `evals` `models` `devtools`
+
+Benchmarks models across 59 agent roles to answer "which LLM for my GPU?". A community favorite for picking local models.
+</Card>
+
+<Card title="Music Craft" icon="music" href="https://clawhub.ai/luischarro/music-craft">
+  **@luischarro** • `music` `generation` `skill`
+
+Provider-agnostic song generation: plan the track, structure lyrics, and revise sparse results instead of one-shot prompting. Includes a [MiniMax variant](https://clawhub.ai/luischarro/music-craft-minimax) with BPM, key, structure, and mashup control.
+</Card>
+
 <Card title="PR Review to Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
@@ -211,6 +253,12 @@ Automated Todoist tasks and had OpenClaw generate the skill directly in Telegram
 Logs into TradingView via browser automation, screenshots charts, and performs technical analysis on demand. No API needed — just browser control.
 </Card>
 
+<Card title="Gardening business back office" icon="seedling" href="https://news.ycombinator.com/item?id=47783940">
+  **@mjsweet** • `automation` `email` `invoicing`
+
+Watches Gmail for work orders, analyzes property photos sent over Telegram, writes multi-page LaTeX quote PDFs, and invoices through Xero.
+</Card>
+
 <Card title="Slack auto-support" icon="slack">
   **@henrymascot** • `slack` `automation` `support`
 
@@ -231,6 +279,18 @@ Systems that index, search, remember, and reason over personal or team knowledge
 Chinese learning engine with pronunciation feedback and study flows via OpenClaw.
 
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
+</Card>
+
+<Card title="Obsidian second brain" icon="book" href="https://notesbylex.com/openclaw-the-missing-piece-for-obsidians-second-brain">
+  **@lexandstuff** • `obsidian` `whatsapp` `memory`
+
+Daily-driver assistant on WhatsApp with all memory stored as markdown in a version-controlled Obsidian vault: calorie and workout tracking, to-do lists, life admin.
+</Card>
+
+<Card title="Family history bot" icon="people-roof" href="https://news.ycombinator.com/item?id=47783940">
+  **@brtkwr** • `telegram` `memory` `family`
+
+Lives in a family Telegram group chat, documents stories across 50+ relatives, and asks informed follow-up questions — responding in Nepali for native speakers.
 </Card>
 
 <Card title="WhatsApp memory vault" icon="vault">
@@ -258,6 +318,12 @@ Separate memory manager that turns session files into memories, then beliefs, th
 Speech-first entry points, phone bridges, and transcription-heavy workflows.
 
 <CardGroup cols={2}>
+
+<Card title="Action Button walkie-talkie" icon="walkie-talkie" href="https://x.com/i/status/2072766510053888497">
+  **@buddyhadry** • `voice` `ios` `mobile`
+
+iPhone Action Button wired to OpenClaw: press, talk, and the agent talks back like a walkie-talkie.
+</Card>
 
 <Card title="Clawdia phone bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
@@ -345,6 +411,12 @@ Things that grew beyond a single workflow into broader products or ecosystems.
   **Community** • `marketplace` `astronomy` `webapp`
 
 Full astronomy gear marketplace. Built with and around the OpenClaw ecosystem.
+</Card>
+
+<Card title="Clinch agent negotiation protocol" icon="handshake" href="https://clawhub.ai/publicstringapps/clinch">
+  **@publicstringapps** • `protocol` `p2p` `skill`
+
+Open agent-to-agent negotiation: your agent haggles deals, schedules, and service agreements with other nodes and cryptographically signs the result — you just approve or reject.
 </Card>
 
 </CardGroup>

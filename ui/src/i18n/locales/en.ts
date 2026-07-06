@@ -1568,6 +1568,13 @@ export const en: TranslationMap = {
     updateNow: "Update now",
     dismissUpdateBanner: "Dismiss update banner",
     switchedSession: "Switched to {session}",
+    splitView: {
+      open: "Open split view",
+      splitRight: "Split right",
+      splitDown: "Split down",
+      closePane: "Close pane",
+      sessionSelect: "Pane session",
+    },
     sidebar: {
       allSessions: "All sessions",
       openSessionMenu: "Open session menu",

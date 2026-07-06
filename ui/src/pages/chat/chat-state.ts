@@ -361,7 +361,9 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
     clearRunStatus: true,
   });
   state.resetChatScroll();
-  saveRouteSessionSettings(state, sessionKey);
+  // Deliberately no saveRouteSessionSettings here: this runs for every split
+  // pane, and only the active pane may write the global sessionKey /
+  // lastActiveSessionKey settings (chat-pane applyActiveSessionBindings).
 }
 
 export async function refreshRouteSessionOptions(state: ChatPageHost) {

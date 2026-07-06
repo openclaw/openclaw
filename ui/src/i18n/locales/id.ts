@@ -1580,6 +1580,13 @@ export const id: TranslationMap = {
     updateNow: "Perbarui sekarang",
     dismissUpdateBanner: "Tutup banner pembaruan",
     switchedSession: "Beralih ke {session}",
+    splitView: {
+      open: "Buka tampilan terbagi",
+      splitRight: "Bagi ke kanan",
+      splitDown: "Bagi ke bawah",
+      closePane: "Tutup panel",
+      sessionSelect: "Sesi panel",
+    },
     sidebar: {
       allSessions: "Semua sesi",
       openSessionMenu: "Open session menu",

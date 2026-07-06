@@ -44,6 +44,9 @@ class SecurePrefs(
     private const val cameraEnabledKey = "camera.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
     private const val appearanceThemeModeKey = "appearance.themeMode"
+    private const val chatModelFavoritesKey = "chat.modelFavorites"
+    private const val chatModelRecentsKey = "chat.modelRecents"
+    private const val maxChatModelRecents = 5
   }
 
   private val appContext = context.applicationContext
@@ -187,6 +190,12 @@ class SecurePrefs(
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
+
+  private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
+  val modelFavorites: StateFlow<List<String>> = _modelFavorites
+
+  private val _modelRecents = MutableStateFlow(loadChatModelRefs(chatModelRecentsKey))
+  val modelRecents: StateFlow<List<String>> = _modelRecents
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -532,6 +541,35 @@ class SecurePrefs(
     _appearanceThemeMode.value = mode
   }
 
+  fun toggleModelFavorite(ref: String) {
+    val trimmed = ref.trim()
+    if (trimmed.isEmpty()) return
+    val next =
+      if (trimmed in _modelFavorites.value) {
+        _modelFavorites.value - trimmed
+      } else {
+        _modelFavorites.value + trimmed
+      }
+    persistChatModelRefs(chatModelFavoritesKey, next)
+    _modelFavorites.value = next
+  }
+
+  fun recordModelRecent(ref: String) {
+    val trimmed = ref.trim()
+    if (trimmed.isEmpty()) return
+    val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
+    persistChatModelRefs(chatModelRecentsKey, next)
+    _modelRecents.value = next
+  }
+
+  private fun persistChatModelRefs(
+    key: String,
+    refs: List<String>,
+  ) {
+    val encoded = JsonArray(refs.map(::JsonPrimitive)).toString()
+    plainPrefs.edit { putString(key, encoded) }
+  }
+
   private fun loadNotificationForwardingPackages(): Set<String> {
     val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
     if (raw.isNullOrEmpty()) {
@@ -601,6 +639,24 @@ class SecurePrefs(
       WakeWords.sanitize(decoded, defaultWakeWords)
     } catch (_: Throwable) {
       defaultWakeWords
+    }
+  }
+
+  private fun loadChatModelRefs(key: String): List<String> {
+    val raw = plainPrefs.getString(key, null)?.trim()
+    if (raw.isNullOrEmpty()) return emptyList()
+    return try {
+      val array = json.parseToJsonElement(raw) as? JsonArray ?: return emptyList()
+      array
+        .mapNotNull { item ->
+          when (item) {
+            is JsonNull -> null
+            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
+            else -> null
+          }
+        }.distinct()
+    } catch (_: Throwable) {
+      emptyList()
     }
   }
 }

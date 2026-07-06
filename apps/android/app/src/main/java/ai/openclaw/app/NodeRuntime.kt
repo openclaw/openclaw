@@ -939,6 +939,7 @@ class NodeRuntime private constructor(
       transcriptCache = chatTranscriptCache,
       cacheScope = ::chatCacheScope,
       commandOutbox = chatCommandOutbox,
+      recordModelRecent = prefs::recordModelRecent,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -1441,6 +1442,7 @@ class NodeRuntime private constructor(
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
+  val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
@@ -2688,6 +2690,13 @@ class NodeRuntime private constructor(
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
+  }
+
+  fun setChatSessionModel(
+    sessionKey: String,
+    modelRef: String?,
+  ) {
+    chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
   }
 
   fun switchChatSession(sessionKey: String) {

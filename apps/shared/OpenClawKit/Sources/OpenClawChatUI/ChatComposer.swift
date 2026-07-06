@@ -170,7 +170,9 @@ struct OpenClawChatComposer: View {
                 HStack(spacing: 5) {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
-                        self.thinkingPicker
+                        if self.viewModel.showsThinkingPicker {
+                            self.thinkingPicker
+                        }
                     }
                     if self.viewModel.showsModelPicker {
                         self.modelPicker

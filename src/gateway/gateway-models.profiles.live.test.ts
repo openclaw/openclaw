@@ -903,6 +903,13 @@ describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   });
 });
 
+describe("isGatewayLiveProbeTimeout", () => {
+  it("keeps missing terminal replies out of provider timeout skips", () => {
+    expect(isGatewayLiveProbeTimeout("probe timeout after 90000ms (prompt)")).toBe(true);
+    expect(isGatewayLiveProbeTimeout("terminal timeout after 90000ms (tool-read)")).toBe(false);
+  });
+});
+
 describe("isGatewayLiveModelTimeout", () => {
   it("matches provider-attributed agent wait timeouts", () => {
     expect(
@@ -2179,7 +2186,15 @@ function extractTranscriptMessageText(message: unknown): string {
   return textParts.join("\n").trim();
 }
 
-async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
+type SessionAssistantEntry = {
+  stopReason?: string;
+  text: string;
+};
+
+async function readSessionAssistantEntries(
+  sessionKey: string,
+  modelKey?: string,
+): Promise<SessionAssistantEntry[]> {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
@@ -2196,7 +2211,7 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
       reason: "live model assistant text verification",
     },
   );
-  const assistantTexts: string[] = [];
+  const assistantEntries: SessionAssistantEntry[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
       continue;
@@ -2205,11 +2220,20 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
     if (role !== "assistant") {
       continue;
     }
-    assistantTexts.push(
-      maybeStripAssistantScaffoldingForLiveModel(extractTranscriptMessageText(message), modelKey),
-    );
+    const stopReason = (message as { stopReason?: unknown }).stopReason;
+    assistantEntries.push({
+      text: maybeStripAssistantScaffoldingForLiveModel(
+        extractTranscriptMessageText(message),
+        modelKey,
+      ),
+      ...(typeof stopReason === "string" ? { stopReason } : {}),
+    });
   }
-  return assistantTexts;
+  return assistantEntries;
+}
+
+async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
+  return (await readSessionAssistantEntries(sessionKey, modelKey)).map((entry) => entry.text);
 }
 
 function latestAssistantTextAfterBaseline(
@@ -2222,6 +2246,17 @@ function latestAssistantTextAfterBaseline(
     .findLast((text) => text.length > 0);
 }
 
+function latestTerminalAssistantTextAfterBaseline(
+  assistantEntries: SessionAssistantEntry[],
+  baselineAssistantCount: number,
+): string | undefined {
+  const latest = assistantEntries.slice(baselineAssistantCount).at(-1);
+  if (!latest || latest.stopReason === "toolUse") {
+    return undefined;
+  }
+  return latest.text.trim() || undefined;
+}
+
 describe("latestAssistantTextAfterBaseline", () => {
   it("returns the final reply after an intermediate tool preamble", () => {
     expect(
@@ -2231,6 +2266,29 @@ describe("latestAssistantTextAfterBaseline", () => {
       ),
     ).toBe("nonce-a nonce-b");
   });
+
+  it("waits for a terminal reply after a tool preamble", () => {
+    expect(
+      latestTerminalAssistantTextAfterBaseline(
+        [
+          { stopReason: "stop", text: "previous reply" },
+          { stopReason: "toolUse", text: "I will read the file." },
+          { stopReason: "stop", text: "nonce-a nonce-b" },
+        ],
+        1,
+      ),
+    ).toBe("nonce-a nonce-b");
+    expect(
+      latestTerminalAssistantTextAfterBaseline(
+        [
+          { stopReason: "stop", text: "previous reply" },
+          { stopReason: "error", text: "partial reply" },
+          { stopReason: "toolUse", text: "I will read the file." },
+        ],
+        1,
+      ),
+    ).toBeUndefined();
+  });
 });
 
 async function waitForSessionAssistantText(params: {
@@ -2238,7 +2296,8 @@ async function waitForSessionAssistantText(params: {
   baselineAssistantCount: number;
   context: string;
   modelKey?: string;
-  timeoutLabel?: "probe" | "model";
+  terminalOnly?: boolean;
+  timeoutLabel?: "model" | "probe" | "terminal";
   timeoutMs?: number;
 }) {
   const startedAt = Date.now();
@@ -2247,15 +2306,15 @@ async function waitForSessionAssistantText(params: {
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
   const timeoutLabel = params.timeoutLabel ?? "model";
   while (Date.now() - startedAt < timeoutMs) {
-    const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
-    if (assistantTexts.length > params.baselineAssistantCount) {
-      const freshText = latestAssistantTextAfterBaseline(
-        assistantTexts,
-        params.baselineAssistantCount,
-      );
-      if (freshText) {
-        return freshText;
-      }
+    const assistantEntries = await readSessionAssistantEntries(params.sessionKey, params.modelKey);
+    const freshText = params.terminalOnly
+      ? latestTerminalAssistantTextAfterBaseline(assistantEntries, params.baselineAssistantCount)
+      : latestAssistantTextAfterBaseline(
+          assistantEntries.map((entry) => entry.text),
+          params.baselineAssistantCount,
+        );
+    if (freshText) {
+      return freshText;
     }
     if (Date.now() - lastHeartbeatAt >= GATEWAY_LIVE_HEARTBEAT_MS) {
       lastHeartbeatAt = Date.now();
@@ -2404,10 +2463,15 @@ async function requestGatewayAgentText(params: {
         ? waitResult.error
         : new Error(String(waitResult.error));
     }
-    // Tool-capable models can append a final reply after an earlier assistant
-    // preamble. Re-read after terminal completion or the probe validates stale text.
-    const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
-    return latestAssistantTextAfterBaseline(assistantTexts, baselineAssistantCount) ?? first.text;
+    return await waitForSessionAssistantText({
+      sessionKey: params.sessionKey,
+      baselineAssistantCount,
+      context: `${params.context}: transcript-terminal`,
+      modelKey: params.modelKey,
+      terminalOnly: true,
+      timeoutLabel: "terminal",
+      timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+    });
   }
   void transcriptPromise.catch(() => undefined);
   if (first.kind === "agent-error") {
@@ -2418,7 +2482,8 @@ async function requestGatewayAgentText(params: {
     baselineAssistantCount,
     context: `${params.context}: transcript-after-agent-wait`,
     modelKey: params.modelKey,
-    timeoutLabel: "probe",
+    terminalOnly: true,
+    timeoutLabel: "terminal",
     timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
   });
 }

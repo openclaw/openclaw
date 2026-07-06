@@ -1582,6 +1582,13 @@ export const pt_BR: TranslationMap = {
     updateNow: "Atualizar agora",
     dismissUpdateBanner: "Dispensar banner de atualização",
     switchedSession: "Mudou para {session}",
+    splitView: {
+      open: "Abrir visualização dividida",
+      splitRight: "Dividir à direita",
+      splitDown: "Dividir para baixo",
+      closePane: "Fechar painel",
+      sessionSelect: "Sessão do painel",
+    },
     sidebar: {
       allSessions: "Todas as sessões",
       openSessionMenu: "Open session menu",

@@ -232,7 +232,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             modelID: model.id,
             name: model.name,
             provider: model.provider,
-            contextWindow: model.contextwindow)
+            contextWindow: model.contextwindow,
+            reasoning: model.reasoning)
     }
 }
 

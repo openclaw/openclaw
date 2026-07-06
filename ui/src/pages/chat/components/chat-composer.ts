@@ -57,13 +57,12 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "[role='listbox']",
   "[role='option']",
 ].join(",");
-const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
-const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
 export type ChatComposerProps = {
+  paneId: string;
   sessionKey: string;
   currentAgentId: string;
   connected: boolean;
@@ -155,7 +154,17 @@ function createChatComposerState(): ChatComposerState {
   };
 }
 
-const composerState = createChatComposerState();
+const composerStates = new Map<string, ChatComposerState>();
+
+function getChatComposerState(paneId: string): ChatComposerState {
+  const existing = composerStates.get(paneId);
+  if (existing) {
+    return existing;
+  }
+  const state = createChatComposerState();
+  composerStates.set(paneId, state);
+  return state;
+}
 
 function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
   return status?.phase === "done" || status?.phase === "interrupted";
@@ -185,21 +194,21 @@ function commitComposerDraft(props: ChatComposerProps, value: string): void {
   props.onDraftChange(value);
 }
 
-function markComposerInputIntent(key: string): void {
-  composerState.composerInputIntentKey = key;
+function markComposerInputIntent(state: ChatComposerState, key: string): void {
+  state.composerInputIntentKey = key;
 }
 
-function consumeComposerInputIntent(key: string): boolean {
-  if (composerState.composerInputIntentKey !== key) {
+function consumeComposerInputIntent(state: ChatComposerState, key: string): boolean {
+  if (state.composerInputIntentKey !== key) {
     return false;
   }
-  composerState.composerInputIntentKey = null;
+  state.composerInputIntentKey = null;
   return true;
 }
 
-function clearPendingClearedSubmittedDraft(key: string): void {
-  if (composerState.pendingClearedSubmittedDraft?.key === key) {
-    composerState.pendingClearedSubmittedDraft = null;
+function clearPendingClearedSubmittedDraft(state: ChatComposerState, key: string): void {
+  if (state.pendingClearedSubmittedDraft?.key === key) {
+    state.pendingClearedSubmittedDraft = null;
   }
 }
 
@@ -212,8 +221,9 @@ function suppressStaleSubmittedDraftReplay(
   event: InputEvent,
   currentDraft: string,
   hasInputIntent: boolean,
+  state: ChatComposerState,
 ): boolean {
-  const pending = composerState.pendingClearedSubmittedDraft;
+  const pending = state.pendingClearedSubmittedDraft;
   if (!pending) {
     return false;
   }
@@ -226,8 +236,14 @@ function suppressStaleSubmittedDraftReplay(
   return true;
 }
 
-export function resetChatComposerState() {
-  Object.assign(composerState, createChatComposerState());
+export function resetChatComposerState(paneId?: string) {
+  if (paneId) {
+    // Goal elapsed timers are keyed by element and cleaned up when their
+    // element leaves the DOM, so a per-pane reset does not need to touch them.
+    composerStates.delete(paneId);
+    return;
+  }
+  composerStates.clear();
   for (const timer of goalElapsedTimers.values()) {
     clearInterval(timer);
   }
@@ -365,6 +381,7 @@ function renderChatGoalActionButton(options: {
 }
 
 function renderChatGoal(
+  state: ChatComposerState,
   goal: SessionGoal | undefined,
   actions: ChatGoalActions,
 ): TemplateResult | typeof nothing {
@@ -373,7 +390,7 @@ function renderChatGoal(
   }
   const elapsed = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
   const usage = formatGoalUsage(goal);
-  const expanded = composerState.goalExpandedId === goal.id;
+  const expanded = state.goalExpandedId === goal.id;
   const showActions = actions.canAct && Boolean(actions.onGoalCommand);
   const canResume =
     goal.status === "paused" ||
@@ -381,7 +398,7 @@ function renderChatGoal(
     goal.status === "usage_limited" ||
     goal.status === "budget_limited";
   const toggleExpanded = () => {
-    composerState.goalExpandedId = expanded ? null : goal.id;
+    state.goalExpandedId = expanded ? null : goal.id;
     actions.requestUpdate();
   };
   return html`
@@ -456,31 +473,31 @@ function renderChatGoal(
   `;
 }
 
-function resetSlashMenuState(): void {
-  composerState.slashMenuMode = "command";
-  composerState.slashMenuCommand = null;
-  composerState.slashMenuArgItems = [];
-  composerState.slashMenuItems = [];
-  composerState.slashMenuExpanded = false;
+function resetSlashMenuState(state: ChatComposerState): void {
+  state.slashMenuMode = "command";
+  state.slashMenuCommand = null;
+  state.slashMenuArgItems = [];
+  state.slashMenuItems = [];
+  state.slashMenuExpanded = false;
 }
 
-function hasVisibleSlashMenuState(): boolean {
+function hasVisibleSlashMenuState(state: ChatComposerState): boolean {
   return (
-    composerState.slashMenuOpen ||
-    composerState.slashMenuMode !== "command" ||
-    composerState.slashMenuCommand !== null ||
-    composerState.slashMenuArgItems.length > 0 ||
-    composerState.slashMenuItems.length > 0 ||
-    composerState.slashMenuExpanded
+    state.slashMenuOpen ||
+    state.slashMenuMode !== "command" ||
+    state.slashMenuCommand !== null ||
+    state.slashMenuArgItems.length > 0 ||
+    state.slashMenuItems.length > 0 ||
+    state.slashMenuExpanded
   );
 }
 
-function closeSlashMenuIfNeeded(requestUpdate: () => void): void {
-  if (!hasVisibleSlashMenuState()) {
+function closeSlashMenuIfNeeded(state: ChatComposerState, requestUpdate: () => void): void {
+  if (!hasVisibleSlashMenuState(state)) {
     return;
   }
-  composerState.slashMenuOpen = false;
-  resetSlashMenuState();
+  state.slashMenuOpen = false;
+  resetSlashMenuState(state);
   requestUpdate();
 }
 
@@ -490,19 +507,20 @@ function requestSlashCommandRefresh(
   requestUpdate: () => void,
   getCurrentValue?: () => string,
 ): void {
-  if (!props.onSlashIntent || composerState.slashCommandRefreshPending) {
+  const state = getChatComposerState(props.paneId);
+  if (!props.onSlashIntent || state.slashCommandRefreshPending) {
     return;
   }
   const refresh = props.onSlashIntent();
   if (!refresh || typeof refresh.then !== "function") {
     return;
   }
-  composerState.slashCommandRefreshPending = true;
+  state.slashCommandRefreshPending = true;
   void Promise.resolve(refresh).finally(() => {
-    composerState.slashCommandRefreshPending = false;
+    state.slashCommandRefreshPending = false;
     const nextValue = getCurrentValue?.() ?? props.getDraft?.() ?? value;
     if (!nextValue.startsWith("/")) {
-      closeSlashMenuIfNeeded(requestUpdate);
+      closeSlashMenuIfNeeded(state, requestUpdate);
       return;
     }
     updateSlashMenu(nextValue, requestUpdate, props, { skipSlashIntent: true });
@@ -516,6 +534,7 @@ function updateSlashMenu(
   opts: { skipSlashIntent?: boolean } = {},
   getCurrentValue?: () => string,
 ): void {
+  const state = getChatComposerState(props.paneId);
   const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
     if (!opts.skipSlashIntent) {
@@ -529,17 +548,17 @@ function updateSlashMenu(
         ? cmd.argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
         : cmd.argOptions;
       if (filtered.length > 0) {
-        composerState.slashMenuMode = "args";
-        composerState.slashMenuCommand = cmd;
-        composerState.slashMenuArgItems = filtered;
-        composerState.slashMenuOpen = true;
-        composerState.slashMenuIndex = 0;
-        composerState.slashMenuItems = [];
+        state.slashMenuMode = "args";
+        state.slashMenuCommand = cmd;
+        state.slashMenuArgItems = filtered;
+        state.slashMenuOpen = true;
+        state.slashMenuIndex = 0;
+        state.slashMenuItems = [];
         requestUpdate();
         return;
       }
     }
-    closeSlashMenuIfNeeded(requestUpdate);
+    closeSlashMenuIfNeeded(state, requestUpdate);
     return;
   }
 
@@ -549,16 +568,16 @@ function updateSlashMenu(
       requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
     }
     const items = getSlashCommandCompletions(match[1], {
-      showAll: composerState.slashMenuExpanded,
+      showAll: state.slashMenuExpanded,
     });
-    composerState.slashMenuItems = items;
-    composerState.slashMenuOpen = items.length > 0;
-    composerState.slashMenuIndex = 0;
-    composerState.slashMenuMode = "command";
-    composerState.slashMenuCommand = null;
-    composerState.slashMenuArgItems = [];
+    state.slashMenuItems = items;
+    state.slashMenuOpen = items.length > 0;
+    state.slashMenuIndex = 0;
+    state.slashMenuMode = "command";
+    state.slashMenuCommand = null;
+    state.slashMenuArgItems = [];
   } else {
-    closeSlashMenuIfNeeded(requestUpdate);
+    closeSlashMenuIfNeeded(state, requestUpdate);
     return;
   }
   requestUpdate();
@@ -569,26 +588,27 @@ function selectSlashCommand(
   props: ChatComposerProps,
   requestUpdate: () => void,
 ) {
+  const state = getChatComposerState(props.paneId);
   if (cmd.argOptions?.length) {
     commitComposerDraft(props, `/${cmd.name} `);
-    composerState.slashMenuMode = "args";
-    composerState.slashMenuCommand = cmd;
-    composerState.slashMenuArgItems = cmd.argOptions;
-    composerState.slashMenuOpen = true;
-    composerState.slashMenuIndex = 0;
-    composerState.slashMenuItems = [];
+    state.slashMenuMode = "args";
+    state.slashMenuCommand = cmd;
+    state.slashMenuArgItems = cmd.argOptions;
+    state.slashMenuOpen = true;
+    state.slashMenuIndex = 0;
+    state.slashMenuItems = [];
     requestUpdate();
     return;
   }
 
   if (cmd.executeLocal && !cmd.args) {
-    composerState.slashMenuOpen = false;
-    resetSlashMenuState();
+    state.slashMenuOpen = false;
+    resetSlashMenuState(state);
     commitComposerDraft(props, `/${cmd.name}`);
     props.onSend();
   } else {
     commitComposerDraft(props, `/${cmd.name} `);
-    closeSlashMenuIfNeeded(requestUpdate);
+    closeSlashMenuIfNeeded(state, requestUpdate);
   }
 }
 
@@ -597,20 +617,21 @@ function tabCompleteSlashCommand(
   props: ChatComposerProps,
   requestUpdate: () => void,
 ) {
+  const state = getChatComposerState(props.paneId);
   if (cmd.argOptions?.length) {
     commitComposerDraft(props, `/${cmd.name} `);
-    composerState.slashMenuMode = "args";
-    composerState.slashMenuCommand = cmd;
-    composerState.slashMenuArgItems = cmd.argOptions;
-    composerState.slashMenuOpen = true;
-    composerState.slashMenuIndex = 0;
-    composerState.slashMenuItems = [];
+    state.slashMenuMode = "args";
+    state.slashMenuCommand = cmd;
+    state.slashMenuArgItems = cmd.argOptions;
+    state.slashMenuOpen = true;
+    state.slashMenuIndex = 0;
+    state.slashMenuItems = [];
     requestUpdate();
     return;
   }
   commitComposerDraft(props, cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
-  composerState.slashMenuOpen = false;
-  resetSlashMenuState();
+  state.slashMenuOpen = false;
+  resetSlashMenuState(state);
   requestUpdate();
 }
 
@@ -620,9 +641,10 @@ function selectSlashArg(
   requestUpdate: () => void,
   run: boolean,
 ) {
-  const cmdName = composerState.slashMenuCommand?.name ?? "";
-  composerState.slashMenuOpen = false;
-  resetSlashMenuState();
+  const state = getChatComposerState(props.paneId);
+  const cmdName = state.slashMenuCommand?.name ?? "";
+  state.slashMenuOpen = false;
+  resetSlashMenuState(state);
   commitComposerDraft(props, `/${cmdName} ${arg}`);
   if (run) {
     props.onSend();
@@ -639,47 +661,54 @@ function slashOptionIdSegment(value: string): string {
   );
 }
 
-function getSlashCommandOptionId(cmd: SlashCommandDef): string {
-  return `chat-slash-option-command-${slashOptionIdSegment(cmd.name)}`;
+function paneDomId(paneId: string, suffix: string): string {
+  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
 }
 
-function getSlashArgOptionId(commandName: string, arg: string): string {
-  return `chat-slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`;
+function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
+  return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
 }
 
-function isSlashMenuVisible(): boolean {
-  if (!composerState.slashMenuOpen) {
+function getSlashArgOptionId(paneId: string, commandName: string, arg: string): string {
+  return paneDomId(
+    paneId,
+    `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
+  );
+}
+
+function isSlashMenuVisible(state: ChatComposerState): boolean {
+  if (!state.slashMenuOpen) {
     return false;
   }
-  if (composerState.slashMenuMode === "args") {
-    return Boolean(composerState.slashMenuCommand && composerState.slashMenuArgItems.length > 0);
+  if (state.slashMenuMode === "args") {
+    return Boolean(state.slashMenuCommand && state.slashMenuArgItems.length > 0);
   }
-  return composerState.slashMenuItems.length > 0;
+  return state.slashMenuItems.length > 0;
 }
 
-function getActiveSlashMenuOptionId(): string | null {
-  if (!isSlashMenuVisible()) {
+function getActiveSlashMenuOptionId(state: ChatComposerState, paneId: string): string | null {
+  if (!isSlashMenuVisible(state)) {
     return null;
   }
-  if (composerState.slashMenuMode === "args") {
-    const commandName = composerState.slashMenuCommand?.name;
-    const arg = composerState.slashMenuArgItems[composerState.slashMenuIndex];
-    return commandName && arg ? getSlashArgOptionId(commandName, arg) : null;
+  if (state.slashMenuMode === "args") {
+    const commandName = state.slashMenuCommand?.name;
+    const arg = state.slashMenuArgItems[state.slashMenuIndex];
+    return commandName && arg ? getSlashArgOptionId(paneId, commandName, arg) : null;
   }
-  const cmd = composerState.slashMenuItems[composerState.slashMenuIndex];
-  return cmd ? getSlashCommandOptionId(cmd) : null;
+  const cmd = state.slashMenuItems[state.slashMenuIndex];
+  return cmd ? getSlashCommandOptionId(paneId, cmd) : null;
 }
 
-function getActiveSlashMenuOptionLabel(): string {
-  if (!isSlashMenuVisible()) {
+function getActiveSlashMenuOptionLabel(state: ChatComposerState): string {
+  if (!isSlashMenuVisible(state)) {
     return "";
   }
-  if (composerState.slashMenuMode === "args") {
-    const commandName = composerState.slashMenuCommand?.name;
-    const arg = composerState.slashMenuArgItems[composerState.slashMenuIndex];
+  if (state.slashMenuMode === "args") {
+    const commandName = state.slashMenuCommand?.name;
+    const arg = state.slashMenuArgItems[state.slashMenuIndex];
     return commandName && arg ? `/${commandName} ${arg}` : "";
   }
-  const cmd = composerState.slashMenuItems[composerState.slashMenuIndex];
+  const cmd = state.slashMenuItems[state.slashMenuIndex];
   if (!cmd) {
     return "";
   }
@@ -687,8 +716,8 @@ function getActiveSlashMenuOptionLabel(): string {
   return `${command} ${cmd.description}`;
 }
 
-function scrollActiveSlashMenuOptionIntoView(): void {
-  const activeId = getActiveSlashMenuOptionId();
+function scrollActiveSlashMenuOptionIntoView(state: ChatComposerState, paneId: string): void {
+  const activeId = getActiveSlashMenuOptionId(state, paneId);
   if (!activeId) {
     return;
   }
@@ -730,48 +759,45 @@ function renderSlashMenu(
   props: ChatComposerProps,
   draft: string,
 ): TemplateResult | typeof nothing {
-  if (!composerState.slashMenuOpen) {
+  const state = getChatComposerState(props.paneId);
+  const listboxId = paneDomId(props.paneId, "slash-menu-listbox");
+  if (!state.slashMenuOpen) {
     return nothing;
   }
 
   if (
-    composerState.slashMenuMode === "args" &&
-    composerState.slashMenuCommand &&
-    composerState.slashMenuArgItems.length > 0
+    state.slashMenuMode === "args" &&
+    state.slashMenuCommand &&
+    state.slashMenuArgItems.length > 0
   ) {
     return html`
-      <div
-        id=${SLASH_MENU_LISTBOX_ID}
-        class="slash-menu"
-        role="listbox"
-        aria-label="Command arguments"
-      >
+      <div id=${listboxId} class="slash-menu" role="listbox" aria-label="Command arguments">
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
-            /${composerState.slashMenuCommand.name} ${composerState.slashMenuCommand.description}
+            /${state.slashMenuCommand.name} ${state.slashMenuCommand.description}
           </div>
-          ${composerState.slashMenuArgItems.map(
+          ${state.slashMenuArgItems.map(
             (arg, i) => html`
               <div
-                id=${getSlashArgOptionId(composerState.slashMenuCommand?.name ?? "", arg)}
-                class="slash-menu-item ${i === composerState.slashMenuIndex
+                id=${getSlashArgOptionId(props.paneId, state.slashMenuCommand?.name ?? "", arg)}
+                class="slash-menu-item ${i === state.slashMenuIndex
                   ? "slash-menu-item--active"
                   : ""}"
                 role="option"
-                aria-selected=${i === composerState.slashMenuIndex}
+                aria-selected=${i === state.slashMenuIndex}
                 @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
                 @mouseenter=${() => {
-                  composerState.slashMenuIndex = i;
+                  state.slashMenuIndex = i;
                   requestUpdate();
                 }}
               >
-                ${composerState.slashMenuCommand?.icon
+                ${state.slashMenuCommand?.icon
                   ? html`<span class="slash-menu-icon"
-                      >${renderSlashIcon(composerState.slashMenuCommand.icon)}</span
+                      >${renderSlashIcon(state.slashMenuCommand.icon)}</span
                     >`
                   : nothing}
                 <span class="slash-menu-name">${arg}</span>
-                <span class="slash-menu-desc">/${composerState.slashMenuCommand?.name} ${arg}</span>
+                <span class="slash-menu-desc">/${state.slashMenuCommand?.name} ${arg}</span>
               </div>
             `,
           )}
@@ -783,7 +809,7 @@ function renderSlashMenu(
     `;
   }
 
-  if (composerState.slashMenuItems.length === 0) {
+  if (state.slashMenuItems.length === 0) {
     return nothing;
   }
 
@@ -791,8 +817,8 @@ function renderSlashMenu(
     SlashCommandCategory,
     Array<{ cmd: SlashCommandDef; globalIdx: number }>
   >();
-  for (let i = 0; i < composerState.slashMenuItems.length; i++) {
-    const cmd = composerState.slashMenuItems[i];
+  for (let i = 0; i < state.slashMenuItems.length; i++) {
+    const cmd = state.slashMenuItems[i];
     const cat = cmd.category ?? "session";
     let list = grouped.get(cat);
     if (!list) {
@@ -810,15 +836,15 @@ function renderSlashMenu(
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
-              id=${getSlashCommandOptionId(cmd)}
-              class="slash-menu-item ${globalIdx === composerState.slashMenuIndex
+              id=${getSlashCommandOptionId(props.paneId, cmd)}
+              class="slash-menu-item ${globalIdx === state.slashMenuIndex
                 ? "slash-menu-item--active"
                 : ""}"
               role="option"
-              aria-selected=${globalIdx === composerState.slashMenuIndex}
+              aria-selected=${globalIdx === state.slashMenuIndex}
               @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
               @mouseenter=${() => {
-                composerState.slashMenuIndex = globalIdx;
+                state.slashMenuIndex = globalIdx;
                 requestUpdate();
               }}
             >
@@ -840,10 +866,10 @@ function renderSlashMenu(
     `);
   }
 
-  const hiddenCount = composerState.slashMenuExpanded ? 0 : getHiddenCommandCount();
+  const hiddenCount = state.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div id=${SLASH_MENU_LISTBOX_ID} class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div id=${listboxId} class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
       ${hiddenCount > 0
         ? html`<button
@@ -851,7 +877,7 @@ function renderSlashMenu(
             @click=${(event: Event) => {
               event.preventDefault();
               event.stopPropagation();
-              composerState.slashMenuExpanded = true;
+              state.slashMenuExpanded = true;
               updateSlashMenu(draft, requestUpdate, props);
             }}
           >
@@ -1765,6 +1791,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
 }
 
 export function renderChatComposer(props: ChatComposerProps) {
+  const state = getChatComposerState(props.paneId);
   const canCompose = props.connected && props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
@@ -1803,12 +1830,12 @@ export function renderChatComposer(props: ChatComposerProps) {
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
-      composerState.pendingClearedSubmittedDraft = {
+      state.pendingClearedSubmittedDraft = {
         key: draftKey,
         value: submittedDraft,
       };
     } else {
-      clearPendingClearedSubmittedDraft(draftKey);
+      clearPendingClearedSubmittedDraft(state, draftKey);
     }
     if (target && target.value !== hostDraft) {
       target.value = hostDraft;
@@ -1817,33 +1844,33 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    if (composerState.composerComposing || event.isComposing || event.keyCode === 229) {
+    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
       return;
     }
 
     if (
-      composerState.slashMenuOpen &&
-      composerState.slashMenuMode === "args" &&
-      composerState.slashMenuArgItems.length > 0
+      state.slashMenuOpen &&
+      state.slashMenuMode === "args" &&
+      state.slashMenuArgItems.length > 0
     ) {
-      const len = composerState.slashMenuArgItems.length;
+      const len = state.slashMenuArgItems.length;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex + 1) % len;
+          state.slashMenuIndex = (state.slashMenuIndex + 1) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "ArrowUp":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex - 1 + len) % len;
+          state.slashMenuIndex = (state.slashMenuIndex - 1 + len) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "Tab":
           event.preventDefault();
           selectSlashArg(
-            composerState.slashMenuArgItems[composerState.slashMenuIndex],
+            state.slashMenuArgItems[state.slashMenuIndex],
             props,
             requestUpdate,
             false,
@@ -1851,57 +1878,44 @@ export function renderChatComposer(props: ChatComposerProps) {
           return;
         case "Enter":
           event.preventDefault();
-          selectSlashArg(
-            composerState.slashMenuArgItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-            true,
-          );
+          selectSlashArg(state.slashMenuArgItems[state.slashMenuIndex], props, requestUpdate, true);
           return;
         case "Escape":
           event.preventDefault();
-          composerState.slashMenuOpen = false;
-          resetSlashMenuState();
+          state.slashMenuOpen = false;
+          resetSlashMenuState(state);
           requestUpdate();
           return;
       }
     }
 
-    if (composerState.slashMenuOpen && composerState.slashMenuItems.length > 0) {
-      const len = composerState.slashMenuItems.length;
+    if (state.slashMenuOpen && state.slashMenuItems.length > 0) {
+      const len = state.slashMenuItems.length;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex + 1) % len;
+          state.slashMenuIndex = (state.slashMenuIndex + 1) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "ArrowUp":
           event.preventDefault();
-          composerState.slashMenuIndex = (composerState.slashMenuIndex - 1 + len) % len;
+          state.slashMenuIndex = (state.slashMenuIndex - 1 + len) % len;
           requestUpdate();
-          scrollActiveSlashMenuOptionIntoView();
+          scrollActiveSlashMenuOptionIntoView(state, props.paneId);
           return;
         case "Tab":
           event.preventDefault();
-          tabCompleteSlashCommand(
-            composerState.slashMenuItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-          );
+          tabCompleteSlashCommand(state.slashMenuItems[state.slashMenuIndex], props, requestUpdate);
           return;
         case "Enter":
           event.preventDefault();
-          selectSlashCommand(
-            composerState.slashMenuItems[composerState.slashMenuIndex],
-            props,
-            requestUpdate,
-          );
+          selectSlashCommand(state.slashMenuItems[state.slashMenuIndex], props, requestUpdate);
           return;
         case "Escape":
           event.preventDefault();
-          composerState.slashMenuOpen = false;
-          resetSlashMenuState();
+          state.slashMenuOpen = false;
+          resetSlashMenuState(state);
           requestUpdate();
           return;
       }
@@ -1952,15 +1966,15 @@ export function renderChatComposer(props: ChatComposerProps) {
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
   const handleBeforeInput = (event: InputEvent) => {
-    if (!composerState.composerComposing && !event.isComposing) {
-      markComposerInputIntent(composerDraftKey(props));
+    if (!state.composerComposing && !event.isComposing) {
+      markComposerInputIntent(state, composerDraftKey(props));
     }
   };
   const handleInput = (event: InputEvent) => {
     const target = event.target as HTMLTextAreaElement;
     const draftKey = composerDraftKey(props);
-    const hasInputIntent = consumeComposerInputIntent(draftKey);
-    if (composerState.composerComposing || event.isComposing) {
+    const hasInputIntent = consumeComposerInputIntent(state, draftKey);
+    if (state.composerComposing || event.isComposing) {
       return;
     }
     if (
@@ -1969,6 +1983,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         event,
         props.getDraft?.() ?? props.draft,
         hasInputIntent,
+        state,
       )
     ) {
       return;
@@ -1976,7 +1991,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     syncComposerValue(target);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
-    composerState.composerComposing = false;
+    state.composerComposing = false;
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
   const handleBlur = (event: FocusEvent) => {
@@ -1991,9 +2006,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
   };
-  const slashMenuVisible = canCompose && isSlashMenuVisible();
-  const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
-  const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
+  const slashMenuVisible = canCompose && isSlashMenuVisible(state);
+  const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
+  const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
+  const slashMenuListboxId = paneDomId(props.paneId, "slash-menu-listbox");
+  const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
 
   return html`
     ${renderChatQueue({
@@ -2045,7 +2062,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
         ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderChatGoal(activeSession?.goal, {
+        ${renderChatGoal(getChatComposerState(props.paneId), activeSession?.goal, {
           canAct: canCompose,
           onGoalCommand: props.onGoalCommand,
           onGoalEdit: (goal) => {
@@ -2123,15 +2140,15 @@ export function renderChatComposer(props: ChatComposerProps) {
           dir=${detectTextDirection(visibleDraft)}
           ?disabled=${!canCompose}
           aria-autocomplete="list"
-          aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
+          aria-controls=${ifDefined(slashMenuVisible ? slashMenuListboxId : undefined)}
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-          aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+          aria-describedby=${slashMenuAnnouncementId}
           aria-keyshortcuts=${sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
           @keydown=${handleKeyDown}
           @beforeinput=${handleBeforeInput}
           @input=${handleInput}
           @compositionstart=${() => {
-            composerState.composerComposing = true;
+            state.composerComposing = true;
           }}
           @compositionend=${handleCompositionEnd}
           @blur=${handleBlur}
@@ -2144,7 +2161,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           rows="1"
         ></textarea>
         <span
-          id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
+          id=${slashMenuAnnouncementId}
           class="agent-chat__sr-only"
           role="status"
           aria-live="polite"
