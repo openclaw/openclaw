@@ -6,6 +6,7 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import * as Diff from "diff";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { resolveToCwd } from "./path-utils.js";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
@@ -255,15 +256,72 @@ function countOccurrences(content: string, oldText: string): number {
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-  if (totalEdits === 1) {
-    return new Error(
-      `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-    );
+function getNotFoundError(
+  path: string,
+  editIndex: number,
+  totalEdits: number,
+  content?: string,
+  oldText?: string,
+): Error {
+  let candidateHint = "";
+  if (content && oldText) {
+    const lines = content.split("\n", CANDIDATE_MAX_LINES); // bounded split to avoid whole-file allocation
+    const oldTextLines = oldText.split("\n", CANDIDATE_MAX_LINES);
+    const oldTextFirstLine = oldTextLines[0]?.slice(0, CANDIDATE_MAX_LINE_LENGTH).trim();
+    if (oldTextFirstLine) {
+      // Score content lines by similarity, capped to avoid unbounded CPU on large files
+      const linesToScore = lines.slice(0, CANDIDATE_MAX_LINES);
+      const oldTextTruncated = oldTextFirstLine.slice(0, CANDIDATE_MAX_LINE_LENGTH);
+      const scored = linesToScore
+        .map((line, idx) => ({
+          lineNum: idx + 1,
+          line,
+          // Slice first, then trim — avoids scanning the full line before truncation
+          score: similarityScore(line.slice(0, CANDIDATE_MAX_LINE_LENGTH).trim(), oldTextTruncated),
+        }))
+        .filter((s) => s.score > CANDIDATE_MIN_SCORE)
+        .toSorted((a, b) => b.score - a.score)
+        .slice(0, 3);
+
+      if (scored.length > 0) {
+        candidateHint =
+          "\n" +
+          scored
+            .map(
+              (s) =>
+                `  ${editIndex === 0 ? "" : `edits[${editIndex}].`}oldText at line ${s.lineNum}: "${s.line.slice(0, 80)}" (${Math.round(s.score * 100)}% match, check whitespace/indentation)`,
+            )
+            .join("\n");
+      }
+    }
   }
+
+  const prefix =
+    totalEdits === 1 ? "Could not find the exact text" : `Could not find edits[${editIndex}]`;
   return new Error(
-    `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+    `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${candidateHint}`,
   );
+}
+
+const CANDIDATE_MAX_LINES = 200;
+const CANDIDATE_MAX_LINE_LENGTH = 200;
+const CANDIDATE_MIN_SCORE = 0.3;
+
+/** Simple similarity score between two strings (0-1). */
+function similarityScore(a: string, b: string): number {
+  if (!a || !b) {
+    return 0;
+  }
+  if (a === b) {
+    return 1;
+  }
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+  if (longer.length === 0) {
+    return 1;
+  }
+  const edits = levenshteinDistance(longer, shorter);
+  return 1 - edits / longer.length;
 }
 
 function getDuplicateError(
@@ -336,7 +394,7 @@ export function applyEditsToNormalizedContent(
     const edit = normalizedEdits[i];
     const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
     if (!matchResult.found) {
-      throw getNotFoundError(path, i, normalizedEdits.length);
+      throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
     }
 
     const occurrences = countOccurrences(replacementBaseContent, edit.oldText);
