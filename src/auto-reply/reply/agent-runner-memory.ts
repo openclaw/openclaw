@@ -213,6 +213,23 @@ function isPreflightCompactionSkipReason(reason?: string): boolean {
   );
 }
 
+/**
+ * Transient infrastructure failures that should not terminate the reply
+ * operation. When preflight compaction fails due to a provider/network issue
+ * the agent run should proceed instead of permanently locking the Composer.
+ * The downstream LLM call may still fail with a context-too-long error, but
+ * that produces a proper user-visible message rather than a silent lockout.
+ */
+function isTransientCompactionFailure(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  return (
+    classification === "timeout" ||
+    classification === "provider_error_4xx" ||
+    classification === "provider_error_5xx" ||
+    classification === "summary_failed"
+  );
+}
+
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
   model?: string,
@@ -996,6 +1013,13 @@ export async function runPreflightCompactionIfNeeded(params: {
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
       }
+      if (isTransientCompactionFailure(reason)) {
+        await notifyTerminalCompaction("incomplete");
+        logVerbose(
+          `preflightCompaction transient failure, continuing without compaction: sessionKey=${params.sessionKey} reason=${reason}`,
+        );
+        return entry ?? params.sessionEntry;
+      }
       await notifyTerminalCompaction("incomplete");
       logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
       throw new Error(`Preflight compaction required but failed: ${reason}`);
@@ -1006,6 +1030,13 @@ export async function runPreflightCompactionIfNeeded(params: {
       if (isPreflightCompactionSkipReason(reason)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+        return entry ?? params.sessionEntry;
+      }
+      if (isTransientCompactionFailure(reason)) {
+        await notifyTerminalCompaction("incomplete");
+        logVerbose(
+          `preflightCompaction transient failure, continuing without compaction: sessionKey=${params.sessionKey} reason=${reason}`,
+        );
         return entry ?? params.sessionEntry;
       }
       await notifyTerminalCompaction("incomplete");
