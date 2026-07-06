@@ -308,7 +308,7 @@ describe("pw-session ensurePageState", () => {
     const saveAs = vi.fn(async (outPath: string) => {
       await fs.writeFile(outPath, "late-action-download", "utf8");
     });
-    const drain = capture.drain({ graceMs: 1_000 });
+    const drain = capture.drain({ firstEventGraceMs: 1_000 });
 
     setImmediate(() => {
       handlers.get("download")?.[0]?.({
@@ -321,6 +321,75 @@ describe("pw-session ensurePageState", () => {
     await expect(drain).resolves.toEqual([
       expect.objectContaining({ suggestedFilename: "late.txt" }),
     ]);
+    capture.dispose();
+  });
+
+  it("keeps a quiet window open for sibling downloads after the first event", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+    const save = (contents: string) =>
+      vi.fn(async (outPath: string) => {
+        await fs.writeFile(outPath, contents, "utf8");
+      });
+
+    handlers.get("download")?.[0]?.({
+      url: () => "https://example.com/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: save("first"),
+    });
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "https://example.com/second.txt",
+        suggestedFilename: () => "second.txt",
+        saveAs: save("second"),
+      });
+    });
+
+    await expect(capture.drain({ quietMs: 1_000 })).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "first.txt" }),
+      expect.objectContaining({ suggestedFilename: "second.txt" }),
+    ]);
+    capture.dispose();
+  });
+
+  it("detaches ownership before waiting for slow file saves", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    let releaseFirstSave: (() => void) | undefined;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const beforeSave = vi.fn(async () => {});
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const firstSave = vi.fn(async (outPath: string) => {
+      await firstSaveGate;
+      await fs.writeFile(outPath, "first", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      url: () => "https://example.com/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: firstSave,
+    });
+
+    const drain = capture.drain();
+    const lateSave = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "late", "utf8");
+    });
+    const lateDownload: MutableDownload = {
+      url: () => "https://example.com/late.txt",
+      suggestedFilename: () => "late.txt",
+      saveAs: lateSave,
+    };
+    handlers.get("download")?.[0]?.(lateDownload);
+    releaseFirstSave?.();
+
+    await expect(drain).resolves.toEqual([
+      expect.objectContaining({ suggestedFilename: "first.txt" }),
+    ]);
+    await expect(lateDownload.path?.()).resolves.toMatch(/-late\.txt$/);
+    expect(beforeSave).toHaveBeenCalledOnce();
+    expect(lateSave).toHaveBeenCalledOnce();
     capture.dispose();
   });
 
@@ -402,6 +471,74 @@ describe("pw-session ensurePageState", () => {
       suggestedFilename: "private.txt",
     });
     expect(saveAs).not.toHaveBeenCalled();
+  });
+
+  it("drains late siblings before surfacing the first download policy failure", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const blocked = new Error("blocked action download");
+    const beforeSave = vi.fn(async () => {
+      throw blocked;
+    });
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    const firstSave = vi.fn(async () => {});
+    const secondSave = vi.fn(async () => {});
+
+    handlers.get("download")?.[0]?.({
+      url: () => "http://127.0.0.1/first.txt",
+      suggestedFilename: () => "first.txt",
+      saveAs: firstSave,
+    });
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "http://127.0.0.1/second.txt",
+        suggestedFilename: () => "second.txt",
+        saveAs: secondSave,
+      });
+    });
+
+    await expect(capture.drain({ quietMs: 1_000 })).rejects.toBe(blocked);
+    capture.dispose();
+    expect(beforeSave).toHaveBeenCalledTimes(2);
+    expect(firstSave).not.toHaveBeenCalled();
+    expect(secondSave).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a sibling policy denial without waiting for an allowed slow save", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const blocked = new Error("blocked sibling download");
+    const beforeSave = vi.fn(async (candidate: { url: string }) => {
+      if (candidate.url.endsWith("/blocked.txt")) {
+        throw blocked;
+      }
+    });
+    const capture = beginActionDownloadCaptureOnPage(page, { beforeSave });
+    let releaseAllowedSave: (() => void) | undefined;
+    const allowedSaveGate = new Promise<void>((resolve) => {
+      releaseAllowedSave = resolve;
+    });
+    const allowedDownload: MutableDownload = {
+      url: () => "https://example.com/allowed.txt",
+      suggestedFilename: () => "allowed.txt",
+      saveAs: vi.fn(async (outPath: string) => {
+        await allowedSaveGate;
+        await fs.writeFile(outPath, "allowed", "utf8");
+      }),
+    };
+    handlers.get("download")?.[0]?.(allowedDownload);
+    setImmediate(() => {
+      handlers.get("download")?.[0]?.({
+        url: () => "https://example.com/blocked.txt",
+        suggestedFilename: () => "blocked.txt",
+        saveAs: vi.fn(async () => {}),
+      });
+    });
+
+    await expect(capture.drain({ quietMs: 100 })).rejects.toBe(blocked);
+    releaseAllowedSave?.();
+    await expect(allowedDownload.path?.()).resolves.toMatch(/-allowed\.txt$/);
+    capture.dispose();
   });
 
   it("surfaces action-owned download save failures without an unhandled rejection", async () => {

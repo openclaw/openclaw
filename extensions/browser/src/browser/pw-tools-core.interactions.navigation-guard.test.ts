@@ -1329,7 +1329,11 @@ describe("pw-tools-core interaction navigation guard", () => {
         path: "/tmp/openclaw/downloads/report.pdf",
       },
     ]);
-    expect(drain).toHaveBeenCalledWith({ graceMs: 0 });
+    expect(drain).toHaveBeenCalledWith({
+      firstEventGraceMs: 0,
+      maxWaitMs: 1_000,
+      quietMs: 250,
+    });
     expect(dispose).toHaveBeenCalledOnce();
     expect(getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage).toHaveBeenCalledWith(
       page,
@@ -1396,7 +1400,11 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(result.downloads).toEqual([
       expect.objectContaining({ suggestedFilename: "report.pdf" }),
     ]);
-    expect(drain).toHaveBeenCalledWith({ graceMs: 250 });
+    expect(drain).toHaveBeenCalledWith({
+      firstEventGraceMs: 250,
+      maxWaitMs: 1_000,
+      quietMs: 250,
+    });
     expect(dispose).toHaveBeenCalledOnce();
   });
 });

@@ -691,7 +691,7 @@ export function registerBrowserAgentActRoutes(
                 resolveCurrentTarget: true,
               });
             case "resize":
-              return await jsonOk();
+              return await jsonOk(downloads ? { downloads } : undefined);
             default:
               return await jsonOk(downloads ? { downloads } : undefined, {
                 resolveCurrentTarget: true,

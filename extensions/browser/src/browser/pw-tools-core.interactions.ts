@@ -61,6 +61,7 @@ type TargetOpts = {
 };
 
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
+const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 
 type NavigationObservablePage = Pick<Page, "url"> & {
   mainFrame?: () => Frame;
@@ -1755,7 +1756,12 @@ export async function executeActViaPlaywright(opts: {
   const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, opts.ssrfPolicy)
     ? INTERACTION_NAVIGATION_GRACE_MS
     : 0;
-  const drainDownloads = async () => await downloadCapture.drain({ graceMs: downloadGraceMs });
+  const drainDownloads = async () =>
+    await downloadCapture.drain({
+      firstEventGraceMs: downloadGraceMs,
+      maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
+      quietMs: INTERACTION_NAVIGATION_GRACE_MS,
+    });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
     parentSignal: opts.signal,
