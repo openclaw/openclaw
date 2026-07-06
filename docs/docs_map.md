@@ -4861,6 +4861,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 2. Verify discovery (optional)
   - H4: Cross-network discovery via unicast DNS-SD
   - H3: 3. Connect from Android
+  - H3: Multiple gateways
   - H3: Presence alive beacons
   - H3: 4. Approve pairing (CLI)
   - H3: 5. Verify the node is connected

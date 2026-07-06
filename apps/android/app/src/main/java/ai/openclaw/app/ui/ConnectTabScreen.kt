@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
@@ -32,9 +33,12 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,14 +85,16 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
-  val gatewayToken by viewModel.gatewayToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+  val pairedGateways by viewModel.pairedGateways.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
+  var gatewaySwitcherOpen by remember { mutableStateOf(false) }
   var inputMode by
-    remember(manualEnabled, manualHost, gatewayToken) {
+    remember(manualEnabled, manualHost) {
       mutableStateOf(
-        if (manualEnabled || manualHost.isNotBlank() || gatewayToken.trim().isNotEmpty()) {
+        if (manualEnabled || manualHost.isNotBlank()) {
           ConnectInputMode.Manual
         } else {
           ConnectInputMode.SetupCode
@@ -232,6 +238,57 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(stringResource(R.string.status), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             Text(statusText, style = mobileBody, color = if (isConnected) mobileSuccess else mobileText)
+          }
+        }
+      }
+    }
+
+    if (pairedGateways.size > 1) {
+      Box(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(14.dp),
+          color = mobileCardSurface,
+          border = BorderStroke(1.dp, mobileBorder),
+          onClick = { gatewaySwitcherOpen = true },
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(Icons.Default.SwapHoriz, contentDescription = null, tint = mobileAccent)
+            Column(modifier = Modifier.weight(1f)) {
+              Text(stringResource(R.string.switch_gateway), style = mobileCaption1, color = mobileTextSecondary)
+              Text(
+                pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.name
+                  ?: stringResource(R.string.select_gateway),
+                style = mobileHeadline,
+                color = mobileText,
+              )
+            }
+            Icon(Icons.Default.ExpandMore, contentDescription = null, tint = mobileTextSecondary)
+          }
+        }
+        DropdownMenu(
+          expanded = gatewaySwitcherOpen,
+          onDismissRequest = { gatewaySwitcherOpen = false },
+        ) {
+          pairedGateways.forEach { entry ->
+            DropdownMenuItem(
+              text = { Text(entry.name) },
+              leadingIcon = {
+                if (entry.stableId == activeGatewayStableId) {
+                  Icon(Icons.Default.Check, contentDescription = stringResource(R.string.active_gateway))
+                }
+              },
+              onClick = {
+                gatewaySwitcherOpen = false
+                if (entry.stableId != activeGatewayStableId) {
+                  viewModel.switchToGateway(entry.stableId)
+                }
+              },
+            )
           }
         }
       }
