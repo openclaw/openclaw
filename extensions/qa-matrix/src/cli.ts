@@ -64,7 +64,6 @@ export const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration[
       "thread-follow-up",
       "thread-isolation",
       "thread-reply-override",
-      "subagent-thread-spawn",
       "dm-shared-session",
       "dm-per-room-session",
     ],

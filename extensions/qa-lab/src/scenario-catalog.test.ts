@@ -808,6 +808,16 @@ describe("qa scenario catalog", () => {
     }
   });
 
+  it("keeps Matrix subagent thread spawn explicitly selectable", () => {
+    const scenario = readQaScenarioById("subagent-thread-spawn");
+    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("matrix");
+    expect(config?.requiredChannelDriver).toBe("live");
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as

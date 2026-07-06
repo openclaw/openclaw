@@ -51,13 +51,12 @@ describe("matrix qa cli registration", () => {
     stdoutSpy.mockRestore();
   });
 
-  it("assigns migrated shared-flow scenarios to the Matrix adapter", () => {
+  it("assigns proven default shared-flow scenarios to the Matrix adapter", () => {
     expect(matrixQaAdapterFactory.scenarioIds).toEqual([
       "channel-chat-baseline",
       "thread-follow-up",
       "thread-isolation",
       "thread-reply-override",
-      "subagent-thread-spawn",
       "dm-shared-session",
       "dm-per-room-session",
     ]);

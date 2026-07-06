@@ -83,9 +83,11 @@ The shared Matrix adapter exposes these canonical YAML scenarios through `opencl
 - `thread-follow-up`
 - `thread-isolation`
 - `thread-reply-override`
-- `subagent-thread-spawn`
 - `dm-shared-session`
 - `dm-per-room-session`
+
+`subagent-thread-spawn` remains available through explicit `--scenario subagent-thread-spawn`
+selection, but is not part of the default shared Matrix set until live child-completion proof is stable.
 
 The remaining imperative scenario id list is the `MatrixQaScenarioId` union in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`. Categories:
 
