@@ -132,11 +132,18 @@ describe("Codex app-server dynamic tool build", () => {
   it("removes account-wide app access when native tools are restricted", () => {
     expect(
       disableCodexPluginThreadConfig({
-        accountApps: { mode: "all", allow_destructive_actions: "auto" },
-        codexPlugins: { enabled: true },
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "auto",
+        },
       }),
     ).toEqual({
-      codexPlugins: { enabled: false },
+      codexPlugins: {
+        enabled: false,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
     });
   });
 

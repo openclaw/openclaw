@@ -666,9 +666,8 @@ function codexNetworkAccessForOpenClawSandbox(
 /** Returns a Codex config copy with all app exposure disabled for restricted thread tools. */
 export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
   const config = readCodexPluginConfig(pluginConfig);
-  const { accountApps: _accountApps, ...configWithoutAccountApps } = config;
   return {
-    ...configWithoutAccountApps,
+    ...config,
     codexPlugins: {
       ...config.codexPlugins,
       enabled: false,

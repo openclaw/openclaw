@@ -101,6 +101,10 @@
             "type": "boolean",
             "default": false
           },
+          "allow_all_plugins": {
+            "type": "boolean",
+            "default": false
+          },
           "allow_destructive_actions": {
             "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }],
             "default": true
@@ -126,21 +130,6 @@
                 }
               }
             }
-          }
-        }
-      },
-      "accountApps": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["mode"],
-        "properties": {
-          "mode": {
-            "type": "string",
-            "enum": ["all"]
-          },
-          "allow_destructive_actions": {
-            "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }],
-            "default": false
           }
         }
       },
@@ -362,6 +351,11 @@
       "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
       "advanced": true
     },
+    "codexPlugins.allow_all_plugins": {
+      "label": "Allow All Connected Apps",
+      "help": "Expose every currently accessible app connected to the authenticated Codex account when a new Codex thread starts.",
+      "advanced": true
+    },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
       "help": "Default policy for plugin app write or destructive action elicitations. Use true to accept safe schemas without prompting, false to decline, auto to ask through plugin approvals when Codex requires approval, or ask to prompt for every write/destructive action without durable approval.",
@@ -370,21 +364,6 @@
     "codexPlugins.plugins": {
       "label": "Migrated Plugin Entries",
       "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
-      "advanced": true
-    },
-    "accountApps": {
-      "label": "Connected Account Apps",
-      "help": "Opt in to Codex apps already connected to the authenticated account.",
-      "advanced": true
-    },
-    "accountApps.mode": {
-      "label": "Connected App Selection",
-      "help": "Use all to expose every currently accessible account app when a new Codex thread starts.",
-      "advanced": true
-    },
-    "accountApps.allow_destructive_actions": {
-      "label": "Allow Destructive Account App Actions",
-      "help": "Policy for write or destructive actions from connected account apps. Defaults to false; auto and ask route required approvals through OpenClaw.",
       "advanced": true
     },
     "appServer": {

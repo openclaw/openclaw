@@ -12,10 +12,8 @@ import {
   type CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
 import {
-  resolveCodexAccountAppsPolicy,
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
-  type ResolvedCodexAccountAppsPolicy,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
@@ -104,10 +102,7 @@ const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
-  return (
-    resolveCodexPluginsPolicy(pluginConfig).configured ||
-    resolveCodexAccountAppsPolicy(pluginConfig).configured
-  );
+  return resolveCodexPluginsPolicy(pluginConfig).configured;
 }
 
 /** Fingerprints policy and app-cache identity before runtime inventory is read. */
@@ -116,11 +111,9 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
   appCacheKey?: string;
 }): string {
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
-  const accountAppsPolicy = resolveCodexAccountAppsPolicy(params.pluginConfig);
   return fingerprintJson({
     version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: policyFingerprint(policy),
-    accountAppsPolicy: accountAppsPolicyFingerprint(accountAppsPolicy),
     appCacheKey: params.appCacheKey ?? null,
   });
 }
@@ -135,8 +128,7 @@ export async function buildCodexPluginThreadConfig(
     appCacheKey: params.appCacheKey,
   });
   const policy = resolveCodexPluginsPolicy(params.pluginConfig);
-  const accountAppsPolicy = resolveCodexAccountAppsPolicy(params.pluginConfig);
-  if (!policy.enabled && !accountAppsPolicy.enabled) {
+  if (!policy.enabled) {
     return emptyPluginThreadConfig({
       enabled: false,
       inputFingerprint,
@@ -144,7 +136,7 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  let inventory = policy.enabled
+  let inventory = policy.pluginPolicies.length > 0
     ? await readCodexPluginInventory({
         pluginConfig: params.pluginConfig,
         policy,
@@ -251,7 +243,7 @@ export async function buildCodexPluginThreadConfig(
   }
 
   const accountAppsResult: Awaited<ReturnType<typeof readAccessibleAccountApps>> =
-    accountAppsPolicy.enabled
+    policy.allowAllPlugins
     ? await readAccessibleAccountApps(params, appCache)
     : { apps: [] };
 
@@ -327,7 +319,7 @@ export async function buildCodexPluginThreadConfig(
     }
     const accountApp = toOwnedAccountApp(app);
     if (
-      accountAppsPolicy.destructiveApprovalMode === "ask" &&
+      policy.destructiveApprovalMode === "ask" &&
       !(await clearPersistedAppToolApprovalOverrides({
         request: params.request,
         configCwd: params.configCwd,
@@ -337,12 +329,12 @@ export async function buildCodexPluginThreadConfig(
     ) {
       continue;
     }
-    apps[app.id] = buildEnabledAppConfig(accountAppsPolicy);
+    apps[app.id] = buildEnabledAppConfig(policy);
     policyApps[app.id] = {
       source: "account",
       appName: app.name,
-      allowDestructiveActions: accountAppsPolicy.allowDestructiveActions,
-      destructiveApprovalMode: accountAppsPolicy.destructiveApprovalMode,
+      allowDestructiveActions: policy.allowDestructiveActions,
+      destructiveApprovalMode: policy.destructiveApprovalMode,
       mcpServerNames: [],
     };
   }
@@ -712,6 +704,7 @@ function shouldForceRefreshForNotReadyPluginApps(
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
   return {
     enabled: policy.enabled,
+    allowAllPlugins: policy.allowAllPlugins,
     allowDestructiveActions: policy.allowDestructiveActions,
     destructiveApprovalMode: policy.destructiveApprovalMode,
     plugins: policy.pluginPolicies.map((plugin) => ({
@@ -722,15 +715,6 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
       allowDestructiveActions: plugin.allowDestructiveActions,
       destructiveApprovalMode: plugin.destructiveApprovalMode,
     })),
-  };
-}
-
-function accountAppsPolicyFingerprint(policy: ResolvedCodexAccountAppsPolicy): JsonValue {
-  return {
-    enabled: policy.enabled,
-    mode: policy.mode ?? null,
-    allowDestructiveActions: policy.allowDestructiveActions,
-    destructiveApprovalMode: policy.destructiveApprovalMode,
   };
 }
 

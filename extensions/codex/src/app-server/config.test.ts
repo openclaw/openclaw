@@ -5,7 +5,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CODEX_ACCOUNT_APPS_CONFIG_KEYS,
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS,
   CODEX_COMPUTER_USE_CONFIG_KEYS,
@@ -16,7 +15,6 @@ import {
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
-  resolveCodexAccountAppsPolicy,
   resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
@@ -1164,6 +1162,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: false,
       destructiveApprovalMode: "deny",
       pluginPolicies: [
@@ -1215,6 +1214,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
@@ -1271,6 +1271,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "ask",
       pluginPolicies: [
@@ -1327,6 +1328,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       pluginPolicies: [
@@ -1361,34 +1363,40 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
   it("parses opt-in access to all connected account apps", () => {
     const config = readCodexPluginConfig({
-      accountApps: {
-        mode: "all",
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
         allow_destructive_actions: "auto",
       },
     });
 
-    expect(config.accountApps).toEqual({
-      mode: "all",
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
       allow_destructive_actions: "auto",
     });
-    expect(resolveCodexAccountAppsPolicy(config)).toEqual({
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
-      mode: "all",
+      allowAllPlugins: true,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
+      pluginPolicies: [],
     });
   });
 
-  it("defaults connected account apps to read-only and rejects unknown modes", () => {
-    expect(resolveCodexAccountAppsPolicy({ accountApps: { mode: "all" } })).toEqual({
+  it("requires native plugin support before exposing all connected account apps", () => {
+    expect(resolveCodexPluginsPolicy({ codexPlugins: { allow_all_plugins: true } })).toEqual({
       configured: true,
-      enabled: true,
-      mode: "all",
-      allowDestructiveActions: false,
-      destructiveApprovalMode: "deny",
+      enabled: false,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      pluginPolicies: [],
     });
-    expect(readCodexPluginConfig({ accountApps: { mode: "selected" } })).toEqual({});
+    expect(
+      readCodexPluginConfig({ codexPlugins: { enabled: true, allow_all_plugins: "yes" } }),
+    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -2593,10 +2601,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configSchema: {
         properties: {
           appServer: { properties: Record<string, unknown> };
-          accountApps: {
-            properties: Record<string, unknown>;
-            additionalProperties: boolean;
-          };
           computerUse: { properties: Record<string, unknown> };
           codexPlugins: {
             properties: Record<string, unknown>;
@@ -2631,14 +2635,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(computerUseManifestKeys).toEqual([...CODEX_COMPUTER_USE_CONFIG_KEYS].toSorted());
     for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
       expectUiHintLabel(manifest, `computerUse.${key}`);
-    }
-    const accountAppsProperties = manifest.configSchema.properties.accountApps;
-    expect(Object.keys(accountAppsProperties.properties).toSorted()).toEqual(
-      [...CODEX_ACCOUNT_APPS_CONFIG_KEYS].toSorted(),
-    );
-    expect(accountAppsProperties.additionalProperties).toBe(false);
-    for (const key of CODEX_ACCOUNT_APPS_CONFIG_KEYS) {
-      expectUiHintLabel(manifest, `accountApps.${key}`);
     }
     const codexPluginsProperties = manifest.configSchema.properties.codexPlugins;
     const codexPluginsManifestKeys = Object.keys(codexPluginsProperties.properties).toSorted();

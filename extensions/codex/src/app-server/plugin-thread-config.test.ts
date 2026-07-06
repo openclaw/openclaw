@@ -665,10 +665,17 @@ describe("Codex plugin thread config", () => {
   });
 
   it("exposes every accessible account app from a complete app inventory", async () => {
-    expect(shouldBuildCodexPluginThreadConfig({ accountApps: { mode: "all" } })).toBe(true);
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: false,
+      },
+    };
+    expect(shouldBuildCodexPluginThreadConfig(pluginConfig)).toBe(true);
     const appListParams: v2.AppsListParams[] = [];
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: { accountApps: { mode: "all" } },
+      pluginConfig,
       appCacheKey: "runtime",
       request: async (method, rawParams) => {
         if (method !== "app/list") {
@@ -738,7 +745,13 @@ describe("Codex plugin thread config", () => {
 
   it("fails closed when the account app inventory cannot be read", async () => {
     const config = await buildCodexPluginThreadConfig({
-      pluginConfig: { accountApps: { mode: "all" } },
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: false,
+        },
+      },
       appCacheKey: "runtime",
       request: async (method) => {
         if (method === "app/list") {
@@ -796,7 +809,11 @@ describe("Codex plugin thread config", () => {
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: {
-        accountApps: { mode: "all", allow_destructive_actions: "ask" },
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: true,
+          allow_destructive_actions: "ask",
+        },
       },
       appCacheKey: "runtime",
       request,
@@ -821,15 +838,16 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: "ask",
+          allow_all_plugins: true,
+          allow_destructive_actions: "auto",
           plugins: {
             meetings: {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
               pluginName: "meetings",
+              allow_destructive_actions: "ask",
             },
           },
         },
-        accountApps: { mode: "all", allow_destructive_actions: "auto" },
       },
       appCacheKey: "runtime",
       request: async (method) => {
