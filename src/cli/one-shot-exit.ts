@@ -6,7 +6,7 @@ type VitestWorkerMarkers = {
   vitestWorker?: unknown;
 };
 
-let exitRequested = false;
+let requestedExitCode: number | undefined;
 
 function resolveVitestWorkerMarkers(): VitestWorkerMarkers {
   return {
@@ -31,10 +31,15 @@ function isVitestWorker(
   );
 }
 
-export function requestExitAfterOneShotOutput(runtime: RuntimeEnv = defaultRuntime): void {
-  if (runtime === defaultRuntime) {
-    exitRequested = true;
+export function requestExitAfterOneShotOutput(
+  runtime: RuntimeEnv = defaultRuntime,
+  exitCode = 0,
+): boolean {
+  if (runtime !== defaultRuntime) {
+    return false;
   }
+  requestedExitCode = exitCode;
+  return true;
 }
 
 export function flushExitAfterOneShotOutput(
@@ -42,13 +47,13 @@ export function flushExitAfterOneShotOutput(
   env: NodeJS.ProcessEnv = process.env,
   markers: VitestWorkerMarkers = resolveVitestWorkerMarkers(),
 ): void {
-  const shouldExit = exitRequested && runtime === defaultRuntime && !isVitestWorker(env, markers);
-  exitRequested = false;
-  if (!shouldExit) {
+  const exitCode = requestedExitCode;
+  requestedExitCode = undefined;
+  if (exitCode === undefined || runtime !== defaultRuntime || isVitestWorker(env, markers)) {
     return;
   }
 
-  const exit = () => runtime.exit(0);
+  const exit = () => runtime.exit(exitCode);
   let pendingStreams = 0;
 
   const maybeDrain = (stream: NodeJS.WriteStream) => {

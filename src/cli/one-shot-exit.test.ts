@@ -7,10 +7,10 @@ describe("one-shot CLI exit", () => {
     vi.restoreAllMocks();
   });
 
-  it("defers requested exits until the top-level flush", async () => {
+  it("defers the requested exit code until the top-level flush", async () => {
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
 
-    requestExitAfterOneShotOutput(defaultRuntime);
+    expect(requestExitAfterOneShotOutput(defaultRuntime, 2)).toBe(true);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -20,7 +20,7 @@ describe("one-shot CLI exit", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(exit).toHaveBeenCalledWith(0);
+    expect(exit).toHaveBeenCalledWith(2);
   });
 
   it("does not request exits for embedded custom runtimes", async () => {
@@ -30,7 +30,7 @@ describe("one-shot CLI exit", () => {
       exit: vi.fn(),
     };
 
-    requestExitAfterOneShotOutput(runtime);
+    expect(requestExitAfterOneShotOutput(runtime)).toBe(false);
     flushExitAfterOneShotOutput(runtime, {} as NodeJS.ProcessEnv, {});
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
