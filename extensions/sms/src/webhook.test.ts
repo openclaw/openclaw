@@ -31,12 +31,16 @@ function createAccount(): ResolvedSmsAccount {
   };
 }
 
-function createRequest(body: string, signature: string): IncomingMessage {
+function createRequest(
+  body: string,
+  signature: string,
+  remoteAddress = "127.0.0.1",
+): IncomingMessage {
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "x-twilio-signature": signature };
   Object.defineProperty(req, "socket", {
-    value: { remoteAddress: "127.0.0.1" },
+    value: { remoteAddress },
   });
   return req;
 }
@@ -52,6 +56,18 @@ function createResponse(): ServerResponse & { body?: string } {
   } as unknown as ServerResponse & { body?: string };
 }
 
+function createSignedSmsPayload(messageSid: string): { body: string; signature: string } {
+  const body = `AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${messageSid}`;
+  return {
+    body,
+    signature: computeTwilioSignature({
+      url: "https://gateway.example.com/webhooks/sms",
+      authToken: "secret",
+      form: parseTwilioFormBody(body),
+    }),
+  };
+}
+
 describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
     dispatchSmsInboundEvent.mockClear();
@@ -59,13 +75,7 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("dedupes replayed signed Twilio webhooks by message SID", async () => {
-    const body =
-      "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=SM123";
-    const signature = computeTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form: parseTwilioFormBody(body),
-    });
+    const { body, signature } = createSignedSmsPayload("SM123");
     const handler = createSmsWebhookHandler({
       cfg: {},
       account: createAccount(),
@@ -80,6 +90,67 @@ describe("createSmsWebhookHandler", () => {
     expect(firstRes.statusCode).toBe(200);
     expect(replayRes.statusCode).toBe(200);
     expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps unexpired replay keys when the replay cache reaches capacity", async () => {
+    const first = createSignedSmsPayload("SM-capacity-0");
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    await handler(createRequest(first.body, first.signature, "10.0.0.0"), createResponse());
+    for (let index = 1; index < 10_000; index += 1) {
+      const next = createSignedSmsPayload(`SM-capacity-${index}`);
+      await handler(
+        createRequest(
+          next.body,
+          next.signature,
+          `10.${Math.floor(index / 65_536)}.${Math.floor(index / 256) % 256}.${index % 256}`,
+        ),
+        createResponse(),
+      );
+    }
+    await handler(createRequest(first.body, first.signature, "10.0.0.0"), createResponse());
+
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(10_000);
+  });
+
+  it("backpressures new message SIDs when every replay key is still live", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    for (let index = 0; index < 10_000; index += 1) {
+      const next = createSignedSmsPayload(`SM-live-${index}`);
+      await handler(
+        createRequest(
+          next.body,
+          next.signature,
+          `172.${Math.floor(index / 65_536)}.${Math.floor(index / 256) % 256}.${index % 256}`,
+        ),
+        createResponse(),
+      );
+    }
+    const overflow = createSignedSmsPayload("SM-live-overflow");
+    const firstOverflowRes = createResponse();
+    const replayOverflowRes = createResponse();
+
+    await handler(
+      createRequest(overflow.body, overflow.signature, "172.16.255.1"),
+      firstOverflowRes,
+    );
+    await handler(
+      createRequest(overflow.body, overflow.signature, "172.16.255.1"),
+      replayOverflowRes,
+    );
+
+    expect(firstOverflowRes.statusCode).toBe(429);
+    expect(replayOverflowRes.statusCode).toBe(429);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(10_000);
   });
 
   it("rejects signed webhooks for a different Twilio account", async () => {

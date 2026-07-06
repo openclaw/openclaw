@@ -45,24 +45,32 @@ function rateLimitKey(req: IncomingMessage): string {
   return req.socket?.remoteAddress ?? "unknown";
 }
 
+type ReplayCacheDecision = "accepted" | "replayed" | "saturated";
+
 function rememberWebhookMessage(params: {
   accountId: string;
   messageSid: string;
   now?: number;
-}): boolean {
+}): ReplayCacheDecision {
   const now = params.now ?? Date.now();
-  for (const [key, expiresAt] of replayCache) {
-    if (expiresAt > now && replayCache.size <= REPLAY_CACHE_MAX_KEYS) {
-      break;
+  const key = `${params.accountId}:${params.messageSid}`;
+  const existingExpiresAt = replayCache.get(key);
+  if (existingExpiresAt !== undefined) {
+    if (existingExpiresAt > now) {
+      return "replayed";
     }
     replayCache.delete(key);
   }
-  const key = `${params.accountId}:${params.messageSid}`;
-  if ((replayCache.get(key) ?? 0) > now) {
-    return false;
+  for (const [cachedKey, expiresAt] of replayCache) {
+    if (expiresAt <= now) {
+      replayCache.delete(cachedKey);
+    }
+  }
+  if (replayCache.size >= REPLAY_CACHE_MAX_KEYS) {
+    return "saturated";
   }
   replayCache.set(key, now + REPLAY_CACHE_TTL_MS);
-  return true;
+  return "accepted";
 }
 
 export function resetSmsWebhookReplayCacheForTest(): void {
@@ -118,14 +126,18 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 403, "Invalid account");
       return true;
     }
-    if (
-      !rememberWebhookMessage({
-        accountId: params.account.accountId,
-        messageSid: msg.messageSid,
-      })
-    ) {
+    const replayDecision = rememberWebhookMessage({
+      accountId: params.account.accountId,
+      messageSid: msg.messageSid,
+    });
+    if (replayDecision === "replayed") {
       params.log?.warn?.(`SMS webhook ignored replayed message ${msg.messageSid}`);
       respondTwiml(res, 200);
+      return true;
+    }
+    if (replayDecision === "saturated") {
+      params.log?.warn?.("SMS webhook replay cache is full of unexpired message SIDs");
+      respondTwiml(res, 429, "Replay cache saturated");
       return true;
     }
 
