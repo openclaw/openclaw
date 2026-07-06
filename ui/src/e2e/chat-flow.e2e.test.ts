@@ -369,6 +369,56 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps stale context visible as approximate without warning or compaction", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: { contextTokens: 200_000, model: "gpt-5.5", modelProvider: "openai" },
+          path: "",
+          sessions: [
+            {
+              contextTokens: 200_000,
+              key: "main",
+              kind: "direct",
+              totalTokens: 190_000,
+              totalTokensFresh: false,
+              updatedAt: Date.now(),
+            },
+          ],
+          ts: Date.now(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const trigger = page.locator("summary.context-ring");
+      await trigger.waitFor({ timeout: 10_000 });
+      expect((await trigger.textContent())?.trim()).toBe("~95%");
+      expect(await trigger.getAttribute("aria-label")).toBe(
+        "Session context usage: ~190k of 200k (~95%)",
+      );
+      expect(
+        await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
+      ).toBe(false);
+
+      await trigger.click();
+      await expect
+        .poll(() => page.locator(".context-usage__popover").textContent())
+        .toContain("~190k / 200k · ~95%");
+      expect(await page.locator(".context-ring__action").count()).toBe(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps a targetless message-tool source reply beside the automatic final reply", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
