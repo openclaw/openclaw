@@ -19,6 +19,11 @@ private enum WebChatSwiftUILayout {
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
+    struct SessionTarget: Equatable {
+        let sessionKey: String
+        let agentID: String?
+    }
+
     private let outboxGatewayID: String?
     private let defaultGlobalAgentID: String?
 
@@ -37,12 +42,30 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             : nil
     }
 
+    func sessionTarget(for sessionKey: String) -> SessionTarget {
+        SessionTarget(
+            sessionKey: sessionKey,
+            agentID: self.selectedGlobalAgentID(for: sessionKey))
+    }
+
+    private func sessionParams(for sessionKey: String, key: String = "key") -> [String: AnyCodable] {
+        let target = self.sessionTarget(for: sessionKey)
+        var params = [key: AnyCodable(target.sessionKey)]
+        if let agentID = target.agentID {
+            params["agentId"] = AnyCodable(agentID)
+        }
+        return params
+    }
+
     var outboxRequiresSessionRoutingContract: Bool {
         true
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
+        let target = self.sessionTarget(for: sessionKey)
+        return try await GatewayConnection.shared.chatHistory(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID)
     }
 
     func listModels() async throws -> [OpenClawChatModelChoice] {
@@ -61,12 +84,11 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
+        var params = self.sessionParams(for: sessionKey, key: "sessionKey")
+        params["runId"] = AnyCodable(runId)
         _ = try await GatewayConnection.shared.request(
             method: "chat.abort",
-            params: [
-                "sessionKey": AnyCodable(sessionKey),
-                "runId": AnyCodable(runId),
-            ],
+            params: params,
             timeoutMs: 10000)
     }
 
@@ -117,9 +139,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
-        var params: [String: AnyCodable] = [
-            "key": AnyCodable(sessionKey),
-        ]
+        var params = self.sessionParams(for: sessionKey)
         params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
         _ = try await GatewayConnection.shared.request(
             method: "sessions.patch",
@@ -128,10 +148,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
-        let params: [String: AnyCodable] = [
-            "key": AnyCodable(sessionKey),
-            "thinkingLevel": AnyCodable(thinkingLevel),
-        ]
+        var params = self.sessionParams(for: sessionKey)
+        params["thinkingLevel"] = AnyCodable(thinkingLevel)
         _ = try await GatewayConnection.shared.request(
             method: "sessions.patch",
             params: params,
@@ -178,8 +196,10 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await GatewayConnection.shared.chatSend(
-            sessionKey: sessionKey,
+        let target = self.sessionTarget(for: sessionKey)
+        return try await GatewayConnection.shared.chatSend(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -195,6 +215,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        let target = self.sessionTarget(for: sessionKey)
         if let outboxGatewayID {
             try await Self.requireGateway(outboxGatewayID)
         }
@@ -210,8 +231,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             expectedSessionRoutingContract,
             serverSupportsGuard: supportsRoutingContract)
         return try await GatewayConnection.shared.chatSend(
-            sessionKey: sessionKey,
-            agentID: agentID,
+            sessionKey: target.sessionKey,
+            agentID: agentID ?? target.agentID,
             expectedSessionRoutingContract: guardedContract,
             message: message,
             thinking: thinking,
@@ -328,12 +349,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         archived: Bool?,
         unread: Bool?) async throws
     {
-        var params: [String: AnyCodable] = [
-            "key": AnyCodable(key),
-        ]
-        if let agentID = self.selectedGlobalAgentID(for: key) {
-            params["agentId"] = AnyCodable(agentID)
-        }
+        var params = self.sessionParams(for: key)
         if let label {
             params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
@@ -356,13 +372,8 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func deleteSession(key: String) async throws {
-        var params: [String: AnyCodable] = [
-            "key": AnyCodable(key),
-            "deleteTranscript": AnyCodable(true),
-        ]
-        if let agentID = self.selectedGlobalAgentID(for: key) {
-            params["agentId"] = AnyCodable(agentID)
-        }
+        var params = self.sessionParams(for: key)
+        params["deleteTranscript"] = AnyCodable(true)
         _ = try await GatewayConnection.shared.request(
             method: "sessions.delete",
             params: params,
@@ -376,14 +387,14 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     func resetSession(sessionKey: String) async throws {
         _ = try await GatewayConnection.shared.request(
             method: "sessions.reset",
-            params: ["key": AnyCodable(sessionKey)],
+            params: self.sessionParams(for: sessionKey),
             timeoutMs: 10000)
     }
 
     func compactSession(sessionKey: String) async throws {
         let response = try await GatewayConnection.shared.request(
             method: "sessions.compact",
-            params: ["key": AnyCodable(sessionKey)],
+            params: self.sessionParams(for: sessionKey),
             timeoutMs: 0,
             retryTransportFailures: false)
         try OpenClawSessionsCompactResponse.requireSuccess(from: response)
@@ -395,7 +406,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         }
         _ = try await GatewayConnection.shared.request(
             method: "sessions.messages.subscribe",
-            params: ["key": AnyCodable(sessionKey)],
+            params: self.sessionParams(for: sessionKey),
             timeoutMs: 10000)
     }
 

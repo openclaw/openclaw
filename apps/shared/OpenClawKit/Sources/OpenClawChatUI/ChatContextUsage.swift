@@ -20,14 +20,15 @@ public struct OpenClawChatContextUsage: Equatable, Sendable {
 
 enum ChatContextUsageCalculator {
     /// Prefers the newest per-run usage (fresh after every reply) and falls
-    /// back to the server-side session totals when no message carries usage.
+    /// back to fresh server-side session totals when no message carries usage.
     static func usage(
         messages: [OpenClawChatMessage],
         sessionEntry: OpenClawChatSessionEntry?,
         defaults: OpenClawChatSessionsDefaults?,
         modelContextWindow: Int?) -> OpenClawChatContextUsage?
     {
-        let usedTokens = self.latestRunTokens(in: messages) ?? sessionEntry?.totalTokens
+        let sessionTokens = sessionEntry?.totalTokensFresh == false ? nil : sessionEntry?.totalTokens
+        let usedTokens = self.latestRunTokens(in: messages) ?? sessionTokens
         guard let usedTokens, usedTokens > 0 else { return nil }
         let contextWindow = self.positive(sessionEntry?.contextTokens)
             ?? self.positive(defaults?.contextTokens)

@@ -2,7 +2,6 @@ import Foundation
 import Testing
 @testable import OpenClawChatUI
 
-@Suite
 struct ChatContextUsageTests {
     private func message(
         role: String = "assistant",
@@ -105,6 +104,37 @@ struct ChatContextUsageTests {
         #expect(result?.usedTokens == 5000)
         #expect(result?.contextWindowTokens == 10000)
         #expect(result?.percentUsed == 50)
+    }
+
+    @Test func `ignores stale session totals without message usage`() {
+        let entry = OpenClawChatSessionEntry(
+            key: "main",
+            kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: 5000,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: 10000,
+            totalTokensFresh: false)
+        let result = ChatContextUsageCalculator.usage(
+            messages: [self.message()],
+            sessionEntry: entry,
+            defaults: nil,
+            modelContextWindow: nil)
+
+        #expect(result == nil)
     }
 
     @Test func `sums cost across all runs`() throws {
