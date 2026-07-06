@@ -110,6 +110,7 @@ fun ChatScreen(
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
@@ -151,18 +152,18 @@ fun ChatScreen(
     viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
-    val accepted =
-      dispatchPendingAssistantAutoSend(
+  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, healthOk, pendingRunCount, thinkingLevel) {
+    if (!healthOk) return@LaunchedEffect
+    val prompt =
+      resolvePendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) { prompt ->
-        viewModel.sendChatAwaitAcceptance(message = prompt, thinking = thinkingLevel, attachments = emptyList())
-      }
-    if (accepted) {
-      viewModel.clearPendingAssistantAutoSend()
-    }
+      ) ?: return@LaunchedEffect
+    viewModel.dispatchPendingAssistantAutoSend(
+      pendingPrompt = prompt,
+      thinking = thinkingLevel,
+    )
   }
 
   var input by rememberSaveable { mutableStateOf("") }

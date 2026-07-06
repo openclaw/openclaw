@@ -22,12 +22,15 @@ import org.junit.Test
 class ChatControllerStreamReplayTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController =
-    ChatController(scope = this, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
 
   private fun transcript(controller: ChatController): List<Pair<String, String?>> =
     controller.messages.value.map { message ->
-      message.role to message.content.firstOrNull { it.type == "text" }?.text
+      val text =
+        message.content
+          .firstOrNull { it.type == "text" }
+          ?.text
+      message.role to text
     }
 
   @Test
@@ -42,7 +45,10 @@ class ChatControllerStreamReplayTest {
       assertTrue(controller.sendMessageAwaitAcceptance("Hello there", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
       assertEquals(1, controller.pendingRunCount.value)
-      val optimisticUserId = controller.messages.value.single { it.role == "user" }.id
+      val optimisticUserId =
+        controller.messages.value
+          .single { it.role == "user" }
+          .id
 
       controller.handleGatewayEvent("chat", chatDeltaPayload("main", runId, 1, "Str", "Str"))
       assertEquals("Str", controller.streamingAssistantText.value)
@@ -63,7 +69,10 @@ class ChatControllerStreamReplayTest {
             ),
         ),
       )
-      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 3))
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("main", runId, seq = 3, assistantText = "Streamed reply."),
+      )
       advanceUntilIdle()
 
       assertEquals(
@@ -71,7 +80,12 @@ class ChatControllerStreamReplayTest {
         transcript(controller),
       )
       // Gateway copy replaces the optimistic echo in place: same row identity, no duplicate.
-      assertEquals(optimisticUserId, controller.messages.value.single { it.role == "user" }.id)
+      assertEquals(
+        optimisticUserId,
+        controller.messages.value
+          .single { it.role == "user" }
+          .id,
+      )
       assertEquals(0, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
       assertNull(controller.errorText.value)
@@ -106,16 +120,16 @@ class ChatControllerStreamReplayTest {
             ),
         ),
       )
-      val terminal = chatTerminalPayload("main", runId, seq = 2)
+      val terminal = chatTerminalPayload("main", runId, seq = 2, assistantText = "Only once.")
       controller.handleGatewayEvent("chat", terminal)
       advanceUntilIdle()
       val idsAfterFirstTerminal = controller.messages.value.map { it.id }
 
-      // Redelivered terminal event triggers a second history refresh with the same payload.
+      // Once ownership resolves, redelivered terminal events are ignored.
       controller.handleGatewayEvent("chat", terminal)
       advanceUntilIdle()
 
-      assertEquals(2, gateway.callCount("chat.history"))
+      assertEquals(1, gateway.callCount("chat.history"))
       assertEquals(
         listOf("user" to "dedupe me", "assistant" to "Only once."),
         transcript(controller),
@@ -153,6 +167,69 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun failedTerminalKeepsAcceptedUserUntilHistoryConfirmsIt() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondChatSend(status = "started")
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      val controller = newController(gateway)
+      controller.handleGatewayEvent("health", null)
+
+      assertTrue(controller.sendMessageAwaitAcceptance("failed send", "off", emptyList()))
+      val runId = requireNotNull(gateway.lastRunId)
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 1, state = "error"))
+      runCurrent()
+
+      assertEquals(0, controller.pendingRunCount.value)
+      assertTrue(transcript(controller).contains("user" to "failed send"))
+      assertEquals("Chat failed", controller.errorText.value)
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          "session-1",
+          listOf(ReplayHistoryMessage("user", "failed send", 1_000, idempotencyKey = "$runId:user")),
+        ),
+      )
+      advanceTimeBy(750)
+      runCurrent()
+      assertEquals(listOf("user" to "failed send"), transcript(controller))
+      assertEquals("Chat failed", controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun messageLessSuccessfulTerminalResolvesAfterUserPersists() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondChatSend(status = "started")
+      val controller = newController(gateway)
+      controller.handleGatewayEvent("health", null)
+
+      assertTrue(controller.sendMessageAwaitAcceptance("no output", "off", emptyList()))
+      val runId = requireNotNull(gateway.lastRunId)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          "session-1",
+          listOf(ReplayHistoryMessage("user", "no output", 1_000, idempotencyKey = "$runId:user")),
+        ),
+      )
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 1))
+      runCurrent()
+
+      assertEquals(listOf("user" to "no output"), transcript(controller))
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.errorText.value)
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      assertEquals(listOf("user" to "no output"), transcript(controller))
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectMidRunClearsTransientStateAndHistoryConverges() =
     runTest {
       val gateway = ScriptedGateway(json)
@@ -162,7 +239,10 @@ class ChatControllerStreamReplayTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive reconnect", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
-      val optimisticUserId = controller.messages.value.single { it.role == "user" }.id
+      val optimisticUserId =
+        controller.messages.value
+          .single { it.role == "user" }
+          .id
 
       controller.handleGatewayEvent(
         "chat",
@@ -203,7 +283,12 @@ class ChatControllerStreamReplayTest {
         listOf("user" to "survive reconnect", "assistant" to "Recovered reply."),
         transcript(controller),
       )
-      assertEquals(optimisticUserId, controller.messages.value.single { it.role == "user" }.id)
+      assertEquals(
+        optimisticUserId,
+        controller.messages.value
+          .single { it.role == "user" }
+          .id,
+      )
       assertEquals("session-1", controller.sessionId.value)
 
       // Disconnect cancelled the 120s ack timer: the converged transcript must not decay.
@@ -255,6 +340,7 @@ class ChatControllerStreamReplayTest {
         chatTerminalPayload("main", runId = "external-run", seq = 1),
       )
       runCurrent() // history refetch for "main" is now suspended on the gate
+      assertEquals(2, gateway.callCount("chat.history"))
 
       controller.switchSession("other")
       advanceUntilIdle()
@@ -267,6 +353,33 @@ class ChatControllerStreamReplayTest {
       // The stale "main" response resolved after the switch and must be dropped.
       assertEquals(listOf("assistant" to "other transcript"), transcript(controller))
       assertEquals("session-other", controller.sessionId.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun unknownTerminalRefreshesIdleTranscript() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          "session-1",
+          listOf(ReplayHistoryMessage("assistant", "from another client", 2_000)),
+        ),
+      )
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("main", "external-run", seq = 1, assistantText = "from another client"),
+      )
+      runCurrent()
+
+      assertEquals(listOf("assistant" to "from another client"), transcript(controller))
+      assertNull(controller.errorText.value)
     }
 
   @Test
@@ -316,7 +429,7 @@ class ChatControllerStreamReplayTest {
       )
       controller.handleGatewayEvent(
         "chat",
-        chatTerminalPayload("main", runId, seq = chunks.size + 1),
+        chatTerminalPayload("main", runId, seq = chunks.size + 1, assistantText = fixture),
       )
       advanceUntilIdle()
 

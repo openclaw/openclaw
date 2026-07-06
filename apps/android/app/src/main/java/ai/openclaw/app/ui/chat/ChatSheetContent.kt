@@ -57,22 +57,6 @@ internal fun resolvePendingAssistantAutoSend(
   return prompt
 }
 
-/** Dispatches a pending assistant prompt once and reports whether it was accepted. */
-internal suspend fun dispatchPendingAssistantAutoSend(
-  pendingPrompt: String?,
-  healthOk: Boolean,
-  pendingRunCount: Int,
-  dispatch: suspend (String) -> Boolean,
-): Boolean {
-  val prompt =
-    resolvePendingAssistantAutoSend(
-      pendingPrompt = pendingPrompt,
-      healthOk = healthOk,
-      pendingRunCount = pendingRunCount,
-    ) ?: return false
-  return dispatch(prompt)
-}
-
 /** Chooses the session key to load for initial chat hydration, if any. */
 internal fun resolveInitialChatLoadSessionKey(
   sessionKey: String,
@@ -101,6 +85,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
 
   LaunchedEffect(Unit) {
@@ -111,23 +96,20 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, healthOk, pendingRunCount, thinkingLevel) {
     // Assistant-launch prompts should wait for a healthy idle chat so they do
     // not race an already-running turn.
-    val accepted =
-      dispatchPendingAssistantAutoSend(
+    if (!healthOk) return@LaunchedEffect
+    val prompt =
+      resolvePendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) { prompt ->
-        viewModel.sendChatAwaitAcceptance(
-          message = prompt,
-          thinking = thinkingLevel,
-          attachments = emptyList(),
-        )
-      }
-    if (!accepted) return@LaunchedEffect
-    viewModel.clearPendingAssistantAutoSend()
+      ) ?: return@LaunchedEffect
+    viewModel.dispatchPendingAssistantAutoSend(
+      pendingPrompt = prompt,
+      thinking = thinkingLevel,
+    )
   }
 
   val context = LocalContext.current
