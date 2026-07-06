@@ -2,7 +2,7 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -23,10 +23,7 @@ function createMockChildProcess(): MockChildProcess {
 }
 
 vi.mock("node:child_process", async () => {
-  const actual =
-    await vi.importActual<typeof import("node:child_process")>(
-      "node:child_process",
-    );
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return { ...actual, spawn: spawnMock };
 });
 
@@ -36,27 +33,27 @@ describe("probeLocalCommand stream error handling", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("registers error listeners on stdout and stderr", async () => {
+  it("keeps child close authoritative when stdout and stderr emit errors", async () => {
     const child = createMockChildProcess();
-    const stdoutOn = vi.spyOn(child.stdout, "on");
-    const stderrOn = vi.spyOn(child.stderr, "on");
 
     spawnMock.mockImplementationOnce(
       (_cmd: string, _args: readonly string[], _opts: SpawnOptions): ChildProcess => {
-        process.nextTick(() => child.emit("close", 0));
+        process.nextTick(() => {
+          child.stdout.emit("error", new Error("stdout closed"));
+          child.stderr.emit("error", new Error("stderr closed"));
+          child.emit("close", 0);
+        });
         return child as unknown as ChildProcess;
       },
     );
 
     const { probeLocalCommand } = await import("./probes.js");
 
-    await probeLocalCommand("echo", ["test"], { timeoutMs: 1000 });
-
-    expect(stdoutOn).toHaveBeenCalledWith("error", expect.any(Function));
-    expect(stderrOn).toHaveBeenCalledWith("error", expect.any(Function));
+    await expect(probeLocalCommand("echo", ["test"], { timeoutMs: 1000 })).resolves.toEqual({
+      command: "echo",
+      found: true,
+      version: undefined,
+      error: undefined,
+    });
   });
 });
