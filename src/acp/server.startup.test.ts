@@ -35,6 +35,7 @@ const mockState = vi.hoisted(() => ({
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
+  closeOpenClawStateDatabase: vi.fn(),
   startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
@@ -154,6 +155,10 @@ vi.mock("../infra/is-main.js", () => ({
 
 vi.mock("../logging/console.js", () => ({
   routeLogsToStderr: () => mockState.routeLogsToStderr(),
+}));
+
+vi.mock("../state/openclaw-state-db.js", () => ({
+  closeOpenClawStateDatabase: () => mockState.closeOpenClawStateDatabase(),
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -287,6 +292,7 @@ describe("serveAcpGateway startup", () => {
     mockState.routeLogsToStderr.mockReset();
     mockState.startProxy.mockReset();
     mockState.stopProxy.mockReset();
+    mockState.closeOpenClawStateDatabase.mockReset();
     mockState.startProxy.mockResolvedValue(null);
     mockState.stopProxy.mockResolvedValue(undefined);
     mockState.resolveGatewayClientBootstrap.mockReset();
@@ -535,5 +541,22 @@ describe("serveAcpGateway startup", () => {
 
     const [message] = await captureAcpMessagesAfterStartup([sessionRequest]);
     expect(message).toBe(sessionRequest);
+  });
+
+  it("closes the shared state database on shutdown", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.closeOpenClawStateDatabase).not.toHaveBeenCalled();
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+
+      expect(mockState.closeOpenClawStateDatabase).toHaveBeenCalledTimes(1);
+    } finally {
+      onceSpy.mockRestore();
+    }
   });
 });
