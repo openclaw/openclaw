@@ -55,6 +55,7 @@ public final class OpenClawVoiceNoteRecorder {
     @ObservationIgnored private let timerIntervalNanoseconds: UInt64
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var timerTask: Task<Void, Never>?
+    @ObservationIgnored private var captureAdmissionHandler: @MainActor () -> Bool = { true }
 
     /// Creates a recorder backed by the system audio recorder.
     public convenience init() {
@@ -87,6 +88,12 @@ public final class OpenClawVoiceNoteRecorder {
         self.state == .requestingPermission
     }
 
+    /// Installs the app's synchronous microphone-ownership gate. The check and
+    /// transition to requesting permission run in one MainActor turn.
+    public func setCaptureAdmissionHandler(_ handler: @escaping @MainActor () -> Bool) {
+        self.captureAdmissionHandler = handler
+    }
+
     public var errorMessage: String? {
         guard case let .failed(message) = self.state else { return nil }
         return message
@@ -101,6 +108,10 @@ public final class OpenClawVoiceNoteRecorder {
     @discardableResult
     public func start() async -> Bool {
         guard self.state == .idle || self.errorMessage != nil else { return false }
+        guard self.captureAdmissionHandler() else {
+            self.fail(message: String(localized: "Push-to-talk is using the microphone."))
+            return false
+        }
 
         self.elapsedSeconds = 0
         self.state = .requestingPermission

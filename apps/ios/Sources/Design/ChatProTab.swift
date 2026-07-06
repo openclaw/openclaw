@@ -207,7 +207,6 @@ struct ChatProTab: View {
             self.viewModelRoutingContract = routingContract
             viewModel.syncSessionRoutingContract(self.appModel.chatSessionRoutingContract)
         }
-        guard viewModel.sessionKey != sessionKey else { return }
         viewModel.syncSession(to: sessionKey)
     }
 
@@ -249,7 +248,7 @@ struct ChatProTab: View {
     private var voiceNoteControl: OpenClawChatVoiceNoteControl {
         OpenClawChatVoiceNoteControl(
             recorder: self.appModel.voiceNoteRecorder,
-            isTalkActive: self.appModel.talkMode.isEnabled || self.appModel.talkMode.isPushToTalkActive)
+            isTalkActive: self.appModel.isTalkCaptureActive)
     }
 
     private var activeAgentID: String {

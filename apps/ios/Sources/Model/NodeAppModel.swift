@@ -312,6 +312,12 @@ final class NodeAppModel {
         self.operatorGateway
     }
 
+    var isTalkCaptureActive: Bool {
+        // PTT owns its Voice Wake lease before permission and audio setup.
+        // Count that pending interval so Chat cannot race another mic owner.
+        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || self.pttVoiceWakeLeaseCount > 0
+    }
+
     var localChatFixture: LocalChatFixture? {
         if self.isScreenshotFixtureModeEnabled { return .appScreenshots }
         if self.isAppleReviewDemoModeEnabled { return .appleReviewDemo }
@@ -518,6 +524,9 @@ final class NodeAppModel {
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.voiceNoteRecorder = voiceNoteRecorder
+        self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
+            self?.isTalkCaptureActive == false
+        }
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
@@ -1982,21 +1991,8 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        if req.command == OpenClawTalkCommand.pttOnce.rawValue ||
-            req.command == OpenClawTalkCommand.pttStart.rawValue
-        {
-            // Composer recording and PTT use separate AVAudio stacks. Refuse the
-            // second owner before it can reconfigure the shared audio session.
-            guard !self.voiceNoteRecorder.isRecording,
-                  !self.voiceNoteRecorder.isRequestingPermission
-            else {
-                throw NSError(domain: "TalkMode", code: 8, userInfo: [
-                    NSLocalizedDescriptionKey: "Voice note recording is active",
-                ])
-            }
-        }
-
         if req.command == OpenClawTalkCommand.pttOnce.rawValue {
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             self.acquirePttVoiceWakeLease()
             defer { self.releasePttVoiceWakeLease() }
             let payload = try await talkMode.runPushToTalkOnce()
@@ -2009,6 +2005,7 @@ final class NodeAppModel {
 
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
             if acquiredLease {
                 self.acquirePttVoiceWakeLease()
@@ -2048,6 +2045,15 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    private func rejectTalkCaptureWhileVoiceNoteActive() throws {
+        // Remote PTT bypasses the Chat Talk toggle. Preserve the user's draft;
+        // Talk must not reconfigure AVAudioSession while its recorder owns it.
+        guard self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission else { return }
+        throw NSError(domain: "TalkMode", code: 8, userInfo: [
+            NSLocalizedDescriptionKey: "Finish or cancel the active voice note before starting push-to-talk.",
+        ])
     }
 
     private func acquirePttVoiceWakeLease() {

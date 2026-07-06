@@ -49,13 +49,32 @@ private actor AttachmentHealthGate {
 private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let capture: AttachmentSendCapture?
     let healthGate: AttachmentHealthGate?
+    let failsAmbiguously: Bool
+    let responseStatus: String
+    let returnsEmptyHistory: Bool
 
-    init(capture: AttachmentSendCapture? = nil, healthGate: AttachmentHealthGate? = nil) {
+    init(
+        capture: AttachmentSendCapture? = nil,
+        healthGate: AttachmentHealthGate? = nil,
+        failsAmbiguously: Bool = false,
+        responseStatus: String = "started",
+        returnsEmptyHistory: Bool = false)
+    {
         self.capture = capture
         self.healthGate = healthGate
+        self.failsAmbiguously = failsAmbiguously
+        self.responseStatus = responseStatus
+        self.returnsEmptyHistory = returnsEmptyHistory
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
+        if self.returnsEmptyHistory {
+            return OpenClawChatHistoryPayload(
+                sessionKey: "main",
+                sessionId: "session-main",
+                messages: [],
+                thinkingLevel: "off")
+        }
         throw NSError(domain: "ChatViewModelAttachmentTests", code: 1)
     }
 
@@ -67,7 +86,13 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         await self.capture?.store(attachments)
-        return OpenClawChatSendResponse(runId: idempotencyKey, status: "started")
+        if self.failsAmbiguously {
+            throw NSError(
+                domain: "ChatViewModelAttachmentTests",
+                code: 9,
+                userInfo: [NSLocalizedDescriptionKey: "Connection lost"])
+        }
+        return OpenClawChatSendResponse(runId: idempotencyKey, status: self.responseStatus)
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -78,6 +103,25 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { _ in }
     }
+}
+
+private func makeAttachmentOutbox() -> OpenClawChatSQLiteTranscriptCache {
+    OpenClawChatSQLiteTranscriptCache(
+        databaseURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("attachment-outbox-\(UUID().uuidString).sqlite"),
+        gatewayID: "attachment-tests")
+}
+
+@MainActor
+private func makeDurableAttachmentViewModel(
+    transport: AttachmentProcessingTransport,
+    outbox: OpenClawChatSQLiteTranscriptCache) -> OpenClawChatViewModel
+{
+    OpenClawChatViewModel(
+        sessionKey: "main",
+        transport: transport,
+        transcriptCache: outbox,
+        outbox: outbox)
 }
 
 private func makeChatAttachmentJPEG(width: Int, height: Int) throws -> Data {
@@ -203,6 +247,143 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testMalformedVoiceNoteDurationIsNormalized() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-malformed-duration.m4a")
+        try Data("voice-note".utf8).write(to: fileURL)
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: .infinity)
+
+        let duration = await MainActor.run { viewModel.attachments.first?.durationSeconds }
+        XCTAssertEqual(duration, 0)
+    }
+
+    @MainActor
+    func testPartialIdentitySyncPreservesTheOtherDeferredComponent() {
+        let oldContract = "per-sender|main|main"
+        let newContract = "per-sender|work-main|main"
+        let contractViewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: AttachmentProcessingTransport(),
+            activeAgentId: "main",
+            sessionRoutingContract: oldContract)
+        let contractAttachment = OpenClawPendingAttachment(
+            url: nil,
+            data: Data("contract".utf8),
+            fileName: "contract.m4a",
+            mimeType: "audio/mp4",
+            preview: nil)
+        contractViewModel.attachments = [contractAttachment]
+
+        contractViewModel.syncSessionRoutingContract(newContract)
+        contractViewModel.syncActiveAgentId("main")
+        contractViewModel.removeAttachment(contractAttachment.id)
+
+        XCTAssertEqual(contractViewModel.activeAgentId, "main")
+        XCTAssertEqual(contractViewModel.sessionRoutingContract, newContract)
+
+        let agentViewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: AttachmentProcessingTransport(),
+            activeAgentId: "main",
+            sessionRoutingContract: oldContract)
+        let agentAttachment = OpenClawPendingAttachment(
+            url: nil,
+            data: Data("agent".utf8),
+            fileName: "agent.m4a",
+            mimeType: "audio/mp4",
+            preview: nil)
+        agentViewModel.attachments = [agentAttachment]
+
+        agentViewModel.syncActiveAgentId("work")
+        agentViewModel.syncSessionRoutingContract(oldContract)
+        agentViewModel.removeAttachment(agentAttachment.id)
+
+        XCTAssertEqual(agentViewModel.activeAgentId, "work")
+        XCTAssertEqual(agentViewModel.sessionRoutingContract, oldContract)
+    }
+
+    func testAttachmentSendWithoutOutboxUsesLiveTransport() async throws {
+        let capture = AttachmentSendCapture()
+        let viewModel = await MainActor.run {
+            let viewModel = OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: AttachmentProcessingTransport(capture: capture))
+            viewModel.attachments = [
+                OpenClawPendingAttachment(
+                    url: nil,
+                    data: Data("fixture-voice-note".utf8),
+                    fileName: "fixture.m4a",
+                    mimeType: "audio/mp4",
+                    preview: nil,
+                    durationSeconds: 4),
+            ]
+            return viewModel
+        }
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("live attachment sent without outbox") {
+            await capture.count() == 1
+        }
+
+        let capturedPayload = await capture.first()
+        let payload = try XCTUnwrap(capturedPayload)
+        XCTAssertEqual(payload.content, Data("fixture-voice-note".utf8).base64EncodedString())
+        let state = await MainActor.run {
+            (
+                viewModel.attachments.isEmpty,
+                viewModel.errorText,
+                viewModel.messages.last?.content.first { $0.mimeType == "audio/mp4" }?.durationSeconds)
+        }
+        XCTAssertTrue(state.0)
+        XCTAssertNil(state.1)
+        XCTAssertEqual(state.2, 4)
+    }
+
+    func testFailedAttachmentSendWithoutOutboxRestoresDraft() async throws {
+        let capture = AttachmentSendCapture()
+        let attachmentData = Data("retry-voice-note".utf8)
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: AttachmentProcessingTransport(
+                    capture: capture,
+                    failsAmbiguously: true))
+        }
+        let attachmentID = await MainActor.run {
+            let attachment = OpenClawPendingAttachment(
+                url: nil,
+                data: attachmentData,
+                fileName: "retry.m4a",
+                mimeType: "audio/mp4",
+                preview: nil,
+                durationSeconds: 5)
+            viewModel.input = "retry caption"
+            viewModel.attachments = [attachment]
+            return attachment.id
+        }
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("failed live attachment restores draft") {
+            await MainActor.run { viewModel.errorText == "Connection lost" }
+        }
+
+        let state = await MainActor.run {
+            (
+                viewModel.input,
+                viewModel.attachments.map(\.id),
+                viewModel.attachments.first?.data,
+                viewModel.messages.contains { $0.idempotencyKey?.hasSuffix(":user") == true })
+        }
+        XCTAssertEqual(state.0, "retry caption")
+        XCTAssertEqual(state.1, [attachmentID])
+        XCTAssertEqual(state.2, attachmentData)
+        XCTAssertFalse(state.3)
+    }
+
     func testVoiceNoteSendUsesExistingAttachmentPayloadAndOptimisticDuration() async throws {
         let capture = AttachmentSendCapture()
         let transport = AttachmentProcessingTransport(capture: capture)
@@ -210,8 +391,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             .appendingPathComponent("voice-note-20260706-120001.m4a")
         let data = Data("encoded-voice-note".utf8)
         try data.write(to: fileURL)
+        let outbox = makeAttachmentOutbox()
         let viewModel = await MainActor.run {
-            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+            makeDurableAttachmentViewModel(transport: transport, outbox: outbox)
         }
 
         await viewModel.addVoiceNoteAttachment(fileURL: fileURL, durationSeconds: 21.2)
@@ -277,6 +459,99 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
         XCTAssertEqual(optimisticAudio?.fileName, "draft.m4a")
         XCTAssertEqual(optimisticAudio?.durationSeconds, 21.2)
+    }
+
+    func testAmbiguousVoiceNoteSurvivesViewModelRecreation() async throws {
+        let outbox = makeAttachmentOutbox()
+        var firstViewModel: OpenClawChatViewModel? = await MainActor.run {
+            let viewModel = makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(failsAmbiguously: true),
+                outbox: outbox)
+            viewModel.attachments = [
+                OpenClawPendingAttachment(
+                    url: nil,
+                    data: Data("durable-voice-note".utf8),
+                    fileName: "durable.m4a",
+                    mimeType: "audio/mp4",
+                    preview: nil,
+                    durationSeconds: 42),
+            ]
+            return viewModel
+        }
+
+        await MainActor.run { firstViewModel?.send() }
+        try await waitUntil("ambiguous voice note is durably parked") {
+            let command = await outbox.loadCommands().first
+            return command?.status == .failed &&
+                command?.lastError == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError
+        }
+        let persistedCommands = await outbox.loadCommands()
+        let persisted = try XCTUnwrap(persistedCommands.first)
+        XCTAssertEqual(persisted.attachments.first?.data, Data("durable-voice-note".utf8))
+        XCTAssertEqual(persisted.attachments.first?.durationSeconds, 42)
+
+        await MainActor.run { firstViewModel = nil }
+        let restoredViewModel = await MainActor.run {
+            makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(returnsEmptyHistory: true),
+                outbox: outbox)
+        }
+        await MainActor.run { restoredViewModel.load() }
+        try await waitUntil("durable voice note bubble is restored") {
+            await MainActor.run {
+                restoredViewModel.messages.contains { message in
+                    message.content.contains { $0.mimeType == "audio/mp4" }
+                }
+            }
+        }
+
+        let restored = try await MainActor.run { () throws -> (String?, Double?, Bool) in
+            let message = try XCTUnwrap(restoredViewModel.messages.first)
+            let audio = try XCTUnwrap(message.content.first { $0.mimeType == "audio/mp4" })
+            return (
+                audio.content?.value as? String,
+                audio.durationSeconds,
+                restoredViewModel.outboxState(for: message.id)?.isFailed == true)
+        }
+        XCTAssertEqual(restored.0, Data("durable-voice-note".utf8).base64EncodedString())
+        XCTAssertEqual(restored.1, 42)
+        XCTAssertTrue(restored.2)
+    }
+
+    func testCanonicalVoiceNoteConfirmationDeletesDurableBytes() async throws {
+        let outbox = makeAttachmentOutbox()
+        let viewModel = await MainActor.run {
+            let viewModel = makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(),
+                outbox: outbox)
+            viewModel.attachments = [
+                OpenClawPendingAttachment(
+                    url: nil,
+                    data: Data("confirmed-voice-note".utf8),
+                    fileName: "confirmed.m4a",
+                    mimeType: "audio/mp4",
+                    preview: nil,
+                    durationSeconds: 7),
+            ]
+            return viewModel
+        }
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("voice note awaits canonical confirmation") {
+            await outbox.loadCommands().first?.status == .awaitingConfirmation
+        }
+        let awaitingCommands = await outbox.loadCommands()
+        let command = try XCTUnwrap(awaitingCommands.first)
+        await viewModel.confirmOutboxCommandsNow(in: [
+            OpenClawChatMessage(
+                role: "user",
+                content: [],
+                timestamp: 1,
+                idempotencyKey: "\(command.id):user"),
+        ])
+
+        let remainingCommands = await outbox.loadCommands()
+        XCTAssertTrue(remainingCommands.isEmpty)
     }
 
     @MainActor
