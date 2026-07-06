@@ -1102,14 +1102,14 @@ The Slack provider reads scope from `messages.ackReactionScope` (default `"group
 
 Values:
 
-- `"all"`: react in DMs and groups.
+- `"all"`: react in DMs and groups, including ambient room events.
 - `"direct"`: react in DMs only.
-- `"group-all"`: react on every group message (no DMs).
+- `"group-all"`: react on every group message except ambient room events (no DMs).
 - `"group-mentions"` (default): react in groups, but only when the bot is mentioned (or in group mentionables that opted in). **DMs are excluded.**
 - `"off"` / `"none"`: never react.
 
 <Note>
-The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages or ambient room events. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs and quiet room events, set `messages.ackReactionScope` to `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
 </Note>
 
 ```json5

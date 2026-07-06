@@ -171,7 +171,6 @@ function createApplicationNavigationPreferences(
     navCollapsed: settings.navCollapsed,
     sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
     sidebarMoreExpanded: settings.sidebarMoreExpanded,
-    recentSessionsCollapsed: settings.recentSessionsCollapsed ?? false,
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
 
@@ -183,7 +182,6 @@ function createApplicationNavigationPreferences(
       const nextSnapshot = { ...snapshot, ...patch };
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
-        nextSnapshot.recentSessionsCollapsed === snapshot.recentSessionsCollapsed &&
         nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
         nextSnapshot.sidebarMoreExpanded === snapshot.sidebarMoreExpanded
       ) {
@@ -193,7 +191,6 @@ function createApplicationNavigationPreferences(
         navCollapsed: nextSnapshot.navCollapsed,
         sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
         sidebarMoreExpanded: nextSnapshot.sidebarMoreExpanded,
-        recentSessionsCollapsed: nextSnapshot.recentSessionsCollapsed,
       });
       snapshot = nextSnapshot;
       for (const listener of listeners) {

@@ -25,6 +25,7 @@ import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  buildEmptyInteractiveReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
@@ -58,6 +59,8 @@ const state = vi.hoisted(() => ({
 
 const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+const EMPTY_INTERACTIVE_REPLY_TEXT =
+  "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
   afterEach(() => {
@@ -646,6 +649,37 @@ describe("computeContextAwareReserveTokensFloor", () => {
     expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
     expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
     expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
+  });
+});
+
+describe("buildEmptyInteractiveReplyPayload", () => {
+  const baseParams = {
+    isInteractive: true,
+    isMessageToolOnly: false,
+    hasPendingContinuation: false,
+    hasExplicitSilentReply: false,
+    hasCommittedDelivery: false,
+    sessionCtx: {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    },
+  } as const;
+
+  it("preserves the default silent policy in group conversations", () => {
+    const payload = buildEmptyInteractiveReplyPayload(baseParams);
+
+    expect(payload?.text).toBe(SILENT_REPLY_TOKEN);
+    expect(payload?.isError).toBeUndefined();
+  });
+
+  it("surfaces the fallback when group silence is explicitly disallowed", () => {
+    expect(
+      buildEmptyInteractiveReplyPayload({
+        ...baseParams,
+        cfg: { agents: { defaults: { silentReply: { group: "disallow" } } } },
+      }),
+    ).toMatchObject({ text: EMPTY_INTERACTIVE_REPLY_TEXT, isError: true });
   });
 });
 

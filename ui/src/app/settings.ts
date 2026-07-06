@@ -104,7 +104,6 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
   sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
-  recentSessionsCollapsed?: boolean; // Collapse recent sessions list in sidebar
   borderRadius: number; // Corner roundness (0–100, default 50)
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -467,7 +466,6 @@ export function loadSettings(): UiSettings {
     navWidth: 220,
     sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
     sidebarMoreExpanded: false,
-    recentSessionsCollapsed: false,
     borderRadius: 50,
     textScale: 100,
   };
@@ -530,10 +528,6 @@ export function loadSettings(): UiSettings {
         typeof parsed.sidebarMoreExpanded === "boolean"
           ? parsed.sidebarMoreExpanded
           : defaults.sidebarMoreExpanded,
-      recentSessionsCollapsed:
-        typeof parsed.recentSessionsCollapsed === "boolean"
-          ? parsed.recentSessionsCollapsed
-          : defaults.recentSessionsCollapsed,
       borderRadius:
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
@@ -637,7 +631,6 @@ function persistSettings(next: UiSettings) {
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
     sidebarMoreExpanded: next.sidebarMoreExpanded,
-    recentSessionsCollapsed: next.recentSessionsCollapsed ?? false,
     borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),

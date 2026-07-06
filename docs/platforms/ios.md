@@ -14,6 +14,7 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Connects to a Gateway over WebSocket (LAN or tailnet).
 - Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
 - Receives `node.invoke` commands and reports node status events.
+- Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected (sending stays disabled until the connection is back), and reset/forget purges the protected local cache.
 
 ## Requirements
 

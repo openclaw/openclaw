@@ -1857,12 +1857,12 @@ async function runAgentTurnWithFallbackInternal(
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
+    const deliver = params.opts?.onBlockReply ?? params.onCompactionNoticePayload;
+    if (!deliver) {
+      return;
+    }
     try {
-      if (params.opts?.onBlockReply) {
-        await params.opts.onBlockReply(noticePayload);
-        return;
-      }
-      await params.onCompactionNoticePayload?.(noticePayload);
+      await deliver(noticePayload);
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -2193,6 +2193,8 @@ async function runAgentTurnWithFallbackInternal(
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
+            reasoningPayloadsEnabled: params.opts?.reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled: params.opts?.commentaryPayloadsEnabled,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,

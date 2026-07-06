@@ -441,7 +441,8 @@ See [Inferred commitments](/concepts/commitments).
   when your provider gives you a direct DevTools WebSocket URL.
 - `remoteCdpTimeoutMs` and `remoteCdpHandshakeTimeoutMs` apply to remote and
   `attachOnly` CDP reachability plus tab-opening requests. Managed loopback
-  profiles keep local CDP defaults.
+  profiles keep local CDP defaults. Persistent remote Playwright tab
+  enumeration uses the larger value as its operation deadline.
 - If an externally managed CDP service is reachable through loopback, set that
   profile's `attachOnly: true`; otherwise OpenClaw treats the loopback port as a
   local managed browser profile and may report local port ownership errors.
