@@ -136,10 +136,10 @@ function expectRetryLater(res: GatewayConnectResponse, retryLater: boolean) {
   const message = res.error?.message ?? "";
   if (retryLater) {
     // A locked-out connect can surface through either the shared-secret/token
-    // bucket ("retry later") or, when the handshake carries a device, the
-    // pre-auth device-signature bucket ("device signature rate-limited") that
-    // gates crypto.verify before the token check. Both are valid lockouts.
-    expect(message.includes("retry later") || message.includes("rate-limited")).toBe(true);
+    // bucket or, when the handshake carries a device, the pre-auth
+    // device-signature bucket that gates crypto.verify before the token
+    // check. Both route through the canonical rate_limited contract.
+    expect(message).toContain("retry later");
   } else {
     expect(message).not.toContain("retry later");
   }

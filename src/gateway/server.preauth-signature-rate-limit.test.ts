@@ -198,15 +198,18 @@ describe("pre-auth device-signature rate limit", () => {
       expect(reasons.every((r) => r === "device-signature")).toBe(true);
 
       // The next attempt is the one that proves the fix: the gateway
-      // rejects without paying for createPublicKey + verify.
+      // rejects without paying for createPublicKey + verify, and the
+      // lockout surfaces the canonical auth rate-limit contract instead of
+      // a signature-scope device-auth variant.
       const lockedOut = await attemptForgedConnect(port, identityPath);
       expect(lockedOut.ok).toBe(false);
       const detail = lockedOut.error?.details as
-        | { reason?: string; retryAfterMs?: number }
+        | { code?: string; authReason?: string; recommendedNextStep?: string }
         | undefined;
-      expect(detail?.reason).toBe("device-signature-rate-limited");
-      expect(typeof detail?.retryAfterMs).toBe("number");
-      expect(lockedOut.error?.message).toContain("rate-limited");
+      expect(detail?.code).toBe("AUTH_RATE_LIMITED");
+      expect(detail?.authReason).toBe("rate_limited");
+      expect(detail?.recommendedNextStep).toBe("wait_then_retry");
+      expect(lockedOut.error?.message).toContain("too many failed authentication attempts");
     });
   });
 
@@ -233,8 +236,8 @@ describe("pre-auth device-signature rate limit", () => {
 
       const second = await attemptForgedConnect(port, identityPath);
       expect(second.ok).toBe(false);
-      const secondDetail = second.error?.details as { reason?: string } | undefined;
-      expect(secondDetail?.reason).toBe("device-signature-rate-limited");
+      const secondDetail = second.error?.details as { code?: string } | undefined;
+      expect(secondDetail?.code).toBe("AUTH_RATE_LIMITED");
     });
   });
 
@@ -262,8 +265,8 @@ describe("pre-auth device-signature rate limit", () => {
 
       const second = await attemptForgedConnect(port, identityPath, "pem");
       expect(second.ok).toBe(false);
-      const secondDetail = second.error?.details as { reason?: string } | undefined;
-      expect(secondDetail?.reason).toBe("device-signature-rate-limited");
+      const secondDetail = second.error?.details as { code?: string } | undefined;
+      expect(secondDetail?.code).toBe("AUTH_RATE_LIMITED");
     });
   });
 
@@ -302,11 +305,11 @@ describe("pre-auth device-signature rate limit", () => {
 
       const third = await attemptValidSignatureUnauthorizedConnect(port, identityPath);
       expect(third.ok).toBe(false);
-      const thirdDetail = third.error?.details as { reason?: string } | undefined;
+      const thirdDetail = third.error?.details as { code?: string } | undefined;
       // The device-signature bucket has now been consumed twice with no
       // reset (auth never succeeded), so the third attempt is gated before
       // any crypto runs — the bucket stayed locked despite valid sigs.
-      expect(thirdDetail?.reason).toBe("device-signature-rate-limited");
+      expect(thirdDetail?.code).toBe("AUTH_RATE_LIMITED");
     });
   });
 });

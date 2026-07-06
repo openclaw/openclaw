@@ -1162,41 +1162,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
             );
             if (!signatureRateCheck.allowed) {
-              // A handshake that presents a bootstrap- or device-token candidate
-              // is rate-limited under that credential's own per-IP bucket
-              // (checked, recorded, and surfaced as `rate_limited` in
-              // resolveConnectAuthDecision). Surface that same reason here so the
-              // pre-crypto signature gate does not shadow the bootstrap/device-token
-              // rate-limit contract with a signature-scope reason. The crypto bound
+              // Lockouts here are auth rate limits, not device-auth failures:
+              // surface the canonical `rate_limited` contract (AUTH_RATE_LIMITED
+              // detail code, wait_then_retry guidance, high-severity security
+              // event) so clients, telemetry, and retry handling see the same
+              // shape as bootstrap/device-token lockouts instead of a
+              // signature-scope `device-auth-invalid` variant. The crypto bound
               // still holds: this returns before any createPublicKey/verify work.
-              if (bootstrapTokenCandidate || deviceTokenCandidate) {
-                rejectUnauthorized({
-                  ok: false,
-                  reason: "rate_limited",
-                  rateLimited: true,
-                  retryAfterMs: signatureRateCheck.retryAfterMs,
-                });
-                return;
-              }
-              setHandshakeState("failed");
-              setCloseCause("device-auth-invalid", {
-                reason: "device-signature-rate-limited",
-                client: connectParams.client.id,
-                deviceId: device.id,
-              });
-              send({
-                type: "res",
-                id: frame.id,
+              rejectUnauthorized({
                 ok: false,
-                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature rate-limited", {
-                  details: {
-                    code: resolveDeviceAuthConnectErrorDetailCode("device-signature"),
-                    reason: "device-signature-rate-limited",
-                    retryAfterMs: signatureRateCheck.retryAfterMs,
-                  },
-                }),
+                reason: "rate_limited",
+                rateLimited: true,
+                retryAfterMs: signatureRateCheck.retryAfterMs,
               });
-              close(1008, "device signature rate-limited");
               return;
             }
             authRateLimiter.recordFailure(
