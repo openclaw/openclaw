@@ -126,4 +126,20 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not persist empty-detail response.failed as auth-profile health (#100600)", () => {
+    // Azure Foundry can return response.failed with no error object. Without
+    // affirmative auth evidence, do not cooldown the profile.
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "no_error_details",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "no_error_details",
+        policy: "shared",
+      }),
+    ).toBeNull();
+  });
 });

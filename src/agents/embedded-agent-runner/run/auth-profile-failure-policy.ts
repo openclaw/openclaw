@@ -35,7 +35,8 @@ export function resolveAuthProfileFailureReason(params: {
     params.failoverReason === "server_error" ||
     params.failoverReason === "empty_response" ||
     params.failoverReason === "context_overflow" ||
-    params.failoverReason === "format"
+    params.failoverReason === "format" ||
+    params.failoverReason === "no_error_details"
   ) {
     return null;
   }

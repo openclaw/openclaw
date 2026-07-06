@@ -30,6 +30,7 @@ const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
   "server_error",
   "model_not_found",
   "format",
+  "no_error_details",
 ];
 
 describe("formatAuthProfileFailureMessage", () => {
@@ -78,6 +79,16 @@ describe("formatAuthProfileFailureMessage", () => {
         });
         expect(message, `reason=${reason}`).toContain(PROVIDER);
       }
+    });
+
+    it("describes no_error_details as a transient upstream response, not a login failure", () => {
+      const message = formatAuthProfileFailureMessage({
+        reason: "no_error_details",
+        provider: PROVIDER,
+        allInCooldown: true,
+      });
+      expect(message).toContain("incomplete error response");
+      expect(message).not.toContain("saved logins");
     });
   });
 

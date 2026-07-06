@@ -50,6 +50,8 @@ function describeReason(
         return `${provider} is overloaded right now. Please wait a moment before trying again.`;
       case "timeout":
         return `${provider} hasn't been responding. Please wait a moment before trying again.`;
+      case "no_error_details":
+        return `${provider} returned an incomplete error response. Please wait a moment before trying again.`;
       case "model_not_found":
         return `${provider} can't find the model you're using right now.`;
       case "server_error":
@@ -84,6 +86,7 @@ function shouldIncludeRecoveryHint(reason: FailoverReason): boolean {
     case "server_error":
     case "model_not_found":
     case "format":
+    case "no_error_details":
       return false;
     default:
       return true;
