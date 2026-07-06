@@ -129,7 +129,7 @@ fun ChatScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
-  val modelCatalog by viewModel.modelCatalog.collectAsState()
+  val modelCatalog by viewModel.chatModelCatalog.collectAsState()
   val modelFavorites by viewModel.modelFavorites.collectAsState()
   val modelRecents by viewModel.modelRecents.collectAsState()
   val selectedModelRef by viewModel.chatSelectedModelRef.collectAsState()
@@ -204,12 +204,6 @@ fun ChatScreen(
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
     viewModel.clearChatDraft()
-  }
-
-  LaunchedEffect(showModelPicker) {
-    if (showModelPicker && modelCatalog.isEmpty()) {
-      viewModel.refreshModelCatalog()
-    }
   }
 
   LaunchedEffect(gatewayConnectionDisplay.isConnected) {

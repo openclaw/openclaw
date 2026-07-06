@@ -2189,9 +2189,29 @@
       "translated": "Ubicación"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "Mientras se usa"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "Permite siempre las comprobaciones de ubicación solicitadas mientras OpenClaw está en segundo plano; Android muestra esto en la notificación persistente del nodo."
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "¿Permitir ubicación en segundo plano?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw solo comprueba la ubicación cuando tu Gateway emparejado lo solicita. "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "Abrir ajustes"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "Ahora no"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",

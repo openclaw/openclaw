@@ -223,6 +223,7 @@ class MainViewModel(
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
   val chatThinkingLevel: StateFlow<String> = runtimeState(initial = "off") { it.chatThinkingLevel }
   val chatSelectedModelRef: StateFlow<String?> = runtimeState(initial = null) { it.chatSelectedModelRef }
+  val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }

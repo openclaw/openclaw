@@ -2189,9 +2189,29 @@
       "translated": "位置"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "使用期間"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "一律允許在 OpenClaw 於背景執行時進行要求的位置檢查；Android 會在常駐節點通知中顯示此項目。"
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "允許背景位置存取？"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw 只會在你配對的 Gateway 要求時檢查位置。 "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "開啟設定"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "暫時不要"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",

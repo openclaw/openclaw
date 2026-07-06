@@ -2189,9 +2189,29 @@
       "translated": "위치"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "사용 중"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "OpenClaw가 백그라운드에 있는 동안 요청된 위치 확인을 항상 허용합니다. Android는 이를 지속적인 노드 알림에 표시합니다."
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "백그라운드 위치를 허용하시겠어요?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw는 페어링된 Gateway가 요청할 때만 위치를 확인합니다. "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "설정 열기"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "나중에"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",

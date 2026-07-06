@@ -2189,9 +2189,29 @@
       "translated": "Місцезнаходження"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "Під час використання"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "Завжди дозволяє запитані перевірки місцезнаходження, поки OpenClaw працює у фоновому режимі; Android показує це в постійному сповіщенні вузла."
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "Дозволити фонове визначення місцезнаходження?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw перевіряє місцезнаходження лише тоді, коли це запитує ваш спарений Gateway. "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "Відкрити налаштування"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "Не зараз"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",

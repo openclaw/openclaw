@@ -2189,9 +2189,29 @@
       "translated": "Vị trí"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "Khi sử dụng"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "Luôn cho phép kiểm tra vị trí được yêu cầu khi OpenClaw đang chạy trong nền; Android hiển thị điều này trong thông báo nút cố định."
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "Cho phép vị trí nền?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw chỉ kiểm tra vị trí khi Gateway đã ghép đôi của bạn yêu cầu. "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "Mở Cài đặt"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "Không phải bây giờ"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",

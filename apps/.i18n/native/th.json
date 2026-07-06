@@ -2189,9 +2189,29 @@
       "translated": "ตำแหน่งที่ตั้ง"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "ขณะใช้งาน"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "อนุญาตการตรวจสอบตำแหน่งที่ร้องขอเสมอขณะที่ OpenClaw ทำงานอยู่เบื้องหลัง; Android จะแสดงสิ่งนี้ในการแจ้งเตือนโหนดแบบถาวร"
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "อนุญาตตำแหน่งเบื้องหลังหรือไม่?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw จะตรวจสอบตำแหน่งเฉพาะเมื่อ Gateway ที่จับคู่ของคุณร้องขอเท่านั้น "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "เปิดการตั้งค่า"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "ไม่ใช่ตอนนี้"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",
