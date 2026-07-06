@@ -76,6 +76,9 @@ class SessionsPage extends LitElement {
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
   @state() private expandedSessionKey: string | null = null;
+  // Route deep-link target (?session=...); unlike expandedSessionKey it also
+  // narrows sessionListOptions so the linked session is guaranteed to load.
+  private deepLinkSessionKey: string | null = null;
   @state() private checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
   @state() private checkpointLoadingKey: string | null = null;
   @state() private checkpointBusyKey: string | null = null;
@@ -212,6 +215,7 @@ class SessionsPage extends LitElement {
       this.loading = false;
       this.selectedKeys = new Set();
       this.expandedSessionKey = null;
+      this.deepLinkSessionKey = null;
       this.checkpointItemsByKey = {};
       this.checkpointLoadingKey = null;
       this.checkpointBusyKey = null;
@@ -260,6 +264,9 @@ class SessionsPage extends LitElement {
       this.includeUnknown = false;
     }
     this.expandedSessionKey = data.expandedSessionKey;
+    // Only route-driven expansion narrows the list query; interactive drawer
+    // opens must keep loading the full roster (see sessionListOptions).
+    this.deepLinkSessionKey = data.expandedSessionKey;
     const gateway = context.gateway.snapshot;
     if (data.client !== gateway.client || data.connected !== gateway.connected) {
       this.routeDataEnabled = false;
@@ -319,16 +326,17 @@ class SessionsPage extends LitElement {
   }
 
   private sessionListOptions() {
-    const checkpointKey = this.expandedSessionKey;
+    // Narrow the query only for a route deep link (?session=...); an open
+    // drawer is pure UI state and must not filter subsequent reloads.
+    const deepLinkKey = this.deepLinkSessionKey;
     return {
-      activeMinutes:
-        checkpointKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
-      limit: checkpointKey ? 50 : parseFilterInteger(this.limit),
-      search: checkpointKey ?? undefined,
-      includeGlobal: checkpointKey ? true : this.includeGlobal,
-      includeUnknown: checkpointKey ? true : this.includeUnknown,
+      activeMinutes: deepLinkKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
+      limit: deepLinkKey ? 50 : parseFilterInteger(this.limit),
+      search: deepLinkKey ?? undefined,
+      includeGlobal: deepLinkKey ? true : this.includeGlobal,
+      includeUnknown: deepLinkKey ? true : this.includeUnknown,
       showArchived: this.showArchived,
-      ...(checkpointKey ? { agentId: this.sessionAgentId(checkpointKey) } : {}),
+      ...(deepLinkKey ? { agentId: this.sessionAgentId(deepLinkKey) } : {}),
     };
   }
 
@@ -447,6 +455,8 @@ class SessionsPage extends LitElement {
     this.showArchived = next.showArchived;
     this.page = 0;
     this.selectedKeys = new Set();
+    // Explicit filter edits leave deep-link mode; load the full roster.
+    this.deepLinkSessionKey = null;
     void this.loadSessions();
   }
 
@@ -491,6 +501,9 @@ class SessionsPage extends LitElement {
       }
       if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
         this.expandedSessionKey = null;
+      }
+      if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
+        this.deepLinkSessionKey = null;
       }
     }
     if (result.errors.length > 0) {
@@ -612,6 +625,8 @@ class SessionsPage extends LitElement {
     if (!context) {
       return;
     }
+    // Any interactive toggle ends deep-link mode so reloads return the roster.
+    this.deepLinkSessionKey = null;
     if (this.expandedSessionKey === sessionKey) {
       this.checkpointRequestId += 1;
       this.expandedSessionKey = null;
@@ -773,6 +788,7 @@ class SessionsPage extends LitElement {
           this.searchQuery = "";
           this.page = 0;
           this.selectedKeys = new Set();
+          this.deepLinkSessionKey = null;
           void this.loadSessions();
         },
         onSearchChange: (query) => {
