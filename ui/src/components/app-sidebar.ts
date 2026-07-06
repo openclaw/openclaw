@@ -845,7 +845,6 @@ export class AppSidebar extends LitElement {
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <div class="sidebar-shell">
           <div class="sidebar-shell__body">
-            ${this.renderSessions()}
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               ${this.collapsed ? this.renderRoute("chat") : nothing}
               <div class="nav-section__items">
@@ -853,6 +852,7 @@ export class AppSidebar extends LitElement {
               </div>
               ${this.renderMoreSection()}
             </nav>
+            ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-footer-bar">

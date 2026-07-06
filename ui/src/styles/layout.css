@@ -474,7 +474,10 @@
 }
 
 .sidebar-nav {
-  flex: 1;
+  /* Nav stays pinned above the session list; the cap keeps sessions reachable
+     when an expanded More section outgrows a short window (nav then scrolls). */
+  flex: 0 0 auto;
+  max-height: 60%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0;
@@ -482,11 +485,14 @@
 }
 
 .sidebar-sessions {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  flex-shrink: 0;
+  /* Sessions own the leftover height below the pinned nav and scroll inside. */
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 0 8px;
-  margin-bottom: 10px;
+  margin-top: 10px;
 }
 
 .sidebar-new-session {
@@ -543,15 +549,21 @@
   stroke-linejoin: round;
 }
 
+/* min-height: 0 down this chain lets the recent list shrink and scroll instead
+   of pushing the sidebar footer out of view. */
 .sidebar-recent-sessions {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   margin: 0 -8px;
+  min-height: 0;
 }
 
 .sidebar-recent-sessions__group {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
+  min-height: 0;
 }
 
 /* Anchors the session-picker popover to the full header width. */
@@ -647,8 +659,7 @@
 .sidebar-recent-sessions__list {
   display: grid;
   gap: 2px;
-  /* Bounded so short viewports keep the nav below reachable. */
-  max-height: min(42vh, 400px);
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1046,9 +1057,9 @@
 }
 
 .sidebar--collapsed .sidebar-sessions {
-  justify-items: center;
+  align-items: center;
   padding: 0;
-  margin-bottom: 14px;
+  margin-top: 14px;
 }
 
 .sidebar--collapsed .sidebar-new-session {
