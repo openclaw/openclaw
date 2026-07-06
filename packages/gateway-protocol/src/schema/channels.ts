@@ -457,7 +457,6 @@ const TalkCatalogProviderSchema = Type.Object(
     ),
     supportsBrowserSession: Type.Optional(Type.Boolean()),
     supportsBargeIn: Type.Optional(Type.Boolean()),
-    emitsSpeechStartedEvent: Type.Optional(Type.Boolean()),
     supportsToolCalls: Type.Optional(Type.Boolean()),
     supportsVideoFrames: Type.Optional(Type.Boolean()),
     supportsSessionResumption: Type.Optional(Type.Boolean()),

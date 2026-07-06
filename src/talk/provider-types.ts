@@ -67,9 +67,11 @@ export type RealtimeVoiceBridgeEvent = {
   responseId?: string;
 };
 
+export type RealtimeVoiceAudioClearReason = "barge-in";
+
 export type RealtimeVoiceBridgeCallbacks = {
   onAudio: (audio: Buffer) => void;
-  onClearAudio: () => void;
+  onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
   onMark?: (markName: string) => void;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
@@ -87,8 +89,8 @@ export type RealtimeVoiceProviderCapabilities = {
   outputAudioFormats: RealtimeVoiceAudioFormat[];
   supportsBrowserSession?: boolean;
   supportsBargeIn?: boolean;
-  /** True when the provider emits a server speech-start event as the authoritative barge-in signal. */
-  emitsSpeechStartedEvent?: boolean;
+  /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
+  handlesInputAudioBargeIn?: boolean;
   supportsToolCalls?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
