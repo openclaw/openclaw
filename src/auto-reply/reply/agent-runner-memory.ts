@@ -206,10 +206,24 @@ function isPreflightCompactionSkipReason(reason?: string): boolean {
   // Preflight compaction is a guardrail, not a hard dependency. These classes
   // mean the context engine found nothing useful to compact, so the reply should
   // continue instead of surfacing a generic user-facing failure.
-  return (
+  if (
     classification === "below_threshold" ||
     classification === "no_compactable_entries" ||
     classification === "already_compacted_recently"
+  ) {
+    return true;
+  }
+  // Transient infrastructure failures (timeout, provider errors, summary
+  // generation failure) should not terminate the reply operation.  Treating
+  // them as hard failures permanently locks the Composer in a "terminated"
+  // state with no user-visible recovery path.  The downstream LLM call may
+  // still fail with a context-too-long error, but that produces a proper
+  // user-visible message instead of a silent lockout.
+  return (
+    classification === "timeout" ||
+    classification === "provider_error_4xx" ||
+    classification === "provider_error_5xx" ||
+    classification === "summary_failed"
   );
 }
 
