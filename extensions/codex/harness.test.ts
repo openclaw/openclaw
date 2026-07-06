@@ -1,9 +1,12 @@
 // Codex tests cover harness plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import { testCodexAppServerBindingStore } from "./src/app-server/session-binding.test-helpers.js";
 
 describe("Codex agent harness supports()", () => {
-  const harness = createCodexAppServerAgentHarness();
+  const harness = createCodexAppServerAgentHarness({
+    bindingStore: testCodexAppServerBindingStore,
+  });
 
   it("supports the canonical codex virtual provider", () => {
     expect(harness.supports({ provider: "codex", requestedRuntime: "codex" })).toEqual({
@@ -40,7 +43,10 @@ describe("Codex agent harness supports()", () => {
   });
 
   it("honors explicit provider id overrides", () => {
-    const narrowHarness = createCodexAppServerAgentHarness({ providerIds: ["codex"] });
+    const narrowHarness = createCodexAppServerAgentHarness({
+      providerIds: ["codex"],
+      bindingStore: testCodexAppServerBindingStore,
+    });
     const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
   });
