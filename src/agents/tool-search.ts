@@ -2154,6 +2154,9 @@ function runCodeModeChild(params: {
     child.stderr?.on("data", (chunk: string) => {
       stderrTail = appendToolSearchCodeStderrTail(stderrTail, chunk);
     });
+    child.stderr?.on("error", (error) => {
+      settle(() => reject(error));
+    });
 
     child.on("error", (error) => {
       settle(() => reject(error));
@@ -2357,5 +2360,7 @@ export const testing = {
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
   appendToolSearchCodeStderrTail,
+  runCodeModeChild,
+  ToolSearchRuntime,
 };
 export { testing as __testing };
