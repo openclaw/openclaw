@@ -290,19 +290,17 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("rejects an oversized Memex upload JSON response", async () => {
-    const hugeBody = JSON.stringify({
-      url: "https://uploads.tlon.network/put",
-      filePath: "https://memex.tlon.network/files/uploaded.png",
-      padding: "x".repeat(128 * 1024),
-    });
+    const cancelBody = vi.fn();
+    let bodyReads = 0;
     mockGuardedFetch.mockResolvedValueOnce(
       createGuardedResult(
         new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode(hugeBody));
-              controller.close();
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              bodyReads += 1;
+              controller.enqueue(new Uint8Array(32 * 1024).fill(120));
             },
+            cancel: cancelBody,
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         ),
@@ -319,6 +317,8 @@ describe("uploadFile memex upload hardening", () => {
     ).rejects.toThrow("Memex upload: JSON response exceeds 65536 bytes");
 
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
+    expect(bodyReads).toBeLessThan(10);
+    expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
