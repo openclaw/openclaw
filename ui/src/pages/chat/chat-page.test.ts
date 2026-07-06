@@ -70,6 +70,18 @@ describe("chat page split layout host", () => {
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
+  it("passes an empty session key while route data is still unresolved", async () => {
+    // Regression: a fabricated fallback key here made the pane canonicalize
+    // against it and skip gateway startup entirely (chat.startup never sent).
+    const page = new ChatPage();
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
+    expect(pane?.sessionKey).toBe("");
+    expect(pane?.active).toBe(true);
+  });
+
   it("renders keyed panes and a divider for a two-column split", async () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };

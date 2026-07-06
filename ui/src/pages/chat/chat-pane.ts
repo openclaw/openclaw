@@ -95,7 +95,11 @@ export class ChatPane extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
-  @property({ attribute: false }) sessionKey = "main";
+  // Empty means "no route/layout opinion yet": the pane boots on the page
+  // state's default session and must not canonicalize or write global session
+  // bindings until the container supplies a real key (classic mode renders
+  // before route data resolves).
+  @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) active = false;
   @property({ attribute: false }) chrome: "none" | "pane" = "none";
   @property({ attribute: false }) draft?: string;
@@ -153,7 +157,7 @@ export class ChatPane extends LitElement {
   // active pane, so inactive split panes must never run these bindings.
   private applyActiveSessionBindings() {
     const state = this.state;
-    if (!state || !this.active) {
+    if (!state || !this.active || !this.sessionKey.trim()) {
       return;
     }
     const nextSessionKey = state.sessionKey;

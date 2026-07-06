@@ -288,7 +288,7 @@ export class ChatPage extends LitElement {
     return html`
       <openclaw-chat-pane
         .paneId=${"single"}
-        .sessionKey=${this.data?.sessionKey ?? "main"}
+        .sessionKey=${this.data?.sessionKey ?? ""}
         .active=${true}
         .chrome=${"none"}
         .draft=${this.data?.draft}
