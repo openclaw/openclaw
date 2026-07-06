@@ -295,6 +295,61 @@ export function clearAutoFallbackPrimaryProbeSelection(
   entry.updatedAt = now;
 }
 
+export type AutoFallbackModelRef = {
+  provider: string;
+  model: string;
+};
+
+/**
+ * Picks the highest-priority candidate ranked strictly above the current auto-fallback
+ * selection that is currently available (not in cooldown). Returns undefined when nothing
+ * better than the current selection is available, so the session stays put.
+ *
+ * Why this exists: making auth-profile cooldowns per-model removed the coarse side effect where
+ * a primary rate-limit also suspended sibling models sharing that profile (e.g. gpt-5.5 limiting
+ * also disabled gpt-5.3-codex-spark), which used to force the chain down to the next provider tier
+ * and looked like "fallback upwards" working. With per-model scoping a session that pins to a low
+ * tier never re-walks up on its own. This restores the climb explicitly: walk from the top of the
+ * ordered chain and return the first available tier above `current`. A session stuck on spark while
+ * gpt-5.5 is still rate-limited re-promotes to an available sonnet instead of sticking on spark, and
+ * jumps straight back to gpt-5.5 once its window clears. Returning undefined above the current tier
+ * is what prevents thrash: once landed on the best available tier, no strictly-better tier exists.
+ */
+export function resolveAutoFallbackRepromotionTarget(params: {
+  chain: readonly AutoFallbackModelRef[];
+  current: AutoFallbackModelRef;
+  isAvailable: (ref: AutoFallbackModelRef) => boolean;
+}): AutoFallbackModelRef | undefined {
+  const normRef = (ref: AutoFallbackModelRef) => ({
+    provider: normalizeOptionalString(ref.provider) ?? "",
+    model: normalizeOptionalString(ref.model) ?? "",
+  });
+  const current = normRef(params.current);
+  if (!current.provider || !current.model) {
+    return undefined;
+  }
+  const sameRef = (
+    a: { provider: string; model: string },
+    b: { provider: string; model: string },
+  ) => a.provider === b.provider && a.model === b.model;
+  const currentIndex = params.chain.findIndex((ref) => sameRef(normRef(ref), current));
+  // Current selection absent from the chain: treat the whole chain as ranked above it.
+  const ceiling = currentIndex === -1 ? params.chain.length : currentIndex;
+  for (let i = 0; i < ceiling; i += 1) {
+    const candidate = normRef(params.chain[i]!);
+    if (!candidate.provider || !candidate.model) {
+      continue;
+    }
+    if (sameRef(candidate, current)) {
+      continue;
+    }
+    if (params.isAvailable({ provider: candidate.provider, model: candidate.model })) {
+      return { provider: candidate.provider, model: candidate.model };
+    }
+  }
+  return undefined;
+}
+
 export { resolveAgentIdFromSessionKey };
 
 export function resolveSessionAgentIds(params: {
