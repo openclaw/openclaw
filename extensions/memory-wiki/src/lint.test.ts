@@ -67,67 +67,63 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
   });
 
-  it("does not report broken-wikilink for [[...]] inside fenced code blocks or inline code", async () => {
+  it("does not report broken wikilinks for [[…]] patterns inside fenced code blocks or inline code (#97945)", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-fenced-code-",
+      prefix: "memory-wiki-lint-fenced-code-wikilinks-",
       config: {
-        vault: { renderMode: "obsidian" },
+        vault: { renderMode: "native" },
       },
     });
     await Promise.all(
       ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
     );
-
     await fs.writeFile(
-      path.join(rootDir, "sources", "code-snippets.md"),
+      path.join(rootDir, "sources", "alpha.md"),
       renderWikiMarkdown({
         frontmatter: {
           pageType: "source",
-          id: "source.code-snippets",
-          title: "Code Snippets",
+          id: "source.alpha",
+          title: "Alpha Source",
         },
-        body: [
-          "# Code Snippets",
-          "",
-          "Normal text with no wikilinks here.",
-          "",
-          "```bash",
-          'if [[ "$name" == "Alice" ]]; then',
-          "  echo found",
-          "fi",
-          "```",
-          "",
-          "```scala",
-          "val result = Future[Option[User]] {",
-          '  collectionName = "users"',
-          "}",
-          "```",
-          "",
-          'Inline code: `val userId: String` and `[[ "$str" == "test" ]]`.',
-        ].join("\n"),
+        body: "# Alpha Source\n",
       }),
       "utf8",
     );
+    // Fenced code blocks and inline code with [[…]] syntax must not produce
+    // broken-wikilink warnings — the text inside code regions is literal,
+    // not a wikilink reference.
     await fs.writeFile(
-      path.join(rootDir, "entities", "alpha.md"),
+      path.join(rootDir, "entities", "code-samples.md"),
       renderWikiMarkdown({
         frontmatter: {
           pageType: "entity",
-          id: "entity.alpha",
-          title: "Alpha",
-          sourceIds: ["source.code-snippets"],
+          id: "entity.code-samples",
+          title: "Code Samples",
+          sourceIds: ["source.alpha"],
         },
-        body: "# Alpha\n",
+        body:
+          "# Code Samples\n\n" +
+          "Bash inside a fenced code block:\n\n" +
+          "```bash\n" +
+          'if [[ "$name" == "Alice" ]]; then echo "ok"; fi\n' +
+          "```\n\n" +
+          "Scala generics inside a tilde-fenced block:\n\n" +
+          "~~~scala\n" +
+          "def handle(userId: String, request: Request[A]): Future[Option[User]] = ???\n" +
+          "~~~\n\n" +
+          'Inline `[[ -z "$str" ]]` code must be skipped.\n\n' +
+          "Outside code, [[real-missing-link]] must still be reported.\n",
       }),
       "utf8",
     );
 
     const result = await lintMemoryWikiVault(config);
-
     const linkIssues = result.issues.filter(
-      (issue) => issue.path === "sources/code-snippets.md" && issue.code === "broken-wikilink",
+      (issue) => issue.path === "entities/code-samples.md" && issue.code === "broken-wikilink",
     );
-    expect(linkIssues).toHaveLength(0);
+    expect(linkIssues.map((issue) => issue.message)).toEqual([
+      "Broken wikilink target `real-missing-link`.",
+    ]);
   });
 
   it("accepts unmanaged raw markdown source pages without page frontmatter", async () => {

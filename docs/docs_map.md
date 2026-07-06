@@ -9218,6 +9218,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Token budgets
   - H2: Model tools
   - H2: Goal context on every turn
+  - H2: Control UI
   - H2: TUI
   - H2: Channel behavior
   - H2: Troubleshooting

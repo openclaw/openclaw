@@ -8,11 +8,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
@@ -178,23 +176,6 @@ class CameraHandler(
     }
   }
 
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? {
-    if (paramsJson.isNullOrBlank()) return null
-    val root =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
-    val value =
-      (root["includeAudio"] as? JsonPrimitive)
-        ?.contentOrNull
-        ?.trim()
-        ?.lowercase()
-    return when (value) {
-      "true" -> true
-      "false" -> false
-      else -> null
-    }
-  }
+  private fun parseIncludeAudio(paramsJson: String?): Boolean? =
+    parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
 }

@@ -54,10 +54,12 @@ export type ControlUiMockGatewayScenario = {
   }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
+  featureMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
   models?: Array<{ id: string; name: string; provider: string }>;
   sessionKey?: string;
+  terminalEnabled?: boolean;
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -210,10 +212,12 @@ function normalizeScenario(
     controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionKey,
+    terminalEnabled: scenario.terminalEnabled ?? false,
   };
 }
 
@@ -228,6 +232,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
+    terminalEnabled: normalizedScenario.terminalEnabled,
   };
 }
 
@@ -394,7 +399,7 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: ["chat.metadata", "chat.startup"] },
+          features: { events: [], methods: scenario.featureMethods },
           controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },

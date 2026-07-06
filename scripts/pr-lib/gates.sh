@@ -12,8 +12,12 @@ run_hosted_prepare_gates() {
 
   local repo
   repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+  local scripts_dir="${script_parent_dir:-}"
+  if [ -z "$scripts_dir" ]; then
+    scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  fi
   local args=(
-    scripts/verify-pr-hosted-gates.mjs
+    "$scripts_dir/verify-pr-hosted-gates.mjs"
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"

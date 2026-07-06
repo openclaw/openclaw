@@ -5707,7 +5707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 476,
+      "line": 503,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -5715,7 +5715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 476,
+      "line": 503,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -5723,7 +5723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 863,
+      "line": 906,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -5731,7 +5731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 864,
+      "line": 907,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "surface": "android",
@@ -5739,7 +5739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 865,
+      "line": 908,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed: $reason",
       "surface": "android",
@@ -5747,7 +5747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1812,
+      "line": 1911,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -5755,7 +5755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1812,
+      "line": 1911,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",

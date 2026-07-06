@@ -612,6 +612,9 @@ export class ChatPage extends LitElement {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const currentAgentId = resolveChatAgentId(state);
+    const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
+      (agent) => agent.id === currentAgentId,
+    )?.model?.primary;
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
@@ -672,6 +675,7 @@ export class ChatPage extends LitElement {
         manualRefreshInFlight: state.chatManualRefreshInFlight,
         model: {
           activeRunId: state.chatRunId,
+          agentDefaultModel,
           connected: state.connected,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
@@ -760,6 +764,7 @@ export class ChatPage extends LitElement {
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+      onGoalCommand: (command) => void state.handleSendChat(command),
       onDismissSideResult: () => {
         state.chatSideResult = null;
         state.requestUpdate?.();

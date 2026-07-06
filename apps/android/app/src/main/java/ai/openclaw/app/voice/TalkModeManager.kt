@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -205,6 +206,8 @@ class TalkModeManager internal constructor(
   @Volatile private var realtimeSessionId: String? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
+  private val realtimeCapturePauseLock = Any()
+  private var realtimeCapturePause: RealtimeCapturePause? = null
 
   // Realtime tool calls can complete before their chat final arrives; cache by call/run id until both sides meet.
   private val realtimeToolLock = Any()
@@ -315,6 +318,19 @@ class TalkModeManager internal constructor(
     val completion: CompletableDeferred<TalkPttStopPayload>?,
   )
 
+  private data class RealtimeCapturePause(
+    // Null while relay creation is still in flight. Keeping the PTT turn here
+    // prevents a late relay response from opening a second microphone capture.
+    val sessionId: String?,
+    val pttCaptureId: String,
+  )
+
+  private enum class RealtimeCaptureResume {
+    Skipped,
+    Resumed,
+    Disconnected,
+  }
+
   private suspend fun startPushToTalk(
     allowNewCapture: Boolean,
     canStartCapture: () -> Boolean,
@@ -373,6 +389,19 @@ class TalkModeManager internal constructor(
         activePttCaptureId = captureId
         pttCompletion = completion
         try {
+          // PTT owns the microphone until its turn finishes. Waiting here prevents
+          // SpeechRecognizer from racing the realtime AudioRecord teardown.
+          withContext(NonCancellable) {
+            pauseRealtimeCaptureForPushToTalk(captureId)
+          }
+          if (
+            activePttCaptureId != captureId ||
+              captureGeneration != startGeneration.get() ||
+              !canStartCapture() ||
+              stopRequested
+          ) {
+            throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          }
           recognizer?.cancel()
           recognizer?.destroy()
           recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
@@ -387,10 +416,8 @@ class TalkModeManager internal constructor(
           activePttCaptureId = null
           pttCompletion = null
           completion?.cancel()
+          resumeRealtimeCaptureAfterPushToTalk(captureId)
           _statusText.value = if (_isEnabled.value) "Listening" else "Ready"
-          if (_isEnabled.value) {
-            start()
-          }
           throw err
         }
         _statusText.value = "Listening (PTT)"
@@ -432,9 +459,7 @@ class TalkModeManager internal constructor(
 
       if (transcript.isEmpty()) {
         _statusText.value = if (_isEnabled.value) "Listening" else "Ready"
-        if (_isEnabled.value) {
-          start()
-        }
+        resumeRealtimeCaptureAfterPushToTalk(captureId)
         return@withContext finishPushToTalk(
           TalkPttStopPayload(captureId = captureId, transcript = null, status = "empty"),
           cleared.completion,
@@ -443,9 +468,7 @@ class TalkModeManager internal constructor(
 
       if (!isConnected()) {
         _statusText.value = "Gateway not connected"
-        if (_isEnabled.value) {
-          start()
-        }
+        resumeRealtimeCaptureAfterPushToTalk(captureId)
         return@withContext finishPushToTalk(
           TalkPttStopPayload(captureId = captureId, transcript = transcript, status = "offline"),
           cleared.completion,
@@ -454,7 +477,11 @@ class TalkModeManager internal constructor(
 
       _statusText.value = "Thinking…"
       scope.launch {
-        finalizeTranscript(transcript)
+        try {
+          finalizeTranscript(transcript)
+        } finally {
+          resumeRealtimeCaptureAfterPushToTalk(captureId)
+        }
       }
       finishPushToTalk(
         TalkPttStopPayload(captureId = captureId, transcript = transcript, status = "queued"),
@@ -474,9 +501,7 @@ class TalkModeManager internal constructor(
         clearPushToTalkRecognition(captureId)
           ?: return@withContext TalkPttStopPayload(captureId = captureId, transcript = null, status = "idle")
       _statusText.value = if (_isEnabled.value) "Listening" else "Ready"
-      if (_isEnabled.value) {
-        start()
-      }
+      resumeRealtimeCaptureAfterPushToTalk(captureId)
       finishPushToTalk(
         TalkPttStopPayload(captureId = captureId, transcript = null, status = "cancelled"),
         cleared.completion,
@@ -808,9 +833,11 @@ class TalkModeManager internal constructor(
     cancelActivePlayback()
     stopTextToSpeechPlayback()
     withContext(Dispatchers.Main) {
-      recognizer?.cancel()
-      recognizer?.destroy()
-      recognizer = null
+      if (activePttCaptureId == null) {
+        recognizer?.cancel()
+        recognizer?.destroy()
+        recognizer = null
+      }
     }
 
     _statusText.value = "Connecting…"
@@ -833,11 +860,27 @@ class TalkModeManager internal constructor(
       throw CancellationException("realtime talk stopped while connecting")
     }
 
-    realtimeSessionId = sessionId
     realtimeOutputSuppressed = false
-    _isListening.value = true
-    _statusText.value = "Listening"
-    startRealtimeCapture(sessionId)
+    val capturePaused =
+      synchronized(realtimeCapturePauseLock) {
+        // Session publication and capture installation are one transition. PTT
+        // therefore either blocks startup or detaches every installed capture job.
+        realtimeSessionId = sessionId
+        val pause = realtimeCapturePause
+        if (pause != null) {
+          realtimeCapturePause = pause.copy(sessionId = sessionId)
+          true
+        } else {
+          _isListening.value = true
+          _statusText.value = "Listening"
+          startRealtimeCaptureLocked(sessionId)
+          false
+        }
+      }
+    if (capturePaused) {
+      Log.d(tag, "realtime session ready; capture paused for PTT relaySessionId=$sessionId")
+      return
+    }
     Log.d(tag, "realtime session started relaySessionId=$sessionId")
   }
 
@@ -865,8 +908,9 @@ class TalkModeManager internal constructor(
       else -> "Talk failed: Realtime provider closed: $reason"
     }
 
+  /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
   @SuppressLint("MissingPermission")
-  private fun startRealtimeCapture(sessionId: String) {
+  private fun startRealtimeCaptureLocked(sessionId: String) {
     realtimeCaptureJob?.cancel()
     realtimeAppendJob?.cancel()
     val audioFrames =
@@ -1180,17 +1224,23 @@ class TalkModeManager internal constructor(
     preserveStatus: Boolean = false,
   ) {
     val status = _statusText.value
-    val sessionId = realtimeSessionId
-    realtimeSessionId = null
+    val (sessionId, captureJobs) =
+      synchronized(realtimeCapturePauseLock) {
+        val currentSessionId = realtimeSessionId
+        val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
+        realtimeSessionId = null
+        realtimeCaptureJob = null
+        realtimeAppendJob = null
+        realtimeCapturePause = null
+        currentSessionId to currentCaptureJobs
+      }
     realtimeOutputSuppressed = false
     if (cancelCapture) {
-      realtimeCaptureJob?.cancel()
+      captureJobs.first?.cancel()
     }
     if (cancelAppend) {
-      realtimeAppendJob?.cancel()
+      captureJobs.second?.cancel()
     }
-    realtimeCaptureJob = null
-    realtimeAppendJob = null
     synchronized(realtimeToolLock) {
       realtimeToolRuns.clear()
       pendingRealtimeToolCalls.clear()
@@ -1208,6 +1258,55 @@ class TalkModeManager internal constructor(
     if (closeSession && !sessionId.isNullOrBlank()) {
       scope.launch {
         closeRealtimeSession(sessionId)
+      }
+    }
+  }
+
+  internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
+    val captureJobs =
+      synchronized(realtimeCapturePauseLock) {
+        val currentSessionId = realtimeSessionId
+        val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
+        realtimeCapturePause = RealtimeCapturePause(sessionId = currentSessionId, pttCaptureId = captureId)
+        realtimeCaptureJob = null
+        realtimeAppendJob = null
+        currentCaptureJobs
+      }
+    val (captureJob, appendJob) = captureJobs
+    captureJob?.cancelAndJoin()
+    appendJob?.cancelAndJoin()
+  }
+
+  internal fun resumeRealtimeCaptureAfterPushToTalk(captureId: String) {
+    val outcome =
+      synchronized(realtimeCapturePauseLock) {
+        val current = realtimeCapturePause ?: return@synchronized RealtimeCaptureResume.Skipped
+        if (current.pttCaptureId != captureId || activePttCaptureId != null) {
+          return@synchronized RealtimeCaptureResume.Skipped
+        }
+        val sessionId = current.sessionId
+        if (!_isEnabled.value || stopRequested || sessionId == null || realtimeSessionId != sessionId) {
+          realtimeCapturePause = null
+          return@synchronized RealtimeCaptureResume.Skipped
+        }
+        if (!isConnected()) return@synchronized RealtimeCaptureResume.Disconnected
+        if (realtimeCaptureJob?.isActive == true || realtimeAppendJob?.isActive == true) {
+          realtimeCapturePause = null
+          return@synchronized RealtimeCaptureResume.Skipped
+        }
+        realtimeCapturePause = null
+        _isListening.value = true
+        _statusText.value = "Listening"
+        startRealtimeCaptureLocked(sessionId)
+        RealtimeCaptureResume.Resumed
+      }
+    when (outcome) {
+      RealtimeCaptureResume.Skipped -> return
+      RealtimeCaptureResume.Resumed -> return
+      RealtimeCaptureResume.Disconnected -> {
+        _statusText.value = "Gateway not connected"
+        stopRealtimeRelay(preserveStatus = true)
+        disableRealtimeModeAndNotifyOwner()
       }
     }
   }

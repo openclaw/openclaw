@@ -653,6 +653,103 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun pushToTalkPauseWaitsForRealtimeCaptureJobs() =
+    runTest {
+      val manager = createManager()
+      val captureJob = Job()
+      val appendJob = Job()
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeCaptureJob", captureJob)
+      setPrivateField(manager, "realtimeAppendJob", appendJob)
+      setMutableStateFlow(manager, "_isEnabled", true)
+
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+
+      assertTrue(captureJob.isCancelled)
+      assertTrue(appendJob.isCancelled)
+      assertNull(readPrivateField(manager, "realtimeCaptureJob"))
+      assertNull(readPrivateField(manager, "realtimeAppendJob"))
+      assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
+    }
+
+  @Test
+  fun stalePushToTalkCompletionCannotResumeNewerPause() =
+    runTest {
+      val manager = createManager()
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-new")
+      setPrivateField(manager, "activePttCaptureId", "capture-new")
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-old")
+
+      assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
+      assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
+    }
+
+  @Test
+  fun pushToTalkPauseOutlivesRecognitionWhileRelayConnects() =
+    runTest {
+      val manager = createManager()
+
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      setPrivateField(manager, "activePttCaptureId", null)
+
+      val pause = readPrivateField(manager, "realtimeCapturePause")
+      assertTrue(pause != null)
+      assertNull(readPrivateField(pause!!, "sessionId"))
+      assertEquals("capture-1", readPrivateField(pause, "pttCaptureId"))
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertNull(readPrivateField(manager, "realtimeCapturePause"))
+    }
+
+  @Test
+  fun resumingRealtimeCaptureRestoresListeningState() =
+    runTest {
+      val manager = createManager(scope = this)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      setMutableStateFlow(manager, "_isListening", false)
+      setMutableStateFlow(manager, "_statusText", "Thinking…")
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertTrue(manager.isListening.value)
+      assertEquals("Listening", manager.statusText.value)
+      manager.stopAllCapture()
+    }
+
+  @Test
+  fun disconnectedRelayDoesNotResumeAfterPushToTalk() =
+    runTest {
+      var stoppedByRelay = false
+      val manager =
+        createManager(
+          scope = this,
+          isConnected = { false },
+          onStoppedByRelay = { stoppedByRelay = true },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      setMutableStateFlow(manager, "_isListening", false)
+      setMutableStateFlow(manager, "_statusText", "Gateway not connected")
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertFalse(manager.isListening.value)
+      assertFalse(manager.isEnabled.value)
+      assertTrue(stoppedByRelay)
+      assertEquals("Gateway not connected", manager.statusText.value)
+      assertNull(readPrivateField(manager, "realtimeSessionId"))
+      assertNull(readPrivateField(manager, "realtimeCaptureJob"))
+      assertNull(readPrivateField(manager, "realtimeAppendJob"))
+    }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun chatFinalWaitUsesGatewayEventTimeout() =
     runTest {

@@ -346,6 +346,70 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("renders a canonical inbound image through the ticketed media route", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const requestedMediaUrls: URL[] = [];
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      requestedMediaUrls.push(url);
+      expect(url.searchParams.get("source")).toBe("media://inbound/telegram-photo.png");
+      if (url.searchParams.get("meta") === "1") {
+        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            available: true,
+            mediaTicket: "ticket-inbound",
+            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          }),
+        });
+        return;
+      }
+      expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
+      await route.fulfill({
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+    });
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          id: "user-inbound-media-ref",
+          role: "user",
+          content: [{ type: "text", text: "🖼️ Attached image" }],
+          MediaPath: "media://inbound/telegram-photo.png",
+          MediaType: "image/png",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+      const image = page.getByAltText("Attached image");
+      await image.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() =>
+          image.evaluate((element) =>
+            element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+          ),
+        )
+        .toBe(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("opens current context and latest-run usage from the composer ring", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1435,6 +1499,104 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
       );
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("restores the selected agent model after clearing a session override", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const agentsList = {
+      agents: [
+        {
+          id: "ops",
+          model: { primary: "anthropic/claude-opus-4-5" },
+          name: "Operations",
+        },
+      ],
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "agent",
+    };
+    const sessionsList = {
+      count: 1,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: [
+        {
+          key: "agent:ops:session-a",
+          kind: "direct",
+          label: "Operations",
+          updatedAt: Date.now(),
+        },
+      ],
+      ts: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "ops",
+      defaultAgentId: "ops",
+      methodResponses: {
+        "agents.list": agentsList,
+        "chat.startup": {
+          agentsList,
+          messages: [],
+          metadata: {
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+              {
+                id: "claude-opus-4-5",
+                name: "Claude Opus 4.5",
+                provider: "anthropic",
+              },
+            ],
+          },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        },
+        "sessions.list": sessionsList,
+      },
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "anthropic" },
+      ],
+      sessionKey: "agent:ops:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+
+      await modelSelect.click();
+      await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      const firstPatch = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(firstPatch.params)).toMatchObject({
+        key: "agent:ops:session-a",
+        model: "openai/gpt-5.5",
+      });
+      expect(await modelSelect.textContent()).toContain("GPT-5.5");
+
+      await modelSelect.click();
+      await main.locator('[data-chat-model-option=""]').click();
+      const patches = await waitForRequests(gateway, "sessions.patch", 2);
+      expect(requireRecord(patches[1]?.params)).toMatchObject({
+        key: "agent:ops:session-a",
+        model: null,
+      });
+      expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
     } finally {
       await closeBrowserContext(context);
     }

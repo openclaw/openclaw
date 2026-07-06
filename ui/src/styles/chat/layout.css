@@ -360,17 +360,39 @@ openclaw-chat-page {
 .agent-chat__goal {
   align-self: center;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   max-width: calc(100% - 20px);
-  gap: 8px;
+  min-width: 0;
   margin: 0 auto 8px;
-  padding: 7px 12px;
+  padding: 5px 8px 5px 12px;
   color: color-mix(in srgb, var(--text) 82%, var(--muted));
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   font-size: 12px;
   line-height: 1.25;
+}
+
+.agent-chat__goal-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.agent-chat__goal-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.agent-chat__goal-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__goal-label,
@@ -382,13 +404,76 @@ openclaw-chat-page {
 }
 
 .agent-chat__goal-label {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   font-weight: 700;
 }
 
 .agent-chat__goal-objective {
   flex: 1 1 auto;
   color: var(--muted);
+}
+
+.agent-chat__goal-elapsed {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__goal-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.agent-chat__goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.agent-chat__goal-action:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.agent-chat__goal-action svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__goal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px 2px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--text);
+}
+
+.agent-chat__goal-detail-objective {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-chat__goal-detail-note,
+.agent-chat__goal-detail-meta {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .agent-chat__goal--active {

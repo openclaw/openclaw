@@ -165,6 +165,24 @@ function computeStatus(job: CronJob): string {
   return state.lastRunStatus ?? state.lastStatus ?? "idle";
 }
 
+// Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
+// verbatim as the --json `status` field, so the failure count must stay out of it.
+// consecutiveErrors resets to 0 on the next successful run, so the count is live.
+function decorateStatusWithFailures(status: string, consecutiveErrors: number | undefined): string {
+  const failures = consecutiveErrors ?? 0;
+  if (status !== "error" || failures <= 1) {
+    return status;
+  }
+  // Capped so the Status column never overflows (a minute cron failing for a day
+  // reaches 4 digits); past 99 the exact figure adds nothing over "chronic".
+  return failures > 99 ? `${status} (99+x)` : `${status} (${failures}x)`;
+}
+
+function formatCronStatusForDisplay(job: CronJob): string {
+  const state = job.state ?? {};
+  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+}
+
 export function handleCronCliError(err: unknown) {
   defaultRuntime.error(danger(String(err)));
   defaultRuntime.exit(1);
@@ -318,7 +336,7 @@ const CRON_NAME_PAD = 24;
 const CRON_SCHEDULE_PAD = 32;
 const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 9;
+const CRON_STATUS_PAD = 12;
 const CRON_TARGET_PAD = 9;
 const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
@@ -473,7 +491,7 @@ export function printCronList(
     );
     const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = computeStatus(job);
-    const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
+    const statusLabel = pad(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
     const deliveryText = deliveryPreview
@@ -560,7 +578,9 @@ export function printCronShow(
   runtime.log(`delivery: ${preview.label} (${preview.detail})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${computeStatus(job)}`);
+  runtime.log(`status: ${formatCronStatusForDisplay(job)}`);
+  // lastError is the run/schedule failure message; the diagnostic line below is
+  // the run-diagnostics summary and can be empty when only lastError is set.
   runtime.log(`last error: ${job.state.lastError ?? "-"}`);
   runtime.log(`last delivery: ${job.state.lastDeliveryStatus ?? "-"}`);
   runtime.log(`last delivery error: ${job.state.lastDeliveryError ?? "-"}`);
