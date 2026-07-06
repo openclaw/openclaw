@@ -32,6 +32,14 @@ type MarkdownToken = {
   level?: number;
 };
 
+type MarkdownItWithInlineState = MarkdownIt & {
+  inline: MarkdownIt["inline"] & {
+    State: typeof MarkdownIt.StateInline;
+  };
+};
+
+type DelimiterScanResult = MarkdownIt.StateInline.Scanned;
+
 export type MarkdownStyle =
   | "bold"
   | "italic"
@@ -143,6 +151,100 @@ export type MarkdownParseOptions = {
   tableMode?: MarkdownTableMode;
 };
 
+function getCodePointBefore(value: string, index: number): number {
+  if (index <= 0) {
+    return 0x20;
+  }
+  const previous = value.charCodeAt(index - 1);
+  if ((previous & 0xfc00) === 0xdc00 && index > 1) {
+    const high = value.charCodeAt(index - 2);
+    if ((high & 0xfc00) === 0xd800) {
+      return 0x10000 + ((high - 0xd800) << 10) + (previous - 0xdc00);
+    }
+  }
+  if ((previous & 0xf800) === 0xd800) {
+    return 0xfffd;
+  }
+  return previous;
+}
+
+function getCodePointAt(value: string, index: number): number {
+  if (index >= value.length) {
+    return 0x20;
+  }
+  const code = value.charCodeAt(index);
+  if ((code & 0xfc00) === 0xd800 && index + 1 < value.length) {
+    const low = value.charCodeAt(index + 1);
+    if ((low & 0xfc00) === 0xdc00) {
+      return 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+    }
+  }
+  if ((code & 0xfc00) === 0xdc00) {
+    return 0xfffd;
+  }
+  return code;
+}
+
+function isMarkdownWhitespace(codePoint: number): boolean {
+  return codePoint === 0x20 || codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d;
+}
+
+function isEastAsianMarkdownFlankingChar(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
+    (codePoint >= 0x2e80 && codePoint <= 0x2eff) ||
+    (codePoint >= 0x2f00 && codePoint <= 0x2fdf) ||
+    (codePoint >= 0x3000 && codePoint <= 0x303f) ||
+    (codePoint >= 0x3040 && codePoint <= 0x30ff) ||
+    (codePoint >= 0x3130 && codePoint <= 0x318f) ||
+    (codePoint >= 0x31a0 && codePoint <= 0x31ff) ||
+    (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+    (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+    (codePoint >= 0xa960 && codePoint <= 0xa97f) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xfe10 && codePoint <= 0xfe1f) ||
+    (codePoint >= 0xfe30 && codePoint <= 0xfe4f) ||
+    (codePoint >= 0xff00 && codePoint <= 0xffef) ||
+    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+  );
+}
+
+function applyCjkFriendlyDelimiterScanning(md: MarkdownIt): void {
+  const inline = (md as MarkdownItWithInlineState).inline;
+  const PreviousState = inline.State;
+
+  // CommonMark treats CJK punctuation before a closing delimiter as non-flanking.
+  class CjkFriendlyState extends PreviousState {
+    override scanDelims(start: number, canSplitWord: boolean): DelimiterScanResult {
+      const scanned = super.scanDelims(start, canSplitWord);
+      if (!canSplitWord) {
+        return scanned;
+      }
+
+      const marker = this.src.charCodeAt(start);
+      let pos = start;
+      while (pos < this.posMax && this.src.charCodeAt(pos) === marker) {
+        pos += 1;
+      }
+
+      const lastChar = getCodePointBefore(this.src, start);
+      const nextChar = getCodePointAt(this.src, pos);
+      if (
+        isMarkdownWhitespace(lastChar) ||
+        isMarkdownWhitespace(nextChar) ||
+        (!isEastAsianMarkdownFlankingChar(lastChar) && !isEastAsianMarkdownFlankingChar(nextChar))
+      ) {
+        return scanned;
+      }
+
+      return { ...scanned, can_open: true, can_close: true };
+    }
+  }
+
+  inline.State = CjkFriendlyState;
+}
+
 function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
   const md = new MarkdownIt({
     html: false,
@@ -150,6 +252,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     breaks: false,
     typographer: false,
   });
+  applyCjkFriendlyDelimiterScanning(md);
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
