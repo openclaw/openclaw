@@ -1,11 +1,22 @@
 // Whatsapp API module exposes the plugin public contract.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
+  NewChatMessageCapInfo,
+  ReachoutTimelockState,
+  SignalKeyStoreWithTransaction,
+  USyncQueryResult,
   WAMessage,
   WAPresence,
 } from "baileys";
+import { USyncQuery, USyncUser } from "baileys";
+import { isTcTokenExpired, resolveTcTokenJid } from "baileys/lib/Utils/tc-token-utils.js";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
@@ -39,6 +50,33 @@ type StructuredStickerSendOptions = {
   mimetype?: string;
 };
 
+type WhatsAppTokenKeyEntry = {
+  token?: Buffer | Uint8Array | null;
+  timestamp?: number | string | null;
+  senderTimestamp?: number;
+};
+
+type WebSendSocket = {
+  sendMessage: (
+    jid: string,
+    content: AnyMessageContent,
+    options?: MiscMessageGenerationOptions,
+  ) => Promise<WAMessage | undefined>;
+  sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+  executeUSyncQuery?: (query: USyncQuery) => Promise<USyncQueryResult | undefined>;
+  getAuthState?: () => { keys: SignalKeyStoreWithTransaction } | undefined;
+  getLIDForPN?: (jid: string) => Promise<string | null>;
+  fetchAccountReachoutTimelock?: () => Promise<ReachoutTimelockState>;
+  fetchNewChatMessageCap?: () => Promise<NewChatMessageCapInfo>;
+};
+
+const outboundTokenLogger = getChildLogger({
+  module: "web-send",
+  feature: "outbound-token-diagnostics",
+});
+const DIRECT_PN_SEND_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
+const DIRECT_LID_SEND_JID_RE = /^(\d+)(?::\d+)?@lid$/i;
+
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
     channel: "whatsapp",
@@ -51,15 +89,252 @@ function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
 }
 
-export function createWebSendApi(params: {
-  sock: {
-    sendMessage: (
-      jid: string,
-      content: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
-    ) => Promise<WAMessage | undefined>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+async function writeJsonIfMissing(filePath: string, value: unknown): Promise<void> {
+  try {
+    await fs.writeFile(filePath, `${JSON.stringify(value)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw err;
+    }
+  }
+}
+
+function normalizeDirectLidJid(raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    return null;
+  }
+  const value = String(raw).trim();
+  const match = value.match(DIRECT_LID_SEND_JID_RE);
+  if (match) {
+    return `${match[1]}@lid`;
+  }
+  const digits = value.replace(/\D/g, "");
+  return digits ? `${digits}@lid` : null;
+}
+
+function normalizeDirectPnDigits(raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    return null;
+  }
+  const value = String(raw).trim();
+  const match = value.match(DIRECT_PN_SEND_JID_RE);
+  if (match) {
+    return match[1];
+  }
+  const digits = value.replace(/\D/g, "");
+  return digits || null;
+}
+
+function findUsyncLidJid(result: USyncQueryResult | undefined, phoneDigits: string): string | null {
+  for (const entry of result?.list ?? []) {
+    const record = entry as Record<string, unknown>;
+    const entryPhone = normalizeDirectPnDigits(record.id);
+    if (entryPhone && entryPhone !== phoneDigits) {
+      continue;
+    }
+    const lidJid = normalizeDirectLidJid(record.lid);
+    if (lidJid) {
+      return lidJid;
+    }
+  }
+  return null;
+}
+
+async function persistOutboundLidMapping(params: {
+  authDir: string;
+  phoneDigits: string;
+  lidJid: string;
+}): Promise<void> {
+  const lidDigits = normalizeDirectLidJid(params.lidJid)?.replace(/\D/g, "");
+  if (!lidDigits) {
+    return;
+  }
+  await fs.mkdir(params.authDir, { recursive: true });
+  await Promise.all([
+    writeJsonIfMissing(
+      path.join(params.authDir, `lid-mapping-${params.phoneDigits}.json`),
+      lidDigits,
+    ),
+    writeJsonIfMissing(
+      path.join(params.authDir, `lid-mapping-${lidDigits}_reverse.json`),
+      params.phoneDigits,
+    ),
+  ]);
+}
+
+async function resolveOutboundJidWithUsync(params: {
+  sock: WebSendSocket;
+  authDir?: string;
+  recipient: string;
+}): Promise<string> {
+  const localJid = params.authDir
+    ? toWhatsappJidWithLid(params.recipient, { authDir: params.authDir })
+    : toWhatsappJid(params.recipient);
+  const phoneDigits = localJid.match(DIRECT_PN_SEND_JID_RE)?.[1];
+  if (!params.authDir || !phoneDigits || !params.sock.executeUSyncQuery) {
+    return localJid;
+  }
+  try {
+    const query = new USyncQuery()
+      .withContext("interactive")
+      .withMode("query")
+      .withContactProtocol()
+      .withLIDProtocol()
+      .withUser(new USyncUser().withPhone(phoneDigits));
+    const result = await params.sock.executeUSyncQuery(query);
+    const lidJid = findUsyncLidJid(result, phoneDigits);
+    if (!lidJid) {
+      return localJid;
+    }
+    await persistOutboundLidMapping({ authDir: params.authDir, phoneDigits, lidJid });
+    const resolved = toWhatsappJidWithLid(params.recipient, { authDir: params.authDir });
+    if (resolved !== localJid) {
+      outboundTokenLogger.info(
+        {
+          to: redactIdentifier(params.recipient),
+          pnJid: redactIdentifier(localJid),
+          lidJid: redactIdentifier(resolved),
+        },
+        "resolved outbound WhatsApp PN target to LID via USync",
+      );
+    }
+    return resolved;
+  } catch (err) {
+    logVerbose(`WhatsApp outbound USync LID lookup failed: ${String(err)}`);
+    return localJid;
+  }
+}
+
+function hasUsableTcToken(entry: WhatsAppTokenKeyEntry | undefined): boolean {
+  const tokenLength = entry?.token?.length ?? 0;
+  return tokenLength > 0 && !isTcTokenExpired(entry?.timestamp);
+}
+
+function describeTcTokenEntry(entry: WhatsAppTokenKeyEntry | undefined) {
+  const token = entry?.token;
+  const tokenLength = token?.length ?? 0;
+  const tokenSha256 =
+    token && tokenLength > 0
+      ? createHash("sha256").update(Buffer.from(token)).digest("hex").slice(0, 12)
+      : undefined;
+  return {
+    tokenLength,
+    tokenSha256,
+    timestamp: entry?.timestamp,
+    senderTimestamp: entry?.senderTimestamp,
+    expired: tokenLength > 0 ? isTcTokenExpired(entry?.timestamp) : undefined,
   };
+}
+
+async function readOutboundTcTokenEntry(params: {
+  keys: SignalKeyStoreWithTransaction;
+  tcTokenJid: string;
+}): Promise<WhatsAppTokenKeyEntry | undefined> {
+  const entries = await params.keys.get("tctoken", [params.tcTokenJid]);
+  return entries[params.tcTokenJid] as WhatsAppTokenKeyEntry | undefined;
+}
+
+async function maybeFetchOutboundTokenDiagnostics(params: { sock: WebSendSocket }): Promise<{
+  reachoutTimelock?: ReachoutTimelockState;
+  newChatMessageCap?: NewChatMessageCapInfo;
+}> {
+  const [reachoutTimelock, newChatMessageCap] = await Promise.all([
+    params.sock.fetchAccountReachoutTimelock?.().catch((err) => {
+      logVerbose(`WhatsApp reachout timelock lookup failed: ${String(err)}`);
+      return undefined;
+    }),
+    params.sock.fetchNewChatMessageCap?.().catch((err) => {
+      logVerbose(`WhatsApp new-chat message cap lookup failed: ${String(err)}`);
+      return undefined;
+    }),
+  ]);
+  return { reachoutTimelock, newChatMessageCap };
+}
+
+function formatDateForError(value: Date | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const time = value.getTime();
+  return Number.isFinite(time) ? value.toISOString() : undefined;
+}
+
+function buildReachoutTimelockError(params: {
+  jid: string;
+  tcTokenJid: string;
+  reachoutTimelock: ReachoutTimelockState;
+  newChatMessageCap?: NewChatMessageCapInfo;
+}): Error {
+  const until = formatDateForError(params.reachoutTimelock.timeEnforcementEnds);
+  const reason = params.reachoutTimelock.enforcementType
+    ? ` type ${params.reachoutTimelock.enforcementType}`
+    : "";
+  const quota =
+    params.newChatMessageCap?.used_quota !== undefined &&
+    params.newChatMessageCap?.total_quota !== undefined
+      ? ` new-chat quota ${params.newChatMessageCap.used_quota}/` +
+        `${params.newChatMessageCap.total_quota}.`
+      : "";
+  return new Error(
+    `WhatsApp reachout timelock is active${reason}${until ? ` until ${until}` : ""}; ` +
+      `missing trusted-contact privacy token for ${redactIdentifier(params.jid)} ` +
+      `(${redactIdentifier(params.tcTokenJid)}), so WhatsApp Web may accept the request ` +
+      `without delivering a visible 1:1 message.${quota}`,
+  );
+}
+
+async function ensureOutboundTcToken(params: { sock: WebSendSocket; jid: string }): Promise<void> {
+  if (!DIRECT_PN_SEND_JID_RE.test(params.jid) && !DIRECT_LID_SEND_JID_RE.test(params.jid)) {
+    return;
+  }
+  const authState = params.sock.getAuthState?.();
+  const getLIDForPN = params.sock.getLIDForPN;
+  if (!authState?.keys || !getLIDForPN) {
+    return;
+  }
+  const tcTokenJid = await resolveTcTokenJid(params.jid, async (jid) => await getLIDForPN(jid));
+  const entry = await readOutboundTcTokenEntry({ keys: authState.keys, tcTokenJid });
+  if (hasUsableTcToken(entry)) {
+    outboundTokenLogger.debug(
+      {
+        jid: redactIdentifier(params.jid),
+        tcTokenJid: redactIdentifier(tcTokenJid),
+        token: describeTcTokenEntry(entry),
+      },
+      "using outbound WhatsApp trusted-contact token",
+    );
+    return;
+  }
+  const diagnostics = await maybeFetchOutboundTokenDiagnostics({ sock: params.sock });
+  const logMissingToken = diagnostics.reachoutTimelock?.isActive
+    ? outboundTokenLogger.warn.bind(outboundTokenLogger)
+    : outboundTokenLogger.info.bind(outboundTokenLogger);
+  logMissingToken(
+    {
+      jid: redactIdentifier(params.jid),
+      tcTokenJid: redactIdentifier(tcTokenJid),
+      token: describeTcTokenEntry(entry),
+      reachoutTimelock: diagnostics.reachoutTimelock,
+      newChatMessageCap: diagnostics.newChatMessageCap,
+    },
+    "missing outbound WhatsApp trusted-contact token",
+  );
+  if (diagnostics.reachoutTimelock?.isActive) {
+    throw buildReachoutTimelockError({
+      jid: params.jid,
+      tcTokenJid,
+      reachoutTimelock: diagnostics.reachoutTimelock,
+      newChatMessageCap: diagnostics.newChatMessageCap,
+    });
+  }
+}
+
+export function createWebSendApi(params: {
+  sock: WebSendSocket;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;
@@ -71,10 +346,8 @@ export function createWebSendApi(params: {
   // ending up in a sender-only ghost chat (#67378). Defaults to PN-only.
   authDir?: string;
 }) {
-  const resolveOutboundJid = (recipient: string): string =>
-    params.authDir
-      ? toWhatsappJidWithLid(recipient, { authDir: params.authDir })
-      : toWhatsappJid(recipient);
+  const resolveOutboundJid = (recipient: string): Promise<string> =>
+    resolveOutboundJidWithUsync({ sock: params.sock, authDir: params.authDir, recipient });
   const resolveMentions = async (
     jid: string,
     text: string,
@@ -87,7 +360,8 @@ export function createWebSendApi(params: {
     content: AnyMessageContent,
     kind: WhatsAppSendKind,
   ): Promise<WhatsAppSendResult> => {
-    const jid = resolveOutboundJid(to);
+    const jid = await resolveOutboundJid(to);
+    await ensureOutboundTcToken({ sock: params.sock, jid });
     const result = await params.sock.sendMessage(jid, content);
     recordWhatsAppOutbound(params.defaultAccountId);
     return normalizeWhatsAppSendResult(result, kind);
@@ -102,7 +376,7 @@ export function createWebSendApi(params: {
       sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
       let mediaType = mediaTypeInput;
-      const jid = resolveOutboundJid(to);
+      const jid = await resolveOutboundJid(to);
       let payload: AnyMessageContent;
       if (mediaBuffer) {
         mediaType ??= "application/octet-stream";
@@ -164,6 +438,7 @@ export function createWebSendApi(params: {
         participant: sendOptions?.quotedMessageKey?.participant,
         messageText: sendOptions?.quotedMessageKey?.messageText,
       });
+      await ensureOutboundTcToken({ sock: params.sock, jid });
       const result = quotedOpts
         ? await params.sock.sendMessage(jid, payload, quotedOpts)
         : await params.sock.sendMessage(jid, payload);
@@ -259,7 +534,7 @@ export function createWebSendApi(params: {
     ): Promise<WhatsAppSendResult> => {
       // Resolve DM targets through the same LID-aware path as normal sends so
       // reactions land on the delivered WhatsApp message key.
-      const jid = resolveOutboundJid(chatJid);
+      const jid = await resolveOutboundJid(chatJid);
       const result = await params.sock.sendMessage(jid, {
         react: {
           text: emoji,
@@ -274,7 +549,7 @@ export function createWebSendApi(params: {
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {
-      const jid = resolveOutboundJid(to);
+      const jid = await resolveOutboundJid(to);
       if (isWhatsAppNewsletterJid(jid)) {
         return;
       }

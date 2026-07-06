@@ -2,6 +2,11 @@
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
+  NewChatMessageCapInfo,
+  ReachoutTimelockState,
+  SignalKeyStoreWithTransaction,
+  USyncQuery,
+  USyncQueryResult,
   WAMessage,
   WAPresence,
 } from "baileys";
@@ -21,6 +26,11 @@ export type WhatsAppSocketOperationAdapter = {
     options?: MiscMessageGenerationOptions,
   ) => Promise<WAMessage | undefined>;
   sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+  executeUSyncQuery?: (query: USyncQuery) => Promise<USyncQueryResult | undefined>;
+  getAuthState?: () => { keys: SignalKeyStoreWithTransaction } | undefined;
+  getLIDForPN?: (jid: string) => Promise<string | null>;
+  fetchAccountReachoutTimelock?: () => Promise<ReachoutTimelockState>;
+  fetchNewChatMessageCap?: () => Promise<NewChatMessageCapInfo>;
 };
 
 type WhatsAppSocketOperationTimeoutHooks = {

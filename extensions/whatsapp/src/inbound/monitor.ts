@@ -846,6 +846,35 @@ export async function attachWebInboxToSocket(
         sendOperationTimeoutMs,
       ).sendPresenceUpdate(presenceLocal, jid);
     },
+    executeUSyncQuery: async (query) => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+      }
+      return await currentSock.executeUSyncQuery(query);
+    },
+    getAuthState: () => getCurrentSock()?.authState,
+    getLIDForPN: async (jid) => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+      }
+      return await currentSock.signalRepository.lidMapping.getLIDForPN(jid);
+    },
+    fetchAccountReachoutTimelock: async () => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+      }
+      return await currentSock.fetchAccountReachoutTimelock();
+    },
+    fetchNewChatMessageCap: async () => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+      }
+      return await currentSock.fetchNewChatMessageCap();
+    },
   };
 
   const summarizeGroupMeta = async (meta: GroupMetadata) => {

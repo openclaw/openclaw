@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  SignalKeyStoreWithTransaction,
+  WAMessage,
+} from "baileys";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
@@ -636,6 +641,85 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     });
     await api.sendMessage("+15555550000", "hello");
     expect(sendMessage).toHaveBeenCalledWith("987654@lid", { text: "hello" });
+  });
+
+  it("queries USync and persists PN to LID mappings before sendMessage", async () => {
+    const executeUSyncQuery = vi.fn(async () => ({
+      list: [{ id: "16666660000@s.whatsapp.net", lid: "777888@lid" }],
+      sideList: [],
+    }));
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate, executeUSyncQuery },
+      defaultAccountId: "main",
+      authDir,
+    });
+
+    await api.sendMessage("+16666660000", "hello");
+
+    expect(executeUSyncQuery).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("777888@lid", { text: "hello" });
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-16666660000.json"), "utf8")).toBe(
+      '"777888"\n',
+    );
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-777888_reverse.json"), "utf8")).toBe(
+      '"16666660000"\n',
+    );
+  });
+
+  it("fails before sendMessage when reachout timelock is active without a trusted-contact token", async () => {
+    const keys = {
+      get: vi.fn(async () => ({})),
+      set: vi.fn(async () => undefined),
+      isInTransaction: () => false,
+      transaction: vi.fn(async (exec: () => Promise<unknown>) => await exec()),
+    } as unknown as SignalKeyStoreWithTransaction;
+    const api = createWebSendApi({
+      sock: {
+        sendMessage,
+        sendPresenceUpdate,
+        getAuthState: () => ({ keys }),
+        getLIDForPN: vi.fn(async () => null),
+        fetchAccountReachoutTimelock: vi.fn(async () => ({
+          isActive: true,
+          timeEnforcementEnds: new Date("2026-07-07T00:00:00.000Z"),
+        })),
+        fetchNewChatMessageCap: vi.fn(async () => ({
+          total_quota: 10,
+          used_quota: 10,
+        })),
+      },
+      defaultAccountId: "main",
+    });
+
+    await expect(api.sendMessage("+14445550000", "hello")).rejects.toThrow(
+      "WhatsApp reachout timelock is active",
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(keys.get).toHaveBeenCalledWith("tctoken", ["14445550000@s.whatsapp.net"]);
+  });
+
+  it("logs missing trusted-contact token diagnostics without blocking inactive accounts", async () => {
+    const keys = {
+      get: vi.fn(async () => ({})),
+      set: vi.fn(async () => undefined),
+      isInTransaction: () => false,
+      transaction: vi.fn(async (exec: () => Promise<unknown>) => await exec()),
+    } as unknown as SignalKeyStoreWithTransaction;
+    const api = createWebSendApi({
+      sock: {
+        sendMessage,
+        sendPresenceUpdate,
+        getAuthState: () => ({ keys }),
+        getLIDForPN: vi.fn(async () => null),
+        fetchAccountReachoutTimelock: vi.fn(async () => ({ isActive: false })),
+        fetchNewChatMessageCap: vi.fn(async () => ({ total_quota: 10, used_quota: 1 })),
+      },
+      defaultAccountId: "main",
+    });
+
+    await api.sendMessage("+14445550001", "hello");
+
+    expect(sendMessage).toHaveBeenCalledWith("14445550001@s.whatsapp.net", { text: "hello" });
   });
 
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
