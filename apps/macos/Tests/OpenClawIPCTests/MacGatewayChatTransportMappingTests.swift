@@ -16,6 +16,12 @@ struct MacGatewayChatTransportMappingTests {
         #expect(transport.sessionTarget(for: "main") == .init(
             sessionKey: "main",
             agentID: nil))
+
+        let snapshotObserverTransport = transport
+        snapshotObserverTransport.updateDefaultGlobalAgentID("Agent-B")
+        #expect(transport.sessionTarget(for: "global") == .init(
+            sessionKey: "global",
+            agentID: "agent-b"))
     }
 
     @Test func `bare global session target tolerates missing selected agent`() {

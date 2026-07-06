@@ -19,18 +19,47 @@ private enum WebChatSwiftUILayout {
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
+    /// Shared across transport value copies so the live view model and its
+    /// snapshot observer cannot diverge on the owner of the bare global alias.
+    private final class RoutingIdentity: @unchecked Sendable {
+        private let lock = NSLock()
+        private var defaultGlobalAgentID: String?
+
+        init(defaultGlobalAgentID: String?) {
+            self.defaultGlobalAgentID = Self.normalized(defaultGlobalAgentID)
+        }
+
+        func update(defaultGlobalAgentID: String?) {
+            self.lock.withLock {
+                self.defaultGlobalAgentID = Self.normalized(defaultGlobalAgentID)
+            }
+        }
+
+        func currentAgentID() -> String? {
+            self.lock.withLock { self.defaultGlobalAgentID }
+        }
+
+        private static func normalized(_ agentID: String?) -> String? {
+            let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return normalized?.isEmpty == false ? normalized : nil
+        }
+    }
+
     struct SessionTarget: Equatable {
         let sessionKey: String
         let agentID: String?
     }
 
     private let outboxGatewayID: String?
-    private let defaultGlobalAgentID: String?
+    private let routingIdentity: RoutingIdentity
 
     init(outboxGatewayID: String? = nil, defaultGlobalAgentID: String? = nil) {
         self.outboxGatewayID = outboxGatewayID
-        let normalized = defaultGlobalAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.defaultGlobalAgentID = normalized?.isEmpty == false ? normalized : nil
+        self.routingIdentity = RoutingIdentity(defaultGlobalAgentID: defaultGlobalAgentID)
+    }
+
+    func updateDefaultGlobalAgentID(_ agentID: String?) {
+        self.routingIdentity.update(defaultGlobalAgentID: agentID)
     }
 
     /// Bare alias keys ("global") do not name their owner; the gateway
@@ -38,7 +67,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     /// window's agent explicitly, mirroring the iOS transport.
     private func selectedGlobalAgentID(for sessionKey: String) -> String? {
         sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
-            ? self.defaultGlobalAgentID
+            ? self.routingIdentity.currentAgentID()
             : nil
     }
 
@@ -299,7 +328,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "scope": AnyCodable("text"),
             "includeArgs": AnyCodable(true),
         ]
-        if let agentID = Self.agentID(fromSessionKey: sessionKey) ?? self.defaultGlobalAgentID {
+        if let agentID = Self.agentID(fromSessionKey: sessionKey) ?? self.routingIdentity.currentAgentID() {
             params["agentId"] = AnyCodable(agentID)
         }
         let data = try await GatewayConnection.shared.request(
@@ -321,7 +350,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         ]
         if let agentID = Self.agentID(fromSessionKey: key)
             ?? parentSessionKey.flatMap(Self.agentID(fromSessionKey:))
-            ?? self.defaultGlobalAgentID
+            ?? self.routingIdentity.currentAgentID()
         {
             params["agentId"] = AnyCodable(agentID)
         }
@@ -621,6 +650,8 @@ final class WebChatSwiftUIWindowController {
                     nil
                 }
                 if let routingIdentity {
+                    (transport as? MacGatewayChatTransport)?
+                        .updateDefaultGlobalAgentID(routingIdentity.defaultAgentID)
                     if let store = transcriptCache as? OpenClawChatSQLiteTranscriptCache,
                        store.gatewayID == MacChatTranscriptCache.currentGatewayID(),
                        let persistedIdentity = OpenClawChatSessionRoutingIdentity(
