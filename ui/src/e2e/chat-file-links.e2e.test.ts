@@ -44,7 +44,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         historyMessages: [
           {
             role: "assistant",
-            content: [{ type: "text", text: "Review `src/sample.ts:2`." }],
+            content: [{ type: "text", text: "Review `README.md:2`." }],
             timestamp: 1,
           },
         ],
@@ -52,28 +52,30 @@ describeControlUiE2e("Control UI chat file links", () => {
           "sessions.files.get": {
             cases: [
               {
-                match: { path: "src/sample.ts" },
+                match: { path: "README.md" },
                 response: {
                   root: "/workspace",
                   file: {
-                    content: "const first = 1;\nconst second = 2;\n",
+                    content: "# Project\n\nNested workspace notes.\n",
                     kind: "read",
                     missing: false,
-                    name: "sample.ts",
-                    path: "src/sample.ts",
+                    name: "README.md",
+                    path: "README.md",
+                    workspacePath: "packages/app/README.md",
                   },
                 },
               },
               {
-                match: { path: "/workspace/src/sample.ts" },
+                match: { path: "/workspace/packages/app/README.md" },
                 response: {
                   root: "/workspace",
                   file: {
-                    content: "const first = 1;\nconst second = 2;\n",
+                    content: "# Project\n\nNested workspace notes.\n",
                     kind: "read",
                     missing: false,
-                    name: "sample.ts",
-                    path: "src/sample.ts",
+                    name: "README.md",
+                    path: "packages/app/README.md",
+                    workspacePath: "packages/app/README.md",
                   },
                 },
               },
@@ -87,8 +89,8 @@ describeControlUiE2e("Control UI chat file links", () => {
               entries: [
                 {
                   kind: "file",
-                  name: "sample.ts",
-                  path: "src/sample.ts",
+                  name: "README.md",
+                  path: "packages/app/README.md",
                   size: 42,
                 },
               ],
@@ -99,7 +101,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       });
 
       await page.goto(`${server.baseUrl}chat`);
-      const chatLink = page.locator('a.markdown-file-link[data-file-path="src/sample.ts"]');
+      const chatLink = page.locator('a.markdown-file-link[data-file-path="README.md"]');
       await chatLink.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(artifactDir, "01-chat-file-link.png") });
       await chatLink.click();
@@ -110,18 +112,21 @@ describeControlUiE2e("Control UI chat file links", () => {
         "2",
       );
       expect((await gateway.getRequests("sessions.files.get"))[0]?.params).toMatchObject({
-        path: "src/sample.ts",
+        path: "README.md",
       });
       await page.screenshot({ path: path.join(artifactDir, "02-chat-file-preview.png") });
 
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await fileView.getByRole("button", { name: "Show in Files" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.files.list"))[0]?.params)
+        .toMatchObject({ path: "packages/app" });
       const browserRow = page
         .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
-        .filter({ hasText: "sample.ts" });
+        .filter({ hasText: "README.md" });
       await browserRow.locator(".chat-workspace-rail__file-open").click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.get"))[1]?.params)
-        .toMatchObject({ path: "/workspace/src/sample.ts" });
+        .toMatchObject({ path: "/workspace/packages/app/README.md" });
       await page.screenshot({ path: path.join(artifactDir, "03-workspace-file-preview.png") });
     } finally {
       await context.close();

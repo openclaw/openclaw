@@ -285,6 +285,7 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(preview.file.content).toBe("# Nested read me\n");
+    expect(preview.file.workspacePath).toBe("packages/app/src/readme.md");
 
     const workspaceRootPreview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
@@ -293,6 +294,7 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(workspaceRootPreview.file.content).toBe("# Read me\n");
+    expect(workspaceRootPreview.file.workspacePath).toBe("src/readme.md");
 
     const browserPreview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {

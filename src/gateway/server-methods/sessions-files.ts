@@ -303,6 +303,7 @@ async function toSessionFileEntry(
   }
   const entry: SessionFileEntry = {
     ...base,
+    workspacePath: browserPath,
     missing: false,
     size: stat.size,
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),

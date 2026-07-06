@@ -368,7 +368,7 @@ function openFile(
         return null;
       }
       const name = file.name || basenameForPath(path);
-      if (/\.(?:md|markdown|mdx)$/i.test(name)) {
+      if (/\.(?:md|markdown|mdx)$/i.test(name) && opts.line == null) {
         return {
           kind: "markdown",
           content: fileSidebarContent(name, file.content),
@@ -377,7 +377,7 @@ function openFile(
       }
       return {
         kind: "file",
-        path: file.path || path,
+        path: file.workspacePath || file.path || path,
         name,
         content: file.content,
         root: result.root ?? null,
