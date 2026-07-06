@@ -241,6 +241,12 @@ export function buildGatewayCronService(params: {
       normalized !== undefined && hasConfiguredAgent(effectiveConfig, normalized)
         ? normalized
         : resolveDefaultAgentId(effectiveConfig);
+    if (normalized !== undefined && normalizeAgentId(agentId) !== normalized) {
+      cronLogger.warn("cron: requested agent not found in runtime config, falling back to default", {
+        requestedAgent: normalized,
+        resolvedAgent: agentId,
+      });
+    }
     return { agentId, cfg: effectiveConfig };
   };
 
@@ -299,14 +305,32 @@ export function buildGatewayCronService(params: {
       return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
     }
 
-    // Derive from canonical agent-prefixed keys only. Relative keys intentionally
-    // fall through to the configured default instead of hardcoding "main".
+    // When an explicit agentId was provided by the caller (e.g. cron timer with
+    // job.agentId), preserve it directly instead of re-resolving through
+    // resolveCronAgent. ResolveCronAgent may silently fall back to the default
+    // agent when the requested agent is not in the runtime config's agent list,
+    // causing the heartbeat to run in the wrong agent's session (#99912).
+    // The runtime config is still merged via resolveCronAgent so startup config
+    // agents (e.g. heartbeat overrides) are available to downstream consumers.
+    if (requestedAgentId) {
+      const { cfg: runtimeConfig } = resolveCronAgent(requestedAgentId);
+      const sessionKey = requestedSessionKey
+        ? resolveCronSessionKey({
+            runtimeConfig,
+            agentId: requestedAgentId,
+            requestedSessionKey,
+          })
+        : undefined;
+      return { runtimeConfig, agentId: requestedAgentId, sessionKey };
+    }
+
+    // No explicit agentId — derive from sessionKey or fall back to default.
     const derivedAgentId =
       requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
         ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
     const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
-      requestedAgentId ?? derivedAgentId,
+      derivedAgentId,
     );
     const agentId = resolvedAgentId || undefined;
     const resolvedSessionKey = agentId
