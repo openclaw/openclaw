@@ -37,7 +37,9 @@ struct AgentWorkspaceFilesScreen: View {
         .navigationTitle("Files")
         .navigationBarTitleDisplayMode(.inline)
         // Registered once at the section root; pushed directory levels resolve
-        // through this single destination table.
+        // through this single destination table. Direct sidebar routes hide the
+        // nav bar for the custom header, so pushed levels restore it explicitly
+        // to keep Back and the share toolbar reachable.
         .navigationDestination(for: Route.self) { route in
             switch route {
             case let .directory(path):
@@ -47,8 +49,10 @@ struct AgentWorkspaceFilesScreen: View {
                 }
                 .navigationTitle(Self.displayName(forPath: path))
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.visible, for: .navigationBar)
             case let .file(path):
                 AgentWorkspaceFilePreview(agentId: self.agentId, path: path)
+                    .toolbar(.visible, for: .navigationBar)
             }
         }
     }
