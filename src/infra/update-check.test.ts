@@ -393,7 +393,7 @@ describe("resolveNpmChannelTag", () => {
     });
   });
 
-  it("surfaces malformed npm view JSON as an error instead of crashing", async () => {
+  it("adds context to malformed npm view JSON errors", async () => {
     const badRunCommand = vi.fn(async () => ({
       stdout: "not valid json {",
       stderr: "",
@@ -408,7 +408,8 @@ describe("resolveNpmChannelTag", () => {
 
     expect(result.version).toBeNull();
     expect(result.nodeEngine).toBeNull();
-    expect(result.error).toMatch(/invalid JSON/i);
+    expect(result.error).toContain("npm view returned invalid JSON");
+    expect(result.error).toContain("SyntaxError");
   });
 });
 
