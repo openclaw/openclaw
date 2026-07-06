@@ -3972,7 +3972,12 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 }
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return model.id.toLowerCase().includes("gemini-3");
+  const id = model.id.toLowerCase();
+  // Gemini 3.x models need thought_signature replay.
+  // Dynamic "latest" aliases (e.g. gemini-flash-latest) resolve to
+  // Gemini 3.x templates but carry the alias as model.id, not the
+  // resolved template id, so check those explicitly too.
+  return id.includes("gemini-3") || (id.includes("gemini-") && id.includes("-latest"));
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;

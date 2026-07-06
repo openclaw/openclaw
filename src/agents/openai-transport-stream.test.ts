@@ -8603,6 +8603,55 @@ describe("openai transport stream", () => {
       );
     });
 
+    it("injects thought_signature for gemini-flash-latest (dynamic alias resolved to Gemini 3.x)", () => {
+      const flashLatestModel = {
+        ...geminiModel,
+        id: "google/gemini-flash-latest",
+        name: "Gemini Flash Latest",
+      };
+      const params = buildOpenAICompletionsParams(
+        flashLatestModel,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: flashLatestModel.api,
+              provider: flashLatestModel.provider,
+              model: flashLatestModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_xyz",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-LATEST-123==",
+                },
+              ],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "SIG-LATEST-123==",
+      );
+    });
+
     it("falls back to skip_thought_signature_validator when a captured same-route Gemini 3 signature is truncated", () => {
       // Compaction-truncated sig: 109 chars, length mod 4 == 1.
       // Same-route assistant tool-call whose captured thoughtSignature is truncated.
