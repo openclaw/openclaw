@@ -51,6 +51,8 @@ struct ChatMarkdownRenderer: View {
                 .lineSpacing(self.variant == .compact ? 2 : 4)
         case let .code(code):
             ChatCodeBlockView(block: code)
+        case let .math(math):
+            ChatMathBlockView(block: math, textColor: self.textColor)
         case let .table(table):
             ChatMarkdownTableView(table: table)
         }
@@ -68,7 +70,7 @@ struct ChatMarkdownRenderer: View {
     }
 }
 
-/// Fenced code and GFM tables are split out by `ChatMarkdownBlockSegmenter`
+/// Fenced code, display math, and GFM tables are split out by `ChatMarkdownBlockSegmenter`
 /// before this runs, so prose only needs chat-style soft-break preservation.
 enum ChatMarkdownDisplayPreprocessor {
     static func preserveChatSoftBreaks(in markdown: String) -> String {

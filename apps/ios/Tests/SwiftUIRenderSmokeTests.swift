@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 import UIKit
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 struct SwiftUIRenderSmokeTests {
     @MainActor private static func host(_ view: some View, size: CGSize? = nil) -> UIWindow {
@@ -108,6 +109,34 @@ struct SwiftUIRenderSmokeTests {
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 402, height: 450))
+        }
+    }
+
+    @Test @MainActor func `display math builds valid and fallback view hierarchies`() {
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = VStack {
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"\notARealCommand{"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: "α + β = γ",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: String(repeating: "{", count: 65) + "x",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: String(repeating: #"\bar"#, count: 129) + "x",
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+                ChatMathBlockView(block: ChatMathBlock(
+                    latex: #"x\textcolor{#fff}{}"#,
+                    isComplete: true), textColor: OpenClawChatTheme.assistantText)
+            }
+            .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 240))
         }
     }
 
