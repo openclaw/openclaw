@@ -1,11 +1,16 @@
 // Covers the promotions feed cache: refresh cadence, 304 revalidation,
 // sequence monotonicity, notified markers, and claim provenance.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   listLivePromotionEntries,
   markPromotionSlugsNotified,
@@ -101,6 +106,36 @@ describe("promotions feed state", () => {
     expect(new Headers(secondInit.headers).get("if-none-match")).toBe('"v4"');
     expect(state.entries).toHaveLength(1);
     expect(readPromotionsFeedState().lastCheckedAtMs).toBe(NOW + 60_000);
+  });
+
+  it("drops a stale validator when the cached payload is invalid", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(feedResponse(feedPayload(), { etag: '"v4"' }))
+      .mockResolvedValueOnce(feedResponse(feedPayload({ sequence: 5 }), { etag: '"v5"' }));
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const kysely =
+        getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "clawhub_promotions_feed_state">>(db);
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("clawhub_promotions_feed_state")
+          .set({ payload_json: "{invalid" })
+          .where("state_key", "=", "default"),
+      );
+    });
+
+    const state = await maybeRefreshPromotionsFeed({
+      nowMs: NOW + 60_000,
+      fetchImpl,
+    });
+
+    const secondInit = fetchImpl.mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(secondInit.headers).get("if-none-match")).toBeNull();
+    expect(state.sequence).toBe(5);
+    expect(state.etag).toBe('"v5"');
+    expect(state.entries).toHaveLength(1);
   });
 
   it("never replaces the cache with an older snapshot sequence", async () => {

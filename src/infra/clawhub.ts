@@ -1805,12 +1805,17 @@ function parseClawHubPromotionCore(
   if (!CLAWHUB_PROMOTION_SLUG_RE.test(slug)) {
     throw new Error(`Malformed ClawHub ${context}: slug must be lowercase [a-z0-9-].`);
   }
+  const startsAt = requiredNumberField(value, "startsAt", context);
+  const endsAt = requiredNumberField(value, "endsAt", context);
+  if (endsAt <= startsAt) {
+    throw new Error(`Malformed ClawHub ${context}: promotion window must end after it starts.`);
+  }
   const promotion: ClawHubPromotionsFeedEntry = {
     slug,
     title: requiredStringField(value, "title", context),
     blurb: requiredStringField(value, "blurb", context),
-    startsAt: requiredNumberField(value, "startsAt", context),
-    endsAt: requiredNumberField(value, "endsAt", context),
+    startsAt,
+    endsAt,
     models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
   };
   const optionalStrings = ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"] as const;
@@ -1925,8 +1930,13 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   }
   const generatedAt = requiredStringField(value, "generatedAt", context);
   const expiresAt = requiredStringField(value, "expiresAt", context);
-  if (!Number.isFinite(Date.parse(generatedAt)) || !Number.isFinite(Date.parse(expiresAt))) {
+  const generatedAtMs = Date.parse(generatedAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(generatedAtMs) || !Number.isFinite(expiresAtMs)) {
     throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
+  }
+  if (expiresAtMs <= generatedAtMs) {
+    throw new Error(`Malformed ClawHub ${context}: expiresAt must be after generatedAt.`);
   }
   const entriesRaw = value.entries;
   if (!Array.isArray(entriesRaw)) {

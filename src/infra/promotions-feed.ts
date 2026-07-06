@@ -50,6 +50,11 @@ export type PromotionClaimRecord = {
 
 const EMPTY_STATE: PromotionsFeedState = { entries: [], notifiedSlugs: new Set() };
 
+type PromotionsFeedStateRead = {
+  state: PromotionsFeedState;
+  payloadInvalid: boolean;
+};
+
 function parseSlugListJson(raw: string | null): Set<string> {
   if (!raw) {
     return new Set();
@@ -61,7 +66,7 @@ function parseSlugListJson(raw: string | null): Set<string> {
   return new Set(parsed.filter((entry): entry is string => typeof entry === "string"));
 }
 
-export function readPromotionsFeedState(): PromotionsFeedState {
+function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
   try {
     const database = openOpenClawStateDatabase();
     const db = getNodeSqliteKysely<PromotionsFeedDatabase>(database.db);
@@ -79,35 +84,50 @@ export function readPromotionsFeedState(): PromotionsFeedState {
         .where("state_key", "=", PROMOTIONS_FEED_STATE_KEY),
     );
     if (!row) {
-      return { ...EMPTY_STATE, notifiedSlugs: new Set() };
+      return {
+        state: { ...EMPTY_STATE, notifiedSlugs: new Set() },
+        payloadInvalid: false,
+      };
     }
     let entries: ClawHubPromotionsFeedEntry[] = [];
+    let payloadInvalid = false;
     if (row.payload_json) {
       try {
         entries = parseClawHubPromotionsFeed(JSON.parse(row.payload_json)).entries;
       } catch {
-        // A stale or contract-drifted payload reads as an empty feed; the
-        // next refresh replaces it.
+        payloadInvalid = true;
       }
     }
     return {
-      ...(row.etag ? { etag: row.etag } : {}),
-      ...(typeof row.feed_sequence === "number" ? { sequence: row.feed_sequence } : {}),
-      entries,
-      ...(typeof row.last_checked_at_ms === "number"
-        ? { lastCheckedAtMs: row.last_checked_at_ms }
-        : {}),
-      notifiedSlugs: parseSlugListJson(row.notified_slugs_json),
+      state: {
+        ...(!payloadInvalid && row.etag ? { etag: row.etag } : {}),
+        ...(!payloadInvalid && typeof row.feed_sequence === "number"
+          ? { sequence: row.feed_sequence }
+          : {}),
+        entries,
+        ...(typeof row.last_checked_at_ms === "number"
+          ? { lastCheckedAtMs: row.last_checked_at_ms }
+          : {}),
+        notifiedSlugs: parseSlugListJson(row.notified_slugs_json),
+      },
+      payloadInvalid,
     };
   } catch {
-    return { ...EMPTY_STATE, notifiedSlugs: new Set() };
+    return {
+      state: { ...EMPTY_STATE, notifiedSlugs: new Set() },
+      payloadInvalid: false,
+    };
   }
 }
 
+export function readPromotionsFeedState(): PromotionsFeedState {
+  return readPromotionsFeedStateWithMetadata().state;
+}
+
 type WritePromotionsFeedStateParams = {
-  etag?: string;
-  sequence?: number;
-  payloadJson?: string;
+  etag?: string | null;
+  sequence?: number | null;
+  payloadJson?: string | null;
   lastCheckedAtMs?: number;
   notifiedSlugs?: Set<string>;
 };
@@ -129,9 +149,11 @@ function writePromotionsFeedState(params: WritePromotionsFeedStateParams): void 
         .where("state_key", "=", PROMOTIONS_FEED_STATE_KEY),
     );
     const next = {
-      etag: params.etag ?? existing?.etag ?? null,
-      payload_json: params.payloadJson ?? existing?.payload_json ?? null,
-      feed_sequence: params.sequence ?? existing?.feed_sequence ?? null,
+      etag: params.etag === undefined ? (existing?.etag ?? null) : params.etag,
+      payload_json:
+        params.payloadJson === undefined ? (existing?.payload_json ?? null) : params.payloadJson,
+      feed_sequence:
+        params.sequence === undefined ? (existing?.feed_sequence ?? null) : params.sequence,
       last_checked_at_ms: params.lastCheckedAtMs ?? existing?.last_checked_at_ms ?? null,
       notified_slugs_json: params.notifiedSlugs
         ? JSON.stringify([...params.notifiedSlugs].toSorted())
@@ -197,12 +219,13 @@ type RefreshPromotionsFeedParams = {
 export async function maybeRefreshPromotionsFeed(
   params: RefreshPromotionsFeedParams = {},
 ): Promise<PromotionsFeedState> {
-  const state = readPromotionsFeedState();
+  const { state, payloadInvalid } = readPromotionsFeedStateWithMetadata();
   const nowMs = params.nowMs ?? Date.now();
   // Never hit the network from unit tests unless the test injects a fetch.
   const skipForTests =
     !params.fetchImpl && (process.env.VITEST !== undefined || process.env.NODE_ENV === "test");
   const fresh =
+    !payloadInvalid &&
     state.lastCheckedAtMs !== undefined &&
     nowMs - state.lastCheckedAtMs < PROMOTIONS_FEED_CHECK_INTERVAL_MS;
   if (skipForTests || (fresh && !params.force)) {
@@ -225,7 +248,7 @@ export async function maybeRefreshPromotionsFeed(
       return { ...state, lastCheckedAtMs: nowMs };
     }
     writePromotionsFeedState({
-      ...(result.etag ? { etag: result.etag } : {}),
+      etag: result.etag ?? null,
       sequence: result.feed.sequence,
       payloadJson: result.payload,
       lastCheckedAtMs: nowMs,
@@ -239,7 +262,10 @@ export async function maybeRefreshPromotionsFeed(
     };
   } catch {
     try {
-      writePromotionsFeedState({ lastCheckedAtMs: nowMs });
+      writePromotionsFeedState({
+        ...(payloadInvalid ? { etag: null, sequence: null, payloadJson: null } : {}),
+        lastCheckedAtMs: nowMs,
+      });
     } catch {
       // Storage unavailable: stay fully in-memory for this invocation.
     }
