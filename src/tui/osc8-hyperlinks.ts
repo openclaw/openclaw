@@ -6,6 +6,18 @@ const ANSI_RE = new RegExp(`${SGR_PATTERN}|${OSC8_PATTERN}`, "g");
 const SGR_START_RE = new RegExp(`^${SGR_PATTERN}`);
 const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
 
+const MD_LINK_HREF_PATTERN = String.raw`https?:\/\/(?:[^\s()>]+|\([^\s()]*\))+`;
+
+function createMarkdownLinkRe(captureHref: boolean): RegExp {
+  const hrefPattern = captureHref ? `(${MD_LINK_HREF_PATTERN})` : MD_LINK_HREF_PATTERN;
+  // The href pattern accepts balanced parenthesized URL segments while the
+  // final unmatched ")" still terminates the markdown link.
+  return new RegExp(
+    String.raw`\[(?:[^\]]*)\]\(\s*<?${hrefPattern}>?(?:\s+["'][^"']*["'])?\s*\)`,
+    "g",
+  );
+}
+
 /**
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).
@@ -14,17 +26,14 @@ export function extractUrls(markdown: string): string[] {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
-  const mdLinkRe = /\[(?:[^\]]*)\]\(\s*<?(https?:\/\/[^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  const mdLinkRe = createMarkdownLinkRe(true);
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
     urls.add(m[1]);
   }
 
   // Bare URLs (remove markdown links first to avoid double-matching)
-  const stripped = markdown.replace(
-    /\[(?:[^\]]*)\]\(\s*<?https?:\/\/[^)\s>]+>?(?:\s+["'][^"']*["'])?\s*\)/g,
-    "",
-  );
+  const stripped = markdown.replace(createMarkdownLinkRe(false), "");
   const bareRe = /https?:\/\/[^\s)\]>]+/g;
   while ((m = bareRe.exec(stripped)) !== null) {
     urls.add(m[0]);
@@ -125,11 +134,17 @@ function findUrlRanges(
       }
     }
 
-    ranges.push({ start, end: start + fragment.length, url: resolvedUrl });
+    let visibleMatchLength = fragment.length;
+    if (resolvedUrl.length > fragment.length && visibleText.startsWith(resolvedUrl, start)) {
+      visibleMatchLength = resolvedUrl.length;
+      urlRe.lastIndex = start + visibleMatchLength;
+    }
+
+    ranges.push({ start, end: start + visibleMatchLength, url: resolvedUrl });
 
     // If fragment is a strict prefix of the resolved URL, it may be split
-    if (resolvedUrl.length > fragment.length && resolvedUrl.startsWith(fragment)) {
-      newPending = { url: resolvedUrl, consumed: fragment.length };
+    if (resolvedUrl.length > visibleMatchLength && resolvedUrl.startsWith(fragment)) {
+      newPending = { url: resolvedUrl, consumed: visibleMatchLength };
     }
   }
 

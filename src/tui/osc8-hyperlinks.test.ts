@@ -25,6 +25,18 @@ describe("extractUrls", () => {
     expect(urls).toEqual(["https://example.com/path"]);
   });
 
+  it("extracts markdown link hrefs with balanced parentheses", () => {
+    const urls = extractUrls("[Wikipedia](https://en.wikipedia.org/wiki/URL_(disambiguation))");
+    expect(urls).toEqual(["https://en.wikipedia.org/wiki/URL_(disambiguation)"]);
+  });
+
+  it("extracts angle-bracket markdown hrefs with balanced parentheses", () => {
+    const urls = extractUrls(
+      '[Wikipedia](<https://en.wikipedia.org/wiki/URL_(disambiguation)> "URL")',
+    );
+    expect(urls).toEqual(["https://en.wikipedia.org/wiki/URL_(disambiguation)"]);
+  });
+
   it("extracts both bare URLs and markdown links", () => {
     const md = "See [docs](https://docs.example.com) and https://api.example.com";
     const urls = extractUrls(md);
@@ -98,6 +110,14 @@ describe("addOsc8Hyperlinks", () => {
 
     // The URL part should be wrapped with OSC 8
     expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
+  });
+
+  it("uses the full known URL target when rendered text contains balanced parentheses", () => {
+    const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
+    const line = `Wikipedia (${url})`;
+    const result = addOsc8Hyperlinks([line], [url]);
+
+    expect(result[0]).toBe(`Wikipedia (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`);
   });
 
   it("handles multiple URLs on the same line", () => {
