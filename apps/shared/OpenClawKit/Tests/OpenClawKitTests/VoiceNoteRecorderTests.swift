@@ -146,4 +146,17 @@ final class VoiceNoteRecorderTests: XCTestCase {
         XCTAssertEqual(openClawVoiceNoteDurationLabel(1e100), "3:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(-1), "0:00")
     }
+
+    @MainActor
+    func testRecordButtonRequiresAttachmentInput() {
+        let recorder = OpenClawVoiceNoteRecorder(capture: FakeVoiceNoteAudioCapture())
+        let control = OpenClawChatVoiceNoteControl(recorder: recorder, isTalkActive: false)
+        let button = OpenClawVoiceNoteButton(
+            control: control,
+            compact: false,
+            isComposerEnabled: true,
+            isAttachmentInputEnabled: false)
+
+        XCTAssertFalse(button.isRecordingEnabled)
+    }
 }

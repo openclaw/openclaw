@@ -15,6 +15,14 @@ struct OpenClawVoiceNoteButton: View {
     let control: OpenClawChatVoiceNoteControl
     let compact: Bool
     let isComposerEnabled: Bool
+    let isAttachmentInputEnabled: Bool
+
+    var isRecordingEnabled: Bool {
+        self.isComposerEnabled
+            && self.isAttachmentInputEnabled
+            && !self.control.isTalkActive
+            && !self.control.recorder.isRequestingPermission
+    }
 
     var body: some View {
         Button {
@@ -35,10 +43,7 @@ struct OpenClawVoiceNoteButton: View {
         .controlSize(.small)
         .foregroundStyle(.secondary)
         .contentShape(Rectangle())
-        .disabled(
-            !self.isComposerEnabled
-                || self.control.isTalkActive
-                || self.control.recorder.isRequestingPermission)
+        .disabled(!self.isRecordingEnabled)
     }
 }
 

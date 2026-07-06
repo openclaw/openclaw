@@ -216,7 +216,8 @@ struct OpenClawChatComposer: View {
                     OpenClawVoiceNoteButton(
                         control: voiceNoteControl,
                         compact: false,
-                        isComposerEnabled: self.isComposerEnabled)
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
                 }
             }
         }
@@ -540,7 +541,8 @@ struct OpenClawChatComposer: View {
                     OpenClawVoiceNoteButton(
                         control: voiceNoteControl,
                         compact: true,
-                        isComposerEnabled: self.isComposerEnabled)
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
                         .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
                 }
 
