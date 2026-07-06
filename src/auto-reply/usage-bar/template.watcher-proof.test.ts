@@ -8,12 +8,9 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clearUsageBarTemplateCacheForTest,
-  loadUsageBarTemplate,
-} from "./template.js";
+import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
 
 const state = vi.hoisted(() => ({
   created: 0,
@@ -42,7 +39,7 @@ vi.mock("node:fs", async (importOriginal) => {
 const CAP = 64;
 
 describe("template cache bound — direct watcher measurement", () => {
-  const tracker = useAutoCleanupTempDirTracker();
+  const tracker = useAutoCleanupTempDirTracker(afterEach);
 
   it("proves bounded cache with direct watcher create/close counts", () => {
     const dir = tracker.make("usage-template-proof-");
@@ -68,7 +65,9 @@ describe("template cache bound — direct watcher measurement", () => {
       const tpl = loadUsageBarTemplate(paths[i]);
       expect(tpl).toMatchObject({ segments: [{ text: `v1-${i}` }] });
     }
-    emit(`Phase 1: Load ${CAP} files → ${state.created - s1c} watchers created, ${state.closed - s1d} closed`);
+    emit(
+      `Phase 1: Load ${CAP} files → ${state.created - s1c} watchers created, ${state.closed - s1d} closed`,
+    );
     expect(state.created - s1c).toBe(CAP);
     expect(state.closed - s1d).toBe(0);
 
@@ -76,7 +75,9 @@ describe("template cache bound — direct watcher measurement", () => {
     const s2c = state.created;
     const s2d = state.closed;
     const tpl64 = loadUsageBarTemplate(paths[64]);
-    emit(`Phase 2: Load 65th file → ${state.created - s2c} created, ${state.closed - s2d} closed (eviction)`);
+    emit(
+      `Phase 2: Load 65th file → ${state.created - s2c} created, ${state.closed - s2d} closed (eviction)`,
+    );
     emit(`  Content: ${JSON.stringify(tpl64)}`);
     emit(`  Oldest watcher CLOSED, new watcher CREATED`);
     expect(tpl64).toMatchObject({ segments: [{ text: "v1-64" }] });
@@ -91,7 +92,9 @@ describe("template cache bound — direct watcher measurement", () => {
       const tpl = loadUsageBarTemplate(paths[i]);
       expect(tpl).toMatchObject({ segments: [{ text: `v1-${i}` }] });
     }
-    emit(`Phase 3: Re-read all 63 cached files → ${state.created - s3c} created, ${state.closed - s3d} closed`);
+    emit(
+      `Phase 3: Re-read all 63 cached files → ${state.created - s3c} created, ${state.closed - s3d} closed`,
+    );
     expect(state.created - s3c).toBe(0);
     expect(state.closed - s3d).toBe(0);
 
