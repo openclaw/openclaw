@@ -355,7 +355,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
       "release-metadata:check",
-      "--",
       ...(options.staged
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),

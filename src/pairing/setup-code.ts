@@ -27,13 +27,17 @@ import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-prof
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
   resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
   url: string;
+  urls?: string[];
   bootstrapToken: string;
 };
+
+const PAIRING_SETUP_MAX_URLS = 8;
 
 export type PairingSetupCommandResult = {
   code: number | null;
@@ -409,10 +413,25 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
+  const urls = [urlResult.url];
+  if (urlResult.source === "gateway.bind=lan") {
+    const serveUrls = await resolveTailscaleServeGatewayUrlsWithRunner(
+      resolveGatewayPort(cfgForAuth, env),
+      options.runCommandWithTimeout,
+    );
+    for (const serveUrl of serveUrls) {
+      if (!validateMobilePairingUrl(serveUrl, "tailscale serve status")) {
+        urls.push(serveUrl);
+      }
+    }
+  }
+  const uniqueUrls = [...new Set(urls)].slice(0, PAIRING_SETUP_MAX_URLS);
+
   return {
     ok: true,
     payload: {
       url: urlResult.url,
+      ...(uniqueUrls.length > 1 ? { urls: uniqueUrls } : {}),
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,

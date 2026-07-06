@@ -2,9 +2,11 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
@@ -17,6 +19,7 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -54,6 +57,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -73,7 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,6 +108,8 @@ fun ChatScreen(
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
@@ -110,7 +117,9 @@ fun ChatScreen(
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
+  val outboxItems by viewModel.chatOutboxItems.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
@@ -119,6 +128,8 @@ fun ChatScreen(
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
+  val activeAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
+  val workspaceGit = gatewayAgents.firstOrNull { it.id == activeAgentId }?.workspaceGit == true
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -150,18 +161,18 @@ fun ChatScreen(
     viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
-    val accepted =
-      dispatchPendingAssistantAutoSend(
+  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, healthOk, pendingRunCount, thinkingLevel) {
+    if (!healthOk) return@LaunchedEffect
+    val prompt =
+      resolvePendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) { prompt ->
-        viewModel.sendChatAwaitAcceptance(message = prompt, thinking = thinkingLevel, attachments = emptyList())
-      }
-    if (accepted) {
-      viewModel.clearPendingAssistantAutoSend()
-    }
+      ) ?: return@LaunchedEffect
+    viewModel.dispatchPendingAssistantAutoSend(
+      pendingPrompt = prompt,
+      thinking = thinkingLevel,
+    )
   }
 
   var input by rememberSaveable { mutableStateOf("") }
@@ -179,9 +190,9 @@ fun ChatScreen(
       gatewayReady = healthOk && !gatewayOffline,
     )
 
-  val startNewChat = {
+  val startNewChat: (Boolean) -> Unit = { worktree ->
     if (newChatEnabled) {
-      viewModel.startNewChat()
+      viewModel.startNewChat(worktree = worktree)
       viewModel.refreshChatSessions(limit = 100)
       viewModel.refreshChatCommands()
     }
@@ -199,9 +210,11 @@ fun ChatScreen(
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
+      workspaceGit = workspaceGit,
       onNewChat = {
-        startNewChat()
+        startNewChat(false)
       },
+      onNewChatInWorktree = { startNewChat(true) },
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
@@ -235,6 +248,14 @@ fun ChatScreen(
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
+      outboxItems =
+        outboxItemsForSession(
+          items = outboxItems,
+          sessionKey = sessionKey,
+          mainSessionKey = mainSessionKey,
+        ),
+      onRetryOutbox = viewModel::retryChatOutboxCommand,
+      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onStarterPrompt = { prompt -> input = prompt },
       modifier = Modifier.weight(1f),
     )
@@ -276,10 +297,17 @@ fun ChatScreen(
               base64 = attachment.base64,
             )
           }
+        val pendingAttachments = attachments.toList()
         input = ""
         attachments.clear()
         scope.launch {
-          viewModel.sendChat(message = message, thinking = thinkingLevel, attachments = outgoing)
+          val accepted = viewModel.sendChatAwaitAcceptance(message = message, thinking = thinkingLevel, attachments = outgoing)
+          if (!accepted) {
+            // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+            // restore it unless the user already started typing something new.
+            if (input.isEmpty()) input = message
+            if (attachments.isEmpty()) attachments.addAll(pendingAttachments)
+          }
         }
       },
     )
@@ -390,21 +418,20 @@ private fun ChatHeader(
   healthOk: Boolean,
   pendingRunCount: Int,
   newChatEnabled: Boolean,
+  workspaceGit: Boolean,
   onNewChat: () -> Unit,
+  onNewChatInWorktree: () -> Unit,
   onMore: () -> Unit,
 ) {
+  var newChatMenuExpanded by remember { mutableStateOf(false) }
+  val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Icon(
-        painter = painterResource(id = R.drawable.openclaw_logo),
-        contentDescription = null,
-        modifier = Modifier.size(25.dp),
-        tint = ClawTheme.colors.text,
-      )
+      OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
       Text(
         text = "OpenClaw",
         style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -428,6 +455,25 @@ private fun ChatHeader(
           },
       )
       HeaderIcon(icon = Icons.Default.Add, contentDescription = "New chat", enabled = newChatEnabled, onClick = onNewChat)
+      if (workspaceGit) {
+        Box {
+          HeaderIcon(
+            icon = Icons.Default.MoreHoriz,
+            contentDescription = "More new chat options",
+            enabled = newChatEnabled,
+            onClick = { newChatMenuExpanded = true },
+          )
+          DropdownMenu(expanded = newChatMenuExpanded, onDismissRequest = { newChatMenuExpanded = false }) {
+            DropdownMenuItem(
+              text = { Text(newChatInWorktreeLabel) },
+              onClick = {
+                newChatMenuExpanded = false
+                onNewChatInWorktree()
+              },
+            )
+          }
+        }
+      }
       HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -507,16 +553,20 @@ private fun ChatMessageList(
   streamingAssistantText: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
+  outboxItems: List<ChatOutboxItem>,
+  onRetryOutbox: (String) -> Unit,
+  onDeleteOutbox: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
-    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
+    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = pendingRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
+        outboxItems = outboxItems,
       )
     }
   val readerScroll =
@@ -542,6 +592,12 @@ private fun ChatMessageList(
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
+            )
+          is ChatTimelineItem.OutboxCommand ->
+            ChatOutboxBubble(
+              item = item.item,
+              onRetry = { onRetryOutbox(item.item.id) },
+              onDelete = { onDeleteOutbox(item.item.id) },
             )
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.StreamingAssistant ->
@@ -744,7 +800,7 @@ private fun ChatBubble(
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
@@ -766,8 +822,9 @@ private fun ChatBubble(
 private fun ChatText(
   text: String,
   textColor: Color,
+  isStreaming: Boolean,
 ) {
-  ChatMarkdown(text = text, textColor = textColor)
+  ChatMarkdown(text = text, textColor = textColor, isStreaming = isStreaming)
 }
 
 @Composable
@@ -874,7 +931,14 @@ private fun ChatComposer(
         modifier = Modifier.weight(1f),
       )
       SendButton(
-        enabled = healthOk && pendingRunCount == 0 && (value.trim().isNotEmpty() || attachments.isNotEmpty()),
+        // Offline, only text sends are enabled: they queue durably (text-only v1).
+        enabled =
+          pendingRunCount == 0 &&
+            if (healthOk) {
+              value.trim().isNotEmpty() || attachments.isNotEmpty()
+            } else {
+              value.trim().isNotEmpty() && attachments.isEmpty()
+            },
         onClick = onSend,
       )
     }

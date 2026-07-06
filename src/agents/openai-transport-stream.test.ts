@@ -1,5 +1,6 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
@@ -26,7 +27,6 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
@@ -8748,6 +8748,50 @@ describe("openai transport stream", () => {
         | undefined;
       expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
     });
+
+    it.each([
+      ["gemini-pro-latest", "Gemini Pro Latest"],
+      ["gemini-flash-latest", "Gemini Flash Latest"],
+      ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+    ])(
+      "uses the Gemini skip-validator signature for unsigned tool calls on %s",
+      (modelId, modelName) => {
+        const latestModel = { ...geminiModel, id: modelId, name: modelName };
+        const params = buildOpenAICompletionsParams(
+          latestModel,
+          {
+            messages: [
+              {
+                role: "assistant",
+                api: latestModel.api,
+                provider: latestModel.provider,
+                model: latestModel.id,
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                stopReason: "toolUse",
+                timestamp: 1,
+                content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+              },
+            ],
+            tools: [],
+          } as never,
+          undefined,
+        ) as { messages: Array<Record<string, unknown>> };
+
+        const assistant = params.messages.find((message) => message.role === "assistant") as
+          | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+          | undefined;
+        expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+          "skip_thought_signature_validator",
+        );
+      },
+    );
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

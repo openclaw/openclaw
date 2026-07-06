@@ -326,7 +326,8 @@
     "memoryEmbeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
-    "videoGenerationProviders": ["openai"]
+    "videoGenerationProviders": ["openai"],
+    "usageProviders": ["openai"]
   },
   "imageGenerationProviderMetadata": {
     "openai": {

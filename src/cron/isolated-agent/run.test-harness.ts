@@ -20,6 +20,7 @@ type CronSession = {
   storePath: string;
   store: Record<string, unknown>;
   sessionEntry: CronSessionEntry;
+  lifecycleRevision: string;
   systemSent: boolean;
   isNewSession: boolean;
   [key: string]: unknown;
@@ -62,6 +63,7 @@ export const getCliSessionIdMock = createMock();
 export const clearCliSessionMock = createMock();
 export const setCliSessionBindingMock = createMock();
 export const updateSessionStoreMock = createMock();
+export const loadSessionEntryMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
@@ -84,6 +86,8 @@ export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
 export const listWebSearchProvidersMock = createMock();
 export const resolveWebSearchProviderIdMock = createMock();
+export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
+export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -256,6 +260,10 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+  classifyEmbeddedAgentRunResultForModelFallback:
+    classifyEmbeddedAgentRunResultForModelFallbackMock,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion:
+    mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
 }));
 
 vi.mock("../../agents/model-runtime-aliases.js", () => ({
@@ -352,6 +360,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("./session.js", () => ({
+  loadCronSessionEntryLatest: loadSessionEntryMock,
   resolveCronSession: resolveCronSessionMock,
 }));
 
@@ -370,6 +379,8 @@ export function makeCronSession(overrides?: Record<string, unknown>): CronSessio
     storePath: "/tmp/store.json",
     store: {},
     sessionEntry: makeCronSessionEntry(),
+    lifecycleRevision: "test-lifecycle-revision",
+    initialSessionEntry: undefined,
     systemSent: false,
     isNewSession: true,
     ...overrides,
@@ -517,6 +528,12 @@ function resetRunExecutionMocks(): void {
   registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
+  classifyEmbeddedAgentRunResultForModelFallbackMock.mockReset();
+  classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue(null);
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockReset();
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockImplementation(
+    (params: { latestResult: unknown }) => params.latestResult,
+  );
   runEmbeddedAgentMock.mockReset();
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
@@ -667,6 +684,8 @@ function resetRunOutcomeMocks(): void {
 }
 
 function resetRunSessionMocks(): void {
+  loadSessionEntryMock.mockReset();
+  loadSessionEntryMock.mockReturnValue(undefined);
   updateSessionStoreMock.mockReset();
   updateSessionStoreMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();

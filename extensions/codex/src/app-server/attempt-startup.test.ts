@@ -242,7 +242,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(500);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -253,7 +253,7 @@ describe("startCodexAttemptThread", () => {
     const error = await runError;
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
-      timeout: 2_000,
+      timeout: 1_000,
     });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("codex app-server startup timed out");
@@ -290,7 +290,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(500);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -304,7 +304,7 @@ describe("startCodexAttemptThread", () => {
     expect((error as Error).message).toBe("codex app-server startup timed out");
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
-      timeout: 2_000,
+      timeout: 1_000,
     });
     expect(
       readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),

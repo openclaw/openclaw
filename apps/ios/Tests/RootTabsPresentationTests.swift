@@ -79,6 +79,7 @@ struct RootTabsPresentationTests {
             .dreaming,
             .usage,
             .cron,
+            .terminal,
         ])
         #expect(groups[2].destinations == [.settings])
         #expect(groups[3].destinations == [.docs])
@@ -95,6 +96,7 @@ struct RootTabsPresentationTests {
             "dreaming",
             "usage",
             "cron",
+            "terminal",
             "docs",
             "settings",
             "gateway",
@@ -326,6 +328,12 @@ struct RootTabsPresentationTests {
         #expect(routed.openSettings != nil)
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
+    }
+
+    @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
+        #expect(ChatProTab.transportAgentID(nil).isEmpty)
+        #expect(ChatProTab.transportAgentID("   ").isEmpty)
+        #expect(ChatProTab.transportAgentID(" Main ") == "main")
     }
 
     @Test func `agent routes can open gateway settings from header pill`() {

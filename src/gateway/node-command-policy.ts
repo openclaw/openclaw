@@ -5,6 +5,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -54,11 +55,13 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   ...SCREEN_COMMANDS,
 ]);

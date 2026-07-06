@@ -7,19 +7,19 @@ read_when:
 ---
 
 ClawRouter gives OpenClaw one policy-scoped key for multiple upstream model
-providers. The bundled plugin discovers only the models allowed for that key,
-routes each model through its declared protocol, and reports the key's budget
-and aggregate usage on OpenClaw usage surfaces.
+providers. The bundled `clawrouter` plugin discovers only the models allowed
+for that key, routes each model through its declared protocol, and reports
+the key's budget and aggregate usage on OpenClaw usage surfaces.
 
-You do not install or authenticate each upstream provider plugin on the
-OpenClaw host. Upstream credentials and provider-specific forwarding stay in
-ClawRouter. OpenClaw needs only the bundled `@openclaw/clawrouter` plugin and an
-issued ClawRouter credential.
+Upstream credentials and provider-specific forwarding stay in ClawRouter, so
+you never install or authenticate each upstream provider plugin on the
+OpenClaw host. The plugin ships bundled with OpenClaw (`enabledByDefault: true`);
+you only need an issued ClawRouter credential.
 
 | Property      | Value                                    |
 | ------------- | ---------------------------------------- |
 | Provider      | `clawrouter`                             |
-| Package       | `@openclaw/clawrouter`                   |
+| Plugin        | bundled (included in OpenClaw)           |
 | Auth          | `CLAWROUTER_API_KEY`                     |
 | Default URL   | `https://clawrouter.openclaw.ai`         |
 | Model catalog | Credential-scoped via `/v1/catalog`      |
@@ -40,7 +40,7 @@ issued ClawRouter credential.
     openclaw plugins enable clawrouter
     ```
 
-    The plugin is bundled with OpenClaw. If your configuration sets
+    `clawrouter` is bundled and enabled by default. If your configuration sets
     `plugins.allow`, add `clawrouter` to that list before enabling it. For a
     custom deployment, set `models.providers.clawrouter.baseUrl` to the
     ClawRouter origin; the default is `https://clawrouter.openclaw.ai`.
@@ -52,9 +52,10 @@ issued ClawRouter credential.
     ```
 
     Use the returned model refs exactly as shown. They retain the upstream
-    namespace, such as `clawrouter/openai/...`, `clawrouter/anthropic/...`, or
-    `clawrouter/google/...`. If `agents.defaults.models` is an allowlist in your
-    configuration, add each selected ClawRouter ref to it.
+    namespace, such as `clawrouter/openai/gpt-5.5`,
+    `clawrouter/anthropic/claude-sonnet-4-6`, or
+    `clawrouter/google/gemini-3.5-flash`. If `agents.defaults.models` is an
+    allowlist in your configuration, add each selected ClawRouter ref to it.
 
   </Step>
   <Step title="Select a model">
@@ -70,46 +71,49 @@ issued ClawRouter credential.
 
 ## Model discovery
 
-`GET /v1/catalog` is the source of truth. OpenClaw does not ship a second,
-fixed list of ClawRouter models. A model configured in ClawRouter appears when:
+`GET /v1/catalog` returns `{ providers: [...] }`, where each provider entry
+lists its own `models[]` (with upstream id, capabilities, and pricing) and its
+supported request routes. OpenClaw does not ship a second, fixed list of
+ClawRouter models. A catalog model is advertised as an OpenClaw model when:
 
 - the credential's policy grants its provider;
-- the provider connection is enabled and ready;
-- the catalog model advertises a supported LLM capability; and
-- the catalog exposes a transport contract supported by the plugin.
+- the catalog model advertises a supported LLM capability (`llm.responses`,
+  `llm.chat`, `llm.messages`, or `llm.stream` with a matching streaming
+  route); and
+- the provider exposes a matching route for one of the transports below.
 
-Adding another model to a supported ClawRouter provider therefore does not
-require an OpenClaw release or another provider plugin. The next catalog
-refresh discovers it. A model that needs a new wire protocol requires support
-in the ClawRouter plugin before OpenClaw advertises it.
+Adding a model to a supported ClawRouter provider needs no OpenClaw release:
+the next catalog refresh (cached 60 seconds per credential scope) discovers
+it. A model that needs a new wire protocol requires plugin support first.
 
 ## Protocol and provider plugins
 
-You do not need to install every upstream company's auth plugin. ClawRouter
-owns upstream credentials; its catalog tells OpenClaw which transport to use.
-The plugin supports:
+ClawRouter owns upstream credentials; its catalog tells OpenClaw which
+transport to use, so you never install every upstream company's auth plugin.
 
-| Catalog route                  | OpenClaw transport     |
-| ------------------------------ | ---------------------- |
-| OpenAI-compatible chat         | `openai-completions`   |
-| OpenAI-compatible Responses    | `openai-responses`     |
-| Native Anthropic Messages      | `anthropic-messages`   |
-| Native Google Gemini streaming | `google-generative-ai` |
+| Catalog capability / route                               | OpenClaw transport     |
+| -------------------------------------------------------- | ---------------------- |
+| `llm.responses` (OpenAI-compatible provider)             | `openai-responses`     |
+| `llm.chat` (OpenAI-compatible provider)                  | `openai-completions`   |
+| `llm.messages` + `anthropic.messages` route              | `anthropic-messages`   |
+| `llm.stream` + streaming `google.generate_content` route | `google-generative-ai` |
 
 The plugin also applies the matching replay and tool-schema policies for those
-families. Catalog rows using another request/stream format are intentionally
-not advertised as OpenClaw text models. Normalize those providers to one of the
-supported contracts in ClawRouter rather than sending an incompatible payload.
+families (OpenAI/DeepSeek/Gemini tool-schema compat; native Anthropic and
+Google Gemini replay policies). A catalog provider exposing only an
+unsupported request format is intentionally not advertised as an OpenClaw
+text model. Normalize those providers to one of the supported contracts in
+ClawRouter rather than sending an incompatible payload.
 
 ## Quotas and usage
 
 ClawRouter's `/v1/usage` response feeds the normal OpenClaw provider-usage
-surfaces. `/status` and related dashboard status show the monthly budget window
-when the key has a limit, plus request, token, and spend totals. Unmetered keys
-still show aggregate usage without a percentage window.
+surfaces: request, token, and spend totals, plus a monthly budget window when
+the key has a limit. Unmetered keys still show aggregate usage without a
+percentage window.
 
-Quota lookup uses the same scoped key as model discovery. A failed quota lookup
-does not block model execution.
+Quota lookup uses the same scoped key as model discovery. A failed quota
+lookup does not block model execution.
 
 Check the live snapshot with:
 
@@ -127,7 +131,7 @@ the same ClawRouter policy can change the remaining percentage.
 | Symptom                                  | Check                                                                                                                                          |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | No ClawRouter models                     | Confirm the plugin is enabled and allowed by `plugins.allow`, then check that the credential is active and grants at least one ready provider. |
-| A configured ClawRouter model is missing | Inspect its `/v1/catalog` capability and route format. Unsupported transport contracts are intentionally filtered.                             |
+| A configured ClawRouter model is missing | Inspect its `/v1/catalog` capability and route support. Unsupported transport contracts are intentionally filtered.                            |
 | `Unknown model: clawrouter/...`          | Add the exact catalog ref to `agents.defaults.models` when that configuration map is being used as an allowlist.                               |
 | `401` or `403` from catalog or usage     | Reissue or re-scope the ClawRouter credential; OpenClaw does not fall back to upstream provider keys.                                          |
 | Model call fails after discovery         | Check the provider connection and upstream health in ClawRouter, then retry after its readiness state recovers.                                |
@@ -135,7 +139,7 @@ the same ClawRouter policy can change the remaining percentage.
 
 ## Security behavior
 
-- Catalog discovery is scoped to the configured proxy key and cached per key.
+- Catalog discovery is scoped to the configured proxy key and cached per credential scope (agent dir, workspace dir, auth profile id, and base URL).
 - The proxy key is attached only at request dispatch; it is not stored in model metadata.
 - Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
 - Unsupported or ungranted catalog rows fail closed and are not selectable.

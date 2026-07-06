@@ -54,6 +54,7 @@ import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -392,6 +393,19 @@ function formatTelegramProgressLine(text: string): string {
   return trimmed.startsWith("_") && trimmed.endsWith("_")
     ? trimmed
     : formatProgressAsMarkdownCode(text);
+}
+
+function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
+  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+  const text = `🧠 ${label}`;
+  return {
+    id: "reasoning:token-progress",
+    kind: "item",
+    icon: "🧠",
+    label,
+    text,
+    prefix: false,
+  };
 }
 
 function escapeTelegramProgressHtml(text: string): string {
@@ -1150,6 +1164,16 @@ export const dispatchTelegramMessage = async ({
       snapshot: payload.isReasoningSnapshot === true,
     });
   };
+  const pushStreamThinkingTokenProgress = async (progressTokens: number) => {
+    const rendered = await pushStreamToolProgress(
+      buildTelegramThinkingProgressLine(progressTokens),
+      { startImmediately: true },
+    );
+    if (rendered) {
+      progressSummary.noteReasoningActivity();
+    }
+    return rendered;
+  };
   const markProgressFinalStarted = () => {
     finalAnswerDeliveryStarted = true;
     progressDraft.markFinalReplyStarted();
@@ -1557,9 +1581,14 @@ export const dispatchTelegramMessage = async ({
   };
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
     (await resolveCurrentTurnTranscriptFinal())?.text;
+  const normalizePromptContextTimestampText = (text: string): string =>
+    stripInlineDirectiveTagsForDelivery(text).text.trim();
   const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
     const final = await resolveCurrentTurnTranscriptFinal();
-    if (final?.text.trim() !== text.trim()) {
+    if (
+      !final ||
+      normalizePromptContextTimestampText(final.text) !== normalizePromptContextTimestampText(text)
+    ) {
       return undefined;
     }
     return final.timestamp;
@@ -2631,6 +2660,12 @@ export const dispatchTelegramMessage = async ({
                             await pushStreamReasoningProgress(payload);
                           })
                       : undefined,
+                  onReasoningProgress: answerLane.stream
+                    ? (payload) =>
+                        enqueueDraftLaneEvent(async () => {
+                          await pushStreamThinkingTokenProgress(payload.progressTokens);
+                        })
+                    : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {

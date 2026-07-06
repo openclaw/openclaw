@@ -12,6 +12,7 @@ import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
@@ -51,6 +52,7 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -542,7 +544,8 @@ export function resolveMissingPluginCommandMessage(
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (existsSync(path.join(process.cwd(), ".env"))) {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
@@ -903,6 +906,7 @@ export async function runCli(argv: string[] = process.argv) {
   let onSigterm: (() => void) | null = null;
   let onSigint: (() => void) | null = null;
   let onExit: (() => void) | null = null;
+  let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
@@ -930,6 +934,8 @@ export async function runCli(argv: string[] = process.argv) {
     }
   };
   const stopStartedProxy = async () => {
+    unregisterProxySignalExitBarrier?.();
+    unregisterProxySignalExitBarrier = null;
     uninstallProxySignalHandlers();
     const handle = proxyHandle;
     proxyHandle = null;
@@ -947,8 +953,9 @@ export async function runCli(argv: string[] = process.argv) {
     if (!proxyHandle || onSigterm || onSigint || onExit) {
       return;
     }
+    unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
     const shutdown = (exitCode: number) => {
-      void stopStartedProxy().finally(() => {
+      void waitForSignalExitBarriers().finally(() => {
         process.exit(exitCode);
       });
     };

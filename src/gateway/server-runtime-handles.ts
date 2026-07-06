@@ -3,12 +3,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service
 // cleanup hooks that shutdown/reload code must stop exactly once.
-type GatewayConfigReloaderHandle = {
+// `hotReloadStatus` is omitted (not defaulted to "active") when no real
+// watcher is running, so health can distinguish "no reloader" from "reloader
+// active" instead of guessing.
+export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
+  hotReloadStatus?: () => GatewayHotReloadStatus;
 };
 
 /** Mutable handles owned by a running gateway server process. */
@@ -18,6 +23,7 @@ export type GatewayServerMutableState = {
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  worktreeCleanup: ReturnType<typeof setInterval> | null;
   heartbeatRunner: HeartbeatRunner;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
@@ -51,6 +57,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     healthInterval: noopInterval(),
     dedupeCleanup: noopInterval(),
     mediaCleanup: null as ReturnType<typeof setInterval> | null,
+    worktreeCleanup: null as ReturnType<typeof setInterval> | null,
     heartbeatRunner: {
       stop: () => {},
       updateConfig: (_cfg: OpenClawConfig) => {},

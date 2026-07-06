@@ -3,16 +3,52 @@
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const facadeRuntimeMock = vi.hoisted(() => ({
+  sessionKeyResolvers: new Map<
+    string,
+    (params: { kind: "group" | "channel"; rawId: string }) => {
+      id: string;
+      threadId?: string | null;
+      baseConversationId?: string | null;
+      parentConversationCandidates?: string[];
+    } | null
+  >(),
+}));
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
+    "../../plugin-sdk/facade-runtime.js",
+  );
+  return {
+    ...actual,
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: (params: {
+      dirName: string;
+      artifactBasename: string;
+    }) => {
+      if (params.artifactBasename === "session-key-api.js") {
+        const resolveSessionConversation = facadeRuntimeMock.sessionKeyResolvers.get(
+          params.dirName,
+        );
+        if (resolveSessionConversation) {
+          return { resolveSessionConversation };
+        }
+      }
+      return actual.tryLoadActivatedBundledPluginPublicSurfaceModuleSync(params);
+    },
+  };
+});
 
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string; agentToAgent?: { maxPingPongTurns: number } };
@@ -33,28 +69,6 @@ vi.mock("../../config/config.js", async () => {
   return {
     ...actual,
     getRuntimeConfig: () => loadConfigMock() as never,
-  };
-});
-const bundledFallbackState = vi.hoisted(() => ({
-  activeDirName: null as string | null,
-  loadCalls: 0,
-  resolveSessionConversation: null as NonNullable<
-    ChannelMessagingAdapter["resolveSessionConversation"]
-  > | null,
-}));
-vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
-    "../../plugin-sdk/facade-runtime.js",
-  );
-  return {
-    ...actual,
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => {
-      bundledFallbackState.loadCalls += 1;
-      return dirName === bundledFallbackState.activeDirName &&
-        bundledFallbackState.resolveSessionConversation
-        ? { resolveSessionConversation: bundledFallbackState.resolveSessionConversation }
-        : null;
-    },
   };
 });
 vi.mock("./sessions-send-tool.a2a.js", () => ({
@@ -366,15 +380,17 @@ describe("sanitizeTextContent", () => {
 });
 
 beforeEach(() => {
+  facadeRuntimeMock.sessionKeyResolvers.clear();
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
     tools: { agentToAgent: { enabled: false } },
   });
   setActivePluginRegistry(createTestRegistry([]));
-  bundledFallbackState.activeDirName = null;
-  bundledFallbackState.loadCalls = 0;
-  bundledFallbackState.resolveSessionConversation = null;
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("extractAssistantText", () => {
@@ -1044,8 +1060,6 @@ describe("sessions_send gating", () => {
   });
 
   it("rejects Telegram topic session targets before dispatching an agent run", async () => {
-    bundledFallbackState.activeDirName = "telegram";
-    bundledFallbackState.resolveSessionConversation = resolveTelegramSessionConversationStub;
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1054,9 +1068,18 @@ describe("sessions_send gating", () => {
       },
     });
     const topicSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    facadeRuntimeMock.sessionKeyResolvers.set("telegram", ({ kind, rawId }) => {
+      if (kind !== "group") {
+        return null;
+      }
+      const [id, threadId] = rawId.split(":topic:");
+      return threadId ? { id, threadId, baseConversationId: id } : null;
+    });
+    setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: true } } } });
+    expect(parseSessionThreadInfo(topicSessionKey).threadId).toBe("77");
     const tool = createMainSessionsSendTool();
 
-    const result = await tool.execute("call-topic-target", {
+    const result = await tool.execute("call-telegram-topic-target", {
       sessionKey: topicSessionKey,
       message: "hi",
       timeoutSeconds: 0,
@@ -1068,7 +1091,6 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(bundledFallbackState.loadCalls).toBeGreaterThan(0);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

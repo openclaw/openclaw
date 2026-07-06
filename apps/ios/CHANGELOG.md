@@ -1,5 +1,13 @@
 # OpenClaw iOS Changelog
 
+## Unreleased
+
+- Fixed Apple Watch connection setup so pairing and companion-install changes refresh immediately and cold launches wait for WatchConnectivity activation before sending.
+- Redesigned the Settings About screen with the animated mascot, app tagline, and Website/Docs/GitHub/Discord links.
+- Fixed startup aborts caused by inactive Voice Wake initializing the simulator audio pipeline.
+- Debug builds now use separate app, extension, widget, and Watch identifiers plus a distinct debug icon, so they can remain installed beside release builds.
+- Animated the OpenClaw mascot (float, blink, antenna wiggle, claw snaps) across onboarding, sidebar, and command center, matching openclaw.ai.
+
 ## 2026.6.11 - 2026-07-01
 
 Maintenance update for the current OpenClaw release.

@@ -11,6 +11,7 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -44,12 +45,22 @@ export type MockGatewayRequest = {
 export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
+  controlUiTabs?: Array<{
+    group?: string;
+    icon?: string;
+    id: string;
+    label: string;
+    pluginId: string;
+  }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
+  featureMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
   models?: Array<{ id: string; name: string; provider: string }>;
   sessionKey?: string;
+  terminalEnabled?: boolean;
+  workspaceGit?: boolean;
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -143,6 +154,7 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
         ...resolveSourcePackageAliasesForVite(),
         ...resolveTsconfigPathAliasesForVite(),
       ],
@@ -198,12 +210,16 @@ function normalizeScenario(
   return {
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
+    controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionKey,
+    terminalEnabled: scenario.terminalEnabled ?? false,
+    workspaceGit: scenario.workspaceGit ?? false,
   };
 }
 
@@ -218,6 +234,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
+    terminalEnabled: normalizedScenario.terminalEnabled,
   };
 }
 
@@ -384,7 +401,8 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: ["chat.metadata", "chat.startup"] },
+          features: { events: [], methods: scenario.featureMethods },
+          controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -411,6 +429,7 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              workspaceGit: scenario.workspaceGit,
             },
           ],
           defaultId: scenario.defaultAgentId,
@@ -459,6 +478,7 @@ function installControlUiMockGateway(input: {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
                 name: scenario.assistantName,
+                workspaceGit: scenario.workspaceGit,
               },
             ],
             defaultId: scenario.defaultAgentId,

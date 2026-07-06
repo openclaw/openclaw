@@ -474,7 +474,7 @@ export function registerNativeHookRelay(
       current.expiresAtMs = renewedExpiresAtMs;
       handle.expiresAtMs = renewedExpiresAtMs;
       const bridge = relayBridges.get(relayId);
-      if (bridge) {
+      if (bridge && bridge.server.listening) {
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
       }
     },
@@ -992,9 +992,6 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
     }
     writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
   });
-  if (relayBridges.get(registration.relayId) === bridge) {
-    writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
-  }
   server.unref();
 }
 
@@ -1404,7 +1401,9 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.cwd
+        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+        : {}),
     },
   });
   if (outcome.blocked) {

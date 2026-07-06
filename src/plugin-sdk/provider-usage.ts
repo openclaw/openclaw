@@ -1,6 +1,7 @@
 // Public usage fetch helpers for provider plugins.
 
 export type {
+  ProviderUsageBilling,
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,

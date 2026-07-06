@@ -39,6 +39,7 @@ internal data class GatewayConnectConfig(
 /** How a connection attempt may update credentials already owned by the runtime. */
 internal enum class GatewaySavedAuthAction {
   PRESERVE,
+  REPLACE_CREDENTIALS,
   REPLACE_ENDPOINT,
   REPLACE_SETUP,
 }
@@ -180,10 +181,10 @@ internal fun resolveGatewayConnectPlan(
     composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
       ?.let { parseGatewayEndpointResult(it).config }
   val action =
-    if (savedManualEndpoint?.sameEndpoint(config) == true) {
-      GatewaySavedAuthAction.PRESERVE
-    } else {
-      GatewaySavedAuthAction.REPLACE_ENDPOINT
+    when {
+      savedManualEndpoint?.sameEndpoint(config) != true -> GatewaySavedAuthAction.REPLACE_ENDPOINT
+      config.token.isNotEmpty() || config.password.isNotEmpty() -> GatewaySavedAuthAction.REPLACE_CREDENTIALS
+      else -> GatewaySavedAuthAction.PRESERVE
     }
   return GatewayConnectPlan(config, action)
 }
@@ -200,9 +201,14 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri =
-    runCatching { URI(normalized) }.getOrNull()
+    runCatching { URI(normalized) }
+      .getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
+  val host =
+    uri.host
+      ?.trim()
+      ?.trim('[', ']')
+      .orEmpty()
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   // OkHttp rejects scoped IPv6 hosts after URI decoding, so fail before saving an endpoint that can never dial.
   if (host.contains(':') && host.contains('%')) {
@@ -314,6 +320,9 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
+private const val defaultManualGatewayPort = 18789
+private const val tailnetTlsGatewayPort = 443
+
 private fun gatewayPort(
   port: Int,
   defaultPort: Int,
@@ -323,6 +332,20 @@ private fun gatewayPort(
     port in 1..65535 -> port
     else -> null
   }
+
+/** Resolves the manual port default shared by onboarding, settings, and the Connect tab. */
+internal fun resolveDefaultManualGatewayPort(
+  hostInput: String,
+  tls: Boolean,
+): Int {
+  val host =
+    hostInput
+      .trim()
+      .trimEnd('/')
+      .removeSuffix(".")
+      .lowercase(Locale.US)
+  return if (tls && host.endsWith(".ts.net")) tailnetTlsGatewayPort else defaultManualGatewayPort
+}
 
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
@@ -343,7 +366,7 @@ internal fun composeGatewayManualUrl(
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
-      if (tls) 443 else return null
+      resolveDefaultManualGatewayPort(bareHost, tls)
     } else {
       portTrimmed.toIntOrNull() ?: return null
     }

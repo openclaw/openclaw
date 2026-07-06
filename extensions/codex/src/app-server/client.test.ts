@@ -481,6 +481,38 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("returns JSON-RPC internal errors when server request handlers throw", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "account/chatgptAuthTokens/refresh") {
+        throw new Error("refresh_token_invalidated: reauthentication required");
+      }
+      return undefined;
+    });
+
+    harness.send({
+      id: "srv-refresh",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { accountId: "acct-1" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-refresh",
+      error: {
+        code: -32603,
+        message: "refresh_token_invalidated: reauthentication required",
+      },
+    });
+    expect(warn).toHaveBeenCalledWith("codex app-server server request handler failed", {
+      id: "srv-refresh",
+      method: "account/chatgptAuthTokens/refresh",
+      error: expect.any(Error),
+    });
+  });
+
   it("fails closed when a dynamic tool server request handler hangs", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
