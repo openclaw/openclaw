@@ -200,13 +200,13 @@ describe("web fetch runtime", () => {
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
   });
 
-  it("does not auto-detect a keyless provider without a credential", () => {
+  it("auto-detects a keyless provider without a credential", () => {
     const provider = createFirecrawlProvider({
       requiresCredential: false,
     });
     resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
 
-    expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
+    expect(resolveWebFetchDefinition({ config: {} })?.provider.id).toBe("firecrawl");
   });
 
   it("auto-detects providers from configured fallback credentials", () => {

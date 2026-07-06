@@ -147,9 +147,6 @@ function resolveWebFetchProviderId(params: {
 
   for (const provider of providers) {
     if (!providerRequiresCredential(provider)) {
-      if (!hasAutoDetectCredential(provider, params.config, params.fetch)) {
-        continue;
-      }
       logVerbose(
         `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected keyless provider "${provider.id}"`,
       );
