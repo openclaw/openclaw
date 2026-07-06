@@ -235,6 +235,19 @@ function isCronAddAction(args: unknown): boolean {
   return normalizeOptionalLowercaseString(action) === "add";
 }
 
+const EXEC_CRON_ADD_COMMAND_RE = /\bopenclaw\s+cron\s+add\b/;
+
+function isExecCronAddCommand(toolName: string, args: unknown): boolean {
+  if (!isExecToolName(toolName)) {
+    return false;
+  }
+  if (!args || typeof args !== "object") {
+    return false;
+  }
+  const command = (args as Record<string, unknown>).command;
+  return typeof command === "string" && EXEC_CRON_ADD_COMMAND_RE.test(command);
+}
+
 function buildToolCallSummary(
   toolName: string,
   args: unknown,
@@ -1303,8 +1316,13 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
+  // Track committed reminders when cron.add completed successfully (structured
+  // tool path) or when openclaw cron add was invoked via exec/bash.
+  if (
+    !isToolError &&
+    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+      isExecCronAddCommand(toolName, startArgs))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
