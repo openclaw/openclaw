@@ -158,29 +158,31 @@ async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
       .filter(Boolean);
   });
 }
-function chatSessionListResponse() {
+function chatSessionListResponse(
+  sessions: Array<Record<string, unknown>> = [
+    {
+      key: "agent:main:session-a",
+      kind: "direct",
+      label: "Session A",
+      updatedAt: 2,
+    },
+    {
+      key: "agent:main:session-b",
+      kind: "direct",
+      label: "Session B",
+      updatedAt: 1,
+    },
+  ],
+) {
   return {
-    count: 2,
+    count: sessions.length,
     defaults: {
       contextTokens: null,
       model: "gpt-5.5",
       modelProvider: "openai",
     },
     path: "",
-    sessions: [
-      {
-        key: "agent:main:session-a",
-        kind: "direct",
-        label: "Session A",
-        updatedAt: 2,
-      },
-      {
-        key: "agent:main:session-b",
-        kind: "direct",
-        label: "Session B",
-        updatedAt: 1,
-      },
-    ],
+    sessions,
     ts: Date.now(),
   };
 }
@@ -193,33 +195,6 @@ async function sidebarSessionOrder(page: Page): Promise<string[]> {
         .map((row) => row.getAttribute("data-session-key") ?? "")
         .filter((key) => key.startsWith("agent:main:session-")),
     );
-}
-
-function activeRunFlagOnlySessionListResponse() {
-  return {
-    count: 1,
-    defaults: {
-      contextTokens: null,
-      model: "gpt-5.5",
-      modelProvider: "openai",
-    },
-    path: "",
-    sessions: [
-      {
-        contextTokens: null,
-        displayName: "Main",
-        hasActiveRun: true,
-        key: "main",
-        kind: "direct",
-        label: "Main",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        totalTokens: 0,
-        updatedAt: Date.now(),
-      },
-    ],
-    ts: Date.now(),
-  };
 }
 
 describeControlUiE2e("Control UI mocked Gateway E2E", () => {
@@ -361,7 +336,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         },
       ],
       methodResponses: {
-        "sessions.list": activeRunFlagOnlySessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          {
+            hasActiveRun: true,
+            key: "main",
+            kind: "direct",
+            label: "Main",
+            updatedAt: Date.now(),
+          },
+        ]),
       },
     });
 
