@@ -187,6 +187,7 @@ function createGatewayActionPlugin(params: {
   gatewayActions?: ChannelMessageActionName[];
   capabilities?: ChannelPlugin["capabilities"];
   messaging?: ChannelPlugin["messaging"];
+  threading?: ChannelPlugin["threading"];
   handleAction: ChannelActionHandler;
 }): ChannelPlugin {
   const actions = new Set(params.actions);
@@ -203,6 +204,7 @@ function createGatewayActionPlugin(params: {
     capabilities: params.capabilities ?? { chatTypes: ["direct"] },
     config: createAlwaysConfiguredPluginConfig(),
     messaging: params.messaging,
+    threading: params.threading,
     actions: {
       describeMessageTool: () => ({ actions: params.actions }),
       supportsAction: ({ action }) => actions.has(action),
@@ -1572,106 +1574,86 @@ describe("runMessageAction plugin dispatch", () => {
 
   describe("threaded plugin actions", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
+      jsonResult({ ok: true, params }),
     );
-
-    const threadedPlugin: ChannelPlugin = {
-      id: "forumchat",
-      meta: {
-        id: "forumchat",
-        label: "Forum Chat",
-        selectionLabel: "Forum Chat",
-        docsPath: "/channels/forumchat",
-        blurb: "Forum chat threaded action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      threading: {
-        resolveAutoThreadId: ({ toolContext, to }) => {
-          if (toolContext?.currentChannelId !== to) {
-            return undefined;
-          }
-          return toolContext.currentThreadTs;
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["sticker"] }),
-        supportsAction: ({ action }) => action === "sticker",
-        handleAction,
-      },
+    const cfg = { channels: { forumchat: { enabled: true } } } as OpenClawConfig;
+    const threading: ChannelPlugin["threading"] = {
+      resolveAutoThreadId: ({ toolContext, to }) =>
+        toolContext?.currentChannelId === to ? toolContext.currentThreadTs : undefined,
     };
-
-    beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "forumchat",
-            source: "test",
-            plugin: threadedPlugin,
+    const createThreadedPlugin = (executionMode: "local" | "gateway") =>
+      createGatewayActionPlugin({
+        pluginId: "forumchat",
+        label: "Forum Chat",
+        blurb: "Forum chat threaded action dispatch test plugin.",
+        actions: ["sticker"],
+        gatewayActions: executionMode === "gateway" ? ["sticker"] : [],
+        capabilities: { chatTypes: ["channel"] },
+        threading,
+        handleAction,
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
           },
-        ]),
-      );
-      handleAction.mockClear();
-    });
+        },
+      });
 
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
-      vi.unstubAllEnvs();
     });
 
-    it("applies auto threadId before dispatching targeted plugin actions", async () => {
-      const result = await runMessageAction({
-        cfg: {
-          channels: {
-            forumchat: {
-              enabled: true,
+    it.each(["local", "gateway"] as const)(
+      "applies auto threadId before %s plugin dispatch",
+      async (executionMode) => {
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "forumchat",
+              source: "test",
+              plugin: createThreadedPlugin(executionMode),
             },
-          },
-        } as OpenClawConfig,
-        action: "sticker",
-        params: {
-          channel: "forumchat",
-          target: "forum:123",
-          stickerName: "wave",
-        },
-        toolContext: {
-          currentChannelProvider: "forumchat",
-          currentChannelId: "forum:123",
-          currentThreadTs: "42",
-        },
-        dryRun: false,
-      });
+          ]),
+        );
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
 
-      expect(handleAction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          params: expect.objectContaining({
-            to: "forum:123",
-            threadId: "42",
-          }),
-        }),
-      );
-      expect(result).toMatchObject({
-        kind: "action",
-        channel: "forumchat",
-        action: "sticker",
-        payload: {
-          ok: true,
-          params: expect.objectContaining({
-            to: "forum:123",
-            threadId: "42",
-          }),
-        },
-      });
-    });
+        await runMessageAction({
+          cfg,
+          action: "sticker",
+          params: {
+            channel: "forumchat",
+            target: "forum:123",
+            stickerName: "wave",
+          },
+          toolContext: {
+            currentChannelProvider: "forumchat",
+            currentChannelId: "forum:123",
+            currentThreadTs: "42",
+          },
+          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
+          dryRun: false,
+        });
+
+        const dispatchedParams =
+          executionMode === "gateway"
+            ? readRecordField(
+                readRecordField(
+                  readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
+                  "params",
+                  "gateway call params",
+                ),
+                "params",
+                "gateway action params",
+              )
+            : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
+        expectRecordFields(
+          dispatchedParams,
+          { to: "forum:123", threadId: "42" },
+          `${executionMode} action params`,
+        );
+        expect(handleAction).toHaveBeenCalledTimes(executionMode === "local" ? 1 : 0);
+      },
+    );
   });
 
   describe("presentation-only send behavior", () => {

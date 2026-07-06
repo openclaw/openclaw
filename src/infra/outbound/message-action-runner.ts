@@ -1380,6 +1380,8 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
 
+  // Plugin actions bypass send/poll, so inherit thread metadata before either
+  // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
     normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
   if (targetForThreading) {
@@ -1388,7 +1390,9 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
       to: targetForThreading,
       accountId,
       toolContext: input.toolContext,
-      resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+      resolveAutoThreadId: plugin.threading?.resolveAutoThreadId,
+      resolveReplyTransport: plugin.threading?.resolveReplyTransport,
+      replyToIsExplicit: Boolean(readStringParam(params, "replyTo")),
     });
   }
 
