@@ -682,16 +682,13 @@ function upsertSqliteSession(
 }
 
 function estimateSqliteLedgerBytes(db: DatabaseSync): number {
-  const row = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0) AS sessions,
-         (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json) + COALESCE(length(run_id), 0) + 32), 0)
-            FROM acp_replay_events) AS events
-       FROM acp_replay_sessions`,
-    )
-    .get() as { sessions?: number | bigint; events?: number | bigint } | undefined;
-  return normalizeSqliteInteger(row?.sessions ?? 0) + normalizeSqliteInteger(row?.events ?? 0);
+  // Use SQLite page-count metadata for an O(1) file-size estimate instead
+  // of SUM(length(...)) which scans every row on each call. This function
+  // runs on every event append and inside trim loops, so the old table
+  // scan caused noticeable degradation with large histories.
+  const pc = db.prepare("PRAGMA page_count").get() as { page_count: number } | undefined;
+  const ps = db.prepare("PRAGMA page_size").get() as { page_size: number } | undefined;
+  return (pc?.page_count ?? 0) * (ps?.page_size ?? 0);
 }
 
 function trimSqliteLedger(
