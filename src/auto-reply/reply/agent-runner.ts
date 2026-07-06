@@ -10,6 +10,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -1661,7 +1662,11 @@ export async function runReplyAgent(params: {
       preflightCompactionApplied =
         (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
     } catch (err) {
-      if (memoryFlushResult.outcome !== "exhausted" || replyOperation.abortSignal.aborted) {
+      const canRotateAfterPreflightFailure =
+        memoryFlushResult.outcome === "exhausted" &&
+        !replyOperation.abortSignal.aborted &&
+        isLikelyContextOverflowError(String(err));
+      if (!canRotateAfterPreflightFailure) {
         throw err;
       }
       logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);

@@ -491,6 +491,29 @@ describe("runReplyAgent runtime config", () => {
     expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
   });
 
+  it("surfaces unrelated preflight failures after an exhausted memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runMemoryFlushIfNeededMock.mockResolvedValue({
+      sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
+      outcome: "exhausted",
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single preflight compaction failure reply payload");
+    }
+    expect(result.text).toContain("auto-compaction could not recover");
+    expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).not.toHaveBeenCalled();
+  });
+
   it("does not start the main turn after cancellation during memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
