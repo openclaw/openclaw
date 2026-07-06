@@ -789,12 +789,9 @@ export async function buildSessionEntry(
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
-    // sessionStoreAlreadyClassifiedCron and hasSeenPriorUserMessage guards
-    // are intentionally removed — the record-level isCronRunGeneratedRecord
-    // check (below) handles all genuine cron archives including orphan ones,
-    // because JSONL records retain cron-run session keys after reset/delete.
-    // A content-based heuristic would cause false positives for human text
-    // matching [cron:...] without record-level provenance, so we omit it.
+    const sessionStoreAlreadyClassifiedCron =
+      sessionStoreClassification?.generatedByCronRun === true;
+    let hasSeenPriorUserMessage = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -846,14 +843,29 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      // The content-based cron heuristic (`isGeneratedCronPromptMessage`) was
-      // intentionally removed. Record-level provenance (`isCronRunGeneratedRecord`
-      // above) handles all genuine cron archives — JSONL records retain their
-      // cron-run session keys even after session reset/delete, so orphan
-      // archives remain correctly opaque. A text-pattern heuristic would
-      // falsely classify human `[cron:...]` text as cron (both mid-transcript
-      // and first-turn), which is worse than letting ambiguous orphan archives
-      // become searchable.
+      // ponytail: content-based cron heuristic — scope decision.
+      // `!hasSeenPriorUserMessage` restricts cron classification to the first
+      // user message, preventing mid-transcript `[cron:]` from wiping content.
+      // Side effect: a first-turn human `[cron:...]` in a reset/deleted archive
+      // is indistinguishable from an orphan cron archive (no session-store
+      // evidence), so it is also classified as cron-generated. Trusted
+      // session-store provenance would be needed to eliminate this trade-off
+      // without sacrificing orphan-cron opacity.
+      if (
+        !generatedByCronRun &&
+        allowArchiveContentCronClassification &&
+        !sessionStoreAlreadyClassifiedCron &&
+        !hasSeenPriorUserMessage &&
+        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
+      ) {
+        generatedByCronRun = true;
+        collected.length = 0;
+        lineMap.length = 0;
+        messageTimestampsMs.length = 0;
+      }
+      if (message.role === "user") {
+        hasSeenPriorUserMessage = true;
+      }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
