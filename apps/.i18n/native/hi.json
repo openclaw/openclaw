@@ -13619,6 +13619,26 @@
       "translated": "लिख रहा है"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "ऑडियो तैयार किया जा रहा है…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "बोला जा रहा है…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "ऑडियो तैयार किया जा रहा है, रद्द करने के लिए टैप करें"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "बोला जा रहा है, रोकने के लिए टैप करें"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "कतार में"
@@ -13692,6 +13712,16 @@
       "id": "native.apple.cdad35e9657fa693",
       "source": "Delete",
       "translated": "मिटाएँ"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "सुनना बंद करें"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "सुनें"
     },
     {
       "id": "native.apple.f84b674ad395b694",

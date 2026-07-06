@@ -2,7 +2,10 @@
 // protocol version checks, and token-backed operator/node clients.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  MIN_NODE_PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   connectReq,
   ConnectErrorDetailCodes,
@@ -462,12 +465,82 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
+    test("allows authenticated previous-protocol nodes to register for maintenance", async () => {
+      const nodeWs = await openWs(port);
+      const operatorWs = await openWs(port);
+      try {
+        const legacyVersion = "2026.5.7";
+        const nodeRes = await connectReq(nodeWs, {
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          role: "node",
+          client: { ...NODE_CLIENT, version: legacyVersion },
+        });
+        expect(nodeRes.ok).toBe(true);
+
+        const operatorRes = await connectReq(operatorWs);
+        expect(operatorRes.ok).toBe(true);
+        const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean; version?: string }> }>(
+          operatorWs,
+          "node.list",
+          {},
+        );
+        expect(listRes.ok).toBe(true);
+        expect(
+          listRes.payload?.nodes?.some(
+            (node) => node.connected === true && node.version === legacyVersion,
+          ),
+        ).toBe(true);
+      } finally {
+        nodeWs.close();
+        operatorWs.close();
+      }
+    });
+
+    test("keeps previous-protocol node connections behind gateway auth", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          role: "node",
+          client: NODE_CLIENT,
+          token: "invalid-token",
+        });
+        expect(res.ok).toBe(false);
+        expect((res.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("rejects node protocols older than the N-1 window", async () => {
+      const ws = await openWs(port);
+      try {
+        const unsupportedProtocol = MIN_NODE_PROTOCOL_VERSION - 1;
+        const res = await connectReq(ws, {
+          minProtocol: unsupportedProtocol,
+          maxProtocol: unsupportedProtocol,
+          role: "node",
+          client: NODE_CLIENT,
+        });
+        expect(res.ok).toBe(false);
+        expect((res.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
     test("keeps previous protocol rejected for non-probe clients", async () => {
       const ws = await openWs(port);
       try {
         const res = await connectReq(ws, {
-          minProtocol: MIN_PROBE_PROTOCOL_VERSION,
-          maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
         });
         expect(res.ok).toBe(false);
       } catch {

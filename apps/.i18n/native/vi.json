@@ -13619,6 +13619,26 @@
       "translated": "Đang viết"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "Đang chuẩn bị âm thanh…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "Đang nói…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "Đang chuẩn bị âm thanh, chạm để hủy"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "Đang nói, chạm để dừng"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "Đã xếp hàng"
@@ -13692,6 +13712,16 @@
       "id": "native.apple.cdad35e9657fa693",
       "source": "Delete",
       "translated": "Xóa"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "Dừng nghe"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "Nghe"
     },
     {
       "id": "native.apple.f84b674ad395b694",

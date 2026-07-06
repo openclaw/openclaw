@@ -13619,6 +13619,26 @@
       "translated": "Schreibt"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "Audio wird vorbereitet…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "Spricht…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "Audio wird vorbereitet, zum Abbrechen tippen"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "Spricht, zum Stoppen tippen"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "In Warteschlange"
@@ -13692,6 +13712,16 @@
       "id": "native.apple.cdad35e9657fa693",
       "source": "Delete",
       "translated": "Löschen"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "Zuhören beenden"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "Zuhören"
     },
     {
       "id": "native.apple.f84b674ad395b694",

@@ -4811,7 +4811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 960,
+      "line": 958,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$onlineNodes/$nodeCount",
       "surface": "android",
@@ -4819,7 +4819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 960,
+      "line": 958,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "None",
       "surface": "android",
@@ -4827,7 +4827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 992,
+      "line": 990,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Recent conversations",
       "surface": "android",
@@ -4835,7 +4835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 999,
+      "line": 997,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Browse",
       "surface": "android",
@@ -4843,7 +4843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 999,
+      "line": 997,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Offline",
       "surface": "android",
@@ -4851,7 +4851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1051,
+      "line": 1049,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Working · $pendingRunCount active ${pluralize(\"run\", pendingRunCount)}",
       "surface": "android",
@@ -4859,7 +4859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1172,
+      "line": 1170,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Needs attention",
       "surface": "android",
@@ -4867,7 +4867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1237,
+      "line": 1235,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open ${row.title}",
       "surface": "android",
@@ -4875,7 +4875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1327,
+      "line": 1325,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open session",
       "surface": "android",
@@ -4883,7 +4883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1439,
+      "line": 1437,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Back",
       "surface": "android",
@@ -4891,7 +4891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1442,
+      "line": 1440,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Settings",
       "surface": "android",
@@ -4899,7 +4899,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1445,
+      "line": 1443,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Search settings",
       "surface": "android",
@@ -4907,7 +4907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1469,
+      "line": 1467,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$readyProviderCount ready",
       "surface": "android",
@@ -4915,7 +4915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1469,
+      "line": 1467,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Review readiness",
       "surface": "android",
@@ -4923,7 +4923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1480,
+      "line": 1478,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Speaker muted",
       "surface": "android",
@@ -4931,7 +4931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1480,
+      "line": 1478,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Speaker on",
       "surface": "android",
@@ -4939,7 +4939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1482,
+      "line": 1480,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Off",
       "surface": "android",
@@ -4947,7 +4947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1482,
+      "line": 1480,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Smart delivery",
       "surface": "android",
@@ -4955,7 +4955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1483,
+      "line": 1481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Camera enabled",
       "surface": "android",
@@ -4963,7 +4963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1483,
+      "line": 1481,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Locked",
       "surface": "android",
@@ -4971,7 +4971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1525,
+      "line": 1523,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
       "surface": "android",
@@ -4979,7 +4979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1528,
+      "line": 1526,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "All systems operational",
       "surface": "android",
@@ -4987,7 +4987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1528,
+      "line": 1526,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Gateway not connected",
       "surface": "android",
@@ -4995,7 +4995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1560,
+      "line": 1558,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No provider usage",
       "surface": "android",
@@ -5003,7 +5003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1561,
+      "line": 1559,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 provider",
       "surface": "android",
@@ -5011,7 +5011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1562,
+      "line": 1560,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$count providers",
       "surface": "android",
@@ -5019,7 +5019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1568,
+      "line": 1566,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$ready/${skills.size} ready",
       "surface": "android",
@@ -5027,7 +5027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1568,
+      "line": 1566,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No skills",
       "surface": "android",
@@ -5035,7 +5035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1746,
+      "line": 1744,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "OpenClaw mobile",
       "surface": "android",
@@ -5043,7 +5043,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1750,
+      "line": 1748,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open profile",
       "surface": "android",
@@ -5051,7 +5051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1835,
+      "line": 1833,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Main session",
       "surface": "android",
