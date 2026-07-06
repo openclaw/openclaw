@@ -898,7 +898,10 @@ function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number 
   if (!isJsonObject(value)) {
     return undefined;
   }
-  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
+  return (
+    readSidePositiveFiniteTimeoutMs(value.timeoutMs) ??
+    readSideTimeoutSecondsAsMs(value.timeoutSeconds)
+  );
 }
 
 function readSideImageGenerationModelTimeoutMs(
