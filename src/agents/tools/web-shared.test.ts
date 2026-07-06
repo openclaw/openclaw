@@ -41,6 +41,21 @@ function responseFromReader(params: {
   } as Response;
 }
 
+function responseFromArrayBuffer(text: string): Response {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    arrayBuffer: async () => bytes.buffer,
+    headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+  } as Response;
+}
+
+function responseFromText(text: string): Response {
+  return {
+    text: async () => text,
+    headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+  } as Response;
+}
+
 describe("web shared timeout seconds", () => {
   it("caps timeoutSeconds at the shared timer-safe ceiling", () => {
     expect(resolveTimeoutSeconds(Number.MAX_SAFE_INTEGER, 30)).toBe(MAX_TIMER_TIMEOUT_SECONDS);
@@ -145,5 +160,25 @@ describe("readResponseText", () => {
     });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("truncates arrayBuffer fallback bodies that exceed maxBytes", async () => {
+    const response = responseFromArrayBuffer("hello world");
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 11,
+    });
+  });
+
+  it("truncates text fallback bodies that exceed maxBytes", async () => {
+    const response = responseFromText("hello world");
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 11,
+    });
   });
 });

@@ -301,6 +301,13 @@ export async function readResponseText(
   if (typeof readBytes === "function") {
     try {
       const bytes = new Uint8Array(await readBytes.call(res));
+      if (maxBytes && bytes.byteLength > maxBytes) {
+        return {
+          text: decodeResponseBytes(res, bytes.subarray(0, maxBytes)),
+          truncated: true,
+          bytesRead: bytes.byteLength,
+        };
+      }
       return {
         text: decodeResponseBytes(res, bytes),
         truncated: false,
@@ -313,6 +320,13 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
+    if (maxBytes && text.length > maxBytes) {
+      return {
+        text: text.slice(0, maxBytes),
+        truncated: true,
+        bytesRead: text.length,
+      };
+    }
     return { text, truncated: false, bytesRead: text.length };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
