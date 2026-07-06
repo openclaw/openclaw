@@ -8139,7 +8139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 23,
+      "line": 18,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "Files",
       "surface": "apple",
@@ -8147,7 +8147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 82,
+      "line": 62,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "This folder is empty.",
       "surface": "apple",
@@ -8155,7 +8155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 145,
+      "line": 134,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "Load More",
       "surface": "apple",
@@ -8163,7 +8163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 151,
+      "line": 140,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "\\(self.entries.count) of \\(self.totalEntries)",
       "surface": "apple",
@@ -8171,7 +8171,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 254,
+      "line": 243,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "Share file",
       "surface": "apple",
@@ -8179,7 +8179,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 261,
+      "line": 250,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "Could not share this file.",
       "surface": "apple",
@@ -8187,7 +8187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 265,
+      "line": 254,
       "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
       "source": "OK",
       "surface": "apple",
