@@ -27,6 +27,10 @@ type HeartbeatSessionSeed = {
   agentRuntimeOverride?: string;
   model?: string;
   modelProvider?: string;
+  /** Timestamp (ms) of the last user/channel interaction. */
+  lastInteractionAt?: number;
+  /** Timestamp (ms) when the current sessionId first became active. */
+  sessionStartedAt?: number;
 };
 
 type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;

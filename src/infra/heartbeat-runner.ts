@@ -182,6 +182,17 @@ const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
 
+/** Session idle fallback: 7 days without user interaction. */
+const HEARTBEAT_IDLE_FALLBACK_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Consecutive heartbeat count per agent since last human interaction.
+ * Reset by inbound user messages; backed off when the count exceeds the limit.
+ */
+const heartbeatConsecutiveIdleCount = new Map<string, number>();
+/** After this many consecutive heartbeats without human interaction, back off. */
+const HEARTBEAT_CONSECUTIVE_IDLE_LIMIT = 48;
+
 function hasQueuedWorkInLanes(
   lanes: readonly string[],
   getSize: (lane?: string) => number,
@@ -1568,6 +1579,39 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
+
+  // ---- Session idle gate -------------------------------------------------
+  // Skip heartbeat when the resolved session has been idle too long.
+  // A heartbeat on an idle session burns tokens with no user to receive
+  // output and no new context for the agent to act on.
+  if (entry) {
+    const lastRealInteraction =
+      entry.lastInteractionAt ?? entry.sessionStartedAt ?? entry.updatedAt;
+    const idleMs = startedAt - lastRealInteraction;
+
+    if (idleMs > HEARTBEAT_IDLE_FALLBACK_MS) {
+      const consecutiveIdleCount =
+        (heartbeatConsecutiveIdleCount.get(agentId) ?? 0) + 1;
+      heartbeatConsecutiveIdleCount.set(agentId, consecutiveIdleCount);
+
+      if (consecutiveIdleCount > HEARTBEAT_CONSECUTIVE_IDLE_LIMIT) {
+        // Too many consecutive idle skips — stop firing until human
+        // activity resets the session.
+        log.warn(
+          `heartbeat consecutive idle limit reached for agent ${agentId} (${consecutiveIdleCount} skips)`,
+        );
+        return { status: "skipped", reason: "backoff-idle" };
+      }
+
+      log.debug(
+        `heartbeat skipped: session idle (agent=${agentId} idleMs=${idleMs} consecutive=${consecutiveIdleCount})`,
+      );
+      return { status: "skipped", reason: "session-idle" };
+    }
+  }
+  // Session is active — reset the consecutive idle counter so the next
+  // idle window starts fresh.
+  heartbeatConsecutiveIdleCount.set(agentId, 0);
 
   const previousUpdatedAt = entry?.updatedAt;
   const dueHeartbeatTasks =
