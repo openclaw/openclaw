@@ -1596,9 +1596,9 @@ export const ja_JP: TranslationMap = {
     sidebar: {
       allSessions: "すべてのセッション",
       openSessionMenu: "Open session menu",
-      sortCreated: "Created",
-      sortSessions: "Sort sessions",
-      sortUpdated: "Last updated",
+      sortCreated: "作成日時",
+      sortSessions: "セッションを並べ替え",
+      sortUpdated: "最終更新",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

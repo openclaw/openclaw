@@ -1596,9 +1596,9 @@ export const tr: TranslationMap = {
     sidebar: {
       allSessions: "Tüm oturumlar",
       openSessionMenu: "Open session menu",
-      sortCreated: "Created",
-      sortSessions: "Sort sessions",
-      sortUpdated: "Last updated",
+      sortCreated: "Oluşturulma",
+      sortSessions: "Oturumları sırala",
+      sortUpdated: "Son güncelleme",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

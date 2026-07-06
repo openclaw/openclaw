@@ -1592,9 +1592,9 @@ export const uk: TranslationMap = {
     sidebar: {
       allSessions: "Усі сеанси",
       openSessionMenu: "Open session menu",
-      sortCreated: "Created",
-      sortSessions: "Sort sessions",
-      sortUpdated: "Last updated",
+      sortCreated: "Створено",
+      sortSessions: "Сортувати сеанси",
+      sortUpdated: "Останнє оновлення",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

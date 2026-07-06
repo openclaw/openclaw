@@ -1603,8 +1603,8 @@ export const ru: TranslationMap = {
       allSessions: "Все сеансы",
       openSessionMenu: "Open session menu",
       sortCreated: "Создано",
-      sortSessions: "Sort sessions",
-      sortUpdated: "Last updated",
+      sortSessions: "Сортировать сеансы",
+      sortUpdated: "Последнее обновление",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

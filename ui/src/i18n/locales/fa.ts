@@ -1590,9 +1590,9 @@ export const fa: TranslationMap = {
     sidebar: {
       allSessions: "همهٔ نشست‌ها",
       openSessionMenu: "Open session menu",
-      sortCreated: "Created",
-      sortSessions: "Sort sessions",
-      sortUpdated: "Last updated",
+      sortCreated: "تاریخ ایجاد",
+      sortSessions: "مرتب‌سازی نشست‌ها",
+      sortUpdated: "آخرین به‌روزرسانی",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

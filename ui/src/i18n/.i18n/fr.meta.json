@@ -1,15 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.sidebar.sortCreated",
-    "chat.sidebar.sortSessions",
-    "chat.sidebar.sortUpdated"
-  ],
-  "generatedAt": "2026-07-06T13:53:42.638Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-06T15:07:05.400Z",
   "locale": "fr",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "1c628b49dcd13285f16322ed97497b3f6fbe381b8e1533f1cd14cbd704d5d940",
-  "totalKeys": 1622,
-  "translatedKeys": 1619,
+  "sourceHash": "aa08ca61cc86933c180bb28403592d6155323229543028c7fbbf8b1b9c845336",
+  "totalKeys": 1627,
+  "translatedKeys": 1627,
   "workflow": 1
 }

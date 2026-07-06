@@ -1575,8 +1575,8 @@ export const hi: TranslationMap = {
       allSessions: "सभी सत्र",
       openSessionMenu: "Open session menu",
       sortCreated: "बनाया गया",
-      sortSessions: "Sort sessions",
-      sortUpdated: "Last updated",
+      sortSessions: "सत्र क्रमबद्ध करें",
+      sortUpdated: "अंतिम अपडेट",
       sessionMenu: "Actions for {session}",
     },
     welcome: {
