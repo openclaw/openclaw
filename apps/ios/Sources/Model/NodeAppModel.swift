@@ -331,7 +331,9 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
-        return IOSGatewayChatTransport(gateway: self.operatorSession)
+        return IOSGatewayChatTransport(
+            gateway: self.operatorSession,
+            globalAgentId: self.chatAgentId)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active

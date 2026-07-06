@@ -13,6 +13,10 @@ struct ChatProTab: View {
     @State private var viewModelTransportModeID = ""
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
+    // Transport can start unscoped while the UI uses its "main" fallback.
+    // Track the real agent separately so gateway metadata always rebuilds it.
+    @State private var viewModelTransportAgentID = ""
+    @State private var viewModelAgentID = ""
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
     let showsAgentBadge: Bool
@@ -52,6 +56,12 @@ struct ChatProTab: View {
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.chatViewModelIdentityID) { _, _ in
+            self.syncChatViewModel()
+        }
+        .onChange(of: self.appModel.chatAgentId) { _, _ in
+            self.syncChatViewModel()
+        }
+        .onChange(of: self.appModel.gatewayDefaultAgentId) { _, _ in
             self.syncChatViewModel()
         }
         .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
@@ -157,11 +167,16 @@ struct ChatProTab: View {
         // Includes the cache gateway identity so switching paired gateways
         // rebuilds the view model even while the transport mode stays the same.
         let transportModeID = self.appModel.chatViewModelIdentityID
+        let transportAgentID = Self.transportAgentID(self.appModel.chatAgentId)
+        let agentID = self.activeAgentID
         guard let viewModel else {
             self.viewModelTransportModeID = transportModeID
+            self.viewModelTransportAgentID = transportAgentID
+            self.viewModelAgentID = agentID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: self.appModel.makeChatTransport(),
+                activeAgentId: agentID,
                 transcriptCache: self.appModel.makeChatTranscriptCache(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
@@ -171,11 +186,17 @@ struct ChatProTab: View {
                 })
             return
         }
-        if self.viewModelTransportModeID != transportModeID {
+        if self.viewModelTransportModeID != transportModeID ||
+            self.viewModelTransportAgentID != transportAgentID ||
+            self.viewModelAgentID != agentID
+        {
             self.viewModelTransportModeID = transportModeID
+            self.viewModelTransportAgentID = transportAgentID
+            self.viewModelAgentID = agentID
             self.viewModel = OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: self.appModel.makeChatTransport(),
+                activeAgentId: agentID,
                 transcriptCache: self.appModel.makeChatTranscriptCache(),
                 onSessionChanged: { sessionKey in
                     self.appModel.focusChatSession(sessionKey)
@@ -360,6 +381,10 @@ struct ChatProTab: View {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.isEmpty || normalized == "?" ? nil : normalized
+    }
+
+    nonisolated static func transportAgentID(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
