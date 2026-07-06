@@ -1207,27 +1207,11 @@ function readGatewayPortFromSystemdEnv({
   readFileSync: readFile = readFileSync,
   homedir: homeDir = homedir,
 } = {}) {
-  // 1. Try gateway.systemd.env first (EnvironmentFile written by install)
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || join(homeDir(), ".openclaw");
-  const envFilePath = join(stateDir, "gateway.systemd.env");
-  if (exists(envFilePath)) {
-    try {
-      const content = readFile(envFilePath, "utf8");
-      const match = content.match(/^OPENCLAW_GATEWAY_PORT=(\d+)$/m);
-      if (match?.[1]) {
-        const port = Number(match[1]);
-        if (Number.isFinite(port) && port > 0 && port <= 65535) {
-          return port;
-        }
-      }
-    } catch {
-      // Unreadable env file -- ignore
-    }
-  }
 
-  // 2. Try systemd unit file inline Environment= directive.
-  //    The gateway port may be stored as Environment=OPENCLAW_GATEWAY_PORT=<port>
-  //    directly in the unit file rather than in a separate EnvironmentFile.
+  // 1. Try systemd unit file inline Environment= directive first.
+  //    The inline directive is set by the installer and takes precedence over
+  //    the EnvironmentFile, which may be stale from a previous installation.
   const serviceName = env.OPENCLAW_SYSTEMD_UNIT?.trim() || "openclaw-gateway";
   const unitName = serviceName.endsWith(".service") ? serviceName : `${serviceName}.service`;
   const unitPath = join(homeDir(), ".config", "systemd", "user", unitName);
@@ -1244,6 +1228,24 @@ function readGatewayPortFromSystemdEnv({
       }
     } catch {
       // Unreadable unit file -- ignore
+    }
+  }
+
+  // 2. Try gateway.systemd.env (EnvironmentFile written by install).
+  //    This is the fallback; the inline unit directive is authoritative.
+  const envFilePath = join(stateDir, "gateway.systemd.env");
+  if (exists(envFilePath)) {
+    try {
+      const content = readFile(envFilePath, "utf8");
+      const match = content.match(/^OPENCLAW_GATEWAY_PORT=(\d+)$/m);
+      if (match?.[1]) {
+        const port = Number(match[1]);
+        if (Number.isFinite(port) && port > 0 && port <= 65535) {
+          return port;
+        }
+      }
+    } catch {
+      // Unreadable env file -- ignore
     }
   }
 

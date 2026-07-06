@@ -1245,7 +1245,7 @@ describe("gateway port resolution", () => {
   });
 
   it("resolves port from service-env (launchd)", () => {
-    const readdirSync = vi.fn(() => [{ name: "openclaw-gateway.env", isDirectory: () => false }]);
+    const readdirSync = vi.fn(() => ["openclaw-gateway.env"]);
     const readFileSync = vi.fn(() => "export OPENCLAW_GATEWAY_PORT='19003'\n");
     expect(
       resolveGatewayPort({
@@ -1343,7 +1343,7 @@ describe("gateway port resolution", () => {
       probe,
     });
     expect(warn).toHaveBeenCalled();
-    expect(warn.mock.calls[0][0]).toContain("WARNING");
+    expect(warn.mock.calls[2][0]).toContain("WARNING");
   });
 
   it("does not warn when no gateway is listening", async () => {
