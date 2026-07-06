@@ -219,6 +219,34 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore<number>("codex", {
+        namespace: "durable-bindings",
+        maxEntries: 2,
+        overflowPolicy: "reject-new",
+      });
+      await store.register("first", 1);
+      await store.register("second", 2);
+
+      await expect(store.register("third", 3)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(store.registerIfAbsent("first", 99)).resolves.toBe(false);
+      if (!store.update) {
+        throw new Error("plugin state update unavailable");
+      }
+      await expect(store.update("first", () => 10)).resolves.toBe(true);
+      await expect(store.update("third", () => 3)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(store.entries()).resolves.toEqual([
+        expect.objectContaining({ key: "second", value: 2 }),
+        expect.objectContaining({ key: "first", value: 10 }),
+      ]);
+    });
+  });
+
   it("registerIfAbsent keeps plugin and namespace claims isolated", async () => {
     await withPluginStateTestState(async () => {
       const discordA = createPluginStateKeyedStore<{ owner: string }>("discord", {
