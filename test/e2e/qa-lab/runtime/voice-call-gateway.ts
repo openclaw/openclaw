@@ -45,99 +45,12 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
-async function createFixturePlugin(root: string) {
-  const pluginDir = path.join(root, FIXTURE_PLUGIN_ID);
-  const bridgeCallsPath = path.join(root, "bridge-calls.jsonl");
-  const toolResultsPath = path.join(root, "tool-results.jsonl");
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: FIXTURE_PLUGIN_ID,
-        activation: { onStartup: true },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "index.js"),
-    `const fs = require("node:fs");
-
-const append = (file, value) => fs.appendFileSync(file, JSON.stringify(value) + "\\n");
-module.exports = {
-  id: ${JSON.stringify(FIXTURE_PLUGIN_ID)},
-  register(api) {
-    api.registerRealtimeVoiceProvider({
-      id: ${JSON.stringify(FIXTURE_REALTIME_PROVIDER_ID)},
-      label: "QA Voice Call Realtime",
-      isConfigured: () => true,
-      createBrowserSession() {
-        throw new Error("Voice Call fixture is bridge-only");
-      },
-      createBridge(request) {
-        append(process.env.OPENCLAW_QA_VOICE_BRIDGE_CALLS_PATH, {
-          instructions: request.instructions,
-          tools: request.tools?.map((tool) => tool.name) ?? [],
-        });
-        let connected = false;
-        return {
-          supportsToolResultContinuation: true,
-          async connect() {
-            connected = true;
-            request.onReady?.();
-            request.onTranscript?.("user", "Caller partial transcript context", false);
-            setTimeout(() => {
-              request.onToolCall?.({
-                itemId: "qa-consult-item",
-                callId: "qa-consult-call",
-                name: "openclaw_agent_consult",
-                args: {
-                  question: "Use the embedded agent context to identify the caller request.",
-                  context: "Realtime provider context marker: VOICE-CONSULT-42",
-                },
-              });
-            }, 10);
-          },
-          sendAudio() {},
-          setMediaTimestamp() {},
-          submitToolResult(callId, result, options) {
-            append(process.env.OPENCLAW_QA_VOICE_TOOL_RESULTS_PATH, { callId, result, options });
-          },
-          acknowledgeMark() {},
-          close() { connected = false; },
-          isConnected() { return connected; },
-          triggerGreeting() {},
-        };
-      },
-    });
-    api.registerGatewayMethod("qa.voiceCall.streamSession", async ({ params, respond }) => {
-      const runtime = globalThis[Symbol.for("openclaw.voice-call.runtime")];
-      const callId = typeof params?.callId === "string" ? params.callId : "";
-      const call = runtime?.manager?.getCall?.(callId);
-      const issue = runtime?.manager?.streamSessionIssuer;
-      if (!runtime || !call || typeof issue !== "function" || !call.providerCallId) {
-        respond(false, undefined, { code: "UNAVAILABLE", message: "Voice Call runtime stream issuer unavailable" });
-        return;
-      }
-      const session = issue({
-        providerName: "twilio",
-        callId,
-        from: call.from,
-        to: call.to,
-        direction: call.direction,
-      });
-      respond(true, { ...session, providerCallId: call.providerCallId, webhookUrl: runtime.webhookUrl });
-    });
-  },
-};
-`,
-    "utf8",
-  );
-  return { bridgeCallsPath, pluginDir, toolResultsPath };
+function createFixturePlugin(repoRoot: string, outputRoot: string) {
+  return {
+    pluginDir: path.join(repoRoot, "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin"),
+    bridgeCallsPath: path.join(outputRoot, "bridge-calls.jsonl"),
+    toolResultsPath: path.join(outputRoot, "tool-results.jsonl"),
+  };
 }
 
 function withVoiceCallConfig(params: {
@@ -255,7 +168,7 @@ async function openRealtimeMediaStream(params: {
 
 async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-gateway-"));
-  const fixture = await createFixturePlugin(fixtureRoot);
+  const fixture = createFixturePlugin(options.repoRoot, fixtureRoot);
   const mock = await startQaMockOpenAiServer();
   const servePort = await getFreePort();
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
