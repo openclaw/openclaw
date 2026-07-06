@@ -381,17 +381,23 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("keeps the Startup-folder launcher when task launch evidence is only the old listener", async () => {
+  it("keeps the Startup-folder launcher when the old fallback owns the listener", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "node.exe" }],
+        hints: [],
+      });
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
         { code: 0, stdout: "", stderr: "" },
-        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
       ]);
 
       await installGatewayScheduledTask(env);

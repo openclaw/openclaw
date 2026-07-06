@@ -1358,6 +1358,9 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   const staged = await writeScheduledTaskScript(args);
   const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
+  const startupEntryWasRunning =
+    (await isStartupEntryInstalled(activationEnv)) &&
+    (await resolveFallbackRuntime(activationEnv).catch(() => null))?.status === "running";
   const activation = await activateScheduledTask({
     env: activationEnv,
     stdout: args.stdout,
@@ -1365,9 +1368,9 @@ export async function installScheduledTask(
     taskLaunchPath: staged.taskLaunchPath,
     description: staged.taskDescription,
   });
-  if (activation === "scheduled-task") {
-    // A busy gateway port can be the old Startup-folder fallback. Keep that
-    // fallback until Task Scheduler itself reports the task is running.
+  if (activation === "scheduled-task" && !startupEntryWasRunning) {
+    // A running fallback can briefly overlap a newly launched task. Keep its
+    // launcher until restart terminates it and proves Task Scheduler took over.
     if (await hasScheduledTaskRunningEvidence(activationEnv)) {
       await removeStartupEntries(activationEnv, args.stdout);
     }

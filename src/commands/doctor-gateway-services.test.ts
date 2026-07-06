@@ -81,7 +81,6 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
     gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
     gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
-    gatewayVersionMismatch: testServiceAuditCodes.gatewayVersionMismatch,
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
   },
 }));
@@ -972,11 +971,18 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: {
         OPENCLAW_SERVICE_VERSION: "2026.5.25",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work",
       },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: true,
-      issues: [],
+      ok: false,
+      issues: [
+        {
+          code: "gateway-service-version-mismatch",
+          message: "Gateway service was installed by an older OpenClaw version.",
+          level: "recommended",
+        },
+      ],
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
@@ -990,11 +996,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     await runNonInteractiveRepair({ updateInProgress: true });
 
     expectNoteContaining(
-      "Gateway service version does not match the current CLI.",
+      "Gateway service was installed by an older OpenClaw version.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+    expect(mocks.readRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work" }),
+    );
   });
 
   it("persists embedded service tokens before Windows update repairs rewrite the task", async () => {
@@ -1019,8 +1028,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
-          ok: true,
-          issues: [],
+          ok: false,
+          issues: [
+            {
+              code: "gateway-token-embedded",
+              message: "Gateway service contains an embedded token.",
+              level: "recommended",
+            },
+          ],
         });
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
@@ -1078,8 +1093,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
-          ok: true,
-          issues: [],
+          ok: false,
+          issues: [
+            {
+              code: "gateway-token-embedded",
+              message: "Gateway service contains an embedded token.",
+              level: "recommended",
+            },
+          ],
         });
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
@@ -1117,8 +1138,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: true,
-      issues: [],
+      ok: false,
+      issues: [
+        {
+          code: "gateway-service-version-mismatch",
+          message: "Gateway service was installed by an older OpenClaw version.",
+          level: "recommended",
+        },
+      ],
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,

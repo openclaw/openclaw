@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - **Cron edit delivery:** preserve each job's implicit delivery mode when applying partial delivery updates, so disabling best-effort delivery no longer turns detached job announcements off. (#100846) Thanks @machine3at.
 - **Control UI session creation:** keep newly created sessions at the front of the stable sidebar order after selecting another session. Thanks @shakkernerd.
 - **FTS-only memory startup:** skip plugin capability discovery when `memorySearch.provider` is explicitly `none`, avoiding an unnecessary cold-start scan.
+- **Windows Gateway update repair:** migrate running Startup-folder fallbacks to Task Scheduler during doctor-driven updates, preserve legacy gateway auth before rewriting the service, restart stale git-update gateways, and remove fallback launchers only after Task Scheduler reports the replacement running. (#87156) Thanks @vincentkoc.
 - **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
 - **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.

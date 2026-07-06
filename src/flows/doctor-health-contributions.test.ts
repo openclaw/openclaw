@@ -1343,11 +1343,12 @@ describe("doctor health contributions", () => {
     const contribution = requireDoctorContribution("doctor:gateway-services");
     const ctx = {
       cfg: { gateway: { mode: "local" } },
+      configResult: {},
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { allowExec: true },
-    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+    } as unknown as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -1356,7 +1357,7 @@ describe("doctor health contributions", () => {
       "local",
       ctx.runtime,
       ctx.prompter,
-      { allowExecSecretRefs: true },
+      expect.objectContaining({ allowExecSecretRefs: true }),
     );
   });
 

@@ -36,7 +36,6 @@ import {
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { VERSION } from "../version.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -426,8 +425,8 @@ async function cleanupLegacyLinuxUserServices(
 /**
  * Audits and optionally rewrites the installed local gateway service configuration.
  *
- * The repair preserves managed env sources, avoids Nix/remote installs, and can stage service
- * updates during updater repair mode instead of immediately installing them.
+ * The repair preserves managed env sources and avoids Nix/remote installs. Update-mode repairs
+ * stay staged except for running Windows services, which must be activated to replace a fallback.
  */
 export async function maybeRepairGatewayServiceConfig(
   cfg: OpenClawConfig,
@@ -506,15 +505,6 @@ export async function maybeRepairGatewayServiceConfig(
       message:
         "Gateway service OPENCLAW_GATEWAY_TOKEN should be unset when gateway.auth.token is SecretRef-managed",
       detail: "service token is stale",
-      level: "recommended",
-    });
-  }
-  const serviceVersion = normalizeOptionalString(command.environment?.OPENCLAW_SERVICE_VERSION);
-  if (serviceVersion && serviceVersion !== VERSION) {
-    audit.issues.push({
-      code: SERVICE_AUDIT_CODES.gatewayVersionMismatch,
-      message: "Gateway service version does not match the current CLI.",
-      detail: `${serviceVersion} -> ${VERSION}`,
       level: "recommended",
     });
   }
@@ -739,11 +729,17 @@ export async function maybeRepairGatewayServiceConfig(
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
   });
+  // Installed metadata owns profile/task locators for the pre-repair runtime probe.
+  // Keep it read-only; the rebuilt service still uses the canonical install plan.
+  const serviceRuntimeEnv = {
+    ...serviceInstallEnv,
+    ...command.environment,
+  };
   const updateRepairShouldInstall =
     updateRepairMode &&
     (await isWindowsGatewayRunningForUpdateRepair({
       service,
-      env: serviceInstallEnv,
+      env: serviceRuntimeEnv,
     }));
   // Windows `install` activates the task/login item. In update mode, only take
   // that path when the gateway was already running; stopped installs stay staged.
