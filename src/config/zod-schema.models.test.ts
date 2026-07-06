@@ -87,7 +87,9 @@ describe("AgentModelSchema nullable fallbacks", () => {
   it("accepts null fallbacks (clear-to-inherit)", () => {
     const result = AgentModelSchema.safeParse({ primary: "openai/gpt-5", fallbacks: null });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.fallbacks).toBeNull();
+    if (result.success) {
+      expect((result.data as Record<string, unknown>).fallbacks).toBeNull();
+    }
   });
   it("accepts fallbacks as array", () => {
     const result = AgentModelSchema.safeParse({
@@ -95,7 +97,9 @@ describe("AgentModelSchema nullable fallbacks", () => {
       fallbacks: ["anthropic/claude-haiku-3-5"],
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.fallbacks).toEqual(["anthropic/claude-haiku-3-5"]);
+    if (result.success) {
+      expect((result.data as Record<string, unknown>).fallbacks).toEqual(["anthropic/claude-haiku-3-5"]);
+    }
   });
   it("rejects non-array non-null fallbacks", () => {
     const result = AgentModelSchema.safeParse({
@@ -107,7 +111,9 @@ describe("AgentModelSchema nullable fallbacks", () => {
   it("accepts string-only model (no fallbacks field)", () => {
     const result = AgentModelSchema.safeParse("openai/gpt-5");
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data).toBe("openai/gpt-5");
+    if (result.success) {
+      expect(result.data).toBe("openai/gpt-5");
+    }
   });
 });
 
@@ -115,7 +121,9 @@ describe("AgentToolModelSchema nullable fallbacks", () => {
   it("accepts null fallbacks", () => {
     const result = AgentToolModelSchema.safeParse({ primary: "openai/gpt-5", fallbacks: null });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.fallbacks).toBeNull();
+    if (result.success) {
+      expect((result.data as Record<string, unknown>).fallbacks).toBeNull();
+    }
   });
   it("accepts fallbacks as array", () => {
     const result = AgentToolModelSchema.safeParse({
@@ -123,7 +131,9 @@ describe("AgentToolModelSchema nullable fallbacks", () => {
       fallbacks: ["anthropic/claude-haiku-3-5"],
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.fallbacks).toEqual(["anthropic/claude-haiku-3-5"]);
+    if (result.success) {
+      expect((result.data as Record<string, unknown>).fallbacks).toEqual(["anthropic/claude-haiku-3-5"]);
+    }
   });
 });
 
