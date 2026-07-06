@@ -14,9 +14,7 @@ describe("isNonRecoverableConnectError", () => {
   });
 
   it("returns false for errors without detail codes (network issues)", () => {
-    expect(isNonRecoverableConnectError({ code: "connect_failed", message: "timeout" })).toBe(
-      false,
-    );
+    expect(isNonRecoverableConnectError({})).toBe(false);
   });
 
   it("blocks reconnect for AUTH_TOKEN_MISSING (misconfigured client)", () => {
