@@ -28,6 +28,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -146,6 +147,7 @@ class TalkModeManager internal constructor(
   private val onStoppedByRelay: () -> Unit = {},
   private val talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(session = session),
   private val talkAudioPlayer: TalkAudioPlaying = TalkAudioPlayer(context),
+  private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -965,7 +967,7 @@ class TalkModeManager internal constructor(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
       )
     realtimeAppendJob =
-      scope.launch(Dispatchers.IO) {
+      scope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
           if (realtimeSessionId != sessionId) continue
           if (isRealtimePlaybackActive()) continue
@@ -993,7 +995,7 @@ class TalkModeManager internal constructor(
         }
       }
     realtimeCaptureJob =
-      scope.launch(Dispatchers.IO) {
+      scope.launch(realtimeCaptureDispatcher) {
         var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000

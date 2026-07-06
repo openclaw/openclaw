@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.os.SystemClock
 import android.speech.RecognitionService
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -732,7 +733,11 @@ class TalkModeManagerTest {
   @Test
   fun resumingRealtimeCaptureRestoresListeningState() =
     runTest {
-      val manager = createManager(scope = this)
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
       setMutableStateFlow(manager, "_isEnabled", true)
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
@@ -766,7 +771,11 @@ class TalkModeManagerTest {
   @Test
   fun replacementRelayPublishedDuringPushToTalkResumesCapture() =
     runTest {
-      val manager = createManager(scope = this)
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
       setMutableStateFlow(manager, "_isEnabled", true)
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
@@ -895,6 +904,7 @@ class TalkModeManagerTest {
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
+    realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -915,6 +925,7 @@ class TalkModeManagerTest {
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
+      realtimeCaptureDispatcher = realtimeCaptureDispatcher,
     )
   }
 
