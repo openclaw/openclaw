@@ -117,7 +117,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache, Ope
     public static let outboxCommandMaxAge: TimeInterval = 48 * 60 * 60
     /// Machine-readable `lastError` set by the staleness gate.
     public static let outboxExpiredError = "expired"
-    // v2 adds the outbox_commands table; older shapes drop-and-rebuild.
+    /// v2 adds the outbox_commands table; older shapes drop-and-rebuild.
     static let schemaVersion: Int32 = 2
 
     /// Owns the raw sqlite handle so it closes on release without needing an
