@@ -12,18 +12,23 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 const {
   mockClientCreate,
   mockCreateFeishuClient,
+  mockClearClientCache,
   mockResolveFeishuAccount,
   mockConvertMarkdownTables,
   mockResolveMarkdownTableMode,
 } = vi.hoisted(() => ({
   mockClientCreate: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
+  mockClearClientCache: vi.fn(),
   mockResolveFeishuAccount: vi.fn(),
   mockConvertMarkdownTables: vi.fn((text: string) => text),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
 }));
 
-vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
+vi.mock("./client.js", () => ({
+  clearClientCache: mockClearClientCache,
+  createFeishuClient: mockCreateFeishuClient,
+}));
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mockResolveFeishuAccount,
   resolveFeishuRuntimeAccount: mockResolveFeishuAccount,
@@ -66,6 +71,18 @@ function axiosRateLimitError(code = 230020) {
       data: {
         code,
         msg: "This operation triggers the frequency limit, ext=chat rate limit",
+      },
+    },
+  });
+}
+
+function axiosTokenInvalidError(code = 99991663) {
+  return Object.assign(new Error("Request failed with status code 400"), {
+    response: {
+      status: 400,
+      data: {
+        code,
+        msg: "Invalid access token",
       },
     },
   });
@@ -241,6 +258,32 @@ describe("Concurrent Feishu sends — rate-limit behavior (code 230020)", () => 
     expect(error).toBeInstanceOf(Error);
     // Error message must carry feishu_code so retry/circuit-breaker logic upstream can identify it
     expect((error as Error).message).toMatch(/230020/);
+  });
+});
+
+describe("Feishu sends — token-invalid recovery", () => {
+  it("clears the account client cache and retries text sends with a fresh client", async () => {
+    const staleCreate = vi.fn().mockRejectedValueOnce(axiosTokenInvalidError());
+    const freshCreate = vi.fn().mockResolvedValueOnce(okResponse("om_after_refresh"));
+
+    mockCreateFeishuClient
+      // Initial target resolution keeps routing metadata stable.
+      .mockReturnValueOnce({ im: { message: { create: vi.fn() } } })
+      // First API attempt uses the stale SDK client.
+      .mockReturnValueOnce({ im: { message: { create: staleCreate } } })
+      // Token invalidation clears the cache, so retry resolves a new client.
+      .mockReturnValueOnce({ im: { message: { create: freshCreate } } });
+
+    const result = await sendMessageFeishu({
+      cfg: MOCK_CFG,
+      to: "oc_refresh",
+      text: "refresh token",
+    });
+
+    expect(result.messageId).toBe("om_after_refresh");
+    expect(staleCreate).toHaveBeenCalledTimes(1);
+    expect(freshCreate).toHaveBeenCalledTimes(1);
+    expect(mockClearClientCache).toHaveBeenCalledWith("default");
   });
 });
 

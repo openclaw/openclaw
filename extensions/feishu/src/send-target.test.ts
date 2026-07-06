@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
+const clearClientCacheMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
@@ -11,6 +12,7 @@ vi.mock("./accounts.js", () => ({
 }));
 
 vi.mock("./client.js", () => ({
+  clearClientCache: clearClientCacheMock,
   createFeishuClient: createFeishuClientMock,
 }));
 

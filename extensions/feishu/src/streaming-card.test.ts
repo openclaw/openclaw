@@ -1,4 +1,5 @@
 // Feishu tests cover streaming card plugin behavior.
+import type { Client } from "@larksuiteoapi/node-sdk";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -150,6 +151,15 @@ describe("FeishuStreamingSession", () => {
       },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client };
+  }
+
+  function tokenInvalidError() {
+    return Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        status: 400,
+        data: { code: 99991663, msg: "Invalid access token" },
+      },
+    });
   }
 
   it("flushes throttled pending text after the throttle window", async () => {
@@ -541,6 +551,208 @@ describe("FeishuStreamingSession", () => {
     }).start("chat_id", "open_id");
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
+  });
+
+  it("refreshes the CardKit token and retries create when Feishu returns token-invalid", async () => {
+    const release = vi.fn(async () => {});
+    const cardCreateAuthorizations: string[] = [];
+    const authTokens: string[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url, init }: { url: string; init?: { headers?: Record<string, string> } }) => {
+        if (url.includes("/auth/")) {
+          const token = `token-${authTokens.length + 1}`;
+          authTokens.push(token);
+          return {
+            response: {
+              ok: true,
+              json: async () => ({
+                code: 0,
+                msg: "ok",
+                tenant_access_token: token,
+                expire: 7200,
+              }),
+            },
+            release,
+          };
+        }
+        cardCreateAuthorizations.push(init?.headers?.Authorization ?? "");
+        return {
+          response: {
+            ok: true,
+            status: 200,
+            json: async () =>
+              cardCreateAuthorizations.length === 1
+                ? { code: 99991663, msg: "Invalid access token" }
+                : { code: 0, msg: "ok", data: { card_id: "card_refreshed" } },
+          },
+          release,
+        };
+      },
+    );
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({
+            code: 0,
+            msg: "ok",
+            data: { message_id: "om_refreshed" },
+          })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+
+    await new FeishuStreamingSession(client, {
+      appId: "app_cardkit_refresh",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+
+    expect(authTokens).toEqual(["token-1", "token-2"]);
+    expect(cardCreateAuthorizations).toEqual(["Bearer token-1", "Bearer token-2"]);
+  });
+
+  it("refreshes the CardKit token on HTTP token-invalid responses", async () => {
+    const release = vi.fn(async () => {});
+    const authTokens: string[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url }: { url: string; init?: { headers?: Record<string, string> } }) => {
+        if (url.includes("/auth/")) {
+          const token = `token-${authTokens.length + 1}`;
+          authTokens.push(token);
+          return {
+            response: {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                code: 0,
+                msg: "ok",
+                tenant_access_token: token,
+                expire: 7200,
+              }),
+            },
+            release,
+          };
+        }
+        return {
+          response: {
+            ok: authTokens.length > 1,
+            status: authTokens.length > 1 ? 200 : 400,
+            json: async () =>
+              authTokens.length === 1
+                ? { code: 99991663, msg: "Invalid access token" }
+                : { code: 0, msg: "ok", data: { card_id: "card_after_http_400" } },
+          },
+          release,
+        };
+      },
+    );
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+
+    await new FeishuStreamingSession(client, {
+      appId: "app_cardkit_http_refresh",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+
+    expect(authTokens).toEqual(["token-1", "token-2"]);
+  });
+
+  it("treats persistent CardKit token-invalid update responses as failed sends", async () => {
+    const release = vi.fn(async () => {});
+    const logs: string[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.includes("/auth/")) {
+        return {
+          response: {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: "token",
+              expire: 7200,
+            }),
+          },
+          release,
+        };
+      }
+      return {
+        response: {
+          ok: true,
+          status: 200,
+          json: async () => ({ code: 99991663, msg: "Invalid access token" }),
+        },
+        release,
+      };
+    });
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_persistent_cardkit_invalid",
+        appSecret: "secret",
+      },
+      (message) => logs.push(message),
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_1",
+        messageId: "om_1",
+        sequence: 1,
+        currentText: "old",
+        sentText: "old",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    await session.update("old with enough new content to send immediately");
+
+    const internals = session as unknown as { state: StreamingSessionState };
+    expect(internals.state.sentText).toBe("old");
+    expect(logs.join("\n")).toContain("CardKit request failed with token-invalid code 99991663");
+  });
+
+  it("invalidates the SDK token and retries streaming card sends with a fresh client", async () => {
+    const { client } = mockStreamingTokenStart((token) => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: token,
+      expire: 7200,
+    }));
+    const staleCreate = vi.fn().mockRejectedValueOnce(tokenInvalidError());
+    const freshCreate = vi.fn().mockResolvedValueOnce({
+      code: 0,
+      msg: "ok",
+      data: { message_id: "om_after_sdk_refresh" },
+    });
+    const onSdkTokenInvalid = vi.fn();
+    const clients = [
+      {
+        im: { message: { create: staleCreate } },
+      },
+      {
+        im: { message: { create: freshCreate } },
+      },
+    ];
+    const resolveClient = vi.fn(() => clients.shift() ?? client);
+
+    await new FeishuStreamingSession(
+      resolveClient as unknown as () => Client,
+      {
+        appId: "app_sdk_refresh",
+        appSecret: "secret",
+      },
+      undefined,
+      { onSdkTokenInvalid },
+    ).start("chat_id", "open_id");
+
+    expect(staleCreate).toHaveBeenCalledTimes(1);
+    expect(freshCreate).toHaveBeenCalledTimes(1);
+    expect(onSdkTokenInvalid).toHaveBeenCalledTimes(1);
   });
 
   it("bounds streaming token fallback lifetime when the process clock is invalid", async () => {

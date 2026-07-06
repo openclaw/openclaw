@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,
+  getFeishuTokenInvalidCode,
+  getFeishuTokenInvalidCodeFromResponse,
   requestFeishuApi,
 } from "./comment-shared.js";
 
@@ -319,5 +321,179 @@ describe("requestFeishuApi — retry on fulfilled rate-limit body (no throw)", (
     const result = await requestFeishuApi(request, "prefix", NO_DELAY);
     expect((result as { data: { message_id: string } }).data.message_id).toBe("om_recovered");
     expect(request).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("getFeishuTokenInvalidCode", () => {
+  it("returns 99991663 for an Invalid access token AxiosError", () => {
+    expect(getFeishuTokenInvalidCode(axiosError(99991663))).toBe(99991663);
+  });
+
+  it("returns 99991664 for the missing-access-token code", () => {
+    expect(getFeishuTokenInvalidCode(axiosError(99991664))).toBe(99991664);
+  });
+
+  it("returns undefined for a rate-limit code (230020) — not a token-invalid signal", () => {
+    expect(getFeishuTokenInvalidCode(axiosError(230020))).toBeUndefined();
+  });
+
+  it("returns undefined for a plain Error without a response body", () => {
+    expect(getFeishuTokenInvalidCode(new Error("network failure"))).toBeUndefined();
+  });
+
+  it("returns undefined for null", () => {
+    expect(getFeishuTokenInvalidCode(null)).toBeUndefined();
+  });
+});
+
+describe("getFeishuTokenInvalidCodeFromResponse", () => {
+  it("returns token-invalid codes from fulfilled Feishu response bodies", () => {
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 99991663 })).toBe(99991663);
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 99991664 })).toBe(99991664);
+  });
+
+  it("ignores non-token-invalid fulfilled response bodies", () => {
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 0 })).toBeUndefined();
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 230020 })).toBeUndefined();
+    expect(getFeishuTokenInvalidCodeFromResponse(null)).toBeUndefined();
+  });
+});
+
+describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
+  it("invokes onTokenInvalid once and retries on 99991663", async () => {
+    const onTokenInvalid = vi.fn();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockResolvedValueOnce("ok-after-refresh");
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    });
+
+    expect(result).toBe("ok-after-refresh");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(onTokenInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT call onTokenInvalid on non-token errors", async () => {
+    const onTokenInvalid = vi.fn();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(230020))
+      .mockResolvedValueOnce("ok-after-ratelimit");
+
+    await requestFeishuApi(request, "prefix", { ...NO_DELAY, onTokenInvalid });
+
+    expect(onTokenInvalid).not.toHaveBeenCalled();
+  });
+
+  it("does not double-wrap non-token errors when token invalidation is configured", async () => {
+    const onTokenInvalid = vi.fn();
+    const request = vi.fn().mockRejectedValue(axiosError(230020));
+
+    const err = await requestFeishuApi(request, "Feishu send failed", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message.match(/Feishu send failed/g)).toHaveLength(1);
+    expect((err as Error).message).toMatch(/230020/);
+    expect(onTokenInvalid).not.toHaveBeenCalled();
+  });
+
+  it("only invalidates the token once even if 99991663 persists", async () => {
+    // Permanently revoked credentials would otherwise spin the invalidation
+    // hook on every retry. Pin behavior: invalidate at most once, then
+    // surface the wrapped error.
+    const onTokenInvalid = vi.fn();
+    const request = vi.fn().mockRejectedValue(axiosError(99991663));
+
+    await expect(
+      requestFeishuApi(request, "Feishu send failed", { ...NO_DELAY, onTokenInvalid }),
+    ).rejects.toThrow(/Feishu send failed: .*99991663/);
+
+    expect(onTokenInvalid).toHaveBeenCalledTimes(1);
+    // 1 initial attempt + 1 retry after invalidation, then surface.
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("still retries on rate-limit codes after a token-invalid retry was consumed", async () => {
+    // Token-invalid on attempt 0, rate-limit on attempt 1, success on
+    // attempt 2. The token retry and rate-limit retries are independent.
+    const onTokenInvalid = vi.fn();
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockRejectedValueOnce(axiosError(230020))
+      .mockResolvedValueOnce("ok-after-mixed");
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    });
+
+    expect(result).toBe("ok-after-mixed");
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(onTokenInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a throwing onTokenInvalid hook (best-effort invalidation)", async () => {
+    // A caller-side cache miss or programming error in the hook must not
+    // swallow the original token-invalid error.
+    const onTokenInvalid = vi.fn(() => {
+      throw new Error("cache flush failed");
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockResolvedValueOnce("ok-after-best-effort");
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    });
+
+    expect(result).toBe("ok-after-best-effort");
+    expect(onTokenInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on 99991663 when no onTokenInvalid hook is supplied", async () => {
+    // SDK callers that have no token cache to clear should see the error
+    // surface immediately rather than retry with the same stale token.
+    const request = vi.fn().mockRejectedValue(axiosError(99991663));
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(
+      /prefix: .*99991663/,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("invokes onTokenInvalid and retries when SDK fulfills with a token-invalid body", async () => {
+    const onTokenInvalid = vi.fn();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 99991663, msg: "Invalid access token" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_after_refresh" } });
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    });
+
+    expect(result).toEqual({ code: 0, data: { message_id: "om_after_refresh" } });
+    expect(onTokenInvalid).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects fulfilled token-invalid bodies when no onTokenInvalid hook is supplied", async () => {
+    const request = vi.fn().mockResolvedValue({ code: 99991664, msg: "Access token missing" });
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(
+      /prefix: .*99991664/,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });
