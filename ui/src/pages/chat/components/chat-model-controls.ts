@@ -42,14 +42,22 @@ type ChatModelProviderOption = ChatModelSelectOption & {
 const CHAT_MODEL_PROVIDER_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
   google: "Google",
-  "google-gemini-cli": "Google",
   "github-copilot": "GitHub",
   openai: "OpenAI",
   opencode: "OpenCode",
-  "opencode-go": "OpenCode",
-  "opencode-zen": "OpenCode",
   openrouter: "OpenRouter",
 };
+
+const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
+  "google-gemini-cli": "google",
+  "opencode-go": "opencode",
+  "opencode-zen": "opencode",
+};
+
+function normalizeChatModelProviderGroupId(provider: string): string {
+  const normalized = normalizeChatModelProviderId(provider);
+  return CHAT_MODEL_PROVIDER_GROUP_ALIASES[normalized] ?? normalized;
+}
 
 function formatChatModelProviderLabel(provider: string): string {
   const known = CHAT_MODEL_PROVIDER_LABELS[provider];
@@ -77,7 +85,7 @@ function resolveChatModelProvider(
     return `${normalizedProvider}/${normalizedId}` === normalizedModelRef;
   });
   if (qualifiedCatalogEntry) {
-    return normalizeChatModelProviderId(qualifiedCatalogEntry.provider);
+    return normalizeChatModelProviderGroupId(qualifiedCatalogEntry.provider);
   }
   const idMatches = catalog.filter((entry) => entry.id.trim().toLowerCase() === normalizedModelRef);
   const normalizedHint = normalizeChatModelProviderId(providerHint);
@@ -85,14 +93,14 @@ function resolveChatModelProvider(
     (entry) => normalizeChatModelProviderId(entry.provider) === normalizedHint,
   );
   if (normalizedHint && (idMatches.length === 0 || hintOwnsRawId)) {
-    return normalizedHint;
+    return normalizeChatModelProviderGroupId(normalizedHint);
   }
   if (idMatches.length === 1) {
-    return normalizeChatModelProviderId(idMatches[0]?.provider ?? "");
+    return normalizeChatModelProviderGroupId(idMatches[0]?.provider ?? "");
   }
   const separator = modelRef.indexOf("/");
   if (separator > 0) {
-    return normalizeChatModelProviderId(modelRef.slice(0, separator));
+    return normalizeChatModelProviderGroupId(modelRef.slice(0, separator));
   }
   return "other";
 }

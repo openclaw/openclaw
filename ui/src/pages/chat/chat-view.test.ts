@@ -2917,6 +2917,43 @@ describe("chat model controls", () => {
     expect(container.querySelector('[data-chat-model-provider-group="codex"]')).toBeNull();
   });
 
+  it("merges provider aliases into unique visible groups", () => {
+    const { state } = createChatHeaderState({
+      model: "gemini-2.5-pro",
+      modelProvider: "google",
+      models: [
+        { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google" },
+        { id: "gemini-cli", name: "Gemini CLI", provider: "google-gemini-cli" },
+        { id: "sonnet", name: "OpenCode Sonnet", provider: "opencode" },
+        { id: "kimi", name: "OpenCode Kimi", provider: "opencode-go" },
+        { id: "glm", name: "OpenCode GLM", provider: "opencode-zen" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    const providerButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
+    );
+    const providerLabels = providerButtons.map((button) => button.textContent?.trim());
+    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode"]);
+    expect(new Set(providerLabels).size).toBe(providerLabels.length);
+    expect(
+      container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,
+    ).toContain("Gemini CLI");
+    const openCodeModels = container.querySelector(
+      '[data-chat-model-provider-group="opencode"]',
+    )?.textContent;
+    expect(openCodeModels).toContain("OpenCode Sonnet");
+    expect(openCodeModels).toContain("OpenCode Kimi");
+    expect(openCodeModels).toContain("OpenCode GLM");
+    expect(
+      container.querySelector('[data-chat-model-provider-group="google-gemini-cli"]'),
+    ).toBeNull();
+    expect(container.querySelector('[data-chat-model-provider-group="opencode-go"]')).toBeNull();
+    expect(container.querySelector('[data-chat-model-provider-group="opencode-zen"]')).toBeNull();
+  });
+
   it("shows canonical OpenAI model names instead of command aliases", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
