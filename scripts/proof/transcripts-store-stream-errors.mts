@@ -1,11 +1,12 @@
-// Real behavior proof: TranscriptsStore handles a real filesystem stream error
-// gracefully instead of leaking an unhandled rejection.
+// Real behavior proof: TranscriptsStore rejects non-ENOENT stream errors
+// gracefully instead of leaking an unhandled rejection or returning partial data.
 //
 // The proof creates a real transcript session directory where `transcript.jsonl`
 // is a directory instead of a file. `fs.createReadStream` on a directory emits
 // an EISDIR error on the stream. With the fix, `readUtterancesFromSessionDir`
-// catches that error and returns the utterances parsed so far (none, in this
-// case). Before the fix the unhandled stream error would reject the promise.
+// rejects with that error after the stream closes. Missing files (ENOENT) still
+// resolve to an empty array. Before the fix the unhandled stream error would
+// reject the promise before listeners were attached.
 
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -36,18 +37,18 @@ console.log(`Created directory-as-file at: ${transcriptPath}`);
 console.log("Calling readUtterancesFromSessionDir with maxUtterances...\n");
 
 try {
-  const result = await store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 });
-  console.log(`Result: ${JSON.stringify(result)}`);
-  if (Array.isArray(result) && result.length === 0) {
-    console.log("\nPASS: EISDIR stream error was caught and returned an empty array.");
+  await store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 });
+  console.log("\nFAIL: readUtterancesFromSessionDir should have rejected for EISDIR.");
+  process.exitCode = 1;
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  console.log(`Rejected with: ${message}`);
+  if (message.includes("EISDIR") || message.includes("is a directory")) {
+    console.log("\nPASS: EISDIR stream error was caught and rejected after stream close.");
   } else {
-    console.log("\nFAIL: unexpected result shape.");
+    console.log("\nFAIL: unexpected rejection reason.");
     process.exitCode = 1;
   }
-} catch (err) {
-  console.error("\nFAIL: readUtterancesFromSessionDir rejected with:");
-  console.error(err);
-  process.exitCode = 1;
 } finally {
   await fs.rm(tmpDir, { recursive: true, force: true });
 }

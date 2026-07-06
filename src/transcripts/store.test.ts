@@ -117,7 +117,7 @@ describe("TranscriptsStore.readUtterancesFromSessionDir", () => {
     },
   );
 
-  it("handles read stream errors without rejecting", async () => {
+  it("rejects non-ENOENT read stream errors", async () => {
     const tmpDir = makeTempDir(tempRoots, "openclaw-transcript-test-");
     const store = new TranscriptsStore(tmpDir);
     const sessionDir = path.join(tmpDir, "2026-07-01", "session-1");
@@ -128,14 +128,13 @@ describe("TranscriptsStore.readUtterancesFromSessionDir", () => {
       const stream = new PassThrough();
       setTimeout(() => {
         stream.write(JSON.stringify({ text: "hello", sessionId: "session-1" }) + "\n");
-        stream.emit("error", new Error("read failed"));
-        stream.end();
+        stream.destroy(new Error("read failed"));
       }, 10);
       return stream;
     });
 
     await expect(
       store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 }),
-    ).resolves.toEqual([expect.objectContaining({ text: "hello" })]);
+    ).rejects.toThrow("read failed");
   });
 });

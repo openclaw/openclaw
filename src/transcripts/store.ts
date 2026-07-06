@@ -196,36 +196,47 @@ export class TranscriptsStore {
           crlfDelay: Infinity,
         });
         let settled = false;
+        let emptyForENOENT = false;
+        let pendingError: Error | undefined;
 
-        const cleanup = () => {
+        const settle = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           lines.close();
           stream.destroy();
-        };
-        const finish = (value: TranscriptUtterance[]) => {
-          if (settled) {
-            return;
+          if (pendingError) {
+            reject(pendingError);
+          } else if (emptyForENOENT) {
+            resolve([]);
+          } else {
+            resolve(utterances);
           }
-          settled = true;
-          cleanup();
-          resolve(value);
         };
-        const fail = (err: unknown) => {
-          if (settled) {
-            return;
+        const setError = (err: unknown) => {
+          if (!pendingError) {
+            pendingError = err instanceof Error ? err : new Error(String(err));
           }
-          settled = true;
-          cleanup();
-          reject(err instanceof Error ? err : new Error(String(err)));
         };
 
+        stream.on("close", settle);
         stream.on("error", (err) => {
           if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-            finish([]);
+            emptyForENOENT = true;
             return;
           }
-          finish(utterances);
+          setError(err);
+          stream.destroy();
         });
-        lines.on("error", () => finish(utterances));
+        lines.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
         lines.on("line", (line) => {
           if (!line) {
             return;
@@ -233,7 +244,8 @@ export class TranscriptsStore {
           try {
             utterances.push(JSON.parse(line) as TranscriptUtterance);
           } catch (err) {
-            fail(err);
+            setError(err);
+            stream.destroy();
             return;
           }
           if (utterances.length > maxUtterances) {
@@ -241,7 +253,6 @@ export class TranscriptsStore {
             utterances.shift();
           }
         });
-        lines.on("close", () => finish(utterances));
       });
     }
     let raw: string;
