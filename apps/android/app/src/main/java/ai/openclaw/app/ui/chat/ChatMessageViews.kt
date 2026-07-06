@@ -89,7 +89,7 @@ internal fun ChatMessageBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank()
-        else -> false
+        else -> part.isAudioAttachment()
       }
     }
 
@@ -200,11 +200,12 @@ private fun ChatMessageBody(
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {
-      when (part.type) {
-        "text" -> {
+      when {
+        part.type == "text" -> {
           val text = part.text ?: continue
           ChatMarkdown(text = text, textColor = textColor)
         }
+        part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
         else -> {
           val b64 = part.base64 ?: continue
           ChatBase64Image(base64 = b64, mimeType = part.mimeType)

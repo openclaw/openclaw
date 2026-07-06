@@ -17,10 +17,12 @@ import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
+import android.Manifest
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +58,8 @@ class MainViewModel(
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
+
+  @Volatile private var permissionRequester: PermissionRequester? = null
 
   @Volatile private var foreground = false
 
@@ -264,6 +268,7 @@ class MainViewModel(
     runtime.camera.attachLifecycleOwner(owner)
     runtime.camera.attachPermissionRequester(permissionRequester)
     runtime.sms.attachPermissionRequester(permissionRequester)
+    this.permissionRequester = permissionRequester
   }
 
   /**
@@ -534,6 +539,23 @@ class MainViewModel(
 
   fun setTalkModeEnabled(enabled: Boolean) {
     ensureRuntime().setTalkModeEnabled(enabled)
+  }
+
+  suspend fun requestVoiceNotePermission(): Boolean {
+    val requester = permissionRequester ?: return false
+    return try {
+      requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
+    } catch (error: CancellationException) {
+      throw error
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  internal fun tryAcquireVoiceNoteMic(): Boolean = runtimeRef.value?.tryAcquireVoiceNoteMic() == true
+
+  internal fun releaseVoiceNoteMic() {
+    runtimeRef.value?.releaseVoiceNoteMic()
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {

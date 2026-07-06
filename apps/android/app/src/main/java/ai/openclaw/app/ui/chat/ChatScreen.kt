@@ -11,7 +11,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
-import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawListItem
@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -139,6 +140,11 @@ fun ChatScreen(
   val modelFavorites by viewModel.modelFavorites.collectAsState()
   val modelRecents by viewModel.modelRecents.collectAsState()
   val selectedModelRef by viewModel.chatSelectedModelRef.collectAsState()
+  val micEnabled by viewModel.micEnabled.collectAsState()
+  val micIsListening by viewModel.micIsListening.collectAsState()
+  val micCooldown by viewModel.micCooldown.collectAsState()
+  val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val talkModeListening by viewModel.talkModeListening.collectAsState()
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
@@ -149,7 +155,7 @@ fun ChatScreen(
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
-  val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
+  val attachments = remember { mutableStateListOf<PendingAttachment>() }
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
 
   DisposableEffect(viewModel) {
@@ -168,6 +174,14 @@ fun ChatScreen(
       modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
         ?: selected.substringAfterLast('/')
     } ?: "Model"
+  val micCaptureActive = micEnabled || micIsListening || micCooldown || talkModeEnabled || talkModeListening
+  val voiceNoteRecorder =
+    rememberVoiceNoteRecorderController(
+      viewModel = viewModel,
+      onFinished = attachments::add,
+    )
+  val voiceNoteState by voiceNoteRecorder.state.collectAsState()
+  val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
@@ -319,6 +333,12 @@ fun ChatScreen(
       onOpenModelPicker = { showModelPicker = true },
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
+      voiceNoteState = voiceNoteState,
+      voiceNoteElapsedMs = voiceNoteElapsedMs,
+      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive,
+      onStartVoiceNote = { scope.launch { voiceNoteRecorder.start() } },
+      onCancelVoiceNote = voiceNoteRecorder::cancel,
+      onFinishVoiceNote = voiceNoteRecorder::finish,
       onVoice = onVoice,
       onFixConnection = onOpenGatewaySettings,
       onCopyDiagnostics = {
@@ -333,15 +353,7 @@ fun ChatScreen(
       onSend = {
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
-        val outgoing =
-          attachments.map { attachment ->
-            OutgoingAttachment(
-              type = "image",
-              mimeType = attachment.mimeType,
-              fileName = attachment.fileName,
-              base64 = attachment.base64,
-            )
-          }
+        val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
         input = ""
         attachments.clear()
@@ -847,7 +859,7 @@ private fun ChatBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank()
-        else -> false
+        else -> part.isAudioAttachment()
       }
     }
   if (displayableContent.isEmpty()) return
@@ -896,10 +908,10 @@ private fun ChatBubble(
             color = ClawTheme.colors.text,
           )
           displayableContent.forEach { part ->
-            if (part.type == "text") {
-              ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-            } else {
-              Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            when {
+              part.type == "text" -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
+              else -> Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
           }
           if (messageId != null) {
@@ -1024,7 +1036,7 @@ private fun ChatNotice(
 private fun ChatComposer(
   value: String,
   onValueChange: (String) -> Unit,
-  attachments: List<PendingImageAttachment>,
+  attachments: List<PendingAttachment>,
   thinkingLevel: String,
   contextUsage: ChatContextUsage,
   selectedModelLabel: String,
@@ -1038,6 +1050,12 @@ private fun ChatComposer(
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
+  voiceNoteState: VoiceNoteRecorderState,
+  voiceNoteElapsedMs: Long,
+  recordVoiceNoteEnabled: Boolean,
+  onStartVoiceNote: () -> Unit,
+  onCancelVoiceNote: () -> Unit,
+  onFinishVoiceNote: () -> Unit,
   onVoice: () -> Unit,
   onFixConnection: () -> Unit,
   onCopyDiagnostics: () -> Unit,
@@ -1080,17 +1098,32 @@ private fun ChatComposer(
     }
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      ChatInputPill(
-        value = value,
-        onValueChange = onValueChange,
-        onPickImages = onPickImages,
-        onVoice = onVoice,
-        modifier = Modifier.weight(1f),
-      )
+      if (voiceNoteState is VoiceNoteRecorderState.Recording) {
+        VoiceNoteRecordingControls(
+          elapsedMs = voiceNoteElapsedMs,
+          onCancel = onCancelVoiceNote,
+          onDone = onFinishVoiceNote,
+          modifier = Modifier.weight(1f),
+        )
+      } else if (voiceNoteState is VoiceNoteRecorderState.Preparing) {
+        VoiceNotePreparing(modifier = Modifier.weight(1f))
+      } else {
+        ChatInputPill(
+          value = value,
+          onValueChange = onValueChange,
+          onPickImages = onPickImages,
+          onStartVoiceNote = onStartVoiceNote,
+          recordVoiceNoteEnabled = recordVoiceNoteEnabled,
+          onVoice = onVoice,
+          modifier = Modifier.weight(1f),
+        )
+      }
       SendButton(
         // Offline, only text sends are enabled: they queue durably (text-only v1).
         enabled =
-          pendingRunCount == 0 &&
+          voiceNoteState !is VoiceNoteRecorderState.Recording &&
+            voiceNoteState !is VoiceNoteRecorderState.Preparing &&
+            pendingRunCount == 0 &&
             if (healthOk) {
               value.trim().isNotEmpty() || attachments.isNotEmpty()
             } else {
@@ -1099,6 +1132,8 @@ private fun ChatComposer(
         onClick = onSend,
       )
     }
+
+    VoiceNoteRecorderError(voiceNoteState)
 
     if (!healthOk && gatewayOffline) {
       ChatOfflineNotice(
@@ -1407,6 +1442,8 @@ private fun ChatInputPill(
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
+  onStartVoiceNote: () -> Unit,
+  recordVoiceNoteEnabled: Boolean,
   onVoice: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1427,6 +1464,10 @@ private fun ChatInputPill(
           Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach image", modifier = Modifier.size(16.dp))
         }
       }
+      VoiceNoteRecordButton(
+        enabled = recordVoiceNoteEnabled,
+        onClick = onStartVoiceNote,
+      )
       Box(modifier = Modifier.weight(1f)) {
         BasicTextField(
           value = value,
@@ -1454,7 +1495,7 @@ private fun ChatInputPill(
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(18.dp))
+          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = "Open voice", modifier = Modifier.size(18.dp))
         }
       }
     }
@@ -1463,19 +1504,19 @@ private fun ChatInputPill(
 
 @Composable
 private fun AttachmentStrip(
-  attachments: List<PendingImageAttachment>,
+  attachments: List<PendingAttachment>,
   onRemoveAttachment: (String) -> Unit,
 ) {
   Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
     attachments.forEach { attachment ->
-      AttachmentChip(fileName = attachment.fileName, onRemove = { onRemoveAttachment(attachment.id) })
+      AttachmentChip(attachment = attachment, onRemove = { onRemoveAttachment(attachment.id) })
     }
   }
 }
 
 @Composable
 private fun AttachmentChip(
-  fileName: String,
+  attachment: PendingAttachment,
   onRemove: () -> Unit,
 ) {
   Surface(
@@ -1489,7 +1530,18 @@ private fun AttachmentChip(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      Text(text = fileName, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      if (attachment.mimeType.startsWith("audio/")) {
+        Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
+      }
+      Text(
+        text =
+          attachment.durationMs?.let { duration -> "Voice note · ${formatVoiceNoteDuration(duration)}" }
+            ?: attachment.fileName,
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
       Surface(onClick = onRemove, modifier = Modifier.size(22.dp), shape = CircleShape, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
           Icon(imageVector = Icons.Default.Close, contentDescription = "Remove attachment", modifier = Modifier.size(13.dp))
