@@ -205,41 +205,37 @@ function getErrorCauseCandidates(err: Error): unknown[] {
   return candidates;
 }
 
+function isTerminalAbortCandidate(candidate: unknown): boolean {
+  if (typeof candidate === "string") {
+    return isTerminalAbortReasonString(candidate);
+  }
+  if (!(candidate instanceof Error)) {
+    return false;
+  }
+  if (isAgentRunRestartAbortReason(candidate)) {
+    return true;
+  }
+  if (candidate.name === "TimeoutError") {
+    return true;
+  }
+  if (candidate.name === "ClientDisconnectError") {
+    return true;
+  }
+  return isTerminalAbortReasonString(candidate.message);
+}
+
 function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) {
     return false;
   }
   const reason = signal.reason;
 
-  if (typeof reason === "string") {
-    return isTerminalAbortReasonString(reason);
-  }
-
   if (reason instanceof Error) {
-    if (isAgentRunRestartAbortReason(reason)) {
-      return true;
-    }
     const candidates: unknown[] = [reason, ...getErrorCauseCandidates(reason)];
-    for (const candidate of candidates) {
-      if (!(candidate instanceof Error)) {
-        continue;
-      }
-      if (isAgentRunRestartAbortReason(candidate)) {
-        return true;
-      }
-      if (candidate.name === "TimeoutError") {
-        return true;
-      }
-      if (candidate.name === "ClientDisconnectError") {
-        return true;
-      }
-      if (typeof candidate.message === "string" && isTerminalAbortReasonString(candidate.message)) {
-        return true;
-      }
-    }
+    return candidates.some(isTerminalAbortCandidate);
   }
 
-  return false;
+  return isTerminalAbortCandidate(reason);
 }
 
 function isTerminalAbortFromError(err: unknown): boolean {
@@ -261,30 +257,7 @@ function isTerminalAbortFromError(err: unknown): boolean {
   if (!isOpenClawAbortableWrapper(err)) {
     return false;
   }
-  for (const candidate of causeCandidates) {
-    if (typeof candidate === "string") {
-      if (isTerminalAbortReasonString(candidate)) {
-        return true;
-      }
-      continue;
-    }
-    if (!(candidate instanceof Error)) {
-      continue;
-    }
-    if (isAgentRunRestartAbortReason(candidate)) {
-      return true;
-    }
-    if (candidate.name === "TimeoutError") {
-      return true;
-    }
-    if (candidate.name === "ClientDisconnectError") {
-      return true;
-    }
-    if (typeof candidate.message === "string" && isTerminalAbortReasonString(candidate.message)) {
-      return true;
-    }
-  }
-  return false;
+  return causeCandidates.some(isTerminalAbortCandidate);
 }
 
 function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
