@@ -39,6 +39,10 @@
           },
           "type": "array"
         },
+        "bestEffort": {
+          "description": "Optional delivery mode. Omit or set true for ordinary replies. Set false only when required durable delivery is necessary.",
+          "type": "boolean"
+        },
         "buffer": {
           "description": "Base64 attachment payload; data URL ok.",
           "type": "string"

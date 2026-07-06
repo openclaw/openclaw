@@ -227,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 51940,
-    "roughTokens": 12985
+    "chars": 52154,
+    "roughTokens": 13039
   },
   "openClawDeveloperInstructions": {
     "chars": 3045,
@@ -239,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6893
   },
   "totalWithDynamicToolsJson": {
-    "chars": 79512,
-    "roughTokens": 19878
+    "chars": 79726,
+    "roughTokens": 19932
   },
   "userInputText": {
     "chars": 1442,
@@ -610,6 +610,10 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
             "type": "object"
           },
           "type": "array"
+        },
+        "bestEffort": {
+          "description": "Optional delivery mode. Omit or set true for ordinary replies. Set false only when required durable delivery is necessary.",
+          "type": "boolean"
         },
         "buffer": {
           "description": "Base64 attachment payload; data URL ok.",
