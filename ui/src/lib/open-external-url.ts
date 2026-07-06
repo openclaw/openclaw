@@ -56,7 +56,7 @@ export function resolveSafeExternalUrl(
   }
 }
 
-export type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
+type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
   baseHref?: string;
 };
 

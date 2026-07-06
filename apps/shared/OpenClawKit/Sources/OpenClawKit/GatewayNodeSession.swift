@@ -541,22 +541,43 @@ public actor GatewayNodeSession {
                 command: request.command,
                 paramsJSON: request.paramsJSON,
                 nodeId: request.nodeId)
-            self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
-            let response = await Self.invokeWithTimeout(
-                request: req,
-                timeoutMs: request.timeoutMs,
-                onInvoke: onInvoke)
-            // Invoke output belongs to the requesting channel. A target switch while the device
-            // command is running must discard it instead of disclosing it to the replacement.
-            guard self.channelGeneration == channelGeneration,
-                  self.channel === channel
-            else { return }
-            self.logger.info(
-                "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
-            await self.sendInvokeResult(request: request, response: response, channel: channel)
+            // GatewayChannel waits for push handling before it rearms receive. Run device work
+            // separately so a long invoke cannot starve heartbeats or later node requests.
+            Task { [weak self] in
+                await self?.handleInvokeRequest(
+                    request: request,
+                    bridgeRequest: req,
+                    timeoutMs: request.timeoutMs,
+                    onInvoke: onInvoke,
+                    channel: channel,
+                    channelGeneration: channelGeneration)
+            }
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func handleInvokeRequest(
+        request: NodeInvokeRequestPayload,
+        bridgeRequest: BridgeInvokeRequest,
+        timeoutMs: Int?,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        channel: GatewayChannelActor,
+        channelGeneration: UInt64) async
+    {
+        self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
+        let response = await Self.invokeWithTimeout(
+            request: bridgeRequest,
+            timeoutMs: timeoutMs,
+            onInvoke: onInvoke)
+        // Invoke output belongs to the requesting channel. A target switch while the device
+        // command is running must discard it instead of disclosing it to the replacement.
+        guard self.channelGeneration == channelGeneration,
+              self.channel === channel
+        else { return }
+        self.logger.info(
+            "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        await self.sendInvokeResult(request: request, response: response, channel: channel)
     }
 
     private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {

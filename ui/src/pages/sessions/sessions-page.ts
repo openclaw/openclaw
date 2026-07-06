@@ -72,7 +72,7 @@ function parseFilterInteger(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-export class SessionsPage extends LitElement {
+class SessionsPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context?: ApplicationContext;
 
