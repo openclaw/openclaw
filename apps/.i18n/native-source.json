@@ -179,7 +179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 249,
+      "line": 239,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt",
       "source": " · Mic: Listening",
       "surface": "android",
@@ -187,7 +187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 249,
+      "line": 239,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt",
       "source": " · Mic: Pending",
       "surface": "android",
