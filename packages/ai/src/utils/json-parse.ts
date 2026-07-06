@@ -93,6 +93,7 @@ export function repairJson(json: string): string {
       }
 
       repaired += "\\\\";
+      repaired += nextChar;  // fix #14452: preserve nextChar after invalid escape
       stringValuePrefix += "\\";
       continue;
     }
