@@ -38,10 +38,14 @@ const config = {
   },
 };
 
-async function writeFakeGog(dir: string, options: { deleteAfterFirstStart: boolean }) {
+async function writeFakeGog(
+  dir: string,
+  options: { deleteAfterFirstStart: boolean; servePidFile?: string },
+) {
   const counterFile = path.join(dir, "watch-start-count");
   const fakeGog = path.join(dir, "gog");
   const selfPath = fakeGog;
+  const servePidFile = options.servePidFile ?? "";
   await fs.writeFile(counterFile, "0", "utf8");
   await fs.writeFile(
     fakeGog,
@@ -52,6 +56,7 @@ subcommand="$2"
 action="$3"
 counter_file="${counterFile}"
 self_path="${selfPath}"
+serve_pid_file="${servePidFile}"
 if [ "$command" = "gmail" ] && [ "$subcommand" = "watch" ]; then
   if [ "$action" = "start" ]; then
     count=$(cat "$counter_file")
@@ -68,6 +73,9 @@ if [ "$command" = "gmail" ] && [ "$subcommand" = "watch" ]; then
     exit 0
   fi
   if [ "$action" = "serve" ]; then
+    if [ -n "$serve_pid_file" ]; then
+      echo $$ > "$serve_pid_file"
+    fi
     trap 'exit 0' TERM
     while true; do
       sleep 1
@@ -140,15 +148,19 @@ async function runGatewayProof(): Promise<{ ok: boolean; output: string }> {
 async function runForegroundProof(): Promise<{ ok: boolean; output: string }> {
   const dir = path.join(baseTmpDir, "foreground");
   await fs.mkdir(dir, { recursive: true });
-  await writeFakeGog(dir, { deleteAfterFirstStart: true });
+  const servePidFile = path.join(dir, "gog-serve.pid");
+  await writeFakeGog(dir, { deleteAfterFirstStart: true, servePidFile });
   const configPath = path.join(dir, "openclaw.json");
   await fs.writeFile(configPath, JSON.stringify(config), "utf8");
 
   const childScript = path.join(dir, "foreground-proof.mjs");
   await fs.writeFile(
     childScript,
-    `import { runGmailService } from "${path.join(repoRoot, "src/hooks/gmail-ops.js")}";
+    `import fs from "node:fs";
+import path from "node:path";
+import { runGmailService } from "${path.join(repoRoot, "src/hooks/gmail-ops.js")}";
 
+const servePidFile = "${servePidFile}";
 const unhandled = [];
 process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED_REJECTION:", String(reason));
@@ -168,6 +180,17 @@ servicePromise.catch((err) => {
 await new Promise((resolve) => {
   setTimeout(resolve, 3000);
 });
+
+// Terminate the fake gog watch serve child so the proof exits cleanly
+// instead of relying on the spawnSync timeout.
+try {
+  const pid = fs.existsSync(servePidFile) ? Number(fs.readFileSync(servePidFile, "utf8").trim()) : 0;
+  if (pid > 0) {
+    process.kill(pid, "SIGTERM");
+  }
+} catch (err) {
+  console.error("[foreground] failed to signal serve child:", String(err));
+}
 
 if (unhandled.length > 0) {
   console.error("FOREGROUND_UNHANDLED_COUNT:", unhandled.length);
@@ -195,7 +218,8 @@ process.exit(0);
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   const noUnhandled = !output.includes("UNHANDLED_REJECTION");
   const renewalLogged = output.includes("renewal failed") || output.includes("watch start error");
-  return { ok: result.status === 0 && noUnhandled && renewalLogged, output };
+  const spawnOk = result.error === undefined;
+  return { ok: spawnOk && result.status === 0 && noUnhandled && renewalLogged, output };
 }
 
 console.log("=== Proof: gmail-watcher renewal interval rejection catch ===\n");
