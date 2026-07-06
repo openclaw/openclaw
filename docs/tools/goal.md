@@ -74,7 +74,7 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal start <objective>`                           | Create a new goal for the current session.                               |
 | `/goal set <objective>`, `/goal create <objective>` | Aliases for `start`.                                                     |
 | `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word). |
-| `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.     |
+| `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.      |
 | `/goal pause [note]`                                | Pause an active goal.                                                    |
 | `/goal resume [note]`                               | Resume a paused, blocked, usage-limited, or budget-limited goal.         |
 | `/goal complete [note]`                             | Mark the goal achieved.                                                  |
