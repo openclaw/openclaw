@@ -86,6 +86,12 @@ import {
 } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
+const CODEX_APP_SERVER_LOCAL_EXEC_POLICY_ERROR_RE =
+  /\bCodex app-server local execution is not available when tools\.exec\.mode=(?:allowlist|deny)\b/iu;
+
+function isCodexAppServerLocalExecutionPolicyError(err: unknown): boolean {
+  return CODEX_APP_SERVER_LOCAL_EXEC_POLICY_ERROR_RE.test(formatErrorMessage(err));
+}
 
 function hasExactConfiguredProviderModel(params: {
   cfg?: OpenClawConfig;
@@ -403,7 +409,10 @@ async function runFallbackCandidate<T>(params: {
     if (isCommandLaneTaskTimeoutError(err)) {
       throw err;
     }
-    if (isNonProviderRuntimeCoordinationError(err)) {
+    if (
+      isNonProviderRuntimeCoordinationError(err) ||
+      isCodexAppServerLocalExecutionPolicyError(err)
+    ) {
       throw err;
     }
     if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
@@ -1765,6 +1774,9 @@ async function runWithModelFallbackInternal<T>(
       // the same local condition and surfacing a misleading "All models
       // failed" summary. See #83510.
       if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
+      if (isCodexAppServerLocalExecutionPolicyError(err)) {
         throw err;
       }
       if (transientProbeProviderForAttempt) {
