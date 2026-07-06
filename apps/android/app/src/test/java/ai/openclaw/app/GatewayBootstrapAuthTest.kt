@@ -1018,7 +1018,7 @@ class GatewayBootstrapAuthTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun pttStartQueuedAfterCancelIsInvalidatedBeforePreparation() =
+  fun pttStartQueuedAfterCancelUsesNewCommandEpoch() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
       shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
@@ -1035,7 +1035,7 @@ class GatewayBootstrapAuthTest {
         preparationMutex.unlock()
 
         assertNull(withTimeout(5_000) { cancel.await() }.error)
-        assertEquals("NODE_BACKGROUND_UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)
+        assertEquals("UNAVAILABLE", withTimeout(5_000) { start.await() }.error?.code)
         val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
         assertNull(talkMode.activePushToTalkCaptureId)
         assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
