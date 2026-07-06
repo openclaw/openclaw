@@ -127,6 +127,34 @@ describe("runLinkUnderstanding", () => {
     );
   });
 
+  it("uses the configured per-link budget before model timeouts", async () => {
+    mockGuardedFetch("page body", "https://example.com/final");
+    mockCommand("summarized page");
+
+    await runLinkUnderstanding({
+      cfg: {
+        tools: {
+          links: {
+            enabled: true,
+            timeoutSeconds: 3,
+            models: [
+              { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
+              { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
+            ],
+          },
+        },
+      } as OpenClawConfig,
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 3000,
+        url: "https://example.com/page",
+      }),
+    );
+  });
+
   it("does not run configured curl fetchers against attacker-controlled URLs", async () => {
     mockGuardedFetch("guarded page body");
 

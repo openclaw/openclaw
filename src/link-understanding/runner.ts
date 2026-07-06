@@ -45,8 +45,13 @@ function resolveFetchTimeoutMsFromConfig(params: {
   config?: LinkToolsConfig;
   entries: LinkModelConfig[];
 }): number {
+  if (params.config?.timeoutSeconds !== undefined) {
+    return resolveTimeoutMs(params.config.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS);
+  }
   return Math.max(
-    ...params.entries.map((entry) => resolveTimeoutMsFromConfig({ config: params.config, entry })),
+    ...params.entries.map((entry) =>
+      resolveTimeoutMs(entry.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS),
+    ),
   );
 }
 
