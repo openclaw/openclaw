@@ -264,6 +264,19 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/android-release-wrapper-args.test.ts"],
     });
+    expect(
+      resolveChangedTestTargetPlan(["apps/android/scripts/build-release-artifacts.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/android-release-artifacts.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan([".github/workflows/android-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
     expect(resolveChangedTestTargetPlan(["scripts/release-fast-pretag-check.sh"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/package-acceptance-workflow.test.ts"],

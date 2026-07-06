@@ -420,6 +420,24 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const daemonPath of [
+      "src/daemon/schtasks.ts",
+      "src/daemon/schtasks-exec.ts",
+      "src/daemon/schtasks.startup-fallback.test.ts",
+      "src/daemon/runtime-hints.windows-paths.test.ts",
+      "src/daemon/test-helpers/schtasks-fixtures.ts",
+    ]) {
+      expect(detectChangedScope([daemonPath]), daemonPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["src/shared/runtime-import.ts"])).toEqual({
       runNode: true,
       runMacos: false,

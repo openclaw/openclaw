@@ -57,13 +57,24 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             timeoutMs: 10000)
     }
 
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         var params: [String: AnyCodable] = [
             "includeGlobal": AnyCodable(true),
             "includeUnknown": AnyCodable(false),
         ]
         if let limit {
             params["limit"] = AnyCodable(limit)
+        }
+        let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedSearch, !normalizedSearch.isEmpty {
+            params["search"] = AnyCodable(normalizedSearch)
+        }
+        if archived {
+            params["archived"] = AnyCodable(true)
         }
         let data = try await GatewayConnection.shared.request(
             method: "sessions.list",
@@ -108,6 +119,39 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "key": AnyCodable(sessionKey),
             "thinkingLevel": AnyCodable(thinkingLevel),
         ]
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.patch",
+            params: params,
+            timeoutMs: 15000)
+    }
+
+    func patchSession(
+        key: String,
+        label: String??,
+        category: String??,
+        pinned: Bool?,
+        archived: Bool?,
+        unread: Bool?) async throws
+    {
+        var params: [String: AnyCodable] = [
+            "key": AnyCodable(key),
+        ]
+        // Double-optionals: .some(nil) clears the field server-side (JSON null).
+        if let label {
+            params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        }
+        if let category {
+            params["category"] = category.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        }
+        if let pinned {
+            params["pinned"] = AnyCodable(pinned)
+        }
+        if let archived {
+            params["archived"] = AnyCodable(archived)
+        }
+        if let unread {
+            params["unread"] = AnyCodable(unread)
+        }
         _ = try await GatewayConnection.shared.request(
             method: "sessions.patch",
             params: params,
