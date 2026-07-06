@@ -19,12 +19,14 @@ describe("runCommand", () => {
     const child = new EventEmitter();
     const stdout = new EventEmitter();
     const stderr = new EventEmitter();
-    Object.assign(child, { stdout, stderr });
+    Object.assign(child, { stdout, stderr, kill: vi.fn() });
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
     const resultPromise = testing.runCommand(["echo", "hello"], undefined, undefined, undefined);
 
     stdout.emit("error", new Error("stdout broke"));
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    child.emit("exit", 1);
 
     const result = await resultPromise;
     expect(result.success).toBe(false);
@@ -36,12 +38,14 @@ describe("runCommand", () => {
     const child = new EventEmitter();
     const stdout = new EventEmitter();
     const stderr = new EventEmitter();
-    Object.assign(child, { stdout, stderr });
+    Object.assign(child, { stdout, stderr, kill: vi.fn() });
     mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
 
     const resultPromise = testing.runCommand(["echo", "hello"], undefined, undefined, undefined);
 
     stderr.emit("error", new Error("stderr broke"));
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    child.emit("exit", 1);
 
     const result = await resultPromise;
     expect(result.success).toBe(false);

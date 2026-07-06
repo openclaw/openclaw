@@ -313,6 +313,7 @@ async function runCommand(
     child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
 
     let timer: NodeJS.Timeout | undefined;
+    let streamError: Error | null = null;
     if (timeoutMs && timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
@@ -323,6 +324,20 @@ async function runCommand(
         }
       }, timeoutMs);
     }
+
+    const stopChildOnStreamError = (err: Error) => {
+      if (streamError) {
+        return;
+      }
+      streamError = err;
+      // Output capture is no longer trustworthy. Terminate the child and let
+      // the exit handler finalize with the stream error message.
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+    };
 
     const finalize = (exitCode?: number, error?: string | null) => {
       if (settled) {
@@ -351,17 +366,14 @@ async function runCommand(
       });
     };
 
-    child.stdout?.on("error", (err) => {
-      finalize(undefined, err.message);
-    });
-    child.stderr?.on("error", (err) => {
-      finalize(undefined, err.message);
-    });
+    child.stdout?.on("error", stopChildOnStreamError);
+    child.stderr?.on("error", stopChildOnStreamError);
     child.on("error", (err) => {
       finalize(undefined, err.message);
     });
     child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, null);
+      const error = streamError?.message ?? null;
+      finalize(code === null ? undefined : code, error);
     });
   });
 }
