@@ -293,11 +293,17 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  const hadPotentialSideEffects = resolveAttemptReplayMetadata(
+    params.attempt,
+  ).hadPotentialSideEffects;
+
   if (hasProviderMaxTurnsStopDiagnostic(params.attempt.lastAssistant)) {
-    return "⚠️ Anthropic stopped because the run reached the provider max-turns limit. Please start a fresh session with /new, or retry with a smaller task.";
+    return hadPotentialSideEffects
+      ? "⚠️ Anthropic stopped because the run reached the provider max-turns limit. Note: some tool actions may have already been executed — please verify before retrying. Start a fresh session with /new, or retry with a smaller task."
+      : "⚠️ Anthropic stopped because the run reached the provider max-turns limit. Please start a fresh session with /new, or retry with a smaller task.";
   }
 
-  return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  return hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
