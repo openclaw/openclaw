@@ -157,7 +157,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
       const sessionGroups = page.locator(".sidebar-recent-sessions__group");
       const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
-      const chatsGroup = sessionGroups.filter({ hasText: "Chats" });
+      const chatsGroup = sessionGroups.filter({ hasText: "Sessions" });
       await expect
         .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
         .toEqual(["Release planning"]);
@@ -274,7 +274,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       const sessionGroups = page.locator(".sidebar-recent-sessions__group");
       const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
-      const chatsGroup = sessionGroups.filter({ hasText: "Chats" });
+      const chatsGroup = sessionGroups.filter({ hasText: "Sessions" });
       await expect
         .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
         .toEqual(["Pinned only"]);
