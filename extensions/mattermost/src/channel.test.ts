@@ -149,6 +149,48 @@ function expectSingleMattermostSend(to: string, text: string): Record<string, un
   return options as Record<string, unknown>;
 }
 
+describe("mattermostPlugin.threading.resolveReplyTransport", () => {
+  const resolveReplyTransport = mattermostPlugin.threading?.resolveReplyTransport;
+  if (!resolveReplyTransport) {
+    throw new Error("mattermost threading.resolveReplyTransport missing");
+  }
+
+  it("keeps direct reply transport flat when dmReplyToMode is off", () => {
+    expect(
+      resolveReplyTransport({
+        threadId: "root-1",
+        replyToId: "root-1",
+        replyToIsExplicit: false,
+        replyDelivery: { chatType: "direct", replyToMode: "off" },
+      }),
+    ).toEqual({ replyToId: null, threadId: null });
+  });
+
+  it("preserves the thread root for direct replies when DM threading is opted in", () => {
+    for (const mode of ["first", "all"] as const) {
+      expect(
+        resolveReplyTransport({
+          threadId: "root-1",
+          replyToId: "root-1",
+          replyToIsExplicit: false,
+          replyDelivery: { chatType: "direct", replyToMode: mode },
+        }),
+      ).toEqual({ replyToId: "root-1", threadId: "root-1" });
+    }
+  });
+
+  it("preserves the thread root for channel replies", () => {
+    expect(
+      resolveReplyTransport({
+        threadId: "root-1",
+        replyToId: "root-1",
+        replyToIsExplicit: false,
+        replyDelivery: { chatType: "channel", replyToMode: "all" },
+      }),
+    ).toEqual({ replyToId: "root-1", threadId: "root-1" });
+  });
+});
+
 describe("mattermostPlugin", () => {
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
@@ -349,6 +391,8 @@ describe("mattermostPlugin", () => {
         replyToId: "other-root",
         threadId: "other-root",
       });
+      // Opted-in DM threading ("all"): direct replies preserve the thread root
+      // instead of being forced flat (#93203).
       expect(
         resolveReplyTransport({
           cfg: {},
@@ -356,6 +400,20 @@ describe("mattermostPlugin", () => {
           replyDelivery: {
             chatType: "direct",
             replyToMode: "all",
+          },
+        }),
+      ).toEqual({
+        replyToId: "dm-post",
+        threadId: "dm-post",
+      });
+      // Default flat DM ("off"): direct reply transport stays flat.
+      expect(
+        resolveReplyTransport({
+          cfg: {},
+          replyToId: "dm-post",
+          replyDelivery: {
+            chatType: "direct",
+            replyToMode: "off",
           },
         }),
       ).toEqual({
