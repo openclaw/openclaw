@@ -279,6 +279,9 @@ export function createFindToolDefinition(
 
             const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
             const rl = createInterface({ input: child.stdout });
+            // Suppress readline-internal re-throws of input stream errors; the real
+            // stream error is handled by the child.stdout error listener below.
+            rl.on("error", () => {});
             let stderr = "";
             const lines: string[] = [];
 
@@ -294,6 +297,14 @@ export function createFindToolDefinition(
 
             child.stderr?.on("data", (chunk) => {
               stderr = appendBoundedTextTail(stderr, chunk);
+            });
+            child.stdout?.on("error", (error) => {
+              cleanup();
+              settle(() => reject(new Error(`fd stdout error: ${error.message}`)));
+            });
+            child.stderr?.on("error", (error) => {
+              cleanup();
+              settle(() => reject(new Error(`fd stderr error: ${error.message}`)));
             });
 
             rl.on("line", (line) => {

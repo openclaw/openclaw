@@ -48,6 +48,32 @@ it("rejects partial fd output when fd exits with an error", async () => {
   await expect(result).rejects.toThrow("fd failed while reading subtree");
 });
 
+it("rejects when stdout emits an error", async () => {
+  const child = createChild();
+  vi.mocked(spawn).mockReturnValue(child);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+  await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+  child.stdout.emit("error", new Error("stdout EPIPE"));
+
+  await expect(result).rejects.toThrow("stdout EPIPE");
+});
+
+it("rejects when stderr emits an error", async () => {
+  const child = createChild();
+  vi.mocked(spawn).mockReturnValue(child);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+  await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+  child.stderr.emit("error", new Error("stderr EPIPE"));
+
+  await expect(result).rejects.toThrow("stderr EPIPE");
+});
+
 it.each([
   { name: "inside a repository", gitBoundary: true, expected: false },
   { name: "outside a repository", gitBoundary: false, expected: true },
