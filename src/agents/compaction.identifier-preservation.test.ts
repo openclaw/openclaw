@@ -113,6 +113,19 @@ describe("compaction identifier-preservation instructions", () => {
         "Preserve all opaque identifiers exactly as written",
       );
     }
+
+    // Verify that the merge step receives chunk ordering labels with source time
+    // ranges, so the LLM can distinguish oldest vs newest context and see the
+    // actual time span each chunk covers during the final merge pass.
+    // The synthetic merge messages have a precise known shape (role: "user",
+    // content: string, timestamp: number) — use an exact type rather than
+    // AgentMessage[] (which is a union that does not guarantee content).
+    type SyntheticMergeMessage = { role: "user"; content: string; timestamp: number };
+    const mergeMessages = mockGenerateSummary.mock.calls[2]![0] as SyntheticMergeMessage[];
+    expect(mergeMessages[0]!.content).toContain("[Chunk 1 — oldest messages [");
+    expect(mergeMessages[0]!.content).toContain("]");
+    expect(mergeMessages[1]!.content).toContain("[Chunk 2 — most recent messages [");
+    expect(mergeMessages[1]!.content).toContain("]");
   });
 
   it("avoids duplicate additional-focus headers in split+merge path", async () => {

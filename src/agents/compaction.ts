@@ -338,6 +338,33 @@ export async function summarizeWithFallback(params: {
   );
 }
 
+/** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
+function extractChunkTimeRange(chunk: AgentMessage[]): string {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const msg of chunk) {
+    const ts = (msg as { timestamp?: number }).timestamp;
+    if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) {
+      if (ts < min) {
+        min = ts;
+      }
+      if (ts > max) {
+        max = ts;
+      }
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return "";
+  }
+  const fmtTime = (ts: number): string => {
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const range = min === max ? fmtTime(min) : `${fmtTime(min)} — ${fmtTime(max)}`;
+  return ` [${range}]`;
+}
+
 /** Summarizes history in multiple stages when a single pass would be too large. */
 export async function summarizeInStages(params: {
   messages: AgentMessage[];
@@ -386,11 +413,30 @@ export async function summarizeInStages(params: {
     return partialSummaries[0];
   }
 
-  const summaryMessages: AgentMessage[] = partialSummaries.map((summary) => ({
-    role: "user",
-    content: summary,
-    timestamp: Date.now(),
-  }));
+  // Capture once so descending timestamps are strictly monotonic across
+  // all synthetic messages regardless of how long the map iteration takes.
+  const now = Date.now();
+  const summaryMessages: AgentMessage[] = partialSummaries.map((summary, index) => {
+    // Annotate each partial summary with chunk order and source time range so
+    // the LLM merger can distinguish old from new context.  The label goes into
+    // message content because serializeConversation (in agent-core) preserves
+    // only text, discarding timestamps.
+    const chunk = plan.chunks[index];
+    const timeRange = extractChunkTimeRange(chunk);
+    const label =
+      index === 0
+        ? `[Chunk 1 — oldest messages${timeRange}]`
+        : index === partialSummaries.length - 1
+          ? `[Chunk ${partialSummaries.length} — most recent messages${timeRange}]`
+          : `[Chunk ${index + 1}/${partialSummaries.length}${timeRange}]`;
+    return {
+      role: "user",
+      content: `${label}\n${summary}`,
+      // Ascending timestamps preserve chronological order for any code
+      // path that reads the AgentMessage timestamp field directly.
+      timestamp: now - (partialSummaries.length - 1 - index),
+    };
+  });
 
   const custom = params.customInstructions?.trim();
   const mergeInstructions = custom
