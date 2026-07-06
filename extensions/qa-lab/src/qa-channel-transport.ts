@@ -2,10 +2,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { QaRunnerTransportPolicy } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
+import type { QaTransportPolicy } from "./qa-transport-registry.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -84,7 +84,7 @@ async function waitForQaChannelReady(params: {
 
 export function createQaChannelGatewayConfig(params: {
   baseUrl: string;
-  transportPolicy?: QaRunnerTransportPolicy;
+  transportPolicy?: QaTransportPolicy;
 }): QaTransportGatewayConfig {
   const senderAllowlist = params.transportPolicy?.senderAllowlist;
   return {
@@ -152,9 +152,9 @@ async function handleQaChannelAction(params: {
 }
 
 class QaChannelTransport extends QaStateBackedTransportAdapter {
-  readonly #transportPolicy?: QaRunnerTransportPolicy;
+  readonly #transportPolicy?: QaTransportPolicy;
 
-  constructor(state: QaBusState, transportPolicy?: QaRunnerTransportPolicy) {
+  constructor(state: QaBusState, transportPolicy?: QaTransportPolicy) {
     super({
       id: QA_CHANNEL_ID,
       label: "qa-channel + qa-lab bus",
@@ -194,7 +194,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
 
 export function createQaChannelTransport(
   state: QaBusState,
-  transportPolicy?: QaRunnerTransportPolicy,
+  transportPolicy?: QaTransportPolicy,
 ) {
   return new QaChannelTransport(state, transportPolicy);
 }

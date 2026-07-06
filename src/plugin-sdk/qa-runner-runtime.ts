@@ -15,7 +15,7 @@ import type {
   QaBusOutboundMessageInput,
 } from "./qa-channel-protocol.js";
 
-export type QaRunnerTransportPolicy = {
+type QaRunnerTransportPolicy = {
   requireGroupMention?: true;
   senderAllowlist?: readonly string[];
   topLevelReplies?: true;

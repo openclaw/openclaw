@@ -1,5 +1,5 @@
-import type { QaRunnerTransportPolicy } from "openclaw/plugin-sdk/qa-runner-runtime";
 // Qa Lab helper module supports suite test helpers behavior.
+import type { QaTransportPolicy } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 type QaSuiteTestScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
@@ -15,7 +15,7 @@ export function makeQaSuiteTestScenario(
     runtimeParityTier?: QaSuiteTestScenario["runtimeParityTier"];
     suiteIsolation?: "isolated";
     surface?: string;
-    transportPolicy?: QaRunnerTransportPolicy;
+    transportPolicy?: QaTransportPolicy;
   } = {},
 ): QaSuiteTestScenario {
   return {

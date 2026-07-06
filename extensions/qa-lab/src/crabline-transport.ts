@@ -11,7 +11,6 @@ import {
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { QaRunnerTransportPolicy } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -20,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
+import type { QaTransportPolicy } from "./qa-transport-registry.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -327,7 +327,7 @@ function createCrablineState(params: {
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
-  readonly #transportPolicy?: QaRunnerTransportPolicy;
+  readonly #transportPolicy?: QaTransportPolicy;
   readonly #state: QaCrablineTransportState;
   readonly sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
   readonly waitForOutboundSequence?: (input: QaTransportOutboundSequenceMatch) => Promise<{
@@ -337,7 +337,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   constructor(params: {
     adapter: StartedOpenClawCrablineAdapter;
-    transportPolicy?: QaRunnerTransportPolicy;
+    transportPolicy?: QaTransportPolicy;
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
   }) {
@@ -443,7 +443,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
 export async function createQaCrablineTransportAdapter(params: {
   outputDir: string;
-  transportPolicy?: QaRunnerTransportPolicy;
+  transportPolicy?: QaTransportPolicy;
   selection: OpenClawCrablineChannelDriverSelection;
   state?: QaBusState;
 }) {

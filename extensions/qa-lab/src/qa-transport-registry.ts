@@ -21,6 +21,10 @@ export type QaTransportFactoryContext = {
   state: QaBusState;
 };
 
+export type QaTransportPolicy = NonNullable<
+  QaTransportFactoryContext["adapterOptions"]
+>["transportPolicy"];
+
 export type QaTransportAdapterFactoryResult<
   TAdapter extends QaTransportAdapter = QaTransportAdapter,
 > = {
