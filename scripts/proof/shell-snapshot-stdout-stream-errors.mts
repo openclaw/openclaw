@@ -40,7 +40,9 @@ try {
     timeoutMs: 5_000,
   });
 
-  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 50);
+  });
   emitError?.();
 
   const result = await resultPromise;
