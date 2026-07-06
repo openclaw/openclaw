@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **OpenAI Realtime Codex auth:** reuse external Codex OAuth profiles for Realtime voice sessions when no explicit OpenAI API key is configured.
+- **Talk transcription providers:** cold-load explicitly configured Voice Call streaming providers, including runtime aliases, when another provider registry is already active, keeping catalog and session selection aligned. (#97170, #97738) Thanks @solavrc.
 - **Android Canvas navigation:** block device-local loopback and unspecified main-frame web targets across direct, user, JavaScript, and redirect navigation while preserving remote, LAN, emulator-host, and bundled canvases. (#99874) Thanks @ly85206559.
 - **Android network recovery:** reconnect Gateway sessions immediately when Android regains a validated network instead of waiting for the current reconnect backoff. (#100347) Thanks @ly85206559.
 - **Android Voice layout:** keep Voice settings controls within their intended width so nested cards do not overflow or clip on constrained screens. (#100491) Thanks @IWhatsskill.
