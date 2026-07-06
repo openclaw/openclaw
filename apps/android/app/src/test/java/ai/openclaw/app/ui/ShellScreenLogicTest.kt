@@ -10,6 +10,7 @@ import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -317,6 +318,31 @@ class ShellScreenLogicTest {
     assertEquals("4", cards.single { it.title == "Sessions" }.value)
     assertEquals("Browse", cards.single { it.title == "Files" }.value)
     assertEquals(Tab.Files, cards.single { it.title == "Files" }.tab)
+  }
+
+  @Test
+  fun overviewRecentSessionCountIgnoresRetainedRowsOutsideTheRecentWindow() {
+    val sessions =
+      (1..51).map { index ->
+        ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
+      }
+
+    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals((1..50).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
+  }
+
+  @Test
+  fun overviewRecentSessionsDeduplicateWithinTheRecentWindow() {
+    assertEquals(
+      listOf("main", "cron"),
+      overviewRecentSessions(
+        listOf(
+          ChatSessionEntry(key = "main", updatedAtMs = 3),
+          ChatSessionEntry(key = "cron", updatedAtMs = 2),
+          ChatSessionEntry(key = "main", updatedAtMs = 1),
+        ),
+      ).map { session -> session.key },
+    )
   }
 
   @Test

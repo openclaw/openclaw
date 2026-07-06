@@ -2,11 +2,15 @@
 
 ## Unreleased
 
+The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
+
 Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.
 
 Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
 
 Third-party Android builds can now opt into Always location through Android settings, with requested background checks disclosed in the persistent node notification while Play builds remain foreground-only. (#68581) Thanks @ioridev.
+
+Android SMS permission guidance now explains the separate Gateway `allowCommands` opt-in required for SMS search and sending. (#91781) Thanks @narcissus0702.
 
 Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
 

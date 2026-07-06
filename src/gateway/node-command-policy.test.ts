@@ -28,7 +28,7 @@ describe("gateway/node-command-policy", () => {
 
   function installCanvasPluginDefaults() {
     const registry = createEmptyPluginRegistry();
-    (registry.nodeInvokePolicies ??= []).push({
+    registry.nodeInvokePolicies.push({
       pluginId: "canvas",
       pluginName: "Canvas",
       source: "/extensions/canvas/index.ts",
@@ -119,11 +119,11 @@ describe("gateway/node-command-policy", () => {
     const startupRegistry = installCanvasPluginDefaults();
     pinActivePluginChannelRegistry(startupRegistry);
     const transientRegistry = createEmptyPluginRegistry();
-    const startupPolicy = startupRegistry.nodeInvokePolicies?.[0];
+    const startupPolicy = startupRegistry.nodeInvokePolicies[0];
     if (!startupPolicy) {
       throw new Error("expected canvas node policy");
     }
-    (transientRegistry.nodeInvokePolicies ??= []).push({
+    transientRegistry.nodeInvokePolicies.push({
       ...startupPolicy,
       pluginId: "transient",
       policy: {

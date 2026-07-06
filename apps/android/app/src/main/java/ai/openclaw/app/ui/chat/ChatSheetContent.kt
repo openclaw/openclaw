@@ -87,6 +87,8 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val outboxItems by viewModel.chatOutboxItems.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val gatewayOffline = !gatewayConnectionDisplay.isConnected
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
@@ -164,6 +166,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
       modifier = Modifier.weight(1f, fill = true),
       outboxItems =
         outboxItemsForSession(
