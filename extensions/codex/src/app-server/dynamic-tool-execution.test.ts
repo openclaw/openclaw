@@ -69,7 +69,7 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(130_000);
+    ).toBe(150_000);
   });
 
   it("prefers timeoutMs over timeoutSeconds when both are present", () => {

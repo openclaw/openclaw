@@ -109,8 +109,10 @@ import {
  * Headroom added to timeoutSeconds-derived watchdog values so the tool's own
  * structured timeout (e.g. sessions_send returning { runId, sentBeforeError })
  * wins the race over the outer generic hard-timeout response.
+ * 30s accounts for baseline work and inner-timer start delay before the tool
+ * arms its own wait budget.
  */
-const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS = 10_000;
+const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS = 30_000;
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;

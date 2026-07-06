@@ -28,8 +28,10 @@ import {
  * Headroom added to timeoutSeconds-derived watchdog values so the tool's own
  * structured timeout (e.g. sessions_send returning { runId, sentBeforeError })
  * wins the race over the outer generic hard-timeout response.
+ * 30s accounts for baseline work and inner-timer start delay before the tool
+ * arms its own wait budget.
  */
-const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS = 10_000;
+const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_HEADROOM_MS = 30_000;
 /** Default timeout for Codex dynamic tool calls. */
 export const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 /** Hard cap for per-call Codex dynamic tool timeout overrides. */
