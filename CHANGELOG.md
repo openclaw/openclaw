@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 
 - **Agent helper downloads:** bound fd and ripgrep archive downloads and extraction with declared and streamed byte caps, extraction limits, timeouts, traversal-safe unpacking, and partial-file cleanup. (#98988) Thanks @LeonidasLux.
 - **Control UI cron actions:** localize the overflow-menu label and due-only run action across all supported locales.
+- **OpenRouter OAuth and Discord webhook response bounds:** cap successful JSON response bodies while preserving Discord's no-body webhook mode. (#98098) Thanks @lwy-2.
 - **OpenAI Realtime Codex auth:** reuse external Codex OAuth profiles for Realtime voice sessions when no explicit OpenAI API key is configured.
 - **OpenAI-compatible TTS voice notes:** route configured MP3 speech output through native voice-message delivery when the channel supports it, while keeping WAV output on the audio-file path. (#83227, #80317) Thanks @HemantSudarshan.
 - **Talk transcription providers:** cold-load explicitly configured Voice Call streaming providers, including runtime aliases, when another provider registry is already active, keeping catalog and session selection aligned. (#97170, #97738) Thanks @solavrc.
