@@ -1385,4 +1385,109 @@ describe("handleLineWebhookEvents", () => {
     resolveFirst?.();
     await firstRun;
   });
+
+  it("does not guard senderless group postbacks so distinct users are not cross-blocked", async () => {
+    // LINE group/room postbacks may omit source.userId (@line/bot-sdk marks it
+    // optional, message events only). Guarding them would collapse all senders
+    // onto one key and drop unrelated button taps.
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+    buildLinePostbackContextMock.mockResolvedValue({
+      ctxPayload: { From: "line:group:group-shared" },
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    });
+
+    const basePostback = {
+      type: "postback",
+      postback: { data: "action=confirm" },
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-shared" },
+      mode: "active",
+      deliveryContext: { isRedelivery: false },
+    };
+    const postbackA = {
+      ...basePostback,
+      replyToken: "reply-token-pb-a",
+      webhookEventId: "evt-pb-senderless-a",
+    } as PostbackEvent;
+    const postbackB = {
+      ...basePostback,
+      replyToken: "reply-token-pb-b",
+      webhookEventId: "evt-pb-senderless-b",
+    } as PostbackEvent;
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+    });
+    context.userInFlightGuard = createLineUserInFlightGuard();
+
+    const firstRun = handleLineWebhookEvents([postbackA], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([postbackB], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
+  });
+
+  it("does not guard group messages without sender identity", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstDone;
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const eventA = createTestMessageEvent({
+      message: { id: "m-senderless-a", type: "text", text: "first", quoteToken: "q-sl-a" },
+      source: { type: "group", groupId: "group-shared" },
+      webhookEventId: "evt-senderless-a",
+    });
+    const eventB = createTestMessageEvent({
+      message: { id: "m-senderless-b", type: "text", text: "second", quoteToken: "q-sl-b" },
+      source: { type: "group", groupId: "group-shared" },
+      webhookEventId: "evt-senderless-b",
+    });
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: false,
+    });
+    context.userInFlightGuard = createLineUserInFlightGuard();
+
+    const firstRun = handleLineWebhookEvents([eventA], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([eventB], context);
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(replyMessageLineMock).not.toHaveBeenCalled();
+
+    resolveFirst?.();
+    await firstRun;
+  });
 });

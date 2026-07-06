@@ -445,14 +445,20 @@ function hasAnyLineMention(message: MessageEvent["message"]): boolean {
   return getLineMentionees(message).length > 0;
 }
 
+// LINE marks source userId optional: group/room postbacks and non-mobile group
+// senders can arrive senderless. Guarding those would collapse distinct users
+// onto one key and drop unrelated events, so senderless events bypass the guard.
 function buildLineInFlightKey(
   accountId: string,
   sourceInfo: { userId?: string; groupId?: string; roomId?: string; isGroup: boolean },
-): string {
-  const userId = sourceInfo.userId ?? "unknown";
+): string | null {
+  const { userId } = sourceInfo;
+  if (!userId) {
+    return null;
+  }
   if (sourceInfo.isGroup) {
-    const conversationId = sourceInfo.groupId ?? sourceInfo.roomId ?? "unknown";
-    return `${accountId}|${conversationId}|${userId}`;
+    const conversationId = sourceInfo.groupId ?? sourceInfo.roomId;
+    return conversationId ? `${accountId}|${conversationId}|${userId}` : null;
   }
   return `${accountId}|${userId}`;
 }
@@ -588,7 +594,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const sourceInfo = { userId, groupId, roomId, isGroup };
   const inFlightKey = buildLineInFlightKey(account.accountId, sourceInfo);
 
-  if (context.userInFlightGuard && !context.userInFlightGuard.tryAcquire(inFlightKey)) {
+  if (
+    inFlightKey &&
+    context.userInFlightGuard &&
+    !context.userInFlightGuard.tryAcquire(inFlightKey)
+  ) {
     logVerbose(`line: session busy, sending in-flight notice for ${inFlightKey}`);
     await sendLineBusyReply({ replyToken: event.replyToken, sourceInfo, context });
     return;
@@ -607,7 +617,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       }
     }
   } finally {
-    context.userInFlightGuard?.release(inFlightKey);
+    if (inFlightKey) {
+      context.userInFlightGuard?.release(inFlightKey);
+    }
   }
 }
 
@@ -659,7 +671,11 @@ async function handlePostbackEvent(
   const sourceInfo = getLineSourceInfo(event.source);
   const inFlightKey = buildLineInFlightKey(context.account.accountId, sourceInfo);
 
-  if (context.userInFlightGuard && !context.userInFlightGuard.tryAcquire(inFlightKey)) {
+  if (
+    inFlightKey &&
+    context.userInFlightGuard &&
+    !context.userInFlightGuard.tryAcquire(inFlightKey)
+  ) {
     logVerbose(`line: session busy, sending in-flight notice for ${inFlightKey}`);
     await sendLineBusyReply({ replyToken: event.replyToken, sourceInfo, context });
     return;
@@ -668,7 +684,9 @@ async function handlePostbackEvent(
   try {
     await context.processMessage(postbackContext);
   } finally {
-    context.userInFlightGuard?.release(inFlightKey);
+    if (inFlightKey) {
+      context.userInFlightGuard?.release(inFlightKey);
+    }
   }
 }
 
