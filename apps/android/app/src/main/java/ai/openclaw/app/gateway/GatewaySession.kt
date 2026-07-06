@@ -530,18 +530,13 @@ class GatewaySession(
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect(): ConnectedGateway {
-      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
-      val builder = Request.Builder().url(url)
-      // Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
-      // request. Read from the provider at connect time so edits apply on the next reconnect
-      // without re-pairing. Values are credentials: never log them.
-      val headers = customHeadersProvider?.invoke(tls?.stableId ?: endpoint.stableId)
-      if (headers != null) {
-        for ((name, value) in GatewayCustomHeaders.sanitized(headers)) {
-          builder.addHeader(name, value)
-        }
-      }
-      socket = client.newWebSocket(builder.build(), listener)
+      val request =
+        buildGatewayWebSocketUpgradeRequest(
+          endpoint = endpoint,
+          tls = tls,
+          customHeadersProvider = customHeadersProvider,
+        )
+      socket = client.newWebSocket(request, listener)
       return connectDeferred.await()
     }
 
@@ -1543,6 +1538,23 @@ internal fun buildGatewayWebSocketUrl(
 ): String {
   val scheme = if (useTls) "wss" else "ws"
   return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+/** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
+internal fun buildGatewayWebSocketUpgradeRequest(
+  endpoint: GatewayEndpoint,
+  tls: GatewayTlsParams?,
+  customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
+): Request {
+  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  if (tls == null) return request.build()
+
+  // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens
+  // or Authorization values, so the cleartext branch above must never invoke the provider.
+  for ((name, value) in GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(tls.stableId).orEmpty())) {
+    request.addHeader(name, value)
+  }
+  return request.build()
 }
 
 /** Formats host/port for gateway URLs, including IPv6 bracket wrapping. */

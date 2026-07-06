@@ -49,6 +49,7 @@ class SecurePrefs(
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val maxChatModelRecents = 5
+    private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
 
   private val appContext = context.applicationContext
@@ -478,7 +479,16 @@ class SecurePrefs(
     securePrefs.edit { putString(key, json.encodeToString(sanitized)) }
   }
 
-  private fun gatewayCustomHeadersKey(stableId: String) = "gateway.customHeaders.${stableId.trim()}"
+  /** Forgets every gateway's proxy credentials during an explicit sign-out/re-pair action. */
+  fun clearGatewayCustomHeaders() {
+    val keys = securePrefs.all.keys.filter { it.startsWith(gatewayCustomHeadersKeyPrefix) }
+    if (keys.isEmpty()) return
+    securePrefs.edit {
+      for (key in keys) remove(key)
+    }
+  }
+
+  private fun gatewayCustomHeadersKey(stableId: String) = "$gatewayCustomHeadersKeyPrefix${stableId.trim()}"
 
   /** Loads the pinned gateway TLS fingerprint for a discovered/manual stable endpoint id. */
   fun loadGatewayTlsFingerprint(stableId: String): String? {

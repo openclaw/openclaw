@@ -146,10 +146,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   }
 
   val setupResolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
-  val manualResolvedEndpoint =
+  val manualEndpointConfig =
     remember(manualHostInput, manualPortInput, manualTlsInput) {
-      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
+      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let(::parseGatewayEndpoint)
     }
+  val manualResolvedEndpoint = manualEndpointConfig?.displayUrl
 
   val activeEndpoint =
     remember(isConnected, remoteAddress, setupResolvedEndpoint, manualResolvedEndpoint, inputMode) {
@@ -568,12 +569,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               EndpointPreview(endpoint = manualResolvedEndpoint)
             }
 
-            ManualGatewayCustomHeadersEditor(
-              viewModel = viewModel,
-              manualHostInput = manualHostInput,
-              manualPortInput = manualPortInput,
-              manualTlsInput = manualTlsInput,
-            )
+            // Proxy credentials are unavailable on cleartext ws:// routes, including pasted URLs
+            // whose explicit scheme overrides the TLS toggle. The transport enforces this too.
+            manualEndpointConfig?.takeIf { it.tls }?.let { endpoint ->
+              ManualGatewayCustomHeadersEditor(
+                viewModel = viewModel,
+                stableId = GatewayEndpoint.manual(host = endpoint.host, port = endpoint.port).stableId,
+              )
+            }
           }
 
           HorizontalDivider(color = mobileBorder)
@@ -599,22 +602,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 @Composable
 private fun ManualGatewayCustomHeadersEditor(
   viewModel: MainViewModel,
-  manualHostInput: String,
-  manualPortInput: String,
-  manualTlsInput: Boolean,
+  stableId: String,
 ) {
-  val stableId =
-    remember(manualHostInput, manualPortInput, manualTlsInput) {
-      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)
-        ?.let { parseGatewayEndpoint(it) }
-        ?.let { GatewayEndpoint.manual(host = it.host, port = it.port).stableId }
-    }
-  if (stableId == null) return
-
   var headers by remember(stableId) { mutableStateOf(viewModel.gatewayCustomHeaders(stableId)) }
-  var nameInput by rememberSaveable { mutableStateOf("") }
+  var nameInput by rememberSaveable(stableId) { mutableStateOf("") }
   // Not rememberSaveable: header values are credentials and must not land in saved instance state.
-  var valueInput by remember { mutableStateOf("") }
+  var valueInput by remember(stableId) { mutableStateOf("") }
 
   val trimmedName = nameInput.trim()
   val nameIsReserved = GatewayCustomHeaders.isReservedName(trimmedName)

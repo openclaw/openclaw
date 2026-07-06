@@ -274,4 +274,21 @@ class SecurePrefsTest {
     )
     assertEquals(mapOf("X-Allowed" to "yes"), prefs.loadGatewayCustomHeaders(stableId))
   }
+
+  @Test
+  fun gatewayCustomHeaders_explicitClearRemovesOnlyCustomHeaderCredentials() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.headers3", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    prefs.saveGatewayCustomHeaders("manual|one.example|443", mapOf("X-One" to "secret-one"))
+    prefs.saveGatewayCustomHeaders("manual|two.example|443", mapOf("X-Two" to "secret-two"))
+    prefs.putString("unrelated.secret", "keep")
+
+    prefs.clearGatewayCustomHeaders()
+
+    assertTrue(prefs.loadGatewayCustomHeaders("manual|one.example|443").isEmpty())
+    assertTrue(prefs.loadGatewayCustomHeaders("manual|two.example|443").isEmpty())
+    assertEquals("keep", prefs.getString("unrelated.secret"))
+  }
 }

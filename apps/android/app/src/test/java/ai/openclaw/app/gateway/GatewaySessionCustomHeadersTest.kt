@@ -21,12 +21,14 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 private const val TEST_TIMEOUT_MS = 8_000L
@@ -56,7 +58,37 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
   @Test
-  fun upgradeRequest_carriesOnlyThisGatewaysSanitizedHeaders() =
+  fun tlsUpgradeRequest_carriesLatestSanitizedHeadersForOnlyThisGateway() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefsBacking =
+      app.getSharedPreferences("openclaw.node.secure.test.${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefsBacking)
+    val stableId = "manual|gateway.example|443"
+    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443)
+    val tls = GatewayTlsParams(required = true, expectedFingerprint = "aa", allowTOFU = false, stableId = stableId)
+
+    prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "client-id"))
+    securePrefsBacking
+      .edit()
+      .putString(
+        "gateway.customHeaders.$stableId",
+        """{"CF-Access-Client-Id":"client-id","Host":"smuggled.example"}""",
+      ).commit()
+    prefs.saveGatewayCustomHeaders("manual|other.example|443", mapOf("X-Other-Gateway" to "leak"))
+
+    val first = buildGatewayWebSocketUpgradeRequest(endpoint, tls, prefs::loadGatewayCustomHeaders)
+    assertTrue(first.url.isHttps)
+    assertEquals("client-id", first.header("CF-Access-Client-Id"))
+    assertNull(first.header("Host"))
+    assertNull(first.header("X-Other-Gateway"))
+
+    prefs.saveGatewayCustomHeaders(stableId, mapOf("CF-Access-Client-Id" to "updated-id"))
+    val reconnected = buildGatewayWebSocketUpgradeRequest(endpoint, tls, prefs::loadGatewayCustomHeaders)
+    assertEquals("updated-id", reconnected.header("CF-Access-Client-Id"))
+  }
+
+  @Test
+  fun cleartextUpgrade_neverReadsOrSendsStoredCustomHeaders() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
       val securePrefsBacking =
@@ -66,19 +98,11 @@ class GatewaySessionCustomHeadersTest {
       val handshake = AtomicReference<RecordedRequest?>(null)
       val server = startCapturingGatewayServer { request -> handshake.compareAndSet(null, request) }
       val stableId = "manual|127.0.0.1|${server.port}"
-      // Reserved names must be dropped at the transport even if a stale store still has them.
       prefs.saveGatewayCustomHeaders(
         stableId,
         mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret"),
       )
-      securePrefsBacking
-        .edit()
-        .putString(
-          "gateway.customHeaders.$stableId",
-          """{"CF-Access-Client-Id":"client-id","CF-Access-Client-Secret":"client-secret","Host":"smuggled.example"}""",
-        ).commit()
-      // A different gateway's credentials must never ride this endpoint's upgrade.
-      prefs.saveGatewayCustomHeaders("manual|other.example.com|443", mapOf("X-Other-Gateway" to "leak"))
+      val providerRead = AtomicBoolean(false)
 
       val sessionJob = SupervisorJob()
       val scope = CoroutineScope(sessionJob + Dispatchers.Default)
@@ -91,7 +115,10 @@ class GatewaySessionCustomHeadersTest {
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},
           onEvent = { _, _ -> },
-          customHeadersProvider = prefs::loadGatewayCustomHeaders,
+          customHeadersProvider = { id ->
+            providerRead.set(true)
+            prefs.loadGatewayCustomHeaders(id)
+          },
         )
 
       try {
@@ -131,10 +158,10 @@ class GatewaySessionCustomHeadersTest {
         withTimeout(TEST_TIMEOUT_MS) { connected.await() }
 
         val request = requireNotNull(handshake.get()) { "no websocket upgrade recorded" }
-        assertEquals("client-id", request.getHeader("CF-Access-Client-Id"))
-        assertEquals("client-secret", request.getHeader("CF-Access-Client-Secret"))
+        assertEquals(false, providerRead.get())
+        assertNull(request.getHeader("CF-Access-Client-Id"))
+        assertNull(request.getHeader("CF-Access-Client-Secret"))
         assertEquals("127.0.0.1:${server.port}", request.getHeader("Host"))
-        assertNull(request.getHeader("X-Other-Gateway"))
       } finally {
         session.disconnectAndJoin()
         scope.cancel()
