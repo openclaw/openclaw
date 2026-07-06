@@ -103,9 +103,9 @@ describe("durable Discord delivery", () => {
   });
 
   it("declares reconcileUnknownSend adapter for reconnect drain recovery", () => {
-    const messageShape = discordPlugin.message?.adapter ?? discordPlugin.message;
-    expect(messageShape).toBeDefined();
-    const durable = (messageShape as { durableFinal?: Record<string, unknown> }).durableFinal;
+    const durable = (discordPlugin.message as Record<string, unknown>).durableFinal as
+      | Record<string, unknown>
+      | undefined;
     expect(durable).toBeDefined();
     expect(durable).toHaveProperty("reconcileUnknownSend");
     expect(typeof durable?.reconcileUnknownSend).toBe("function");
@@ -114,22 +114,19 @@ describe("durable Discord delivery", () => {
   });
 
   it("returns not_sent so reconnect drain can safely retry failed sends", async () => {
-    const messageShape = discordPlugin.message?.adapter ?? discordPlugin.message;
-    const durable = (messageShape as { durableFinal?: { reconcileUnknownSend?: Function } })
-      .durableFinal;
+    const durable = (discordPlugin.message as Record<string, unknown>).durableFinal as
+      | { reconcileUnknownSend?: Function }
+      | undefined;
     expect(durable?.reconcileUnknownSend).toBeDefined();
-
     const result = await durable!.reconcileUnknownSend!({
-      cfg: { channels: { discord: { token: "test-token" } } },
-      queueId: "test-queue-id",
+      cfg: {},
+      queueId: "test-q",
       channel: "discord",
-      to: "channel:123456",
-      accountId: "default",
+      to: "channel:1",
       enqueuedAt: Date.now(),
       retryCount: 0,
-      payloads: [{ text: "test message" }],
+      payloads: [{ text: "t" }],
     });
-
     expect(result).toEqual({ status: "not_sent" });
   });
 });
