@@ -277,8 +277,7 @@ function isTrustedPlaintextWebSocketHost(hostname: string, allowPrivateWs = fals
       normalized.endsWith(".test") ||
       normalized.endsWith(".invalid") ||
       normalized.endsWith(".localhost") ||
-      normalized.endsWith(".example") ||
-      normalized.endsWith(".ai")
+      normalized.endsWith(".example")
     );
   }
   return false;
