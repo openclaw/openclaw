@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  isOpenClawStateDatabaseOpen,
+} from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createInMemoryAcpEventLedger,
@@ -428,4 +431,33 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
+  it("releases the shared state database handle after close() (no silent reopen)", async () => {
+    await withTempDir({ prefix: "acp-ledger-close-" }, async (tmpDir) => {
+      const databasePath = path.join(tmpDir, "state.sqlite");
+      const ledger = createSqliteAcpEventLedger({ path: databasePath });
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: { sessionUpdate: "agent_state_update", status: "completed" },
+      });
+
+      // Prove the shared state DB is open before close.
+      expect(isOpenClawStateDatabaseOpen()).toBe(true);
+
+      ledger.close();
+
+      // After close, no cached handle should remain open.  A silent
+      // reopen would mean in-flight handlers can resurrect the handle
+      // after shutdown, undoing the fix.
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
+    });
+  });
+
+  it("in-memory ledger close() is callable and idempotent", () => {
+    const ledger = createInMemoryAcpEventLedger();
+    // Must not throw.
+    expect(() => ledger.close()).not.toThrow();
+    // Idempotent.
+    expect(() => ledger.close()).not.toThrow();
+  });
 });

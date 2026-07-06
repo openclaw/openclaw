@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { readJsonFile } from "../infra/json-files.js";
 import {
+  closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
@@ -70,6 +71,9 @@ export type AcpEventLedger = {
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
+  /** Releases the shared state database connection so hot-reload and shutdown
+   *  paths can reopen it without file-lock contention. */
+  close: () => void;
 };
 
 type LedgerSession = {
@@ -421,6 +425,10 @@ function createLedgerApi(params: {
         }
         return buildReplay(session);
       });
+    },
+
+    close() {
+      // In-memory ledger has no persistent resources to release.
     },
   };
 }
@@ -903,6 +911,10 @@ export function createSqliteAcpEventLedger(
       return read((db) =>
         buildSqliteReplay(readLatestCompleteSqliteSessionByKey(db, replayParams.sessionKey)),
       );
+    },
+
+    close() {
+      closeOpenClawStateDatabase();
     },
   };
 }

@@ -80,6 +80,8 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
   };
 
+  const inflightGatewayEvents = new Set<Promise<unknown>>();
+
   const gateway = new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
@@ -91,7 +93,11 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     mode: GATEWAY_CLIENT_MODES.CLI,
     caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
-      void agent?.handleGatewayEvent(evt);
+      const promise = agent?.handleGatewayEvent(evt);
+      if (promise) {
+        inflightGatewayEvents.add(promise);
+        void promise.finally(() => inflightGatewayEvents.delete(promise));
+      }
     },
     onHelloOk: () => {
       resolveGatewayReady();
@@ -105,14 +111,13 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
         rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
       }
       agent?.handleGatewayDisconnect(`${code}: ${reason}`);
-      // Resolve only on intentional shutdown (gateway.stop() sets closed
-      // which skips scheduleReconnect, then fires onClose).  Transient
-      // disconnects are followed by automatic reconnect attempts.
-      if (stopped) {
-        onClosed();
-      }
+      // Drain + close + onClosed() is handled by the shutdown sequence
+      // below; onClose must not resolve directly when stopped so that
+      // the drain can complete before serveAcpGateway returns.
     },
   });
+
+  let eventLedger: ReturnType<typeof createSqliteAcpEventLedger> | null = null;
 
   const shutdown = () => {
     if (stopped) {
@@ -121,9 +126,16 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     stopped = true;
     resolveGatewayReady();
     gateway.stop();
-    // If no WebSocket is active (e.g. between reconnect attempts),
-    // gateway.stop() won't trigger onClose, so resolve directly.
-    onClosed();
+    // Drain in-flight gateway events before closing the event ledger.
+    // In-flight handlers can write to the SQLite ledger after awaited
+    // client work completes; closing before they finish leaves file-lock
+    // contention unresolved on hot-reload.
+    void Promise.allSettled(inflightGatewayEvents).finally(() => {
+      eventLedger?.close();
+      // If no WebSocket is active (e.g. between reconnect attempts),
+      // gateway.stop() won't trigger onClose, so resolve directly.
+      onClosed();
+    });
   };
 
   process.once("SIGINT", shutdown);
@@ -158,7 +170,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     filePath: resolveDefaultAcpEventLedgerPath(process.env),
     archiveSource: true,
   });
-  const eventLedger = createSqliteAcpEventLedger();
+  eventLedger = createSqliteAcpEventLedger();
 
   void new AgentSideConnection(
     (conn: AgentSideConnection) => {
