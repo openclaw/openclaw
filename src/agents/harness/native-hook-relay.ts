@@ -219,6 +219,7 @@ const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
 const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
 const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
+const NATIVE_HOOK_RELAY_SLOW_WARN_MS = 250;
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
@@ -1367,16 +1368,39 @@ async function processNativeHookRelayInvocation(params: {
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
-  if (params.invocation.event === "pre_tool_use") {
-    return runNativeHookRelayPreToolUse(params);
+  const startedAt = Date.now();
+  let outcome: "ok" | "error" = "ok";
+  try {
+    if (params.invocation.event === "pre_tool_use") {
+      return await runNativeHookRelayPreToolUse(params);
+    }
+    if (params.invocation.event === "post_tool_use") {
+      return await runNativeHookRelayPostToolUse(params);
+    }
+    if (params.invocation.event === "before_agent_finalize") {
+      return await runNativeHookRelayBeforeAgentFinalize(params);
+    }
+    return await runNativeHookRelayPermissionRequest(params);
+  } catch (error) {
+    outcome = "error";
+    throw error;
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    const details = {
+      event: params.invocation.event,
+      durationMs,
+      outcome,
+      runId: params.registration.runId,
+      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      relayId: `${params.registration.relayId.slice(0, 16)}...`,
+    };
+    if (durationMs >= NATIVE_HOOK_RELAY_SLOW_WARN_MS) {
+      log.warn("native hook relay invocation slow", details);
+    } else {
+      log.debug("native hook relay invocation completed", details);
+    }
   }
-  if (params.invocation.event === "post_tool_use") {
-    return runNativeHookRelayPostToolUse(params);
-  }
-  if (params.invocation.event === "before_agent_finalize") {
-    return runNativeHookRelayBeforeAgentFinalize(params);
-  }
-  return runNativeHookRelayPermissionRequest(params);
 }
 
 async function runNativeHookRelayPreToolUse(params: {

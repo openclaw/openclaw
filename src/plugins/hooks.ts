@@ -589,6 +589,23 @@ export function createHookRunner(
     }
   };
 
+  const HOOK_HANDLER_SLOW_WARN_MS = 250;
+
+  const recordHookHandlerDuration = (params: {
+    hookName: PluginHookName;
+    pluginId: string;
+    durationMs: number;
+    mode: "parallel" | "sequential";
+    outcome: "ok" | "error";
+  }): void => {
+    const details = `hook=${params.hookName} plugin=${params.pluginId} durationMs=${params.durationMs} mode=${params.mode} outcome=${params.outcome}`;
+    if (params.durationMs >= HOOK_HANDLER_SLOW_WARN_MS) {
+      logger?.warn?.(`[hooks] slow handler ${details}`);
+    } else {
+      logger?.debug?.(`[hooks] handler completed ${details}`);
+    }
+  };
+
   const runSyncHookHandler = <K extends SyncHookName>(
     hook: PluginHookRegistration<K>,
     event: SyncHookEvent<K>,
@@ -616,6 +633,8 @@ export function createHookRunner(
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
     const promises = hooks.map(async (hook) => {
+      const startedAt = Date.now();
+      let outcome: "ok" | "error" = "ok";
       try {
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
@@ -627,7 +646,16 @@ export function createHookRunner(
           await promise;
         }
       } catch (err) {
+        outcome = "error";
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      } finally {
+        recordHookHandlerDuration({
+          hookName,
+          pluginId: hook.pluginId,
+          durationMs: Date.now() - startedAt,
+          mode: "parallel",
+          outcome,
+        });
       }
     });
 
@@ -654,6 +682,8 @@ export function createHookRunner(
     let result: TResult | undefined;
 
     for (const hook of hooks) {
+      const startedAt = Date.now();
+      let outcome: "ok" | "error" = "ok";
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
         const promise = Promise.resolve(handler(event, ctx));
@@ -679,7 +709,16 @@ export function createHookRunner(
           }
         }
       } catch (err) {
+        outcome = "error";
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      } finally {
+        recordHookHandlerDuration({
+          hookName,
+          pluginId: hook.pluginId,
+          durationMs: Date.now() - startedAt,
+          mode: "sequential",
+          outcome,
+        });
       }
     }
 
