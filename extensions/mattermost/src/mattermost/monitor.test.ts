@@ -1187,6 +1187,43 @@ describe("backfillMattermostThreadHistory", () => {
     expect(client.request).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves usernames only for the retained historyLimit posts on a long thread", async () => {
+    const channelHistories = new Map();
+    const order = Array.from({ length: 50 }, (_, i) => `p${i}`);
+    const posts = Object.fromEntries(
+      order.map((id, i) => [id, { id, user_id: `u${i}`, message: `m${i}`, create_at: i }]),
+    );
+    const client = threadClientMock({ order, posts });
+    const boundedResolveUserInfo = vi.fn(
+      async (userId: string): Promise<MattermostUser | null> => ({
+        id: userId,
+        username: `user-${userId}`,
+      }),
+    );
+
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 5,
+      resolveUserInfo: boundedResolveUserInfo,
+      backfilledSessionIds: new Map(),
+    });
+
+    // Only the last historyLimit posts are seeded...
+    const seeded = channelHistories.get("channel:chan-1");
+    expect(seeded?.map((e: { messageId?: string }) => e.messageId)).toStrictEqual([
+      "p45",
+      "p46",
+      "p47",
+      "p48",
+      "p49",
+    ]);
+    // ...and username resolution is bounded to those retained posts, not all 50.
+    expect(boundedResolveUserInfo).toHaveBeenCalledTimes(5);
+  });
+
   it("skips the server fetch when the thread session was already backfilled (active thread)", async () => {
     const channelHistories = new Map();
     const client = threadClientMock({ order: ["p1"], posts: { p1: { id: "p1", message: "x" } } });

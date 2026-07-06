@@ -540,12 +540,15 @@ export async function backfillMattermostThreadHistory(params: {
     const thread = await fetchMattermostThread(params.client, params.threadRootId);
     const order = Array.isArray(thread?.order) ? thread.order : [];
     const posts = thread?.posts ?? {};
+    // Bound the per-post work: select eligible posts and trim to the last
+    // `historyLimit` BEFORE resolving usernames, so a large cold thread cannot
+    // issue an unbounded number of sequential user lookups on the reply path.
+    const eligiblePosts = order
+      .map((postId) => posts[postId])
+      .filter((post): post is MattermostPost => Boolean(post) && post.id !== params.currentPostId)
+      .slice(-params.historyLimit);
     const entries: HistoryEntry[] = [];
-    for (const postId of order) {
-      const threadPost = posts[postId];
-      if (!threadPost || threadPost.id === params.currentPostId) {
-        continue;
-      }
+    for (const threadPost of eligiblePosts) {
       const userId = normalizeOptionalString(threadPost.user_id);
       const username = userId
         ? normalizeOptionalString((await params.resolveUserInfo(userId))?.username)
@@ -558,7 +561,7 @@ export async function backfillMattermostThreadHistory(params: {
       });
     }
     if (entries.length > 0) {
-      params.channelHistories.set(params.historyKey, entries.slice(-params.historyLimit));
+      params.channelHistories.set(params.historyKey, entries);
     }
     // Record even when the server thread had no extra posts, so the same session is not
     // refetched on every follow-up turn within its lifetime.
