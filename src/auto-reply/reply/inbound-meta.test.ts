@@ -160,6 +160,23 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
+  it("keeps explicit bot mentions out of the system metadata", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "telegram:-1001249586642",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      BotUsername: "SirPinchALotBot",
+      ExplicitlyMentionedBot: true,
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["flags"]).toBeUndefined();
+    expect(prompt).not.toContain("SirPinchALotBot");
+    expect(prompt).not.toContain("explicitly mentions your channel identity");
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",
@@ -712,6 +729,19 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["has_forwarded_context"]).toBe(true);
     expect(conversationInfo["has_thread_starter"]).toBe(true);
     expect(conversationInfo["history_count"]).toBe(1);
+  });
+
+  it("carries explicit bot mentions in current-turn user context", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      BotUsername: "SirPinchALotBot",
+      ExplicitlyMentionedBot: true,
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["explicitly_mentioned_bot"]).toBe(true);
+    expect(text).toContain("explicitly mentions your channel identity @SirPinchALotBot");
+    expect(text).toContain("Treat that mention as addressed to you");
   });
 
   it("trims sender_id in conversation info", () => {

@@ -13,6 +13,7 @@ import {
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -114,6 +115,7 @@ function hookCallAt(index: number, kind: "before" | "after"): [HookEvent, HookCo
 describe("timeout-triggered compaction", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -616,22 +618,29 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("uses prompt/input tokens for ratio, not total tokens", async () => {
-    // Timeout where total tokens are high (150k) but input/prompt tokens
-    // are low (20k / 200k = 10%).  Should NOT trigger compaction because
-    // the ratio is based on prompt tokens, not total.
+  it("uses the explicit context snapshot instead of aggregate billing buckets", async () => {
+    // Server-side loops can report aggregate cache billing far above the final
+    // iteration's prompt. Timeout recovery must use the explicit 20k snapshot.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { input: 20000, total: 150000 },
+          usage: {
+            input: 20_000,
+            cacheRead: 150_000,
+            contextUsage: {
+              state: "available",
+              promptTokens: 20_000,
+              totalTokens: 20_500,
+            },
+            total: 170_500,
+          },
         } as never,
       }),
     );
 
     const result = await runEmbeddedAgent(overflowBaseRunParams);
 
-    // Despite high total tokens, low prompt tokens mean no compaction
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");

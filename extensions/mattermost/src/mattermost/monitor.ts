@@ -73,7 +73,11 @@ import {
   shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
-import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
+import {
+  createMattermostMonitorResources,
+  formatMattermostInboundMediaText,
+  type MattermostMediaInfo,
+} from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import {
   createMattermostConnectOnce,
@@ -1538,10 +1542,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           recordPendingHistory();
           return;
         }
-        const mediaList = await resolveMattermostMedia(post.file_ids);
+        const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
+        const mediaList = await resolveMattermostMedia(fileIds);
         const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
-        const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
+        const downloadedText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
+        const baseText = formatMattermostInboundMediaText({
+          body: downloadedText,
+          mediaPlaceholder,
+          expectedCount: fileIds.length,
+          mediaCount: mediaList.length,
+        });
         const bodyText = normalizeMention(baseText, botUsername);
         if (shouldDropEmptyMattermostBody({ bodyText, rawText: rawPostText, botUsername })) {
           logVerboseMessage(
@@ -1612,7 +1623,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Body: combinedBody,
           BodyForAgent: bodyForAgent,
           InboundHistory: inboundHistory,
-          RawBody: bodyText,
+          RawBody: commandBody,
           CommandBody: commandBody,
           BodyForCommands: commandBody,
           From:

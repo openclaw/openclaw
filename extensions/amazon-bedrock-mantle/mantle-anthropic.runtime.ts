@@ -9,7 +9,6 @@ import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sd
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
 type MantleAnthropicStream = typeof stream;
-type AnthropicStreamClient = Anthropic;
 
 /** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
 export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
@@ -138,7 +137,7 @@ export function createMantleAnthropicStreamFn(deps?: {
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
     // Plugin package deps can give this plugin a distinct physical SDK copy.
     // The client API is the same, but the SDK class private field makes types nominal.
-    const streamClient = client as unknown as AnthropicStreamClient;
+    const streamClient = client as unknown as Anthropic;
     const reasoning = resolveMantleReasoning(model, options);
     if (!reasoning) {
       return streamFn(model as Model<"anthropic-messages">, context, {

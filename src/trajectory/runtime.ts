@@ -1,6 +1,7 @@
 // Trajectory runtime records runtime events into trajectory log files.
 import fs from "node:fs";
 import path from "node:path";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type {
   QueuedFileWriter,
@@ -46,7 +47,7 @@ type TrajectoryRuntimeRecorder = {
 };
 
 const writers = new Map<string, TrajectoryRuntimeWriter>();
-const windowFlushes = new Map<string, Promise<void>>();
+const windowFlushes = new KeyedAsyncQueue();
 const MAX_TRAJECTORY_WRITERS = 100;
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
@@ -389,19 +390,9 @@ async function queueTrajectoryWindowFlush(params: {
   maxFileBytes: number;
   appendedLines: string[];
 }): Promise<void> {
-  const previous = windowFlushes.get(params.filePath) ?? Promise.resolve();
-  const current = previous
-    .catch(() => undefined)
-    .then(async () => {
-      await replaceTrajectoryWindow(params);
-    })
-    .finally(() => {
-      if (windowFlushes.get(params.filePath) === current) {
-        windowFlushes.delete(params.filePath);
-      }
-    });
-  windowFlushes.set(params.filePath, current);
-  await current;
+  await windowFlushes.enqueue(params.filePath, async () => {
+    await replaceTrajectoryWindow(params);
+  });
 }
 
 function createTrajectoryWindowWriter(

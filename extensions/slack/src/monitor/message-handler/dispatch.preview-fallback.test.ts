@@ -335,6 +335,7 @@ function createPreparedSlackMessage(params?: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => Promise<void>;
   typingReaction?: string;
   ackReactionMessageTs?: string;
@@ -1285,20 +1286,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
 
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
   });
 
-  it("does not use native Slack streaming when a custom identity is active", async () => {
+  it("uses supported native Slack streaming authorship when a custom identity is active", async () => {
     mockedNativeStreaming = true;
     const relayIdentity = { username: "Nik Team Claw" };
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
 
-    expect(startSlackStreamMock).not.toHaveBeenCalled();
-    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+    expectMockCallArgFields(startSlackStreamMock, 0, "Slack stream start params", {
+      text: FINAL_REPLY_TEXT,
+      identity: relayIdentity,
+    });
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
   it("does not create a Slack thread for top-level messages when replyToMode is off", async () => {
@@ -1739,6 +1744,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       channelId: "C123",
       threadTs: THREAD_TS,
       status: "is typing...",
+      loadingMessages: [
+        "Reading the thread...",
+        "Checking context...",
+        "Working through the request...",
+        "Putting it all together...",
+      ],
     });
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",
@@ -1783,6 +1794,40 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Slack lifecycle reactions off by default when an ack reaction exists", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
+      enabled: false,
+      initialEmoji: "eyes",
+    });
+    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
+  it("keeps Slack lifecycle reactions off for ambient room-event acks", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        ctxPayload: { ChatType: "channel", InboundEventKind: "room_event" },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
+      enabled: false,
+      initialEmoji: "eyes",
+    });
+    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
   });
 
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {

@@ -1,5 +1,8 @@
 // Tests get-reply behavior while probing an auto-fallback primary model.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ThinkLevel } from "../thinking.js";
@@ -130,6 +133,8 @@ function makePerModelThinkingConfig(
   } satisfies OpenClawConfig);
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 function mockAutoFallbackSession() {
   const sessionKey = "agent:main:telegram:123";
   const sessionEntry: SessionEntry = {
@@ -141,11 +146,17 @@ function mockAutoFallbackSession() {
     modelOverrideFallbackOriginProvider: "openai",
     modelOverrideFallbackOriginModel: "gpt-5.5",
   };
+  // Reply-turn admission re-reads the store from disk before starting work;
+  // seed a real per-test store so the guard sees the same session the mocks
+  // describe instead of depending on leftover host files.
+  const storePath = path.join(tempDirs.make("auto-fallback-store"), "sessions.json");
+  fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: sessionEntry }));
   mocks.initSessionState.mockResolvedValue(
     createGetReplySessionState({
       sessionKey,
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
+      storePath,
       triggerBodyNormalized: "hello",
       bodyStripped: "hello",
     }),

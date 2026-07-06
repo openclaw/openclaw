@@ -26,8 +26,8 @@ function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized ? normalized : undefined;
 }
 
 export async function normalizeSupportedLanguageHint(

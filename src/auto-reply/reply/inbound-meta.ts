@@ -575,6 +575,7 @@ export function buildInboundUserContextPrefix(
     e164: normalizePromptMetadataString(ctx.SenderE164),
     is_bot: typeof ctx.SenderIsBot === "boolean" ? ctx.SenderIsBot : undefined,
   };
+  const botUsername = normalizePromptMetadataString(ctx.BotUsername);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -605,6 +606,10 @@ export function buildInboundUserContextPrefix(
     topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     ...buildConversationMentionMetadataPayload(ctx, isDirect),
+    explicit_bot_mention_note:
+      ctx.ExplicitlyMentionedBot === true && botUsername
+        ? `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`
+        : undefined,
     has_reply_context:
       replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,

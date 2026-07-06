@@ -131,7 +131,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun disconnectCancelsPendingRpcWithoutWaitingForRequestTimeout() {
+  fun disconnectFailsPendingRpcWithUnknownOutcomeWithoutWaitingForTimeout() {
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -173,13 +173,63 @@ class GatewaySessionInvokeTest {
         harness.session.disconnect()
 
         val result = withTimeout(2_000) { requestResult.await() }
-        assertEquals(true, result.exceptionOrNull() is CancellationException)
+        assertEquals(true, result.exceptionOrNull() is GatewayRequestOutcomeUnknown)
         serverWebSocket.get()?.close(1000, "done")
         withTimeoutOrNull(2_000) {
           while (lastDisconnect.get().isEmpty()) delay(10)
         }
       } finally {
         requestJob?.cancelAndJoin()
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
+        harness.session.disconnect()
+        harness.sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+  }
+
+  @Test
+  fun disconnectReportsUnknownOutcomeForFireAndForgetRpc() {
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val requestSeen = CompletableDeferred<Unit>()
+      val requestError = CompletableDeferred<GatewaySession.ErrorShape>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "fire.and.forget" -> requestSeen.complete(Unit)
+          }
+        }
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        harness.session.sendRequestFrame(
+          method = "fire.and.forget",
+          paramsJson = null,
+          timeoutMs = 30_000,
+          onError = { requestError.complete(it) },
+        )
+        withTimeout(TEST_TIMEOUT_MS) { requestSeen.await() }
+
+        harness.session.disconnect()
+
+        val error = withTimeout(2_000) { requestError.await() }
+        assertEquals("UNAVAILABLE", error.code)
+        assertEquals("Gateway disconnected before response", error.message)
+        serverWebSocket.get()?.close(1000, "done")
+      } finally {
         runCatching { serverWebSocket.get()?.close(1000, "done") }
         delay(100)
         harness.session.disconnect()
@@ -199,13 +249,14 @@ class GatewaySessionInvokeTest {
       val secondEventHandled = CompletableDeferred<Unit>()
       val events = CopyOnWriteArrayList<String>()
       val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
       val server =
         startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
           if (method == "connect") {
             webSocket.send(connectResponseFrame(id))
             webSocket.send("""{"type":"event","event":"voice.first","payload":{}}""")
             webSocket.send("""{"type":"event","event":"voice.second","payload":{}}""")
-            webSocket.close(1000, "done")
           }
         }
 
@@ -237,6 +288,8 @@ class GatewaySessionInvokeTest {
         assertEquals(listOf("voice.first", "voice.second"), events.toList())
       } finally {
         releaseFirstEvent.complete(Unit)
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
         shutdownHarness(harness, server)
       }
     }
@@ -481,7 +534,6 @@ class GatewaySessionInvokeTest {
                     secondConnectAuth.complete(auth)
                   }
                   webSocket.send(connectResponseFrame(id))
-                  webSocket.close(1000, "done")
                 }
               }
             }
@@ -758,6 +810,47 @@ class GatewaySessionInvokeTest {
           ?.jsonPrimitive
           ?.content,
       )
+    }
+
+  @Test
+  fun nodeInvokeRequest_doesNotSendResultAfterCancellation() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val invokeStarted = CompletableDeferred<Unit>()
+      val invokeResult = CompletableDeferred<Unit>()
+      val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+              webSocket.send(
+                """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-cancelled","nodeId":"node-1","command":"camera.snap","timeoutMs":5000}}""",
+              )
+            }
+            "node.invoke.result" -> invokeResult.complete(Unit)
+          }
+        }
+      val harness =
+        createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
+          invokeStarted.complete(Unit)
+          throw CancellationException("cancelled")
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        withTimeout(TEST_TIMEOUT_MS) { invokeStarted.await() }
+
+        assertNull(withTimeoutOrNull(250) { invokeResult.await() })
+      } finally {
+        serverWebSocket.get()?.close(1000, "done")
+        delay(100)
+        shutdownHarness(harness, server)
+      }
     }
 
   @Test

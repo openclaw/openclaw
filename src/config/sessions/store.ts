@@ -268,6 +268,7 @@ export type ResetSessionEntryLifecycleMutation = Omit<
 export type DeleteSessionEntryLifecycleResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   deleted: boolean;
+  expectedEntryMismatch?: true;
   deletedEntry?: SessionEntry;
   deletedSessionFile?: string;
   deletedSessionId?: string;
@@ -651,21 +652,33 @@ function resolveLifecyclePrimaryEntry(params: {
   store: Record<string, SessionEntry>;
   target: SessionLifecycleStoreTarget;
 }): SessionEntry | undefined {
-  const freshestMatch = resolveFreshestLifecycleStoreMatch({
-    store: params.store,
-    storeKeys: params.target.storeKeys,
-  });
-  if (freshestMatch) {
-    const currentPrimary = params.store[params.target.canonicalKey];
-    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
-      params.store[params.target.canonicalKey] = freshestMatch.entry;
-    }
+  const primaryEntry = resolveLifecyclePrimaryEntrySnapshot(params);
+  if (primaryEntry) {
+    params.store[params.target.canonicalKey] = primaryEntry;
   }
   pruneLifecycleLegacyStoreKeys({
     store: params.store,
     target: params.target,
   });
   return params.store[params.target.canonicalKey];
+}
+
+function resolveLifecyclePrimaryEntrySnapshot(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionLifecycleStoreTarget;
+}): SessionEntry | undefined {
+  const currentPrimary = params.store[params.target.canonicalKey];
+  const freshestMatch = resolveFreshestLifecycleStoreMatch({
+    store: params.store,
+    storeKeys: params.target.storeKeys,
+  });
+  if (
+    freshestMatch &&
+    (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0))
+  ) {
+    return freshestMatch.entry;
+  }
+  return currentPrimary;
 }
 
 function resolveFreshestLifecycleStoreMatch(params: {
@@ -1201,12 +1214,18 @@ export async function resetSessionEntryLifecycle(params: {
 export async function deleteSessionEntryLifecycle(params: {
   agentId?: string;
   archiveTranscript: boolean;
+  expectedEntry?: SessionEntry;
+  expectedLifecycleRevision?: string;
+  expectedSessionId?: string;
+  expectedUpdatedAt?: number;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 }): Promise<DeleteSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
-    const deletedEntry = resolveLifecyclePrimaryEntry({
+    // Compare against an unmodified snapshot. Alias promotion is itself a
+    // mutation and must not enter the cache when a guarded delete is rejected.
+    const deletedEntry = resolveLifecyclePrimaryEntrySnapshot({
       store,
       target: params.target,
     });
@@ -1217,6 +1236,34 @@ export async function deleteSessionEntryLifecycle(params: {
         deleted: false,
       };
     }
+    const expectedEntryMatches =
+      params.expectedEntry === undefined ||
+      JSON.stringify(deletedEntry) === JSON.stringify(params.expectedEntry);
+    const expectedLifecycleRevisionMatches =
+      params.expectedLifecycleRevision === undefined ||
+      deletedEntry.lifecycleRevision === params.expectedLifecycleRevision;
+    const expectedSessionIdMatches =
+      !params.expectedSessionId ||
+      deletedEntry.sessionId === params.expectedSessionId ||
+      (deletedEntry.sessionId === undefined &&
+        params.expectedLifecycleRevision !== undefined &&
+        expectedLifecycleRevisionMatches);
+    const expectedUpdatedAtMatches =
+      params.expectedUpdatedAt === undefined || deletedEntry.updatedAt === params.expectedUpdatedAt;
+    if (
+      !expectedEntryMatches ||
+      !expectedLifecycleRevisionMatches ||
+      !expectedSessionIdMatches ||
+      !expectedUpdatedAtMatches
+    ) {
+      restoreUnchangedSessionStoreCache(params.storePath, store);
+      return {
+        archivedTranscripts: [],
+        deleted: false,
+        expectedEntryMismatch: true,
+      };
+    }
+    pruneLifecycleLegacyStoreKeys({ store, target: params.target });
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
     delete store[params.target.canonicalKey];

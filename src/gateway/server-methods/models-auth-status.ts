@@ -43,7 +43,7 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["deepseek"]);
+const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
 type ProviderUsageStatus = Pick<ProviderUsageSnapshot, "windows" | "summary" | "plan">;
 

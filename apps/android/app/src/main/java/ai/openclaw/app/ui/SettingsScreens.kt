@@ -140,6 +140,7 @@ internal enum class SettingsRoute {
   Channels,
   Dreaming,
   Canvas,
+  Terminal,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -172,6 +173,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -974,10 +976,16 @@ private fun GatewaySettingsScreen(
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.weight(1f), icon = Icons.Default.QrCode2)
-          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.weight(1f), icon = Icons.Default.Info)
+        Text(
+          text = "Clear this phone's saved gateway access and scan a fresh setup code.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
         }
         if (showSetupCodeHelp) {
           Text(
@@ -992,18 +1000,18 @@ private fun GatewaySettingsScreen(
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "Connection Setup", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = "Setup code")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = "Host", modifier = Modifier.weight(1f))
-          ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.55f))
+          ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.62f))
         }
         ClawSegmentedControl(
           options = listOf("Local", "TLS"),
           selected = if (tlsInput) "TLS" else "Local",
           onSelect = { selected -> tlsInput = selected == "TLS" },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
-          ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1f))
+          ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1.05f))
         }
         ClawTextField(value = passwordInput, onValueChange = { passwordInput = it }, placeholder = "Password")
         validationText?.let {
@@ -1687,8 +1695,23 @@ internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       Row(modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 0.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+          text = row.title,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+          modifier = Modifier.weight(0.9f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          text = row.value,
+          style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
+          color = ClawTheme.colors.textMuted,
+          modifier = Modifier.weight(1.1f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          textAlign = TextAlign.End,
+        )
       }
     }
   }

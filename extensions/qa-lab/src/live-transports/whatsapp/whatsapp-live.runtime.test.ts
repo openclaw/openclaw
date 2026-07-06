@@ -139,6 +139,7 @@ const DIRECT_GATEWAY_SCENARIO_IDS = [
   "whatsapp-outbound-media-matrix",
   "whatsapp-outbound-document-preserves-filename",
   "whatsapp-outbound-poll",
+  "whatsapp-outbound-send-serialization",
   "whatsapp-message-actions",
   "whatsapp-group-outbound-media",
   "whatsapp-group-outbound-audio",

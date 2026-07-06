@@ -568,6 +568,8 @@ export async function runPreparedReply(
       : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
         ? "automatic"
         : opts?.sourceReplyDeliveryMode;
+  const sessionPromptSourceReplyDeliveryMode =
+    opts?.sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -617,20 +619,20 @@ export async function runPreparedReply(
   const directChatContext = isDirectChat
     ? buildDirectChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
       })
     : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
-  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
-  const groupIntro = shouldInjectGroupIntro
+  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
+  const groupIntro = isGroupChat
     ? buildGroupIntro({
         sessionEntry,
         defaultActivation,
@@ -651,32 +653,35 @@ export async function runPreparedReply(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
   );
+  const execOverridePromptHint = buildExecOverridePromptHint({
+    execOverrides,
+    elevatedLevel: resolvedElevatedLevel,
+    fullAccessAvailable: fullAccessState.available,
+    fullAccessBlockedReason: fullAccessState.blockedReason,
+  });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
+    execOverridePromptHint,
   ].filter(Boolean);
-  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
-  const extraSystemPromptStaticParts = [
+  const extraSystemPromptStatic = [
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
-  ].filter(Boolean);
+    execOverridePromptHint,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const cliSessionBindingFacts = {
+    extraSystemPromptStatic,
+    ...(sessionPromptSourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode }
+      : {}),
+  };
   const silentReplyPromptMode: SilentReplyPromptMode =
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
@@ -1262,8 +1267,15 @@ export async function runPreparedReply(
       extractedFileImages: opts?.extractedFileImages,
     }),
   );
+  // Abort-signal attachment for queued followups:
+  // - room_event: always inherit (source admission fence / ambient cancel).
+  // - Gateway-owned lifecycle (chat.send): always inherit so Esc can cancel a
+  //   turn after chat.send terminalizes while still queued.
+  // - plain user_request without lifecycle: deliberately detach from the
+  //   source/active-lane signal so a superseded parent abort does not cancel a
+  //   still-valid queued user turn.
   const queuedFollowupAbortSignal =
-    inboundEventKind === "room_event"
+    opts?.queuedFollowupLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
@@ -1351,6 +1363,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
+    onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1362,12 +1375,9 @@ export async function runPreparedReply(
     originatingAccountId: replyRoute.accountId,
     originatingThreadId: replyRoute.threadId ?? originatingThreadId,
     originatingReplyToId: promptSessionCtx.ReplyToId,
-    originatingReplyToMode: resolveReplyToMode(
-      cfg,
-      replyPolicyChannel,
-      replyRoute.accountId,
-      replyRoute.chatType,
-    ),
+    originatingReplyToMode:
+      promptSessionCtx.ReplyToMode ??
+      resolveReplyToMode(cfg, replyPolicyChannel, replyRoute.accountId, replyRoute.chatType),
     originatingChatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
@@ -1457,7 +1467,8 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       silentReplyPromptMode,
-      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
+      extraSystemPromptStatic,
+      cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,

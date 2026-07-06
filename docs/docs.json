@@ -1019,7 +1019,11 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["index", "start/showcase", "concepts/features"]
+                "pages": [
+                  "index",
+                  "start/showcase",
+                  "concepts/features"
+                ]
               },
               {
                 "group": "First steps",
@@ -1045,7 +1049,11 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer", "install/node"]
+                "pages": [
+                  "install/index",
+                  "install/installer",
+                  "install/node"
+                ]
               },
               {
                 "group": "Maintenance",
@@ -1098,7 +1106,10 @@
               },
               {
                 "group": "Advanced setup",
-                "pages": ["start/setup", "openclaw-agent-runtime"]
+                "pages": [
+                  "start/setup",
+                  "openclaw-agent-runtime"
+                ]
               }
             ]
           },
@@ -1107,7 +1118,10 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index", "announcements/bluebubbles-imessage"]
+                "pages": [
+                  "channels/index",
+                  "announcements/bluebubbles-imessage"
+                ]
               },
               {
                 "group": "Mainstream messaging",
@@ -1244,7 +1258,9 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["tools/index"]
+                "pages": [
+                  "tools/index"
+                ]
               },
               {
                 "group": "Plugins",
@@ -1261,6 +1277,7 @@
                   "plugins/codex-harness",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
+                  "plugins/logbook",
                   "plugins/google-meet",
                   "plugins/workboard",
                   "plugins/webhooks",
@@ -1386,7 +1403,11 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["clawhub/index", "clawhub/quickstart", "clawhub/how-it-works"]
+                "pages": [
+                  "clawhub/index",
+                  "clawhub/quickstart",
+                  "clawhub/how-it-works"
+                ]
               },
               {
                 "group": "Using ClawHub",
@@ -1416,11 +1437,18 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["providers/index", "providers/models"]
+                "pages": [
+                  "providers/index",
+                  "providers/models"
+                ]
               },
               {
                 "group": "Concepts and configuration",
-                "pages": ["concepts/models", "concepts/model-providers", "concepts/model-failover"]
+                "pages": [
+                  "concepts/models",
+                  "concepts/model-providers",
+                  "concepts/model-failover"
+                ]
               },
               {
                 "group": "Providers",
@@ -1433,6 +1461,7 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/clawrouter",
                   "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1623,13 +1652,22 @@
                   },
                   {
                     "group": "Networking and discovery",
-                    "pages": ["network", "gateway/pairing", "gateway/discovery", "gateway/bonjour"]
+                    "pages": [
+                      "network",
+                      "gateway/pairing",
+                      "gateway/discovery",
+                      "gateway/bonjour"
+                    ]
                   }
                 ]
               },
               {
                 "group": "Remote access",
-                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
+                "pages": [
+                  "gateway/remote",
+                  "gateway/remote-gateway-readme",
+                  "gateway/tailscale"
+                ]
               },
               {
                 "group": "Security",
@@ -1657,13 +1695,23 @@
                   },
                   {
                     "group": "Node features",
-                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
+                    "pages": [
+                      "nodes/talk",
+                      "nodes/voicewake",
+                      "nodes/location-command"
+                    ]
                   }
                 ]
               },
               {
                 "group": "Web interfaces",
-                "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
+                "pages": [
+                  "web/index",
+                  "web/control-ui",
+                  "web/dashboard",
+                  "web/webchat",
+                  "web/tui"
+                ]
               }
             ]
           },
@@ -1736,7 +1784,11 @@
                   },
                   {
                     "group": "Configuration",
-                    "pages": ["cli/config", "cli/configure", "cli/webhooks"]
+                    "pages": [
+                      "cli/config",
+                      "cli/configure",
+                      "cli/webhooks"
+                    ]
                   },
                   {
                     "group": "Plugins and skills",
@@ -1750,7 +1802,11 @@
                   },
                   {
                     "group": "Interfaces",
-                    "pages": ["cli/attach", "cli/dashboard", "cli/tui"]
+                    "pages": [
+                      "cli/attach",
+                      "cli/dashboard",
+                      "cli/tui"
+                    ]
                   },
                   {
                     "group": "Utility",
@@ -1839,6 +1895,7 @@
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
+                  "reference/openclaw-ai",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
@@ -1860,14 +1917,20 @@
               },
               {
                 "group": "Project",
-                "pages": ["reference/application-modernization-plan", "reference/credits"]
+                "pages": [
+                  "reference/application-modernization-plan",
+                  "reference/credits"
+                ]
               },
               {
                 "group": "Release and CI",
                 "pages": [
                   {
                     "group": "Release notes",
-                    "pages": ["releases/index", "releases/2026.6.11"]
+                    "pages": [
+                      "releases/index",
+                      "releases/2026.6.11"
+                    ]
                   },
                   "maturity/scorecard",
                   "maturity/taxonomy",
@@ -1886,23 +1949,43 @@
             "groups": [
               {
                 "group": "Start here",
-                "pages": ["help/index", "help/troubleshooting", "help/debugging"]
+                "pages": [
+                  "help/index",
+                  "help/troubleshooting",
+                  "help/debugging"
+                ]
               },
               {
                 "group": "FAQ",
-                "pages": ["help/faq", "help/faq-first-run", "help/faq-models"]
+                "pages": [
+                  "help/faq",
+                  "help/faq-first-run",
+                  "help/faq-models"
+                ]
               },
               {
                 "group": "Testing",
-                "pages": ["help/testing", "help/testing-updates-plugins", "help/testing-live"]
+                "pages": [
+                  "help/testing",
+                  "help/testing-updates-plugins",
+                  "help/testing-live"
+                ]
               },
               {
                 "group": "Diagnostics",
-                "pages": ["help/environment", "diagnostics/flags", "debug/node-issue"]
+                "pages": [
+                  "help/environment",
+                  "diagnostics/flags",
+                  "debug/node-issue"
+                ]
               },
               {
                 "group": "Community and meta",
-                "pages": ["start/lore", "start/hubs", "start/docs-directory"]
+                "pages": [
+                  "start/lore",
+                  "start/hubs",
+                  "start/docs-directory"
+                ]
               }
             ]
           }

@@ -141,7 +141,7 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
+import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -2124,6 +2124,7 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
             chatId: params.chatId,
@@ -2265,6 +2266,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            crestodianTool: params.crestodianTool,
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -2507,7 +2509,9 @@ async function runEmbeddedAgentInternal(
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
-            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const lastTurnPromptTokens = deriveContextPromptTokens({
+              lastCallUsage: lastRunPromptUsage,
+            });
             const tokenUsedRatio =
               lastTurnPromptTokens != null && ctxInfo.tokens > 0
                 ? lastTurnPromptTokens / ctxInfo.tokens
@@ -2866,6 +2870,7 @@ async function runEmbeddedAgentInternal(
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
                     config: params.config,
+                    protectTrailingToolResults: true,
                   });
                   if (truncResult.truncated) {
                     log.info(
@@ -2929,6 +2934,7 @@ async function runEmbeddedAgentInternal(
                   sessionKey: params.sessionKey,
                   agentId: sessionAgentId,
                   config: params.config,
+                  protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
                 });
                 if (truncResult.truncated) {
                   log.info(
@@ -3617,6 +3623,7 @@ async function runEmbeddedAgentInternal(
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
+            assistantTranscriptOwned: attempt.assistantTranscriptOwned,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             currentAssistant: currentAttemptAssistant ?? null,

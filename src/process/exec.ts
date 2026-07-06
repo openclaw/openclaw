@@ -15,6 +15,7 @@ import {
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import {
@@ -292,11 +293,7 @@ function appendCapturedOutput(
 }
 
 function trimPreservedPendingLine(value: string, maxBytes: number): string {
-  if (Buffer.byteLength(value) <= maxBytes) {
-    return value;
-  }
-  const buffer = Buffer.from(value);
-  return buffer.subarray(buffer.byteLength - maxBytes).toString();
+  return truncateUtf8Suffix(value, maxBytes);
 }
 
 function appendPreservedOutputLines(params: {
@@ -615,6 +612,10 @@ export async function runCommandWithTimeout(
       child.stdin.end();
     }
 
+    // Output pipes may fail independently; child exit/close remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    child.stdout?.on("error", ignoreOutputStreamError);
+    child.stderr?.on("error", ignoreOutputStreamError);
     child.stdout?.on("data", (d) => {
       appendPreservedOutputLines({
         capture: stdoutCapture,

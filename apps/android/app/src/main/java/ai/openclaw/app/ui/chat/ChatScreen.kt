@@ -1,9 +1,10 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.R
+import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
@@ -16,6 +17,7 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -44,6 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
@@ -71,7 +74,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -105,9 +107,12 @@ fun ChatScreen(
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
+  val outboxItems by viewModel.chatOutboxItems.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
@@ -144,20 +149,21 @@ fun ChatScreen(
       viewModel.loadChat(loadSessionKey)
     }
     viewModel.refreshChatSessions(limit = 100)
+    viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
-    val accepted =
-      dispatchPendingAssistantAutoSend(
+  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, healthOk, pendingRunCount, thinkingLevel) {
+    if (!healthOk) return@LaunchedEffect
+    val prompt =
+      resolvePendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) { prompt ->
-        viewModel.sendChatAwaitAcceptance(message = prompt, thinking = thinkingLevel, attachments = emptyList())
-      }
-    if (accepted) {
-      viewModel.clearPendingAssistantAutoSend()
-    }
+      ) ?: return@LaunchedEffect
+    viewModel.dispatchPendingAssistantAutoSend(
+      pendingPrompt = prompt,
+      thinking = thinkingLevel,
+    )
   }
 
   var input by rememberSaveable { mutableStateOf("") }
@@ -166,6 +172,21 @@ fun ChatScreen(
     val draft = chatDraft?.trim()?.ifEmpty { null } ?: return@LaunchedEffect
     input = draft
     viewModel.clearChatDraft()
+  }
+
+  val newChatEnabled =
+    canStartNewChat(
+      pendingRunCount = pendingRunCount,
+      hasQueuedMessage = pendingAssistantAutoSend != null,
+      gatewayReady = healthOk && !gatewayOffline,
+    )
+
+  val startNewChat = {
+    if (newChatEnabled) {
+      viewModel.startNewChat()
+      viewModel.refreshChatSessions(limit = 100)
+      viewModel.refreshChatCommands()
+    }
   }
 
   Column(
@@ -179,6 +200,10 @@ fun ChatScreen(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
+      newChatEnabled = newChatEnabled,
+      onNewChat = {
+        startNewChat()
+      },
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
@@ -212,6 +237,14 @@ fun ChatScreen(
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
+      outboxItems =
+        outboxItemsForSession(
+          items = outboxItems,
+          sessionKey = sessionKey,
+          mainSessionKey = mainSessionKey,
+        ),
+      onRetryOutbox = viewModel::retryChatOutboxCommand,
+      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onStarterPrompt = { prompt -> input = prompt },
       modifier = Modifier.weight(1f),
     )
@@ -226,6 +259,7 @@ fun ChatScreen(
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
+      commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
@@ -252,10 +286,17 @@ fun ChatScreen(
               base64 = attachment.base64,
             )
           }
+        val pendingAttachments = attachments.toList()
         input = ""
         attachments.clear()
         scope.launch {
-          viewModel.sendChat(message = message, thinking = thinkingLevel, attachments = outgoing)
+          val accepted = viewModel.sendChatAwaitAcceptance(message = message, thinking = thinkingLevel, attachments = outgoing)
+          if (!accepted) {
+            // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+            // restore it unless the user already started typing something new.
+            if (input.isEmpty()) input = message
+            if (attachments.isEmpty()) attachments.addAll(pendingAttachments)
+          }
         }
       },
     )
@@ -270,15 +311,31 @@ private fun ChatSessionSwitcher(
   onSelectSession: (String) -> Unit,
   onOpenSessions: () -> Unit,
 ) {
-  val choices =
+  val allChoices =
     remember(sessionKey, sessions, mainSessionKey) {
-      resolveCompactSessionChoices(
+      resolveSessionChoices(
         currentSessionKey = sessionKey,
         sessions = sessions,
         mainSessionKey = mainSessionKey,
       )
     }
-  if (choices.size <= 1 && sessions.size <= 1) return
+  val choices =
+    remember(sessionKey, allChoices, mainSessionKey) {
+      compactSessionChoices(
+        choices = allChoices,
+        currentSessionKey = sessionKey,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  val hasMoreSessions =
+    remember(sessions, choices, mainSessionKey) {
+      hasAdditionalSessionChoices(
+        sessions = sessions,
+        displayedChoices = choices,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  if (choices.size <= 1 && !hasMoreSessions) return
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -292,7 +349,7 @@ private fun ChatSessionSwitcher(
         onClick = { onSelectSession(entry.key) },
       )
     }
-    if (sessions.size > choices.size) {
+    if (hasMoreSessions) {
       Surface(
         onClick = onOpenSessions,
         modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
@@ -338,11 +395,19 @@ private fun ChatSessionChip(
   }
 }
 
+internal fun canStartNewChat(
+  pendingRunCount: Int,
+  hasQueuedMessage: Boolean,
+  gatewayReady: Boolean,
+): Boolean = gatewayReady && pendingRunCount == 0 && !hasQueuedMessage
+
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
   healthOk: Boolean,
   pendingRunCount: Int,
+  newChatEnabled: Boolean,
+  onNewChat: () -> Unit,
   onMore: () -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -351,12 +416,7 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Icon(
-        painter = painterResource(id = R.drawable.openclaw_logo),
-        contentDescription = null,
-        modifier = Modifier.size(25.dp),
-        tint = ClawTheme.colors.text,
-      )
+      OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
       Text(
         text = "OpenClaw",
         style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -379,6 +439,7 @@ private fun ChatHeader(
             else -> ClawStatus.Danger
           },
       )
+      HeaderIcon(icon = Icons.Default.Add, contentDescription = "New chat", enabled = newChatEnabled, onClick = onNewChat)
       HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -430,14 +491,17 @@ private fun ModelPill(
 private fun HeaderIcon(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   contentDescription: String,
+  enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
+  val contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textMuted
   Surface(
     onClick = onClick,
+    enabled = enabled,
     modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = Color.Transparent,
-    contentColor = ClawTheme.colors.text,
+    contentColor = contentColor,
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
@@ -455,16 +519,20 @@ private fun ChatMessageList(
   streamingAssistantText: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
+  outboxItems: List<ChatOutboxItem>,
+  onRetryOutbox: (String) -> Unit,
+  onDeleteOutbox: (String) -> Unit,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
-    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
+    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = pendingRunCount,
         pendingToolCalls = pendingToolCalls,
         streamingAssistantText = streamingAssistantText,
+        outboxItems = outboxItems,
       )
     }
   val readerScroll =
@@ -490,6 +558,12 @@ private fun ChatMessageList(
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
+            )
+          is ChatTimelineItem.OutboxCommand ->
+            ChatOutboxBubble(
+              item = item.item,
+              onRetry = { onRetryOutbox(item.item.id) },
+              onDelete = { onDeleteOutbox(item.item.id) },
             )
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.StreamingAssistant ->
@@ -692,7 +766,7 @@ private fun ChatBubble(
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
@@ -714,8 +788,9 @@ private fun ChatBubble(
 private fun ChatText(
   text: String,
   textColor: Color,
+  isStreaming: Boolean,
 ) {
-  ChatMarkdown(text = text, textColor = textColor)
+  ChatMarkdown(text = text, textColor = textColor, isStreaming = isStreaming)
 }
 
 @Composable
@@ -780,6 +855,7 @@ private fun ChatComposer(
   gatewayOffline: Boolean,
   offlineStatus: String,
   pendingRunCount: Int,
+  commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
@@ -789,6 +865,11 @@ private fun ChatComposer(
   onAbort: () -> Unit,
   onSend: () -> Unit,
 ) {
+  val slashCommands =
+    remember(value, commands) {
+      matchingSlashCommands(input = value, commands = commands)
+    }
+
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
@@ -800,10 +881,30 @@ private fun ChatComposer(
       onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
     )
 
+    if (shouldShowSlashCommandMenu(value)) {
+      SlashCommandPanel(
+        commands = slashCommands,
+        onSelect = { command -> onValueChange(slashCommandCompletion(command)) },
+      )
+    }
+
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      ChatInputPill(value = value, onValueChange = onValueChange, onPickImages = onPickImages, onVoice = onVoice, modifier = Modifier.weight(1f))
+      ChatInputPill(
+        value = value,
+        onValueChange = onValueChange,
+        onPickImages = onPickImages,
+        onVoice = onVoice,
+        modifier = Modifier.weight(1f),
+      )
       SendButton(
-        enabled = healthOk && pendingRunCount == 0 && (value.trim().isNotEmpty() || attachments.isNotEmpty()),
+        // Offline, only text sends are enabled: they queue durably (text-only v1).
+        enabled =
+          pendingRunCount == 0 &&
+            if (healthOk) {
+              value.trim().isNotEmpty() || attachments.isNotEmpty()
+            } else {
+              value.trim().isNotEmpty() && attachments.isEmpty()
+            },
         onClick = onSend,
       )
     }
@@ -834,6 +935,68 @@ private fun ChatComposer(
             Text(text = "Stop", style = ClawTheme.type.label)
           }
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SlashCommandPanel(
+  commands: List<ChatCommandEntry>,
+  onSelect: (ChatCommandEntry) -> Unit,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      if (commands.isEmpty()) {
+        Text(
+          text = "No commands found",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+        )
+      } else {
+        commands.forEachIndexed { index, command ->
+          SlashCommandRow(command = command, onClick = { onSelect(command) })
+          if (index != commands.lastIndex) {
+            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SlashCommandRow(
+  command: ChatCommandEntry,
+  onClick: () -> Unit,
+) {
+  Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .heightIn(min = 48.dp)
+          .padding(horizontal = 10.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = slashCommandText(command),
+        style = ClawTheme.type.label,
+        color = ClawTheme.colors.text,
+        modifier = Modifier.width(82.dp),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(
+          text = command.description.ifBlank { command.category ?: "Command" },
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
     }
   }
