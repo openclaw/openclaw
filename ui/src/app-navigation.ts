@@ -33,6 +33,43 @@ export const SIDEBAR_SECTIONS = [
   { label: "settings", routes: ["config"] },
 ] as const satisfies readonly SidebarSection[];
 
+// Compatibility surface for the customizable pinned sidebar. The newer section
+// model remains authoritative; these exports keep older sidebar/settings code
+// working while callers migrate to sections.
+export const SIDEBAR_NAV_ROUTES = SIDEBAR_SECTIONS.flatMap((section) =>
+  section.label === "chat" || section.label === "settings" ? [] : section.routes,
+) as SidebarNavRoute[];
+
+export type SidebarNavRoute = Exclude<
+  (typeof SIDEBAR_SECTIONS)[number]["routes"][number],
+  "chat" | "config"
+>;
+
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "overview",
+] as const satisfies readonly SidebarNavRoute[];
+
+export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const pinned: SidebarNavRoute[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry === "string" &&
+      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
+      !pinned.includes(entry as SidebarNavRoute)
+    ) {
+      pinned.push(entry as SidebarNavRoute);
+    }
+  }
+  return pinned;
+}
+
+export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+}
+
 export const SETTINGS_NAVIGATION_ROUTES = [
   "config",
   "channels",

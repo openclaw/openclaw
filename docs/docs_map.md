@@ -2354,6 +2354,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Full list
   - H2: Related
 
+## concepts/managed-worktrees.md
+
+- Route: /concepts/managed-worktrees
+- Headings:
+  - H2: Layout and names
+  - H2: Provision ignored files
+  - H2: Run repository setup
+  - H2: Snapshots, cleanup, and restore
+  - H2: CLI
+  - H2: Gateway methods
+  - H2: Workboard workspaces
+
 ## concepts/mantis-slack-desktop-runbook.md
 
 - Route: /concepts/mantis-slack-desktop-runbook
