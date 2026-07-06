@@ -344,9 +344,17 @@ struct AgentWorkspaceFilePreview: View {
     /// it to the system share sheet.
     private func share() {
         guard let file else { return }
+        let safeName = (file.name as NSString).lastPathComponent
+        guard !safeName.isEmpty, safeName != ".", safeName != ".." else {
+            self.showsShareError = true
+            return
+        }
+        // Each share gets stable bytes at a unique URL; a later same-basename
+        // export must not replace the item already handed to an extension.
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenClawWorkspaceFiles", isDirectory: true)
-        let fileURL = directory.appendingPathComponent(file.name, isDirectory: false)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = directory.appendingPathComponent(safeName, isDirectory: false)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             if self.isImage(file) {
