@@ -125,6 +125,29 @@ enum DeviceIdentityPaths {
         }
         return containerURL.appendingPathComponent("OpenClaw", isDirectory: true)
     }
+
+    static func appGroupMigrationSourceURL(identityFileName: String) -> URL? {
+        self.appGroupMigrationSourceURL(
+            appGroupStateDirURL: self.appGroupStateDirURL(),
+            appGroupStateDirAvailable: self.hasAppGroupEntitlement(OpenClawAppGroup.identifier),
+            identityFileName: identityFileName)
+    }
+
+    static func appGroupMigrationSourceURL(
+        appGroupStateDirURL: URL?,
+        appGroupStateDirAvailable: Bool,
+        identityFileName: String) -> URL?
+    {
+        if appGroupStateDirAvailable {
+            return nil
+        }
+        guard let appGroupStateDirURL else {
+            return nil
+        }
+        return appGroupStateDirURL
+            .appendingPathComponent("identity", isDirectory: true)
+            .appendingPathComponent(identityFileName, isDirectory: false)
+    }
 }
 
 public enum DeviceIdentityStore {
@@ -142,10 +165,17 @@ public enum DeviceIdentityStore {
     }
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
-        self.loadOrCreate(fileURL: self.fileURL(profile: profile))
+        self.loadOrCreate(
+            fileURL: self.fileURL(profile: profile),
+            migrationSourceURL: DeviceIdentityPaths.appGroupMigrationSourceURL(
+                identityFileName: profile.identityFileName))
     }
 
     static func loadOrCreate(fileURL url: URL) -> DeviceIdentity {
+        self.loadOrCreate(fileURL: url, migrationSourceURL: nil)
+    }
+
+    static func loadOrCreate(fileURL url: URL, migrationSourceURL: URL?) -> DeviceIdentity {
         if let data = try? Data(contentsOf: url) {
             switch self.decodeStoredIdentity(data) {
             case let .identity(decoded):
@@ -159,8 +189,23 @@ public enum DeviceIdentityStore {
         if FileManager.default.fileExists(atPath: url.path) {
             return self.generate()
         }
+        if let migrated = self.migratedIdentity(from: migrationSourceURL, to: url) {
+            return migrated
+        }
         let identity = self.generate()
         self.save(identity, to: url)
+        return identity
+    }
+
+    private static func migratedIdentity(from sourceURL: URL?, to destinationURL: URL) -> DeviceIdentity? {
+        guard
+            let sourceURL,
+            let data = try? Data(contentsOf: sourceURL),
+            case let .identity(identity) = self.decodeStoredIdentity(data)
+        else {
+            return nil
+        }
+        self.save(identity, to: destinationURL)
         return identity
     }
 
