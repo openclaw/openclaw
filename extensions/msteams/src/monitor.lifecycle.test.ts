@@ -508,11 +508,16 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit): Promise<globalThis.Response> => {
-        const url = String(input);
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.includes("/api/usertoken/exchange")) {
           expect(init?.method).toBe("POST");
           expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer mock-token");
-          expect(JSON.parse(String(init?.body))).toEqual({ token: "exchangeable-token" });
+          expect(typeof init?.body).toBe("string");
+          if (typeof init?.body !== "string") {
+            throw new Error("expected token exchange body to be a JSON string");
+          }
+          expect(JSON.parse(init.body)).toEqual({ token: "exchangeable-token" });
           return createJsonResponse({
             channelId: "msteams",
             connectionName: "graph",
