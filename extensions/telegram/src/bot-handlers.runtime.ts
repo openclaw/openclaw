@@ -185,6 +185,25 @@ type TelegramPromptContextMessageForDedupe = {
   timestamp_ms?: unknown;
 };
 
+// Inline directive tags (`[[reply_to_current]]`, `[[reply_to:<id>]]`,
+// `[[audio_as_voice]]`) are prepended to transcript copies but stripped
+// from delivered cache copies. Strip them before computing a dedupe key
+// so the same visible reply dedupes regardless of the source.
+// Also strip leading `#session:<id>` synthetic ids that only appear in
+// transcript copies.
+const DEDUPE_DIRECTIVE_RE =
+  /\[\[\s*(?:reply_to_current|reply_to\s*:[^\]\n]*|audio_as_voice)\s*\]\]/gi;
+const DEDUPE_SESSION_ID_RE = /^#session:[\da-f-]+[ \t]+/;
+
+function normalizeBodyForDedupe(raw: string): string {
+  const stripped = raw
+    .replace(DEDUPE_DIRECTIVE_RE, "")
+    .replace(DEDUPE_SESSION_ID_RE, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped;
+}
+
 function resolvePromptContextTextDedupeKey(
   message: TelegramPromptContextMessageForDedupe,
 ): string | undefined {
@@ -195,10 +214,18 @@ function resolvePromptContextTextDedupeKey(
   if (!visibleBody) {
     return undefined;
   }
-  if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
+  // Use normalized visible text as the dedupe key so transcript copies
+  // that carry directive tags still dedupe against cache copies that
+  // were delivered without them. Timestamps also differ between the two
+  // sources and are not reliable for dedupe, so only the visible text
+  // body is used.
+  const normalized = normalizeBodyForDedupe(message.body);
+  if (!normalized) {
     return undefined;
   }
-  return `${message.timestamp_ms}:${visibleBody}`;
+  // Use only visible text as the dedupe key. Timestamps differ between
+  // transcript and cache copies and are not reliable for dedupe.
+  return visibleBody;
 }
 
 export const registerTelegramHandlers = ({
