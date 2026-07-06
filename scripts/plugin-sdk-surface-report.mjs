@@ -2,9 +2,9 @@
 
 // Reports plugin SDK export surface metadata.
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -14,6 +14,9 @@ import {
 } from "./lib/plugin-sdk-entries.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+let ts;
+
 function usage() {
   return `Usage: node scripts/plugin-sdk-surface-report.mjs [--check]
 
@@ -279,6 +282,8 @@ function countWildcardReexports(entrypoints) {
 let exportStatsProgram;
 
 function collectExportStats(entrypoints) {
+  // CLI validation and help do not need the compiler's startup cost.
+  ts ??= require("typescript");
   exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
     allowJs: false,
     declaration: true,
