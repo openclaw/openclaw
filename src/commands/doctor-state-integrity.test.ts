@@ -636,6 +636,9 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).toMatch(
       /openclaw sessions cleanup --store ".*sessions\.json" --dry-run --fix-missing/,
     );
+    expect(text).not.toMatch(
+      /openclaw sessions cleanup --store ".*sessions\.json" --dry-run(?! --fix-missing)/,
+    );
     expect(text).toMatch(
       /openclaw sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/,
     );
