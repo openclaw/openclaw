@@ -131,6 +131,7 @@ private val overviewMetricTileMinHeight = 96.dp
 private val overviewTalkPanelMinHeight = 72.dp
 private val overviewListRowMinHeight = 54.dp
 private const val overviewRecentSessionLimit = 50
+private const val overviewRecentSessionVisibleLimit = 3
 
 internal fun shellBottomNavVisible(
   keyboardVisible: Boolean,
@@ -385,10 +386,12 @@ private fun OverviewScreen(
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
   val overviewSessions = overviewRecentSessions(sessions)
   val overviewSessionCount = overviewSessions.size
-  val recentRows =
+  val candidateRecentRows =
     remember(overviewSessions, channelsSummary) {
       overviewRecentSessionRows(sessions = overviewSessions, channelsSummary = channelsSummary)
     }
+  var recentRows by remember { mutableStateOf<List<RecentSessionListItem>>(emptyList()) }
+  val visibleRecentRows = recentRows.ifEmpty { candidateRecentRows }
   val metricCards =
     overviewMetricCards(
       isConnected = isConnected,
@@ -397,6 +400,14 @@ private fun OverviewScreen(
       pendingApprovals = pendingApprovalsCount,
       sessionCount = overviewSessionCount,
     )
+
+  LaunchedEffect(candidateRecentRows) {
+    recentRows =
+      stableOverviewRecentRows(
+        previousRows = recentRows,
+        candidateRows = candidateRecentRows,
+      )
+  }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -464,7 +475,7 @@ private fun OverviewScreen(
 
         item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
 
-        if (recentRows.isEmpty()) {
+        if (visibleRecentRows.isEmpty()) {
           item {
             ClawEmptyState(
               title = "No recent sessions",
@@ -475,7 +486,7 @@ private fun OverviewScreen(
         } else {
           item {
             RecentSessionList(
-              rows = recentRows,
+              rows = visibleRecentRows,
               onOpen = { sessionKey ->
                 viewModel.switchChatSession(sessionKey)
                 onSelectTab(Tab.Chat)
@@ -862,7 +873,28 @@ internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): Setting
 
 internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int = overviewRecentSessions(sessions).size
 
-internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> = sessions.take(overviewRecentSessionLimit).distinctBy { session -> session.key }
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
+  sessions
+    .withIndex()
+    .groupBy { entry -> entry.value.key }
+    .values
+    .map { entries ->
+      entries
+        .sortedWith(
+          compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
+            .thenBy { entry -> entry.index },
+        )
+        .first()
+    }
+    .sortedWith(
+      compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
+        .thenBy { entry -> entry.value.key },
+    )
+    .take(overviewRecentSessionLimit)
+    .map { entry -> entry.value }
+
+private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long =
+  lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
 
 internal data class OverviewMetricCard(
   val title: String,
@@ -1240,28 +1272,46 @@ private fun ModuleListRow(
   }
 }
 
-private data class RecentSessionListItem(
+internal data class RecentSessionListItem(
   val key: String,
   val title: String,
   val source: String,
   val metadata: String,
 )
 
-private fun overviewRecentSessionRows(
+internal fun overviewRecentSessionRows(
   sessions: List<ChatSessionEntry>,
   channelsSummary: GatewayChannelsSummary,
 ): List<RecentSessionListItem> =
   sessions
-    .take(3)
+    .take(overviewRecentSessionVisibleLimit)
     .map { session ->
       val title = displaySessionTitle(session.displayName)
       RecentSessionListItem(
         key = session.key,
         title = title,
         source = sessionSourceLabel(session.key, channelsSummary),
-        metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
+        metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: "",
       )
     }
+
+internal fun stableOverviewRecentRows(
+  previousRows: List<RecentSessionListItem>,
+  candidateRows: List<RecentSessionListItem>,
+): List<RecentSessionListItem> {
+  val previousRowsByKey = previousRows.associateBy { row -> row.key }
+  return candidateRows.map { candidateRow ->
+    val previousRow = previousRowsByKey[candidateRow.key]
+    if (previousRow == null) candidateRow else candidateRow.withStableFieldsFrom(previousRow)
+  }
+}
+
+private fun RecentSessionListItem.withStableFieldsFrom(previousRow: RecentSessionListItem): RecentSessionListItem =
+  copy(
+    title = title.ifBlank { previousRow.title },
+    source = source.ifBlank { previousRow.source },
+    metadata = metadata.ifBlank { previousRow.metadata },
+  )
 
 /** Recent sessions panel that preserves the session key behind display labels. */
 @Composable
