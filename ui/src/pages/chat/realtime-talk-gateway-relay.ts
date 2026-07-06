@@ -45,6 +45,12 @@ type GatewayRelayEvent = {
   | { type?: "close"; reason?: string }
 );
 
+type DelayedToolResult = {
+  callId: string;
+  result: unknown;
+  options?: { suppressResponse?: boolean; willContinue?: boolean };
+  timer?: number;
+};
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
 const BARGE_IN_CONSECUTIVE_SPEECH_FRAMES = 2;
@@ -404,7 +410,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private flushDelayedToolResults(): void {
-    for (const pending of [...this.delayedToolResults]) {
+    for (const pending of this.delayedToolResults) {
       this.discardDelayedToolResult(pending);
       if (!this.closed) {
         void this.sendToolResultNow(pending.callId, pending.result, pending.options).catch(
@@ -417,7 +423,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private discardDelayedToolResults(): void {
-    for (const pending of [...this.delayedToolResults]) {
+    for (const pending of this.delayedToolResults) {
       this.discardDelayedToolResult(pending);
     }
   }
