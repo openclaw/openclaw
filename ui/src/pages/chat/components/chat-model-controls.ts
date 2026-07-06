@@ -663,8 +663,13 @@ function renderChatModelReasoningSelect(params: {
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
   const defaultLevelLabel = formatThinkingOverrideLabel(thinkingDefaultValue);
+  const selectedThinkingOption = thinkingOptions.find(
+    (option) => option.value === selectedThinkingValue,
+  );
   const reasoningValueLabel = hasThinkingOverride
-    ? triggerThinking
+    ? formatCombinedPickerThinkingLabel(
+        selectedThinkingOption?.label ?? formatThinkingOverrideLabel(selectedThinkingValue),
+      )
     : `Default (${defaultLevelLabel})`;
   const onSliderDrag = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
@@ -680,11 +685,7 @@ function renderChatModelReasoningSelect(params: {
     });
     draft.thinkingValue = stop.value;
     input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    const value = panel?.querySelector<HTMLElement>(".chat-controls__reasoning-value");
-    if (value) {
-      value.textContent = formatCombinedPickerThinkingLabel(stop.label);
-    }
+    onRequestUpdate?.();
   };
   const onSliderCommit = (event: Event) => {
     if (thinkingDisabled) {

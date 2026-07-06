@@ -18,6 +18,7 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -1892,15 +1893,7 @@ type MessageActionDetails = {
   shouldFetchFullMessage: boolean;
 };
 
-function resolveMessageActionDetails(
-  message: unknown,
-  onOpenSidebar?: (content: SidebarContent) => void,
-): MessageActionDetails | null {
-  const record = message as Record<string, unknown>;
-  const normalizedMessage = normalizeMessage(message);
-  if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
-    return null;
-  }
+function resolveDisplayedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
   const markdown = normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
@@ -1910,6 +1903,21 @@ function resolveMessageActionDetails(
     }, [])
     .join("\n")
     .trim();
+  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
+    ? stripThinkingTags(markdown).trim()
+    : markdown;
+}
+
+function resolveMessageActionDetails(
+  message: unknown,
+  onOpenSidebar?: (content: SidebarContent) => void,
+): MessageActionDetails | null {
+  const record = message as Record<string, unknown>;
+  const normalizedMessage = normalizeMessage(message);
+  if (normalizeRoleForGrouping(normalizedMessage.role) !== "assistant") {
+    return null;
+  }
+  const markdown = resolveDisplayedMessageMarkdown(normalizedMessage);
   if (!markdown) {
     return null;
   }
@@ -2006,15 +2014,7 @@ function renderGroupedMessage(
   const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
-  const extractedText = normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
+  const extractedText = resolveDisplayedMessageMarkdown(normalizedMessage);
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
   );

@@ -3371,6 +3371,16 @@ describe("chat model controls", () => {
       slider.dispatchEvent(new Event("input", { bubbles: true }));
       slider.dispatchEvent(new Event("change", { bubbles: true }));
     }
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        onFastModeSelect,
+        onModelSelect,
+        onThinkingSelect,
+      }),
+      container,
+    );
+    expect(getThinkingReasoningValueLabel(container)).toBe("Low");
     const fastButton = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
     ).find((button) => button.textContent?.trim() === "Fast");
