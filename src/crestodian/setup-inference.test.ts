@@ -410,7 +410,7 @@ describe("activateSetupInference", () => {
       gateway: { port: 18789 },
       agents: { defaults: { model: { primary: existingModel } } },
     } satisfies OpenClawConfig;
-    let persistedConfig = {
+    let persistedConfig: OpenClawConfig = {
       gateway: { port: 19000 },
       agents: { defaults: { model: { primary: existingModel } } },
     } satisfies OpenClawConfig;
