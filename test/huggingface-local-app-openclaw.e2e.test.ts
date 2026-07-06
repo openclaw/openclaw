@@ -51,6 +51,7 @@ describe("Hugging Face OpenClaw local-app CLI contract", () => {
       const instance = await createOpenClawTestInstance({
         name: `hf-local-app-${providerId}`,
         env: {
+          CUSTOM_API_KEY: undefined,
           OPENCLAW_TEST_FAST: "1",
         },
       });
