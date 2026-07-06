@@ -41,6 +41,8 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
     expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
+    expect(rendered.html).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(rendered.html).toContain("scroll-behavior: auto;");
   });
 
   it("normalizes non-finite presentation numbers before rendering CSS", async () => {

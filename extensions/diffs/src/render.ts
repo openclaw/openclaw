@@ -328,6 +328,12 @@ function buildHtmlDocument(params: {
         scroll-behavior: smooth;
       }
 
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+      }
+
       body {
         margin: 0;
         min-height: 100vh;
