@@ -1706,6 +1706,9 @@ function hasInvalidLeafControl(lines: Iterable<string>): boolean {
   return tree.hasInvalidLeafControl;
 }
 
+// File-tier only (#88838): this module is the file backend behind the
+// session-transcript-readers seam, and the index read operates on an already
+// resolved transcript artifact path, never on live session identity.
 async function extractLatestUsageFromTranscriptIndex(
   filePath: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
