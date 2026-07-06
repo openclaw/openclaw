@@ -13,7 +13,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-const { waitForChildProcess } = await import(path.join(repoRoot, "src/agents/utils/child-process.js"));
+const { waitForChildProcess } = await import(
+  path.join(repoRoot, "src/agents/utils/child-process.js")
+);
 
 console.log("=== Proof: agents child-process stream error catch ===\n");
 
