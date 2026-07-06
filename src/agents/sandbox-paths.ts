@@ -151,7 +151,9 @@ export async function resolveAllowedManagedMediaPath(
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
+  containerWorkdir?: string;
 }): Promise<string> {
+  const containerWorkdir = normalizeSandboxContainerWorkdir(params.containerWorkdir);
   const raw = params.media.trim();
   if (!raw) {
     return raw;
@@ -164,6 +166,7 @@ export async function resolveSandboxedMediaSource(params: {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
+      containerWorkdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -180,6 +183,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -218,6 +222,7 @@ async function assertNoManagedMediaAliasEscape(params: {
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   let parsed: URL;
   try {
@@ -244,26 +249,28 @@ function mapContainerWorkspaceFileUrl(params: {
     return undefined;
   }
   if (
-    normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
+    normalizedPathname !== params.containerWorkdir &&
+    !normalizedPathname.startsWith(`${params.containerWorkdir}/`)
   ) {
     return undefined;
   }
   return mapContainerWorkspacePath({
     candidate: normalizedPathname,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   const normalized = params.candidate.replace(/\\/g, "/");
-  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+  if (normalized === params.containerWorkdir) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  const prefix = `${params.containerWorkdir}/`;
   if (!normalized.startsWith(prefix)) {
     return undefined;
   }
@@ -272,6 +279,13 @@ function mapContainerWorkspacePath(params: {
     return path.resolve(params.sandboxRoot);
   }
   return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
+}
+
+function normalizeSandboxContainerWorkdir(containerWorkdir?: string): string {
+  const normalized = path.posix.normalize(
+    (containerWorkdir?.trim() || SANDBOX_CONTAINER_WORKDIR).replace(/\\/g, "/"),
+  );
+  return normalized === "." ? SANDBOX_CONTAINER_WORKDIR : normalized.replace(/\/+$/, "") || "/";
 }
 
 async function resolveAllowedTmpMediaPath(params: {

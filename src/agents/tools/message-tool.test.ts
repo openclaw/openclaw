@@ -137,6 +137,7 @@ type RunMessageActionInput = {
   params?: Record<string, unknown>;
   requesterSenderId?: string;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
   inboundAudio?: boolean;
@@ -3182,15 +3183,17 @@ describe("message tool sandbox passthrough", () => {
   it.each([
     {
       name: "forwards sandboxRoot to runMessageAction",
-      toolOptions: { sandboxRoot: "/tmp/sandbox" },
-      expected: "/tmp/sandbox",
+      toolOptions: { sandboxRoot: "/tmp/sandbox", sandboxContainerWorkdir: "/sandbox" },
+      expectedRoot: "/tmp/sandbox",
+      expectedWorkdir: "/sandbox",
     },
     {
       name: "omits sandboxRoot when not configured",
       toolOptions: {},
-      expected: undefined,
+      expectedRoot: undefined,
+      expectedWorkdir: undefined,
     },
-  ])("$name", async ({ toolOptions, expected }) => {
+  ])("$name", async ({ toolOptions, expectedRoot, expectedWorkdir }) => {
     mockSendResult({ to: "telegram:123" });
 
     const call = await executeSend({
@@ -3200,7 +3203,8 @@ describe("message tool sandbox passthrough", () => {
         message: "",
       },
     });
-    expect(call?.sandboxRoot).toBe(expected);
+    expect(call?.sandboxRoot).toBe(expectedRoot);
+    expect(call?.sandboxContainerWorkdir).toBe(expectedWorkdir);
   });
 
   it("forwards trusted requesterSenderId to runMessageAction", async () => {

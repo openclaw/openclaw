@@ -201,6 +201,32 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it.each([
+    { media: "/sandbox/media/pic.png", containerWorkdir: "/sandbox" },
+    { media: "file:///sandbox/media/pic.png", containerWorkdir: "/sandbox/" },
+  ])("maps active container workdir media source $media", async ({ media, containerWorkdir }) => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media,
+        sandboxRoot: sandboxDir,
+        containerWorkdir,
+      });
+      expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
+    });
+  });
+
+  it("does not map similarly named active container workdir paths", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      await expect(
+        resolveSandboxedMediaSource({
+          media: "/sandboxer/media/pic.png",
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
+  });
+
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({

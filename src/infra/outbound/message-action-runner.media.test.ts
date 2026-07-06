@@ -110,6 +110,7 @@ const runDrySend = (params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -117,6 +118,7 @@ const runDrySend = (params: {
     params: params.actionParams as never,
     dryRun: true,
     sandboxRoot: params.sandboxRoot,
+    sandboxContainerWorkdir: params.sandboxContainerWorkdir,
   });
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -558,6 +560,40 @@ describe("runMessageAction media behavior", () => {
       const sendMediaAccess = requireRecord(sendCtx.mediaAccess);
       expect(sendMediaAccess.localRoots).toEqual(expect.arrayContaining([sandboxDir]));
       expect(sendParams.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
+    });
+  });
+
+  it("maps send mediaUrls through the active sandbox container workdir", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          mediaUrls: ["file:///sandbox/one.png", "/sandbox/two.png"],
+        },
+        sandboxRoot: sandboxDir,
+        sandboxContainerWorkdir: "/sandbox/",
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrls).toEqual([
         path.join(sandboxDir, "one.png"),
         path.join(sandboxDir, "two.png"),
       ]);

@@ -44,8 +44,8 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function expectMedia(result: NormalizedReply, mediaUrl: string, mediaUrls: string[]): void {
-  expect(result.mediaUrl).toBe(mediaUrl);
-  expect(result.mediaUrls).toEqual(mediaUrls);
+  expectPathLike(result.mediaUrl).toBePathLike(mediaUrl);
+  expectPathLikeList(result.mediaUrls).toEqualPathLikeList(mediaUrls);
 }
 
 function expectNoMedia(result: NormalizedReply): void {
@@ -62,7 +62,7 @@ function expectOutboundAttachmentCall(
   if (!call) {
     throw new Error(`missing outbound attachment call ${index + 1}`);
   }
-  expect(call[0]).toBe(mediaUrl);
+  expectPathLike(call[0]).toBePathLike(mediaUrl);
   expect(call[1]).toBe(mediaMaxBytes);
   return requireRecord(call[2], "outbound attachment options");
 }
@@ -73,6 +73,37 @@ function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
     throw new Error("missing agent scoped media access call");
   }
   return requireRecord(call[0], "agent scoped media access request");
+}
+
+function normalizePathLike(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value) && !/^[a-z]:[\\/]/iu.test(value)) {
+    return value;
+  }
+  const normalized = path.normalize(value);
+  return normalized.replace(/^[A-Z]:/iu, "");
+}
+
+function normalizePathLikeList(value: unknown): unknown {
+  return Array.isArray(value) ? value.map(normalizePathLike) : value;
+}
+
+function expectPathLike(value: unknown) {
+  return {
+    toBePathLike(expected: string) {
+      expect(normalizePathLike(value)).toBe(normalizePathLike(expected));
+    },
+  };
+}
+
+function expectPathLikeList(value: unknown) {
+  return {
+    toEqualPathLikeList(expected: string[]) {
+      expect(normalizePathLikeList(value)).toEqual(normalizePathLikeList(expected));
+    },
+  };
 }
 
 describe("createReplyMediaPathNormalizer", () => {
@@ -177,6 +208,28 @@ describe("createReplyMediaPathNormalizer", () => {
       path.join("/tmp/sandboxes/session-1", "screens", "final.png"),
       5 * 1024 * 1024,
     );
+  });
+
+  it("maps active sandbox container workdir media back to the host sandbox workspace", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/sandbox/",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["file:///sandbox/screens/final.png"],
+    });
+
+    const stagedPath = path.join("/tmp/outbound-media", "final.png");
+    expectMedia(result, stagedPath, [stagedPath]);
+    const call = resolveOutboundAttachmentFromUrl.mock.calls[0] as unknown[] | undefined;
+    expect(call?.[0]).toEqual(expect.stringMatching(/[\\/]screens[\\/]final\.png$/));
+    expect(call?.[1]).toBe(5 * 1024 * 1024);
   });
 
   it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
@@ -519,11 +572,15 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
-    expect(expectAgentScopedMediaAccessCall()).toEqual({
+    const accessRequest = expectAgentScopedMediaAccessCall();
+    expect({
+      ...accessRequest,
+      mediaSources: normalizePathLikeList(accessRequest.mediaSources),
+    }).toEqual({
       cfg: {},
       agentId: undefined,
       workspaceDir: "/tmp/agent-workspace",
-      mediaSources: [path.join("/tmp/agent-workspace", "out", "photo.png")],
+      mediaSources: normalizePathLikeList([path.join("/tmp/agent-workspace", "out", "photo.png")]),
       sessionKey: undefined,
       messageProvider: "whatsapp",
       accountId: "source-account",
@@ -552,11 +609,15 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
     const accessRequest = expectAgentScopedMediaAccessCall();
     expect(typeof accessRequest.agentId).toBe("string");
-    expect({ ...accessRequest, agentId: undefined }).toEqual({
+    expect({
+      ...accessRequest,
+      agentId: undefined,
+      mediaSources: normalizePathLikeList(accessRequest.mediaSources),
+    }).toEqual({
       cfg: { tools: { fs: { workspaceOnly: false } } },
       agentId: undefined,
       workspaceDir: "/tmp/agent-workspace",
-      mediaSources: [absolutePath],
+      mediaSources: normalizePathLikeList([absolutePath]),
       sessionKey: "session-key",
       messageProvider: undefined,
       accountId: undefined,
@@ -586,11 +647,15 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
     const accessRequest = expectAgentScopedMediaAccessCall();
     expect(typeof accessRequest.agentId).toBe("string");
-    expect({ ...accessRequest, agentId: undefined }).toEqual({
+    expect({
+      ...accessRequest,
+      agentId: undefined,
+      mediaSources: normalizePathLikeList(accessRequest.mediaSources),
+    }).toEqual({
       cfg: { tools: { fs: { workspaceOnly: false } } },
       agentId: undefined,
       workspaceDir: "/tmp/agent-workspace",
-      mediaSources: [homeRelativePath],
+      mediaSources: normalizePathLikeList([homeRelativePath]),
       sessionKey: "session-key",
       messageProvider: undefined,
       accountId: undefined,

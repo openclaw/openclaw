@@ -162,6 +162,21 @@ describe("message action media helpers", () => {
     }
   });
 
+  maybeIt("normalizes sandbox media lists with the active container workdir", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-sandbox-"));
+    try {
+      await expect(
+        normalizeSandboxMediaList({
+          values: [" file:///sandbox/assets/photo.png ", "/sandbox/assets/photo.png"],
+          sandboxRoot,
+          sandboxContainerWorkdir: "/sandbox/",
+        }),
+      ).resolves.toEqual([path.join(sandboxRoot, "assets", "photo.png")]);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
   maybeIt("normalizes mediaUrl and fileUrl sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-alias-"));
     try {
@@ -225,6 +240,30 @@ describe("message action media helpers", () => {
 
       expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
       expect(args.avatarUrl).toBe(path.join(sandboxRoot, "avatars", "remote-avatar.jpg"));
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes sandbox media params with the active container workdir", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-active-workdir-"));
+    try {
+      const args: Record<string, unknown> = {
+        mediaUrl: " file:///sandbox/assets/photo.png ",
+        fileUrl: "/sandbox/docs/report.pdf",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+          containerWorkdir: "/sandbox/",
+        },
+      });
+
+      expect(args.mediaUrl).toBe(path.join(sandboxRoot, "assets", "photo.png"));
+      expect(args.fileUrl).toBe(path.join(sandboxRoot, "docs", "report.pdf"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
