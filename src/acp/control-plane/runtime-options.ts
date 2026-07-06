@@ -21,6 +21,16 @@ const MAX_BACKEND_EXTRAS = 32;
 
 const SAFE_OPTION_KEY_RE = /^[a-z0-9][a-z0-9._:-]*$/i;
 // User-facing config aliases accepted by ACP clients and normalized to session runtime options.
+const RUNTIME_OPTION_KEYS = [
+  "runtimeMode",
+  "model",
+  "thinking",
+  "cwd",
+  "permissionProfile",
+  "timeoutSeconds",
+  "backendExtras",
+] as const;
+
 const RUNTIME_CONFIG_OPTION_ALIASES = {
   model: ["model"],
   thinking: ["thinking", "effort", "reasoning_effort", "thought_level"],
@@ -160,15 +170,7 @@ export function validateRuntimeOptionPatch(
     return {};
   }
   const rawPatch = patch as Record<string, unknown>;
-  const allowedKeys = new Set([
-    "runtimeMode",
-    "model",
-    "thinking",
-    "cwd",
-    "permissionProfile",
-    "timeoutSeconds",
-    "backendExtras",
-  ]);
+  const allowedKeys = new Set<string>(RUNTIME_OPTION_KEYS);
   for (const key of Object.keys(rawPatch)) {
     if (!allowedKeys.has(key)) {
       failInvalidOption(`Unknown runtime option "${key}".`);
@@ -277,16 +279,30 @@ export function mergeRuntimeOptions(params: {
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
   const current = normalizeRuntimeOptions(params.current);
-  const patch = normalizeRuntimeOptions(validateRuntimeOptionPatch(params.patch));
-  const mergedExtras = {
-    ...current.backendExtras,
-    ...patch.backendExtras,
-  };
-  return normalizeRuntimeOptions({
+  const patch = validateRuntimeOptionPatch(params.patch);
+  const normalizedPatch = normalizeRuntimeOptions(patch);
+  const merged: Partial<AcpSessionRuntimeOptions> = {
     ...current,
-    ...patch,
-    ...(Object.keys(mergedExtras).length > 0 ? { backendExtras: mergedExtras } : {}),
-  });
+    ...normalizedPatch,
+  };
+
+  if (Object.hasOwn(patch, "backendExtras") && patch.backendExtras !== undefined) {
+    const mergedExtras = {
+      ...current.backendExtras,
+      ...normalizedPatch.backendExtras,
+    };
+    if (Object.keys(mergedExtras).length > 0) {
+      merged.backendExtras = mergedExtras;
+    }
+  }
+
+  for (const key of RUNTIME_OPTION_KEYS) {
+    if (Object.hasOwn(patch, key) && patch[key] === undefined) {
+      delete merged[key];
+    }
+  }
+
+  return normalizeRuntimeOptions(merged);
 }
 
 export function resolveRuntimeOptionsFromMeta(meta: SessionAcpMeta): AcpSessionRuntimeOptions {
