@@ -177,6 +177,30 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(KeychainStore.loadString(service: gatewayService, account: unrelatedAccount) == "keep")
     }
 
+    @Test func `custom header forget clears only one gateway`() {
+        let service = "\(gatewayService).custom-headers-test.\(UUID().uuidString)"
+        let forgottenGatewayID = "manual|forgotten.example.com|443|\(UUID().uuidString)"
+        let keptGatewayID = "manual|kept.example.com|443|\(UUID().uuidString)"
+        defer { GatewaySettingsStore.clearGatewayCustomHeaders(service: service) }
+
+        for gatewayID in [forgottenGatewayID, keptGatewayID] {
+            #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+                ["X-Proxy-Token": gatewayID],
+                gatewayStableID: gatewayID,
+                service: service))
+        }
+
+        #expect(GatewaySettingsStore.clearGatewayCustomHeaders(
+            gatewayStableID: forgottenGatewayID,
+            service: service))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: forgottenGatewayID,
+            service: service).isEmpty)
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: keptGatewayID,
+            service: service) == ["X-Proxy-Token": keptGatewayID])
+    }
+
     @Test func `credentials stay bound to their gateway`() {
         let instanceID = "credential-owner-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
@@ -514,9 +538,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 useTLS: true,
                 lastConnectedAtMs: nil)
 
-            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayB))
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayB, activate: true))
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
-            #expect(GatewaySettingsStore.setActiveGateway(stableID: gatewayB.stableID))
             #expect(GatewaySettingsStore.markGatewayConnected(stableID: gatewayB.stableID, atMs: 1234))
             let firstJSON = KeychainStore.loadString(service: gatewayService, account: "gateway-registry")
             let registry = GatewaySettingsStore.loadGatewayRegistry()

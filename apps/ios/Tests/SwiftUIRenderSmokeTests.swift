@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 import UIKit
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 struct SwiftUIRenderSmokeTests {
     @MainActor private static func host(_ view: some View, size: CGSize? = nil) -> UIWindow {

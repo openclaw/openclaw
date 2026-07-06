@@ -123,6 +123,9 @@ final class GatewayConnectionController {
     @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
+    @ObservationIgnored private var pendingForgetCleanups: [
+        String: (id: UUID, task: Task<Void, Never>)
+    ] = [:]
     private var pendingConnectionStableID: String?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
@@ -255,6 +258,8 @@ final class GatewayConnectionController {
         let connectAttempt = self.beginConnectAttempt()
         self.pendingConnectionStableID = gateway.stableID
         defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
+        await self.waitForPendingForgetCleanup(stableID: gateway.stableID)
+        guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return nil }
         self.requestLocalNetworkAccess(reason: "connect_discovered_gateway", allowAutoReconnect: false)
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -341,8 +346,9 @@ final class GatewayConnectionController {
             port: nil,
             useTLS: true,
             lastConnectedAtMs: nil)
-        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(registryEntry)
-        _ = GatewaySettingsStore.setActiveGateway(stableID: stableID)
+        guard self.persistActiveGateway(registryEntry) else {
+            return "Could not save the paired gateway."
+        }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -377,6 +383,8 @@ final class GatewayConnectionController {
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
         self.pendingConnectionStableID = stableID
+        await self.waitForPendingForgetCleanup(stableID: stableID)
+        guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return }
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let storedCredentials = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceId,
@@ -449,8 +457,7 @@ final class GatewayConnectionController {
             port: resolvedPort,
             useTLS: resolvedUseTLS && tlsParams != nil,
             lastConnectedAtMs: nil)
-        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(registryEntry)
-        _ = GatewaySettingsStore.setActiveGateway(stableID: stableID)
+        guard self.persistActiveGateway(registryEntry) else { return }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -497,7 +504,9 @@ final class GatewayConnectionController {
                 return "This paired gateway has an invalid saved endpoint."
             }
             // Switching intentionally persists the user's selection at initiation, matching connect flows.
-            _ = GatewaySettingsStore.setActiveGateway(stableID: stableID)
+            guard GatewaySettingsStore.setActiveGateway(stableID: stableID) else {
+                return "Could not save the active gateway selection."
+            }
             await self.connectManual(
                 host: host,
                 port: port,
@@ -508,14 +517,23 @@ final class GatewayConnectionController {
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
                 return "\(entry.name) is not currently discoverable on this network."
             }
-            _ = GatewaySettingsStore.setActiveGateway(stableID: stableID)
+            guard GatewaySettingsStore.setActiveGateway(stableID: stableID) else {
+                return "Could not save the active gateway selection."
+            }
             return await self.connectDiscoveredGateway(gateway, forceReconnect: true)
         }
     }
 
-    func forgetGateway(stableID: String) {
+    @discardableResult
+    func forgetGateway(stableID: String) -> Bool {
         let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stableID.isEmpty else { return }
+        guard !stableID.isEmpty else { return false }
+        if self.pendingForgetCleanups[stableID] != nil {
+            return true
+        }
+        guard GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID) else {
+            return false
+        }
         if self.pendingConnectionStableID == stableID {
             let cancellationLease = self.cancelPendingConnectionAttempts()
             self.releaseAutoConnectSuppression(after: cancellationLease)
@@ -531,8 +549,8 @@ final class GatewayConnectionController {
         let instanceID = GatewaySettingsStore.currentInstanceID()
         self.clearLegacyManualGatewayDefaults(matching: stableID)
         GatewaySettingsStore.clearLegacyGatewaySelectors(stableID: stableID)
-        _ = GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID)
         GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID, stableID: stableID)
+        _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: stableID)
         _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
         GatewaySettingsStore.saveGatewayClientIdOverride(stableID: stableID, clientId: nil)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
@@ -543,7 +561,8 @@ final class GatewayConnectionController {
         }
 
         Self.clearDeviceAuthTokens(gatewayID: stableID)
-        Task { @MainActor [weak appModel] in
+        let cleanupID = UUID()
+        let cleanupTask = Task { @MainActor [weak appModel] in
             if let appModel {
                 if shouldDisconnect {
                     await appModel.waitForGatewaySessionResetIfNeeded()
@@ -555,6 +574,29 @@ final class GatewayConnectionController {
                 OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
             }
         }
+        self.pendingForgetCleanups[stableID] = (cleanupID, cleanupTask)
+        Task { @MainActor [weak self] in
+            await cleanupTask.value
+            guard self?.pendingForgetCleanups[stableID]?.id == cleanupID else { return }
+            self?.pendingForgetCleanups[stableID] = nil
+        }
+        return true
+    }
+
+    private func waitForPendingForgetCleanup(stableID: String) async {
+        guard let pending = self.pendingForgetCleanups[stableID] else { return }
+        await pending.task.value
+        if self.pendingForgetCleanups[stableID]?.id == pending.id {
+            self.pendingForgetCleanups[stableID] = nil
+        }
+    }
+
+    private func persistActiveGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> Bool {
+        guard GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true) else {
+            self.appModel?.gatewayStatusText = "Could not save paired gateway"
+            return false
+        }
+        return true
     }
 
     private static func clearDeviceAuthTokens(gatewayID: String) {
@@ -703,7 +745,6 @@ final class GatewayConnectionController {
         }
 
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        self.clearPendingTrustPrompt()
         let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
             stableID: pending.stableID,
             kind: pending.isManual ? .manual : .discovered,
@@ -712,8 +753,11 @@ final class GatewayConnectionController {
             port: pending.isManual ? prompt.port : nil,
             useTLS: true,
             lastConnectedAtMs: nil)
-        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(registryEntry)
-        _ = GatewaySettingsStore.setActiveGateway(stableID: pending.stableID)
+        guard self.persistActiveGateway(registryEntry) else {
+            _ = GatewayTLSStore.clearFingerprint(stableID: pending.stableID)
+            return
+        }
+        self.clearPendingTrustPrompt()
         let storedCredentials = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceId,
             gatewayStableID: pending.stableID)
@@ -1375,11 +1419,6 @@ extension GatewayConnectionController {
             return override
         }
 
-        static func persisted(instanceId: String) -> ManualAuthOverride? {
-            guard let activeStableID = GatewaySettingsStore.activeGatewayEntry()?.stableID else { return nil }
-            return self.persisted(instanceId: instanceId, targetStableID: activeStableID)
-        }
-
         static func persisted(instanceId: String, targetStableID: String) -> ManualAuthOverride? {
             let authenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(
                 routeStableID: targetStableID)
@@ -1733,10 +1772,6 @@ extension GatewayConnectionController {
 
     func _test_resolveManualPort(host: String, port: Int, useTLS _: Bool) -> Int? {
         Self.resolvedManualPort(host: host, port: port)
-    }
-
-    func _test_mostRecentlyConnectedManualGateway() -> GatewaySettingsStore.GatewayRegistryEntry? {
-        self.mostRecentlyConnectedManualGateway()
     }
 }
 #endif

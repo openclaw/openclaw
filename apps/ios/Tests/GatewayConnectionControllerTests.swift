@@ -20,8 +20,7 @@ private func saveActiveManualGateway(
         port: port,
         useTLS: useTLS,
         lastConnectedAtMs: nil)
-    return GatewaySettingsStore.upsertGatewayRegistryEntry(entry) &&
-        GatewaySettingsStore.setActiveGateway(stableID: stableID)
+    return GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true)
 }
 
 private struct GatewayRegistryTestIsolation {

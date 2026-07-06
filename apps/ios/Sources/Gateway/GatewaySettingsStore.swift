@@ -369,6 +369,22 @@ enum GatewaySettingsStore {
     }
 
     @discardableResult
+    static func clearGatewayCustomHeaders(gatewayStableID: String) -> Bool {
+        self.clearGatewayCustomHeaders(
+            gatewayStableID: gatewayStableID,
+            service: self.gatewayCustomHeadersService)
+    }
+
+    @discardableResult
+    static func clearGatewayCustomHeaders(gatewayStableID: String, service: String) -> Bool {
+        let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
+        guard !stableID.isEmpty else { return false }
+        let account = self.customHeadersAccount(stableID: stableID)
+        let deleted = KeychainStore.delete(service: service, account: account)
+        return deleted || KeychainStore.loadString(service: service, account: account) == nil
+    }
+
+    @discardableResult
     static func clearGatewayCustomHeaders(service: String) -> Bool {
         KeychainStore.deleteAll(service: service)
     }
@@ -465,6 +481,11 @@ enum GatewaySettingsStore {
 
     @discardableResult
     static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry) -> Bool {
+        self.upsertGatewayRegistryEntry(entry, activate: false)
+    }
+
+    @discardableResult
+    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry, activate: Bool) -> Bool {
         guard let normalized = self.normalizedGatewayRegistryEntry(entry) else { return false }
         var registry = self.loadGatewayRegistry()
         if let index = registry.entries.firstIndex(where: { $0.stableID == normalized.stableID }) {
@@ -475,6 +496,9 @@ enum GatewaySettingsStore {
             registry.entries[index] = replacement
         } else {
             registry.entries.append(normalized)
+        }
+        if activate {
+            registry.activeStableID = normalized.stableID
         }
         return self.saveGatewayRegistry(registry)
     }

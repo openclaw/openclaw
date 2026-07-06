@@ -134,7 +134,11 @@ extension SettingsProTab {
     func forgetPendingGateway() {
         guard let entry = self.pendingForgetGateway else { return }
         self.pendingForgetGateway = nil
-        self.gatewayController.forgetGateway(stableID: entry.stableID)
+        guard self.gatewayController.forgetGateway(stableID: entry.stableID) else {
+            self.setupStatusText = "Could not forget \(entry.name)."
+            self.refreshGatewayRegistry()
+            return
+        }
         if self.gatewayCredentialFieldStableID == entry.stableID {
             self.clearManualCredentialFields()
         }
