@@ -1674,6 +1674,56 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("preserves explicit agentId in resolveCronTarget even when agent is absent from runtime config", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-absent-agent-${Date.now()}`);
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(tmpDir, "cron.json") },
+      agents: {
+        defaults: { workspace: path.join(tmpDir, "workspace") },
+        list: [{ id: "main", default: true }],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+    // Startup config is the same — no "historian2" anywhere.
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              runHeartbeatOnce?: (opts?: {
+                agentId?: string;
+                sessionKey?: string | null;
+                heartbeat?: Record<string, unknown>;
+              }) => Promise<unknown>;
+            };
+          };
+        }
+      ).state?.deps;
+      await cronDeps?.runHeartbeatOnce?.({
+        agentId: "historian2",
+        sessionKey: "agent:historian2:main",
+        heartbeat: {},
+      });
+
+      const options = requireRecord(
+        callArg(runHeartbeatOnceMock, 0, 0, "heartbeat options"),
+        "heartbeat options",
+      );
+      // The explicit agentId must be preserved even when the agent does
+      // not appear in either runtime or startup config (regression: the
+      // old resolveCronAgent path silently fell back to the default agent).
+      expect(options.agentId).toBe("historian2");
+    } finally {
+      state.cron.stop();
+    }
+  });
 });
 
 describe("fireOnExitJob (on-exit fire routing)", () => {

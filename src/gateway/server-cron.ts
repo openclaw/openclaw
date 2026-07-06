@@ -242,10 +242,13 @@ export function buildGatewayCronService(params: {
         ? normalized
         : resolveDefaultAgentId(effectiveConfig);
     if (normalized !== undefined && normalizeAgentId(agentId) !== normalized) {
-      cronLogger.warn("cron: requested agent not found in runtime config, falling back to default", {
-        requestedAgent: normalized,
-        resolvedAgent: agentId,
-      });
+      cronLogger.warn(
+        "cron: requested agent not found in runtime config, falling back to default",
+        {
+          requestedAgent: normalized,
+          resolvedAgent: agentId,
+        },
+      );
     }
     return { agentId, cfg: effectiveConfig };
   };
@@ -329,9 +332,7 @@ export function buildGatewayCronService(params: {
       requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
         ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
-    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
-      derivedAgentId,
-    );
+    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(derivedAgentId);
     const agentId = resolvedAgentId || undefined;
     const resolvedSessionKey = agentId
       ? resolveCronSessionKey({
