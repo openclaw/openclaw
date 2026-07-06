@@ -12,13 +12,13 @@ import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/docker-artifact-proof.ts";
 
 const PROOFS = {
-  "docker-compose-setup": {
+  "compose-setup": {
     secondaryCoverageIds: ["docker.compose"],
-    title: "Docker setup and Compose evidence",
+    title: "Docker Compose setup evidence",
   },
-  "package-openclaw-for-docker": {
+  "docker-package-install": {
     secondaryCoverageIds: ["docker.package-artifact-generation", "cli.package-manager-installs"],
-    title: "Docker package artifact QA evidence",
+    title: "Docker package install evidence",
   },
 } as const;
 

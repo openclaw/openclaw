@@ -5,10 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-bare:local")"
-PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz package-openclaw-for-docker "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
-IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/package-openclaw-for-docker-identities.json}"
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz docker-package-install "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/docker-package-install-identities.json}"
 CONTAINER_NAME="openclaw-package-proof-$$"
-DOCKER_RUN_TIMEOUT="${OPENCLAW_PACKAGE_OPENCLAW_FOR_DOCKER_RUN_TIMEOUT:-120s}"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -16,7 +16,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" package-openclaw-for-docker "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
+docker_e2e_build_or_reuse "$IMAGE_NAME" docker-package-install "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 
 echo "Installing the real OpenClaw package artifact in the target container..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
@@ -54,8 +54,8 @@ if [[ "$INSTALLED_VERSION" != *"$PACKAGE_VERSION"* ]]; then
   exit 1
 fi
 
-node "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.mjs" \
-  --scenario package-openclaw-for-docker \
+node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
+  --scenario docker-package-install \
   --output "$IDENTITY_PATH" \
   --image "$IMAGE_NAME" \
   --package "$PACKAGE_TGZ" \

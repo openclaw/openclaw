@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-functional:local")"
-PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz docker-compose-setup "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
-IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/docker-compose-setup-identities.json}"
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz compose-setup "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/compose-setup-identities.json}"
 PROJECT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-compose-proof.XXXXXX")"
 PROJECT_NAME="openclaw-compose-proof-$$"
 CLI_NAME="$PROJECT_NAME-cli-proof"
@@ -44,7 +44,7 @@ export OPENCLAW_MSTEAMS_PORT=0
 export OPENCLAW_DISABLE_BONJOUR=1
 export OPENCLAW_CURRENT_PACKAGE_TGZ="$PACKAGE_TGZ"
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" docker-compose-setup "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" functional
+docker_e2e_build_or_reuse "$IMAGE_NAME" compose-setup "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" functional
 
 echo "Launching documented Docker Compose gateway topology..."
 "${COMPOSE[@]}" up -d --no-build openclaw-gateway
@@ -75,8 +75,8 @@ fi
 "${COMPOSE[@]}" run -T --no-deps --name "$CLI_NAME" openclaw-cli health --token "$TOKEN"
 GATEWAY_VERSION="$("${COMPOSE[@]}" exec -T openclaw-gateway node -p "require('./package.json').version")"
 
-node "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.mjs" \
-  --scenario docker-compose-setup \
+node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
+  --scenario compose-setup \
   --output "$IDENTITY_PATH" \
   --image "$IMAGE_NAME" \
   --package "$PACKAGE_TGZ" \

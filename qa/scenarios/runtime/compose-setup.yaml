@@ -1,7 +1,7 @@
-title: Docker setup and Compose evidence
+title: Docker Compose setup evidence
 
 scenario:
-  id: docker-compose-setup
+  id: compose-setup
   surface: docker-podman-hosting
   category: docker-podman-hosting.container-setup
   coverage:
@@ -19,7 +19,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - docker-compose.yml
-    - scripts/e2e/docker-compose-setup-docker.sh
+    - scripts/e2e/compose-setup.sh
     - scripts/lib/docker-e2e-scenarios.mjs
     - scripts/package-openclaw-for-docker.mjs
     - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
@@ -32,4 +32,4 @@ scenario:
       - --artifact-base
       - ${outputDir}
       - --lane
-      - docker-compose-setup
+      - compose-setup

@@ -1,7 +1,7 @@
-title: Docker package artifact QA evidence
+title: Docker package install evidence
 
 scenario:
-  id: package-openclaw-for-docker
+  id: docker-package-install
   surface: docker-podman-hosting
   category: docker-podman-hosting.image-release-and-validation
   coverage:
@@ -21,7 +21,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - scripts/package-openclaw-for-docker.mjs
-    - scripts/e2e/package-openclaw-for-docker.sh
+    - scripts/e2e/docker-package-install.sh
     - scripts/lib/docker-e2e-scenarios.mjs
     - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
   execution:
@@ -33,4 +33,4 @@ scenario:
       - --artifact-base
       - ${outputDir}
       - --lane
-      - package-openclaw-for-docker
+      - docker-package-install

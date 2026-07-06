@@ -171,10 +171,10 @@ describe("qa coverage report", () => {
       channelDriver: "live",
     });
     for (const [categoryId, scenarioRef] of [
-      ["docker-podman-hosting.container-setup", "qa/scenarios/runtime/docker-compose-setup.yaml"],
+      ["docker-podman-hosting.container-setup", "qa/scenarios/runtime/compose-setup.yaml"],
       [
         "docker-podman-hosting.image-release-and-validation",
-        "qa/scenarios/runtime/package-openclaw-for-docker.yaml",
+        "qa/scenarios/runtime/docker-package-install.yaml",
       ],
     ] as const) {
       const category = inventory.scorecardTaxonomy.categories.find(

@@ -11,17 +11,17 @@ describe("Docker artifact proof producer", () => {
         "--artifact-base",
         ".artifacts/proof",
         "--lane",
-        "docker-compose-setup",
+        "compose-setup",
       ]).lane,
-    ).toBe("docker-compose-setup");
+    ).toBe("compose-setup");
     expect(
       parseDockerArtifactProofOptions([
         "--artifact-base",
         ".artifacts/proof",
         "--lane",
-        "package-openclaw-for-docker",
+        "docker-package-install",
       ]).lane,
-    ).toBe("package-openclaw-for-docker");
+    ).toBe("docker-package-install");
   });
 
   it("rejects non-artifact Docker lanes", () => {
@@ -56,7 +56,7 @@ describe("Docker artifact proof producer", () => {
           sizeBytes: 42,
           version: "2026.7.6",
         },
-        scenarioId: "docker-compose-setup",
+        scenarioId: "compose-setup",
       }),
     ).toContain("containers=gateway=container123");
   });

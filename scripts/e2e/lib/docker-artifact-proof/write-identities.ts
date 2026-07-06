@@ -3,7 +3,41 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-function readValue(args, index, option) {
+type ContainerOption = {
+  name: string;
+  role: string;
+};
+
+type WriterOptions = {
+  containers: ContainerOption[];
+  details: Map<string, Record<string, string>>;
+  image?: string;
+  output?: string;
+  package?: string;
+  scenario?: string;
+};
+
+type RequiredWriterOptions = WriterOptions & {
+  image: string;
+  output: string;
+  package: string;
+  scenario: string;
+};
+
+type DockerInspect = {
+  Id: string;
+  Image?: string;
+  Name?: string;
+  RepoDigests?: string[];
+  State?: { Status?: string };
+};
+
+type PackageManifest = {
+  name?: unknown;
+  version?: unknown;
+};
+
+function readValue(args: string[], index: number, option: string): string {
   const value = args[index + 1];
   if (!value || value.startsWith("--")) {
     throw new Error(`${option} requires a value`);
@@ -11,10 +45,13 @@ function readValue(args, index, option) {
   return value;
 }
 
-function parseArgs(args) {
-  const options = { containers: [], details: new Map() };
+function parseArgs(args: string[]): RequiredWriterOptions {
+  const options: WriterOptions = { containers: [], details: new Map() };
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
+    if (!option) {
+      continue;
+    }
     const value = readValue(args, index, option);
     index += 1;
     if (option === "--scenario") {
@@ -50,7 +87,7 @@ function parseArgs(args) {
       throw new Error(`unknown option: ${option}`);
     }
   }
-  for (const required of ["scenario", "output", "image", "package"]) {
+  for (const required of ["scenario", "output", "image", "package"] as const) {
     if (!options[required]) {
       throw new Error(`--${required} is required`);
     }
@@ -58,23 +95,28 @@ function parseArgs(args) {
   if (options.containers.length === 0) {
     throw new Error("at least one --container is required");
   }
-  return options;
+  return options as RequiredWriterOptions;
 }
 
-function run(command, args) {
+function run(command: string, args: string[]): string {
   return execFileSync(command, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
 }
 
-function inspectDockerObject(reference) {
-  const [result] = JSON.parse(run("docker", ["inspect", reference]));
+function inspectDockerObject(reference: string): DockerInspect {
+  const [result] = JSON.parse(run("docker", ["inspect", reference])) as DockerInspect[];
   if (!result) {
     throw new Error(`docker inspect returned no result for ${reference}`);
   }
   return result;
 }
 
-function readPackageIdentity(packagePath) {
-  const packageJson = JSON.parse(run("tar", ["-xOf", packagePath, "package/package.json"]));
+function readPackageIdentity(packagePath: string) {
+  const packageJson = JSON.parse(
+    run("tar", ["-xOf", packagePath, "package/package.json"]),
+  ) as PackageManifest;
+  if (typeof packageJson.name !== "string" || typeof packageJson.version !== "string") {
+    throw new Error("package artifact manifest is missing name or version");
+  }
   const bytes = fs.readFileSync(packagePath);
   return {
     fileName: path.basename(packagePath),
