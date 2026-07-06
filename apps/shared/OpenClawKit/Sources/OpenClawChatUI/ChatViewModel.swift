@@ -378,6 +378,50 @@ public final class OpenClawChatViewModel {
         await self.performStartNewSession(worktree: worktree)
     }
 
+    public func requestSessionReset() {
+        Task { await self.performReset() }
+    }
+
+    public func requestSessionCompact() {
+        Task { await self.performCompact() }
+    }
+
+    public func setSessionPinned(_ sessionKey: String, pinned: Bool) {
+        Task {
+            do {
+                try await self.transport.patchSession(
+                    key: sessionKey,
+                    label: nil,
+                    category: nil,
+                    pinned: pinned,
+                    archived: nil,
+                    unread: nil)
+            } catch {
+                self.errorText = error.localizedDescription
+                return
+            }
+            await self.fetchSessions(limit: nil, sessionSnapshot: self.currentSessionSnapshot())
+        }
+    }
+
+    public func deleteSession(_ sessionKey: String) {
+        Task {
+            do {
+                try await self.transport.deleteSession(key: sessionKey)
+            } catch {
+                self.errorText = error.localizedDescription
+                return
+            }
+            self.sessions.removeAll { $0.key == sessionKey }
+            if sessionKey == self.sessionKey {
+                // The active transcript just disappeared server-side; fall
+                // back to the main session instead of a dead key.
+                self.applySessionSwitch(to: self.resolvedMainSessionKey, intent: .userInitiated)
+            }
+            await self.fetchSessions(limit: nil, sessionSnapshot: self.currentSessionSnapshot())
+        }
+    }
+
     public func switchSession(to sessionKey: String) {
         self.applySessionSwitch(to: sessionKey, intent: .userInitiated)
     }
