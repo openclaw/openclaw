@@ -684,7 +684,9 @@ async function initSessionStateAttemptLocked(
     previousSessionId: previousSessionEntry?.sessionId,
   });
   if (previousSessionEntry) {
-    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
+    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
+      activeReplySessionIds: [previousSessionEntry.sessionId],
+    });
   }
 
   const recoveredTerminalEntry =

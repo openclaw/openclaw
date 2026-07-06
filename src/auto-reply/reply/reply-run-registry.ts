@@ -1,10 +1,10 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createAbortError } from "../../infra/abort-signal.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -856,6 +856,24 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
   operation.fail("run_failed", cause);
   operation.complete();
   return true;
+}
+
+/** Release an active reply operation owned by the archived session id during
+ *  session reset/rotation. Queued reservations are intentionally left alone so
+ *  session init can rebind them to the new session id via `updateSessionId`.
+ *  Only non-queued (running/compacting) operations are cleared — these are
+ *  stale work from the old session that would otherwise block the new session's
+ *  reply delivery for the full stuck-session recovery window. (#99082) */
+export function forceClearReplyRunForResetBySessionId(sessionId: string, cause?: unknown): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation || operation.phase === "queued") {
+    return false;
+  }
+  operation.abortForRestart();
+  if (!resolveReplyRunForCurrentSessionId(sessionId)) {
+    return true;
+  }
+  return forceClearReplyRunBySessionId(sessionId, cause);
 }
 
 export function waitForReplyRunEndBySessionId(
