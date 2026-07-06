@@ -84,7 +84,10 @@ import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import { isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl } from "../workspace.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
+} from "../workspace.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -130,7 +133,7 @@ function resolveCliSessionInvalidatedReason(
     : undefined;
 }
 
-function canApplySystemPromptOnResume(backend: CliBackendConfig): boolean {
+function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
   return (
     backend.systemPromptWhen !== "never" &&
     Boolean(
@@ -406,7 +409,7 @@ export async function prepareCliRunContext(
   const bindingFacts = params.cliSessionBindingFacts;
   const bindingExtraSystemPromptStatic =
     bindingFacts?.extraSystemPromptStatic ?? params.extraSystemPromptStatic;
-  const extraSystemPromptHash =
+  const baseExtraSystemPromptHash =
     bindingExtraSystemPromptStatic !== undefined
       ? hashCliSessionText(bindingExtraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
@@ -458,7 +461,7 @@ export async function prepareCliRunContext(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = isSideQuestion
+  const { bootstrapFiles, contextFiles: resolvedContextFiles } = isSideQuestion
     ? { bootstrapFiles: [], contextFiles: [] }
     : await prepareDeps.resolveBootstrapContextForRun({
         workspaceDir,
@@ -474,11 +477,43 @@ export async function prepareCliRunContext(
           warn: (message) => cliBackendLog.warn(message),
         }),
       });
+  // Mirror the embedded runner's bootstrap routing for backends that transport
+  // OpenClaw's system prompt. Only a declared native-tool backend can complete
+  // the file-based ritual; other backends receive limited guidance.
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
+  const hasBootstrapFileAccess =
+    backendResolved.nativeToolMode === "always-on" && params.disableTools !== true;
+  const bootstrapRouting =
+    isSideQuestion || !canTransportSystemPrompt(backendResolved.config)
+      ? undefined
+      : await resolveWorkspaceBootstrapRouting({
+          isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
+          bootstrapFiles,
+          bootstrapFilesProvideAccess: false,
+          bootstrapContextRunKind: params.bootstrapContextRunKind,
+          trigger: params.trigger,
+          sessionKey: params.sessionKey,
+          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+          effectiveWorkspace: workspaceDir,
+          resolvedWorkspace,
+          hasBootstrapFileAccess,
+        });
+  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
+  const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
+  const contextFiles = includeBootstrapInSystemContext
+    ? resolvedContextFiles
+    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+  const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
+    ? bootstrapFiles
+    : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
   const bootstrapAnalysis = analyzeBootstrapBudget({
     files: buildBootstrapInjectionStats({
-      bootstrapFiles,
+      bootstrapFiles: bootstrapFilesForInjectionStats,
       injectedFiles: contextFiles,
     }),
     bootstrapMaxChars,
@@ -491,28 +526,12 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
-  // Mirror the embedded runner's bootstrap routing so CLI-backend runs render
-  // the same "Bootstrap Pending" system prompt gate while BOOTSTRAP.md is
-  // pending. CLI backends expose native file tools, so a run that reaches this
-  // point can read BOOTSTRAP.md unless the caller disabled tools outright.
-  const canonicalWorkspace = resolveUserPath(
-    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-  );
-  const bootstrapRouting = isSideQuestion
-    ? undefined
-    : await resolveWorkspaceBootstrapRouting({
-        isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
-        bootstrapFiles,
-        bootstrapContextRunKind: params.bootstrapContextRunKind,
-        trigger: params.trigger,
-        sessionKey: params.sessionKey,
-        isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-        isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
-        effectiveWorkspace: workspaceDir,
-        resolvedWorkspace,
-        hasBootstrapFileAccess: params.disableTools !== true,
-      });
-  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
+  // Bootstrap guidance changes resumable system context. Hash the pending mode
+  // so entering or leaving bootstrap refreshes first-only CLI system prompts.
+  const extraSystemPromptHash =
+    bootstrapMode === "none"
+      ? baseExtraSystemPromptHash
+      : hashCliSessionText(JSON.stringify([baseExtraSystemPromptHash ?? null, bootstrapMode]));
   // Ring-zero Crestodian runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. The generated MCP config carries
   // only the crestodian stdio server, so the CLI harness sees exactly one
@@ -726,7 +745,7 @@ export async function prepareCliRunContext(
           : { mode: "none" };
     const backendReusableCliSession: CliReusableSession =
       reusableCliSessionCandidate.mode === "reuse-with-drift" &&
-      !canApplySystemPromptOnResume(preparedBackendFinal.backend)
+      !canTransportSystemPrompt(preparedBackendFinal.backend)
         ? { mode: "invalidate", invalidatedReason: "system-prompt" }
         : reusableCliSessionCandidate;
     const candidateClaudeCliSessionId =
@@ -980,7 +999,7 @@ export async function prepareCliRunContext(
       }),
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
-      bootstrapFiles,
+      bootstrapFiles: bootstrapFilesForInjectionStats,
       injectedFiles: contextFiles,
       skillsPrompt: systemPromptSkillsPrompt,
       tools: promptTools,

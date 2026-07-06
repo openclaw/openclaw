@@ -109,6 +109,31 @@ describe("resolveWorkspaceBootstrapRouting", () => {
     expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
+  it("does not infer file access from loaded bootstrap content when the caller opts out", async () => {
+    const routing = await resolveWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: vi.fn(async () => false),
+      bootstrapFiles: [
+        {
+          name: "BOOTSTRAP.md",
+          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
+          content: "Ask who I am before continuing.",
+          missing: false,
+        },
+      ],
+      bootstrapFilesProvideAccess: false,
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: "/tmp/openclaw-workspace",
+      resolvedWorkspace: "/tmp/openclaw-workspace",
+      hasBootstrapFileAccess: false,
+    });
+
+    expect(routing.bootstrapMode).toBe("limited");
+    expect(routing.includeBootstrapInSystemContext).toBe(false);
+    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
+  });
+
   it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", async () => {
     const routing = await resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),

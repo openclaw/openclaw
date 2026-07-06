@@ -40,6 +40,7 @@ export type WorkspaceBootstrapRouting = {
 type WorkspaceBootstrapRoutingInput = Omit<BootstrapRoutingInput, "workspaceBootstrapPending"> & {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
+  bootstrapFilesProvideAccess?: boolean;
 };
 
 function resolveBootstrapRouting(params: BootstrapRoutingInput): WorkspaceBootstrapRouting {
@@ -63,9 +64,8 @@ function resolveBootstrapRouting(params: BootstrapRoutingInput): WorkspaceBootst
 
 /**
  * Resolves workspace bootstrap routing after checking pending state and
- * hook-provided bootstrap files. Hook content counts as both pending bootstrap
- * and file access so generated bootstrap text follows the same route as disk
- * bootstrap content.
+ * loaded bootstrap files. Content can prove bootstrap is pending; callers
+ * decide whether that content also proves the run can complete file changes.
  */
 export async function resolveWorkspaceBootstrapRouting(
   params: WorkspaceBootstrapRoutingInput,
@@ -73,7 +73,7 @@ export async function resolveWorkspaceBootstrapRouting(
   const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
     params.resolvedWorkspace,
   );
-  const hasHookBootstrapContent =
+  const hasBootstrapContent =
     params.bootstrapFiles?.some(
       (file) =>
         file.name === DEFAULT_BOOTSTRAP_FILENAME &&
@@ -83,7 +83,9 @@ export async function resolveWorkspaceBootstrapRouting(
     ) ?? false;
   return resolveBootstrapRouting({
     ...params,
-    workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,
-    hasBootstrapFileAccess: params.hasBootstrapFileAccess || hasHookBootstrapContent,
+    workspaceBootstrapPending: workspaceBootstrapPending || hasBootstrapContent,
+    hasBootstrapFileAccess:
+      params.hasBootstrapFileAccess ||
+      (params.bootstrapFilesProvideAccess !== false && hasBootstrapContent),
   });
 }
