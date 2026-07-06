@@ -39,15 +39,13 @@ type MockSessionStoreEntry = Partial<SessionStoreEntry>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
-  sourceSessionKey?: string;
   entry?: MockSessionStoreEntry;
   forceNew?: boolean;
   fresh?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
-  const sourceSessionKey = params?.sourceSessionKey;
   const store: SessionStore = params?.entry
-    ? ({ [sourceSessionKey ?? sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
+    ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
     : {};
   vi.mocked(loadSessionStore).mockReturnValue(store);
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
@@ -55,7 +53,6 @@ function resolveWithStoredEntry(params?: {
   return resolveCronSession({
     cfg: {} as OpenClawConfig,
     sessionKey,
-    sourceSessionKey,
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
@@ -110,6 +107,30 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.model).toBeUndefined();
     expect(result.isNewSession).toBe(true);
+  });
+
+  it("assigns a collision-proof lifecycle revision to each resolved run", () => {
+    const first = resolveWithStoredEntry({ sessionKey: "agent:main:cron:new-job" });
+    const second = resolveWithStoredEntry({ sessionKey: "agent:main:cron:new-job" });
+
+    expect(first.lifecycleRevision).toBe(first.sessionEntry.lifecycleRevision);
+    expect(second.lifecycleRevision).toBe(second.sessionEntry.lifecycleRevision);
+    expect(first.lifecycleRevision).not.toBe(second.lifecycleRevision);
+  });
+
+  it("rejects archived persistent sessions before rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "archived-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+        },
+        forceNew: true,
+      }),
+    ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
   // New tests for session reuse behavior (#18027)
@@ -179,31 +200,20 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
-    it("seeds fresh cron run sessions from a source session without rolling that source", () => {
+    it("preserves pin state when rolling to a fresh session", () => {
+      const pinnedAt = NOW_MS - 500;
       const result = resolveWithStoredEntry({
-        sessionKey: "agent:main:cron:daily-repost",
-        sourceSessionKey: "agent:main:telegram:direct:42",
         entry: {
-          sessionId: "live-chat-session",
+          sessionId: "existing-session-id-pinned",
           updatedAt: NOW_MS - 1000,
-          systemSent: true,
-          modelOverride: "sonnet-4",
-          providerOverride: "anthropic",
-          thinkingLevel: "high",
-          sendPolicy: "allow",
+          pinnedAt,
         },
         fresh: true,
         forceNew: true,
       });
 
-      expect(result.sessionEntry.sessionId).not.toBe("live-chat-session");
       expect(result.isNewSession).toBe(true);
-      expect(result.previousSessionId).toBeUndefined();
-      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
-      expect(result.sessionEntry.providerOverride).toBe("anthropic");
-      expect(result.sessionEntry.thinkingLevel).toBe("high");
-      expect(result.sessionEntry.sendPolicy).toBeUndefined();
-      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+      expect(result.sessionEntry.pinnedAt).toBe(pinnedAt);
     });
 
     it("clears stale sessionFile when forceNew rolls to a fresh session", () => {

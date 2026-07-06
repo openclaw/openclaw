@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { applyJobPatch } from "../service/jobs.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
@@ -860,6 +861,45 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(cliRun.toolsAllow).toBeUndefined();
   });
 
+  it("keeps a cron-tool default toolsAllow marker after a self-edit before CLI execution", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const job = makeMessageToolPolicyJob(
+      { mode: "announce", channel: "messagechat", to: "123" },
+      {
+        kind: "agentTurn",
+        message: "send a message",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+    );
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "send a clearer message",
+        toolsAllow: ["read", "cron"],
+      },
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job,
+    });
+
+    const cliRun = expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {},
+      "CLI run params",
+    );
+    expect(cliRun.toolsAllow).toBeUndefined();
+  });
+
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
@@ -996,12 +1036,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
-  it("releases preexisting run context after detached current-session completion", async () => {
+  it("keeps shared cron run context references active after completion", async () => {
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": { retained: true } },
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    const { getAgentRunContext, registerAgentRunContext } =
+    const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
       await import("../../infra/agent-events.js");
     registerAgentRunContext("test-session-id", {
       sessionKey: "agent:default:cron:message-tool-policy",
@@ -1015,8 +1055,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: currentSessionJob as never,
     });
 
-    expect(getAgentRunContext("test-session-id")).toBeUndefined();
+    expect(getAgentRunContext("test-session-id")).toMatchObject({
+      sessionKey: "agent:default:cron:message-tool-policy",
+    });
     expect(cronSession.store).toBeUndefined();
+    clearAgentRunContext("test-session-id");
   });
 
   it("releases a shared cron run context created by this invocation", async () => {
@@ -1173,6 +1216,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: expect.objectContaining({ id: "fatal-error-payload" }),
       agentSessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-fatal-error",
     });
     expectDeliveryFields(result.delivery, {
@@ -1209,6 +1255,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
       agentSessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",
+      lifecycleRevision: "test-lifecycle-revision",
+      sessionUpdatedAt: expect.any(Number),
+      beforeSessionDelete: expect.any(Function),
       retireReason: "cron-delete-after-run-fatal-error",
     });
   });

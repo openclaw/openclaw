@@ -1,18 +1,23 @@
-/** Executes detached cron prompts with model fallbacks and interim-ack retries. */
+/** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { isDetachedCronSessionTarget } from "../session-target.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -20,11 +25,13 @@ import {
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
-  getCliSessionId,
+  classifyEmbeddedAgentRunResultForModelFallback,
   ensureSelectedAgentHarnessPlugin,
+  getCliSessionBinding,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
@@ -63,23 +70,27 @@ async function loadCronSubagentRegistryRuntime() {
   return await cronSubagentRegistryRuntimeLoader.load();
 }
 
+function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
+  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
+}
+
 const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
 const MAX_CRON_DELIVERY_TARGET_CONTEXT_CHARS = 1000;
 
-function resolveDetachedCronPromptCacheKey(params: {
+function resolveIsolatedCronPromptCacheKey(params: {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
   provider: string;
   model: string;
 }): string | undefined {
-  if (!isDetachedCronSessionTarget(params.job.sessionTarget)) {
+  if (params.job.sessionTarget !== "isolated") {
     return undefined;
   }
   const material = JSON.stringify({
     version: 1,
-    kind: "detached-cron",
+    kind: "isolated-cron",
     jobId: params.job.id,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -87,7 +98,7 @@ function resolveDetachedCronPromptCacheKey(params: {
     model: params.model,
   });
   const digest = createHash("sha256").update(material).digest("hex").slice(0, 32);
-  // Detached cron rotates transcript/session ids per run; keep cache affinity
+  // Isolated cron rotates transcript/session ids per run; keep cache affinity
   // on stable job identity without sending raw local session labels upstream.
   return `openclaw-cron-${digest}`;
 }
@@ -279,8 +290,31 @@ export function createCronPromptExecutor(params: {
     resolvedDelivery: params.resolvedDelivery,
     sourceDelivery,
   });
+  let pendingUserTurn:
+    | {
+        promptText: string;
+        recorder: UserTurnTranscriptRecorder;
+      }
+    | undefined;
 
   const runPrompt = async (promptText: string) => {
+    const userTurnTranscriptRecorder =
+      pendingUserTurn?.promptText === promptText
+        ? pendingUserTurn.recorder
+        : createUserTurnTranscriptRecorder({
+            input: { text: promptText },
+            target: {
+              transcriptPath: sessionFile,
+              sessionId: params.cronSession.sessionEntry.sessionId,
+              agentId: params.agentId,
+              sessionKey: params.runSessionKey,
+              cwd: params.workspaceDir,
+              config: params.cfgWithAgentDefaults,
+            },
+            beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+            errorContext: "cron user turn transcript",
+          });
+    pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const modelPrompt = deliveryTargetRuntimeContext
       ? `${promptText}\n\n${deliveryTargetRuntimeContext}`.trim()
       : promptText;
@@ -307,6 +341,9 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -323,9 +360,13 @@ export function createCronPromptExecutor(params: {
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
-          const cliSessionId = params.cronSession.isNewSession
+          const cliSessionBinding = params.cronSession.isNewSession
             ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
+            : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
+          const guardedCliSessionBinding =
+            cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
+              ? cliSessionBinding
+              : undefined;
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -333,7 +374,7 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            cleanupCliLiveSessionOnRunEnd: isDetachedCronSessionTarget(params.job.sessionTarget),
+            cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === "isolated",
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
@@ -345,7 +386,8 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
-            cliSessionId,
+            cliSessionId: cliSessionBinding?.sessionId,
+            cliSessionBinding: guardedCliSessionBinding,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             sourceReplyDeliveryMode,
@@ -364,6 +406,9 @@ export function createCronPromptExecutor(params: {
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+            userTurnTranscriptRecorder,
+            suppressNextUserMessagePersistence:
+              userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -371,7 +416,7 @@ export function createCronPromptExecutor(params: {
           return result;
         }
         const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
-        const promptCacheKey = resolveDetachedCronPromptCacheKey({
+        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
@@ -392,7 +437,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
-          cleanupBundleMcpOnRunEnd: isDetachedCronSessionTarget(params.job.sessionTarget),
+          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
@@ -458,6 +503,9 @@ export function createCronPromptExecutor(params: {
           onLaneWait: params.onLaneWait,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
+          userTurnTranscriptRecorder,
+          suppressNextUserMessagePersistence:
+            userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
         });
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
@@ -471,6 +519,7 @@ export function createCronPromptExecutor(params: {
     params.liveSelection.provider = fallbackResult.provider;
     params.liveSelection.model = fallbackResult.model;
     runEndedAt = Date.now();
+    pendingUserTurn = undefined;
   };
 
   return {

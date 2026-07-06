@@ -82,6 +82,13 @@ Verified against Telegram Bot API 10.1, July 1 2026.
   hydration path later.
 - Current local chat context must outrank stale reply ancestry in the prompt.
   Old replied-to messages should not look like the active conversation.
+- The group history window is always on for groups and bounded by
+  `historyLimit`. Do not reintroduce prompt-history gating modes; that
+  regression blinded ambient rooms.
+- The group history window is rolling. Use self-entry watermark selection for
+  "since your last reply" views; do not reintroduce destructive clears because
+  room events are not persisted to the session and cleared context is
+  unrecoverable.
 - Pairing is DM-only. Group and topic authorization need explicit config
   allowlists.
 - Telegram allowlists use numeric sender IDs. Usernames are optional, mutable,

@@ -552,6 +552,7 @@ function resolveToolErrorWarningPolicy(params: {
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
+  assistantTranscriptOwned?: boolean;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -926,9 +927,16 @@ export function buildEmbeddedRunPayloads(params: {
           nonTerminalToolErrorWarning: true,
         });
       }
-      if (!item.isError && !item.isReasoning && params.assistantMessageIndex !== undefined) {
+      if (
+        !item.isError &&
+        !item.isReasoning &&
+        (params.assistantMessageIndex !== undefined || params.assistantTranscriptOwned === true)
+      ) {
         setReplyPayloadMetadata(payload, {
-          assistantMessageIndex: params.assistantMessageIndex,
+          ...(params.assistantMessageIndex !== undefined
+            ? { assistantMessageIndex: params.assistantMessageIndex }
+            : {}),
+          ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
         });
       }
       if (item.replyToId) {

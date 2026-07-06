@@ -824,12 +824,28 @@ describe("gateway.remote.transport", () => {
         remote: {
           remotePort: 18789,
           sshTarget: "user@example.test",
+          sshHostKeyPolicy: "openssh",
           transport: "ssh",
           url: "ws://127.0.0.1:18789",
         },
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid macOS SSH host-key policy", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          sshHostKeyPolicy: "accept-new",
+          transport: "ssh",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.remote.sshHostKeyPolicy");
+    }
   });
 
   it("rejects invalid macOS SSH remote port", () => {

@@ -127,7 +127,9 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerCapabilityCli",
     },
     {
-      commandNames: ["approvals"],
+      // exec-approvals is a commander alias on the approvals command; the lazy
+      // router only routes names listed here, so the alias must be owned too.
+      commandNames: ["approvals", "exec-approvals"],
       loadModule: () => import("../exec-approvals-cli.js"),
       exportName: "registerExecApprovalsCli",
     },

@@ -7,7 +7,7 @@ read_when:
   - Updating community project highlights
 ---
 
-OpenClaw projects are not toy demos. People are shipping PR review loops, mobile apps, home automation, voice systems, devtools, and memory-heavy workflows from the channels they already use — chat-native builds on Telegram, WhatsApp, Discord, and terminals; real automation for booking, shopping, and support without waiting for an API; and physical-world integrations with printers, vacuums, cameras, and home systems.
+Community-built OpenClaw projects: PR review loops, mobile apps, home automation, voice systems, devtools, and memory workflows, built chat-native on Telegram, WhatsApp, Discord, and terminals.
 
 <Info>
 **Want to be featured?** Share your project in [#self-promotion on Discord](https://discord.gg/clawd) or [tag @openclaw on X](https://x.com/openclaw).
@@ -106,11 +106,9 @@ Upload to Cloudflare R2/S3 and generate secure presigned download links. Useful 
 </Card>
 
 <Card title="iOS app via Telegram" icon="mobile">
-  **@coard** • `ios` `xcode` `testflight`
+  **@coard** • `ios` `xcode` `app-store`
 
-Built a complete iOS app with maps and voice recording, deployed to TestFlight entirely via Telegram chat.
-
-  <img src="/assets/showcase/ios-testflight.jpg" alt="iOS app on TestFlight" />
+Built a complete iOS app with maps and voice recording, prepared for App Store distribution entirely via Telegram chat.
 </Card>
 
 <Card title="Oura Ring health assistant" icon="heart-pulse">

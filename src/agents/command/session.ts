@@ -60,12 +60,7 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
-function clearRotatedTerminalMainSessionMetadata(
-  entry: SessionEntry | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
+export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
   const next = {
     ...entry,
     sessionFile: undefined,
@@ -416,10 +411,9 @@ export function resolveSession(opts: {
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry =
-    terminalMainTranscriptNewerThanRegistry && !restartContinuationAllowed
-      ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
-      : sessionEntry;
+  const resolvedSessionEntry = isNewSession && sessionEntry
+    ? clearRotatedSessionMetadata(sessionEntry)
+    : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

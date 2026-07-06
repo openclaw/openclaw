@@ -2,7 +2,10 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import {
+  resolveSessionLifecycleTimestamps,
+  resolveSessionWorkStartError,
+} from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
@@ -24,6 +27,7 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "reasoningLevel",
   "ttsAuto",
   "responseUsage",
+  "pinnedAt",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
@@ -106,11 +110,18 @@ function sanitizeFreshCronSessionEntry(
   return next;
 }
 
+/** Reads the exact cron session row without an in-process cache snapshot. */
+export function loadCronSessionEntryLatest(
+  storePath: string,
+  sessionKey: string,
+): SessionEntry | undefined {
+  return loadSessionStore(storePath, { skipCache: true })[sessionKey];
+}
+
 /** Resolves or rolls over the cron session entry for one isolated-agent run. */
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  sourceSessionKey?: string;
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
@@ -121,9 +132,11 @@ export function resolveCronSession(params: {
     agentId: params.agentId,
   });
   const store = params.store ?? loadSessionStore(storePath);
-  const sourceSessionKey = params.sourceSessionKey?.trim();
-  const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
-  const entry = store[sourceSessionKey || params.sessionKey];
+  const entry = store[params.sessionKey];
+  const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, entry);
+  if (archivedSessionError) {
+    throw new Error(archivedSessionError);
+  }
 
   let sessionId: string;
   let isNewSession: boolean;
@@ -165,7 +178,7 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
-  const previousSessionId = isNewSession && !sourceSessionDiffers ? entry?.sessionId : undefined;
+  const previousSessionId = isNewSession ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,
@@ -177,11 +190,13 @@ export function resolveCronSession(params: {
       : entry
     : undefined;
 
+  const lifecycleRevision = crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.
     ...baseEntry,
     sessionId,
+    lifecycleRevision,
     updatedAt: params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
@@ -194,5 +209,14 @@ export function resolveCronSession(params: {
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
     systemSent,
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
+  return {
+    storePath,
+    store,
+    sessionEntry,
+    lifecycleRevision,
+    systemSent,
+    isNewSession,
+    previousSessionId,
+    initialSessionEntry: entry,
+  };
 }
