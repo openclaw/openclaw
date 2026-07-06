@@ -2938,9 +2938,10 @@ describe("chat model controls", () => {
     const openCodeModels = container.querySelector(
       '[data-chat-model-provider-group="opencode"]',
     )?.textContent;
-    expect(openCodeModels).toContain("OpenCode Sonnet");
-    expect(openCodeModels).toContain("OpenCode Kimi");
-    expect(openCodeModels).toContain("OpenCode GLM");
+    expect(openCodeModels).toContain("Sonnet");
+    expect(openCodeModels).toContain("Kimi");
+    expect(openCodeModels).toContain("GLM");
+    expect(openCodeModels).not.toContain("OpenCode Sonnet");
     expect(
       container.querySelector('[data-chat-model-provider-group="google-gemini-cli"]'),
     ).toBeNull();

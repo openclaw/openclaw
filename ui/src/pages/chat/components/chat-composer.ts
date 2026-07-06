@@ -1588,6 +1588,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
               <span class="agent-chat__control-label">${t("chat.composer.stopVoiceInput")}</span>
             </button>
           </openclaw-tooltip>
+          ${abortAction}
         `
       : props.canAbort
         ? html`
@@ -2160,9 +2161,13 @@ export function renderChatComposer(props: ChatComposerProps) {
               placeholder=${placeholder}
               rows="1"
             ></textarea>
-            <div class="agent-chat__token-row">
-              ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-            </div>
+            ${tokens
+              ? html`
+                  <div class="agent-chat__token-row">
+                    <span class="agent-chat__token-count">${tokens}</span>
+                  </div>
+                `
+              : nothing}
             <span
               id=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
               class="agent-chat__sr-only"

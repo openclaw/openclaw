@@ -702,7 +702,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
           geometry.bubble?.paddingBottom,
           geometry.bubble?.paddingLeft,
         ]),
-      ).toEqual(new Set([8]));
+      ).toEqual(new Set([16]));
       expect(geometry.composer?.borderRadius).toBe(10);
 
       const composerInset = width <= 768 ? 4 : 8;
@@ -1257,8 +1257,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
         }
 
         if (width >= 1600) {
-          expect(shell.width).toBeGreaterThanOrEqual(1439);
-          expect(shell.width).toBeLessThanOrEqual(1441);
+          expect(shell.width).toBeGreaterThanOrEqual(1099);
+          expect(shell.width).toBeLessThanOrEqual(1101);
           expect(
             Math.abs(shell.x + shell.width / 2 - (chat.x + chat.width / 2)),
           ).toBeLessThanOrEqual(1);
@@ -1293,7 +1293,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
           .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(12);
+        expect(previewPaddingTop).toBe(10);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
         expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
       } finally {

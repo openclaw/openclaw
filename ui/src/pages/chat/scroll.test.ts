@@ -49,6 +49,7 @@ function createScrollHost(
     chatScrollFrame: null as number | null,
     chatScrollTimeout: null as number | null,
     chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
@@ -264,6 +265,22 @@ describe("scheduleChatScroll", () => {
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
+  it("does not show new messages when the thread height did not grow", async () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = true;
+    host.chatLastScrollHeight = 2000;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
   it("does not re-stick streaming after a user scrolls slightly up near the bottom", async () => {
     const { host, container } = createScrollHost({
       scrollHeight: 2000,
@@ -281,6 +298,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatFollowLocked).toBe(true);
     expect(host.chatUserNearBottom).toBe(false);
 
+    container.scrollHeight = 2050;
     scheduleChatScroll(host);
     await host.updateComplete;
 
@@ -313,6 +331,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatFollowLocked).toBe(true);
     expect(host.chatUserNearBottom).toBe(false);
 
+    container.scrollHeight = 2050;
     scheduleChatScroll(host);
     await host.updateComplete;
 

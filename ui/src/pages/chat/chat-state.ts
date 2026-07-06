@@ -185,6 +185,7 @@ export type ChatPageHost = ChatHost &
     chatScrollFrame: number | null;
     chatScrollTimeout: number | null;
     chatLastScrollTop: number;
+    chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;
     chatUserNearBottom: boolean;
     chatFollowLocked: boolean;
@@ -1019,6 +1020,7 @@ export function createPageState(
     chatScrollFrame: null,
     chatScrollTimeout: null,
     chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,

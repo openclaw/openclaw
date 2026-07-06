@@ -745,7 +745,7 @@ openclaw-chat-page {
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  width: min(1440px, calc(100% - 36px));
+  width: min(1100px, calc(100% - 36px));
   margin: 8px auto 14px;
 }
 
@@ -844,7 +844,7 @@ openclaw-chat-page {
 
 .agent-chat__composer-combobox > textarea {
   width: 100%;
-  min-height: 40px;
+  min-height: 36px;
   max-height: calc(7em + 24px);
   resize: none;
   padding: var(--chat-box-inset);
@@ -893,7 +893,7 @@ openclaw-chat-page {
   margin: 0;
 }
 
-/* Footer controls stay content-sized and left-aligned. */
+/* Settings stays left while the model picker uses the remaining footer space. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
@@ -958,7 +958,7 @@ openclaw-chat-page {
   flex: 0 0 auto;
   min-width: 0;
   max-width: 70vw;
-  margin-left: 0;
+  margin-left: auto;
   order: 2;
 }
 
@@ -1696,7 +1696,6 @@ openclaw-chat-page {
 
 @media (min-width: 1600px) {
   .agent-chat__composer-combobox > textarea {
-    min-height: 40px;
     max-height: calc(7em + 12px);
   }
 

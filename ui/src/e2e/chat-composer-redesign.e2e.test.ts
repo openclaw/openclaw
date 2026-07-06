@@ -267,8 +267,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       ) {
         throw new Error("expected composer controls to have layout boxes");
       }
-      expect(composerShellBox.width).toBeGreaterThanOrEqual(1439);
-      expect(composerShellBox.width).toBeLessThanOrEqual(1441);
+      expect(composerShellBox.width).toBeGreaterThanOrEqual(1099);
+      expect(composerShellBox.width).toBeLessThanOrEqual(1101);
       expect(
         Math.abs(
           composerShellBox.x + composerShellBox.width / 2 - (chatMainBox.x + chatMainBox.width / 2),

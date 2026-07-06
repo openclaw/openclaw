@@ -13,6 +13,7 @@ type ChatScrollHost = {
   chatScrollFrame: number | null;
   chatScrollTimeout: number | null;
   chatLastScrollTop: number;
+  chatLastScrollHeight?: number;
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
   chatFollowLocked: boolean;
@@ -69,6 +70,8 @@ export function scheduleChatScroll(
         return;
       }
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+      const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
+      host.chatLastScrollHeight = target.scrollHeight;
       const autoScrollMode = normalizeChatAutoScrollMode(host.settings?.chatAutoScroll);
       const manualScroll = options.source === "manual";
 
@@ -84,8 +87,10 @@ export function scheduleChatScroll(
               (host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD))));
 
       if (!shouldStick) {
-        // User is scrolled up — flag that new content arrived below.
-        host.chatNewMessagesBelow = true;
+        if (contentGrew) {
+          // Only show the indicator when the thread actually gained content below.
+          host.chatNewMessagesBelow = true;
+        }
         return;
       }
       if (effectiveForce) {
@@ -150,6 +155,7 @@ export function handleChatScroll(host: ChatScrollHost, event: Event) {
   const scrollTop = Math.max(0, container.scrollTop);
   const delta = scrollTop - host.chatLastScrollTop;
   host.chatLastScrollTop = scrollTop;
+  host.chatLastScrollHeight = container.scrollHeight;
   // Ignore scroll events that we ourselves triggered — they must not flip
   // chatUserNearBottom to false while streaming content grows the page.
   // Only suppress if scrollTop is still at or above the position we scrolled to;
@@ -192,6 +198,7 @@ export function resetChatScroll(host: ChatScrollHost) {
   host.chatUserNearBottom = true;
   host.chatFollowLocked = false;
   host.chatLastScrollTop = 0;
+  host.chatLastScrollHeight = 0;
   host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;
   host.chatIsProgrammaticScroll = false;
