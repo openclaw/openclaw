@@ -1951,16 +1951,15 @@ export function renderChatComposer(props: ChatComposerProps) {
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
     const hostDraft = props.getDraft?.() ?? props.draft;
-    const submittedDraftKey = composerDraftKey(props);
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
       state.pendingClearedSubmittedDraft = {
-        key: submittedDraftKey,
+        key: draftKey,
         value: submittedDraft,
       };
     } else {
-      clearPendingClearedSubmittedDraft(state, submittedDraftKey);
+      clearPendingClearedSubmittedDraft(state, draftKey);
     }
     if (target && target.value !== hostDraft) {
       target.value = hostDraft;

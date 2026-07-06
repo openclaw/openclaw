@@ -1748,7 +1748,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
       await modelSelect.click();
-      await main.locator('[data-chat-model-option=""]').click();
+      await main.getByRole("button", { name: "Use default model", exact: true }).click();
       await main.getByRole("button", { name: "Save", exact: true }).click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
