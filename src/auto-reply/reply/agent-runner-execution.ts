@@ -1623,12 +1623,21 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   const repromotesToPrimary =
     repromotionTarget?.provider === probe.provider && repromotionTarget?.model === probe.model;
   if (repromotionTarget && !repromotesToPrimary) {
-    return {
+    const repromotedRun: FollowupRun["run"] = {
       ...params.run,
       provider: repromotionTarget.provider,
       model: repromotionTarget.model,
       autoFallbackPrimaryProbe: undefined,
     };
+    // A carried authProfileId is scoped to the prior provider. Forwarding it into a
+    // different provider on a cross-provider climb breaks credential selection and
+    // violates the auth-profile runtime contract, so drop it and let the target
+    // provider resolve its own profile. Same-provider climbs keep the pinned profile.
+    if (repromotionTarget.provider !== params.run.provider) {
+      delete repromotedRun.authProfileId;
+      delete repromotedRun.authProfileIdSource;
+    }
+    return repromotedRun;
   }
   const resolveEntrySelectionRun = (): FollowupRun["run"] => {
     const entryRef = resolvePersistedOverrideModelRef({

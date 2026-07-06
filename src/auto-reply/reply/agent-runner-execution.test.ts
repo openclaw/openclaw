@@ -2029,6 +2029,10 @@ describe("runAgentTurnWithFallback", () => {
     run.provider = "openai";
     run.model = "gpt-5.5";
     run.autoFallbackPrimaryProbe = probe;
+    // Session was auto-pinned to spark under an OpenAI auth profile. Climbing to
+    // claude-cli must not carry that OpenAI profile into the new provider.
+    run.authProfileId = "openai:oauth";
+    run.authProfileIdSource = "auto";
 
     const rechecked = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
@@ -2043,6 +2047,64 @@ describe("runAgentTurnWithFallback", () => {
       model: "claude-sonnet-5",
       autoFallbackPrimaryProbe: undefined,
     });
+    // Cross-provider climb must clear the stale OpenAI auth profile so credential
+    // selection resolves a claude-cli profile instead of leaking the OpenAI one.
+    expect(rechecked.authProfileId).toBeUndefined();
+    expect(rechecked.authProfileIdSource).toBeUndefined();
+  });
+
+  it("keeps the pinned auth profile on a same-provider re-promotion climb", async () => {
+    const { resolveAutoFallbackRepromotionTarget } = await import("../../agents/agent-scope.js");
+    // Chain where the climb target stays on the same provider as the current pin,
+    // so the (provider-scoped) auth profile remains valid and must be preserved.
+    const chain = [
+      { provider: "openai", model: "gpt-5.5" },
+      { provider: "openai", model: "gpt-5.3-codex" },
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+    ];
+    const unavailable = new Set(["openai/gpt-5.5"]);
+    const isAvailable = (ref: { provider: string; model: string }) =>
+      !unavailable.has(`${ref.provider}/${ref.model}`);
+
+    const probe = {
+      provider: "openai",
+      model: "gpt-5.5",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.3-codex-spark",
+      fallbackAuthProfileId: "openai:oauth",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.3-codex-spark",
+      modelOverrideSource: "auto",
+      authProfileOverride: "openai:oauth",
+      authProfileOverrideSource: "auto",
+    };
+    const run = createFollowupRun().run;
+    run.provider = "openai";
+    run.model = "gpt-5.5";
+    run.autoFallbackPrimaryProbe = probe;
+    run.authProfileId = "openai:oauth";
+    run.authProfileIdSource = "auto";
+
+    const rechecked = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+      run,
+      entry: sessionEntry,
+      sessionKey: "main",
+      resolveRepromotionTarget: (current) =>
+        resolveAutoFallbackRepromotionTarget({ chain, current, isAvailable }),
+    });
+
+    expect(rechecked).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.3-codex",
+      autoFallbackPrimaryProbe: undefined,
+    });
+    expect(rechecked.authProfileId).toBe("openai:oauth");
+    expect(rechecked.authProfileIdSource).toBe("auto");
   });
 
   it("keeps fallback auth available when a primary probe falls back", async () => {
