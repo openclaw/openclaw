@@ -280,8 +280,6 @@ export const ja_JP: TranslationMap = {
     activeRun: "アクティブな実行",
     archived: "アーカイブ済み",
     pinned: "ピン留め済み",
-    renameSession: "セッション名を変更",
-    renameSessionPrompt: "セッション名を変更",
     pinSession: "セッションをピン留め",
     unpinSession: "セッションのピン留めを解除",
     archiveSession: "セッションをアーカイブ",
@@ -461,6 +459,7 @@ export const ja_JP: TranslationMap = {
   },
   nav: {
     chat: "チャット",
+    chats: "Chats",
     settings: "設定",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
@@ -995,6 +994,7 @@ export const ja_JP: TranslationMap = {
         search: "検索",
         navigation: "ナビゲーション",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "概要",
@@ -1584,10 +1584,6 @@ export const ja_JP: TranslationMap = {
     },
     selectors: {
       agentFilter: "エージェントでセッションを絞り込む",
-      session: "Chat session",
-      sessionSearch: "セッションを検索",
-      clearSessionSearch: "セッション検索をクリア",
-      loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

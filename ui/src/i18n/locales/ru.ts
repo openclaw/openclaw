@@ -277,8 +277,6 @@ export const ru: TranslationMap = {
     activeRun: "Активный запуск",
     archived: "В архиве",
     pinned: "Закреплено",
-    renameSession: "Переименовать сеанс",
-    renameSessionPrompt: "Переименовать сеанс",
     pinSession: "Закрепить сеанс",
     unpinSession: "Открепить сеанс",
     archiveSession: "Архивировать сеанс",
@@ -459,6 +457,7 @@ export const ru: TranslationMap = {
   },
   nav: {
     chat: "Чат",
+    chats: "Chats",
     settings: "Настройки",
     expand: "Развернуть боковую панель",
     collapse: "Свернуть боковую панель",
@@ -994,6 +993,7 @@ export const ru: TranslationMap = {
         search: "Поиск",
         navigation: "Навигация",
         skills: "Навыки",
+        chats: "Chats",
       },
       items: {
         overview: "Обзор",
@@ -1590,10 +1590,6 @@ export const ru: TranslationMap = {
     },
     selectors: {
       agentFilter: "Фильтр сеансов по агенту",
-      session: "Сеанс чата",
-      sessionSearch: "Поиск сеансов",
-      clearSessionSearch: "Очистить поиск сеансов",
-      loadMoreSessions: "Загрузить еще сеансы",
       model: "Модель чата",
       thinkingLevel: "Уровень мышления чата",
     },

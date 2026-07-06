@@ -1,4 +1,4 @@
-// Control UI tests cover session management through the sidebar and chat picker.
+// Control UI tests cover session management through the sidebar and the command palette.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
@@ -88,12 +88,15 @@ async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-function actionOpacity(button: Locator): Promise<string> {
-  return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
+
+function trimmedTextContents(locator: Locator): Promise<string[]> {
+  return locator.evaluateAll((elements) =>
+    elements.map((element) => element.textContent?.trim() ?? ""),
+  );
 }
 
-async function trimmedTextContents(locator: Locator): Promise<string[]> {
-  return (await locator.allTextContents()).map((text) => text.trim());
+function actionOpacity(button: Locator): Promise<string> {
+  return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
 }
 
 async function captureUiProof(page: Page, fileName: string) {
@@ -121,7 +124,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("manages sessions through the sidebar and chat picker", async () => {
+  it("manages sessions through the sidebar groups and command palette", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
       locale: "en-US",
@@ -151,24 +154,43 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
 
-      // Sidebar recents: pinned first, live-run spinner, hover-revealed actions.
+      // Sidebar: pinned rows form their own group ahead of the Chats group.
       const sidebarRows = page.locator(".sidebar-recent-sessions__list .sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
-      const sessionGroups = page.locator(".sidebar-recent-sessions__group");
-      const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
-      const chatsGroup = sessionGroups.filter({ hasText: "Sessions" });
+      const groups = page.locator(".sidebar-recent-sessions__group");
+      await expect.poll(() => groups.count()).toBe(2);
       await expect
-        .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
-        .toEqual(["Release planning"]);
+        .poll(() => groups.first().locator(".sidebar-recent-sessions__label-text").textContent())
+        .toContain("Pinned");
+
+      // Chats keep recency order with the open session highlighted in place —
+      // selecting a row must not reshuffle the list.
+      const chatRows = groups.nth(1).locator(".sidebar-recent-session");
+      const rowNames = () =>
+        chatRows.evaluateAll((rows) =>
+          rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
+        );
+      await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
+      const researchLink = chatRows.filter({ hasText: "Research notes" }).locator("a").first();
+      await researchLink.click();
+      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
+      await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
       await expect
-        .poll(() => trimmedTextContents(chatsGroup.locator(".sidebar-recent-session__name")))
-        .toEqual(["Main", "Data migration", "Research notes"]);
+        .poll(() =>
+          chatRows
+            .filter({ hasText: "Research notes" })
+            .first()
+            .evaluate((row) => row.classList.contains("sidebar-recent-session--active")),
+        )
+        .toBe(true);
+
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
         .toBe(true);
 
+      // Hover-revealed management actions on sidebar rows.
       const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
       const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
       await page.mouse.move(900, 500);
@@ -182,39 +204,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
       await captureUiProof(page, "sidebar-sessions.png");
 
-      // Chat picker: single-line rows with hover-revealed management actions.
-      await page.getByRole("button", { name: "Search sessions" }).click();
-      const releaseRow = page
-        .locator(".chat-session-picker__option-row")
-        .filter({ hasText: "Release planning" });
-      await releaseRow.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => releaseRow.getByRole("button").count()).toBe(3);
-
-      const migrationRow = page
-        .locator(".chat-session-picker__option-row")
-        .filter({ hasText: "Data migration" });
-      await expect.poll(() => migrationRow.locator(".session-run-spinner").isVisible()).toBe(true);
-
-      const mainRow = page.locator(".chat-session-picker__option-row").filter({ hasText: "Main" });
-      await expect
-        .poll(() => mainRow.getByRole("button", { name: "Archive session" }).isDisabled())
-        .toBe(true);
-
-      const researchRow = page
-        .locator(".chat-session-picker__option-row")
-        .filter({ hasText: "Research notes" });
-      const researchArchive = researchRow.getByRole("button", { name: "Archive session" });
-      await page.mouse.move(900, 500);
-      await expect.poll(() => actionOpacity(researchArchive)).toBe("0");
-      await expect
-        .poll(() => actionOpacity(releaseRow.getByRole("button", { name: "Unpin session" })))
-        .toBe("1");
-      await researchRow.hover();
-      await expect.poll(() => actionOpacity(researchArchive)).toBe("1");
-      await captureUiProof(page, "chat-session-management.png");
-
-      await releaseRow.hover();
-      await releaseRow.getByRole("button", { name: "Unpin session" }).click();
+      await sidebarReleasePin.click();
       const pinPatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:release" && params.pinned === false,
@@ -224,33 +214,41 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         pinned: false,
       });
 
-      page.once("dialog", (dialog) => dialog.accept("Launch plan"));
-      await releaseRow.hover();
-      await releaseRow.getByRole("button", { name: "Rename session" }).click();
-      const renamePatch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:release" && params.label === "Launch plan",
-      );
-      expect(requireRecord(renamePatch.params)).toMatchObject({
-        key: "agent:main:release",
-        label: "Launch plan",
+      const sidebarMigrationArchive = sidebarMigration.getByRole("button", {
+        name: "Archive session",
       });
-
-      await researchRow.hover();
-      await researchArchive.click();
+      await sidebarMigration.hover();
+      await sidebarMigrationArchive.click();
       const archivePatch = await waitForPatch(
         gateway,
-        (params) => params.key === "agent:main:research" && params.archived === true,
+        (params) => params.key === "agent:main:migration" && params.archived === true,
       );
       expect(requireRecord(archivePatch.params)).toMatchObject({
         archived: true,
-        key: "agent:main:research",
+        key: "agent:main:migration",
       });
+
+      // Command palette is the single search surface: querying lists matching
+      // chats from the gateway and selecting one navigates to it.
+      await page.getByRole("button", { name: "Open command palette" }).click();
+      const paletteInput = page.locator(".cmd-palette__input");
+      await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
+      await paletteInput.fill("release");
+      const paletteOption = page
+        .locator(".cmd-palette__item")
+        .filter({ hasText: "Release planning" });
+      await paletteOption.waitFor({ state: "visible", timeout: 10_000 });
+      const searchRequests = await gateway.getRequests("sessions.list");
+      expect(
+        searchRequests.some((request) => requireRecord(request.params).search === "release"),
+      ).toBe(true);
+      await captureUiProof(page, "command-palette-session-search.png");
+      await paletteOption.click();
+      await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Arelease");
     } finally {
       await context.close();
     }
   });
-
   it("does not duplicate the active chat when its only session is pinned", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -274,7 +272,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       const sessionGroups = page.locator(".sidebar-recent-sessions__group");
       const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
-      const chatsGroup = sessionGroups.filter({ hasText: "Sessions" });
+      const chatsGroup = sessionGroups.filter({ hasText: "Chats" });
       await expect
         .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
         .toEqual(["Pinned only"]);

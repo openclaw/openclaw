@@ -277,8 +277,6 @@ export const nl: TranslationMap = {
     activeRun: "Actieve uitvoering",
     archived: "Gearchiveerd",
     pinned: "Vastgezet",
-    renameSession: "Sessie hernoemen",
-    renameSessionPrompt: "Sessie hernoemen",
     pinSession: "Sessie vastzetten",
     unpinSession: "Sessie losmaken",
     archiveSession: "Sessie archiveren",
@@ -458,6 +456,7 @@ export const nl: TranslationMap = {
   },
   nav: {
     chat: "Chat",
+    chats: "Chats",
     settings: "Instellingen",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
@@ -992,6 +991,7 @@ export const nl: TranslationMap = {
         search: "Zoeken",
         navigation: "Navigatie",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "Overzicht",
@@ -1583,10 +1583,6 @@ export const nl: TranslationMap = {
     },
     selectors: {
       agentFilter: "Sessies filteren op agent",
-      session: "Chat session",
-      sessionSearch: "Sessies zoeken",
-      clearSessionSearch: "Sessiezoekopdracht wissen",
-      loadMoreSessions: "Meer sessies laden",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

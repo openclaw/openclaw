@@ -275,8 +275,6 @@ export const hi: TranslationMap = {
     activeRun: "सक्रिय रन",
     archived: "आर्काइव किया गया",
     pinned: "पिन किया गया",
-    renameSession: "सत्र का नाम बदलें",
-    renameSessionPrompt: "सत्र का नाम बदलें",
     pinSession: "सत्र पिन करें",
     unpinSession: "सत्र अनपिन करें",
     archiveSession: "सत्र संग्रहीत करें",
@@ -456,6 +454,7 @@ export const hi: TranslationMap = {
   },
   nav: {
     chat: "चैट",
+    chats: "Chats",
     settings: "सेटिंग्स",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
@@ -985,6 +984,7 @@ export const hi: TranslationMap = {
         search: "खोज",
         navigation: "नेविगेशन",
         skills: "स्किल्स",
+        chats: "Chats",
       },
       items: {
         overview: "ओवरव्यू",
@@ -1562,10 +1562,6 @@ export const hi: TranslationMap = {
     },
     selectors: {
       agentFilter: "एजेंट के अनुसार सत्र फ़िल्टर करें",
-      session: "चैट सत्र",
-      sessionSearch: "सत्र खोजें",
-      clearSessionSearch: "सत्र खोज साफ़ करें",
-      loadMoreSessions: "और सत्र लोड करें",
       model: "चैट मॉडल",
       thinkingLevel: "चैट सोच स्तर",
     },

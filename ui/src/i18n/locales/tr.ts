@@ -278,8 +278,6 @@ export const tr: TranslationMap = {
     activeRun: "Etkin çalıştırma",
     archived: "Arşivlendi",
     pinned: "Sabitlenmiş",
-    renameSession: "Oturumu yeniden adlandır",
-    renameSessionPrompt: "Oturumu yeniden adlandır",
     pinSession: "Oturumu sabitle",
     unpinSession: "Oturumun sabitlemesini kaldır",
     archiveSession: "Oturumu arşivle",
@@ -459,6 +457,7 @@ export const tr: TranslationMap = {
   },
   nav: {
     chat: "Sohbet",
+    chats: "Chats",
     settings: "Ayarlar",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
@@ -994,6 +993,7 @@ export const tr: TranslationMap = {
         search: "Ara",
         navigation: "Navigation",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "Genel Bakış",
@@ -1584,10 +1584,6 @@ export const tr: TranslationMap = {
     },
     selectors: {
       agentFilter: "Oturumları ajana göre filtrele",
-      session: "Chat session",
-      sessionSearch: "Oturumlarda ara",
-      clearSessionSearch: "Oturum aramasını temizle",
-      loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

@@ -203,10 +203,6 @@ export function normalizeAgentLabel(agent: {
   );
 }
 
-export function agentLogoUrl(basePath: string): string {
-  return controlUiPublicAssetPath("favicon.svg", basePath);
-}
-
 export function assistantAvatarFallbackUrl(basePath: string): string {
   return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }

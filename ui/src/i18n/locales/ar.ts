@@ -274,8 +274,6 @@ export const ar: TranslationMap = {
     activeRun: "تشغيل نشط",
     archived: "مؤرشف",
     pinned: "مثبّتة",
-    renameSession: "إعادة تسمية الجلسة",
-    renameSessionPrompt: "إعادة تسمية الجلسة",
     pinSession: "تثبيت الجلسة",
     unpinSession: "إلغاء تثبيت الجلسة",
     archiveSession: "أرشفة الجلسة",
@@ -455,6 +453,7 @@ export const ar: TranslationMap = {
   },
   nav: {
     chat: "الدردشة",
+    chats: "Chats",
     settings: "الإعدادات",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
@@ -981,6 +980,7 @@ export const ar: TranslationMap = {
         search: "بحث",
         navigation: "التنقل",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "نظرة عامة",
@@ -1560,10 +1560,6 @@ export const ar: TranslationMap = {
     },
     selectors: {
       agentFilter: "تصفية الجلسات حسب الوكيل",
-      session: "Chat session",
-      sessionSearch: "البحث في الجلسات",
-      clearSessionSearch: "مسح البحث في الجلسات",
-      loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

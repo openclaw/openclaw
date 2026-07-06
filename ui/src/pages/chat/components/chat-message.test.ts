@@ -78,7 +78,6 @@ vi.mock("../../../lib/agents/display.ts", () => {
 
   return {
     assistantAvatarFallbackUrl: () => "/openclaw-molty.png",
-    agentLogoUrl: () => "/openclaw-logo.svg",
     isRenderableControlUiAvatarUrl,
     resolveAssistantTextAvatar: (value: string | null | undefined) => {
       const trimmed = value?.trim();

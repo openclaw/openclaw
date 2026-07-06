@@ -273,8 +273,6 @@ export const zh_CN: TranslationMap = {
     activeRun: "活动运行",
     archived: "已归档",
     pinned: "已置顶",
-    renameSession: "重命名会话",
-    renameSessionPrompt: "重命名会话",
     pinSession: "置顶会话",
     unpinSession: "取消置顶会话",
     archiveSession: "归档会话",
@@ -453,6 +451,7 @@ export const zh_CN: TranslationMap = {
   },
   nav: {
     chat: "聊天",
+    chats: "Chats",
     settings: "设置",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
@@ -977,6 +976,7 @@ export const zh_CN: TranslationMap = {
         search: "搜索",
         navigation: "导航",
         skills: "技能",
+        chats: "Chats",
       },
       items: {
         overview: "概览",
@@ -1539,10 +1539,6 @@ export const zh_CN: TranslationMap = {
     },
     selectors: {
       agentFilter: "按代理筛选会话",
-      session: "聊天会话",
-      sessionSearch: "搜索会话",
-      clearSessionSearch: "清除会话搜索",
-      loadMoreSessions: "加载更多会话",
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
     },

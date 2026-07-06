@@ -274,8 +274,6 @@ export const ko: TranslationMap = {
     activeRun: "활성 실행",
     archived: "보관됨",
     pinned: "고정됨",
-    renameSession: "세션 이름 변경",
-    renameSessionPrompt: "세션 이름 변경",
     pinSession: "세션 고정",
     unpinSession: "세션 고정 해제",
     archiveSession: "세션 보관",
@@ -455,6 +453,7 @@ export const ko: TranslationMap = {
   },
   nav: {
     chat: "채팅",
+    chats: "Chats",
     settings: "설정",
     expand: "사이드바 펼치기",
     collapse: "사이드바 접기",
@@ -985,6 +984,7 @@ export const ko: TranslationMap = {
         search: "검색",
         navigation: "탐색",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "개요",
@@ -1567,10 +1567,6 @@ export const ko: TranslationMap = {
     },
     selectors: {
       agentFilter: "에이전트별로 세션 필터링",
-      session: "Chat session",
-      sessionSearch: "세션 검색",
-      clearSessionSearch: "세션 검색 지우기",
-      loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

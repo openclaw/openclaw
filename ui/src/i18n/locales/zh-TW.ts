@@ -273,8 +273,6 @@ export const zh_TW: TranslationMap = {
     activeRun: "進行中的執行",
     archived: "已封存",
     pinned: "已釘選",
-    renameSession: "重新命名工作階段",
-    renameSessionPrompt: "重新命名工作階段",
     pinSession: "釘選工作階段",
     unpinSession: "取消釘選工作階段",
     archiveSession: "封存工作階段",
@@ -453,6 +451,7 @@ export const zh_TW: TranslationMap = {
   },
   nav: {
     chat: "聊天",
+    chats: "Chats",
     settings: "設置",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
@@ -977,6 +976,7 @@ export const zh_TW: TranslationMap = {
         search: "搜尋",
         navigation: "導覽",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "概覽",
@@ -1541,10 +1541,6 @@ export const zh_TW: TranslationMap = {
     },
     selectors: {
       agentFilter: "按代理篩選會話",
-      session: "Chat session",
-      sessionSearch: "搜尋工作階段",
-      clearSessionSearch: "清除工作階段搜尋",
-      loadMoreSessions: "載入更多工作階段",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

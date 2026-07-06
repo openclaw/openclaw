@@ -276,8 +276,6 @@ export const uk: TranslationMap = {
     activeRun: "Активний запуск",
     archived: "Архівовано",
     pinned: "Закріплено",
-    renameSession: "Перейменувати сеанс",
-    renameSessionPrompt: "Перейменувати сеанс",
     pinSession: "Закріпити сеанс",
     unpinSession: "Відкріпити сеанс",
     archiveSession: "Архівувати сеанс",
@@ -457,6 +455,7 @@ export const uk: TranslationMap = {
   },
   nav: {
     chat: "Чат",
+    chats: "Chats",
     settings: "Налаштування",
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
@@ -992,6 +991,7 @@ export const uk: TranslationMap = {
         search: "Пошук",
         navigation: "Навігація",
         skills: "Навички",
+        chats: "Chats",
       },
       items: {
         overview: "Огляд",
@@ -1580,10 +1580,6 @@ export const uk: TranslationMap = {
     },
     selectors: {
       agentFilter: "Фільтрувати сеанси за агентом",
-      session: "Chat session",
-      sessionSearch: "Пошук сеансів",
-      clearSessionSearch: "Очистити пошук сеансів",
-      loadMoreSessions: "Завантажити більше сеансів",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

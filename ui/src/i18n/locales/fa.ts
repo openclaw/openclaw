@@ -276,8 +276,6 @@ export const fa: TranslationMap = {
     activeRun: "اجرای فعال",
     archived: "بایگانی‌شده",
     pinned: "سنجاق‌شده",
-    renameSession: "تغییر نام نشست",
-    renameSessionPrompt: "تغییر نام نشست",
     pinSession: "سنجاق کردن نشست",
     unpinSession: "برداشتن سنجاق نشست",
     archiveSession: "بایگانی کردن نشست",
@@ -457,6 +455,7 @@ export const fa: TranslationMap = {
   },
   nav: {
     chat: "چت",
+    chats: "Chats",
     settings: "تنظیمات",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
@@ -989,6 +988,7 @@ export const fa: TranslationMap = {
         search: "جستجو",
         navigation: "پیمایش",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "نمای کلی",
@@ -1578,10 +1578,6 @@ export const fa: TranslationMap = {
     },
     selectors: {
       agentFilter: "فیلتر کردن نشست‌ها بر اساس عامل",
-      session: "Chat session",
-      sessionSearch: "جستجوی نشست‌ها",
-      clearSessionSearch: "پاک کردن جستجوی نشست",
-      loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

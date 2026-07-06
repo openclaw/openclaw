@@ -33,6 +33,8 @@ export type SessionNavigation = {
   defaultAgentId: string;
   selectedSession?: GatewaySessionRow;
   recentSessions: GatewaySessionRow[];
+  /** Key of the row in `recentSessions` that is the open session, if any. */
+  activeRowKey: string | null;
 };
 
 export type SessionScopeHost = {
@@ -246,22 +248,29 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     agentId: selectedAgentId,
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
-  })
-    .filter((row) => !matchesCurrentSession(row))
-    .toSorted(compareSessionRowsByUpdatedAt);
-  // Pinned chats are explicit user choices, so the recent-chat cap only
-  // trims unpinned rows. Otherwise a tenth pin silently vanishes.
+  }).toSorted(compareSessionRowsByUpdatedAt);
+  // Stable presentation order: rows keep their recency slot and the open
+  // session highlights in place. Hoisting it to the top made every click
+  // reshuffle the list. Pinned chats are explicit user choices, so the
+  // recent-chat cap only trims unpinned rows; otherwise a tenth pin
+  // silently vanishes.
   const pinnedSessions = sortedSessions.filter((row) => row.pinned === true);
-  const recentSessions = [
-    ...pinnedSessions,
-    ...sortedSessions.filter((row) => row.pinned !== true).slice(0, 9),
-  ];
+  const chatSessions = sortedSessions.filter((row) => row.pinned !== true).slice(0, 9);
+  let recentSessions = [...pinnedSessions, ...chatSessions];
+  let activeRow = recentSessions.find(matchesCurrentSession);
+  if (!activeRow && activeSession) {
+    // The open session is not in the visible list (deep link, capped, or
+    // archived); surface it at the top so the user can see where they are.
+    activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
+    recentSessions = [activeRow, ...recentSessions.filter((row) => row !== activeRow)];
+  }
   return {
     currentSessionKey,
     selectedAgentId,
     defaultAgentId,
     selectedSession: activeSession,
-    recentSessions: activeSession ? [activeSession, ...recentSessions] : recentSessions,
+    recentSessions,
+    activeRowKey: activeRow?.key ?? null,
   };
 }
 

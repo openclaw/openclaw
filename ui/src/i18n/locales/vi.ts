@@ -275,8 +275,6 @@ export const vi: TranslationMap = {
     activeRun: "Lần chạy đang hoạt động",
     archived: "Đã lưu trữ",
     pinned: "Đã ghim",
-    renameSession: "Đổi tên phiên",
-    renameSessionPrompt: "Đổi tên phiên",
     pinSession: "Ghim phiên",
     unpinSession: "Bỏ ghim phiên",
     archiveSession: "Lưu trữ phiên",
@@ -456,6 +454,7 @@ export const vi: TranslationMap = {
   },
   nav: {
     chat: "Trò chuyện",
+    chats: "Chats",
     settings: "Cài đặt",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
@@ -986,6 +985,7 @@ export const vi: TranslationMap = {
         search: "Tìm kiếm",
         navigation: "Điều hướng",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "Tổng quan",
@@ -1569,10 +1569,6 @@ export const vi: TranslationMap = {
     },
     selectors: {
       agentFilter: "Lọc phiên theo tác nhân",
-      session: "Chat session",
-      sessionSearch: "Tìm kiếm phiên",
-      clearSessionSearch: "Xóa tìm kiếm phiên",
-      loadMoreSessions: "Tải thêm phiên",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

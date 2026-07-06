@@ -275,8 +275,6 @@ export const id: TranslationMap = {
     activeRun: "Jalankan aktif",
     archived: "Diarsipkan",
     pinned: "Disematkan",
-    renameSession: "Ganti nama sesi",
-    renameSessionPrompt: "Ganti nama sesi",
     pinSession: "Sematkan sesi",
     unpinSession: "Lepas sematan sesi",
     archiveSession: "Arsipkan sesi",
@@ -456,6 +454,7 @@ export const id: TranslationMap = {
   },
   nav: {
     chat: "Chat",
+    chats: "Chats",
     settings: "Pengaturan",
     expand: "Perluas bilah samping",
     collapse: "Ciutkan bilah samping",
@@ -988,6 +987,7 @@ export const id: TranslationMap = {
         search: "Cari",
         navigation: "Navigasi",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "Ikhtisar",
@@ -1578,10 +1578,6 @@ export const id: TranslationMap = {
     },
     selectors: {
       agentFilter: "Filter sesi berdasarkan agen",
-      session: "Chat session",
-      sessionSearch: "Cari sesi",
-      clearSessionSearch: "Hapus pencarian sesi",
-      loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

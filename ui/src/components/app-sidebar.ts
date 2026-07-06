@@ -22,8 +22,8 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
+import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
-import "./session-picker.ts";
 import "./tooltip.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
@@ -212,24 +212,18 @@ export class AppSidebar extends LitElement {
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === navigation.currentSessionKey,
+      active: row.key === navigation.activeRowKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
     });
-    const activeSession = navigation.selectedSession
-      ? toSidebarSession(navigation.selectedSession)
-      : null;
-    const recentSessions = navigation.recentSessions
-      .slice(activeSession ? 1 : 0)
-      .map(toSidebarSession);
+    const recentSessions = navigation.recentSessions.map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
       defaultAgentId: navigation.defaultAgentId,
-      activeSession,
       recentSessions,
       newSessionDisabled,
       newSessionTitle: !this.connected
@@ -637,16 +631,8 @@ export class AppSidebar extends LitElement {
   }
 
   private renderSessions() {
-    const context = this.context;
-    const {
-      routeSessionKey,
-      selectedAgentId,
-      defaultAgentId,
-      activeSession,
-      recentSessions,
-      newSessionDisabled,
-      newSessionTitle,
-    } = this.getSessionNavigationState();
+    const { routeSessionKey, selectedAgentId, recentSessions, newSessionDisabled, newSessionTitle } =
+      this.getSessionNavigationState();
     const newSessionButton = html`
       <button
         type="button"
@@ -663,11 +649,10 @@ export class AppSidebar extends LitElement {
             >`}
       </button>
     `;
-    // Pinned rows stay separate from the recency-capped chat list; the active
-    // session leads whichever group owns it.
-    const allRows = [...(activeSession ? [activeSession] : []), ...recentSessions];
-    const pinnedRows = allRows.filter((session) => session.pinned);
-    const chatRows = allRows.filter((session) => !session.pinned);
+    // Pinned rows stay separate from the recency-capped chat list; the open
+    // session highlights in place inside whichever group owns it.
+    const pinnedRows = recentSessions.filter((session) => session.pinned);
+    const chatRows = recentSessions.filter((session) => !session.pinned);
     return html`
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
         ${this.collapsed
@@ -695,27 +680,11 @@ export class AppSidebar extends LitElement {
                     `}
                 <div class="sidebar-recent-sessions__group">
                   <div class="sidebar-recent-sessions__head">
-                    <span class="sidebar-recent-sessions__label-text"
-                      >${t("sessionsView.title")}</span
-                    >
-                    <openclaw-session-picker
-                      .sessions=${context?.sessions}
-                      .sessionsResult=${this.sessionsResult}
-                      .currentSessionKey=${routeSessionKey}
-                      .agentId=${selectedAgentId}
-                      .defaultAgentId=${defaultAgentId}
-                      .mainKey=${resolveUiConfiguredMainKey({
-                        agentsList: context?.agents.state.agentsList,
-                        hello: context?.gateway.snapshot.hello,
-                      })}
-                      .connected=${this.connected}
-                      .onSelectSession=${this.selectSession}
-                      .onReplaceCurrentSession=${this.replaceCurrentSession}
-                    ></openclaw-session-picker>
+                    <span class="sidebar-recent-sessions__label-text">${t("nav.chats")}</span>
+                    ${this.renderAgentScope(routeSessionKey, selectedAgentId)}
                   </div>
-                  ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
                   <div class="sidebar-recent-sessions__list">
-                    ${allRows.length === 0
+                    ${recentSessions.length === 0
                       ? this.renderChatFallback()
                       : chatRows.map((session) => this.renderRecentSession(session))}
                   </div>
@@ -742,7 +711,11 @@ export class AppSidebar extends LitElement {
     `;
   }
 
-  private renderAgentFilter(sessionKey: string, selectedAgentId: string) {
+  /**
+   * Compact agent scope switcher in the Chats group header. Replaces the old
+   * full-width dropdown row; hidden entirely for single-agent setups.
+   */
+  private renderAgentScope(sessionKey: string, selectedAgentId: string) {
     const options = resolveSessionAgentFilterOptions({
       agentsList: this.context?.agents.state.agentsList,
       sessionsResult: this.sessionsResult,
@@ -755,25 +728,23 @@ export class AppSidebar extends LitElement {
     const selectedLabel =
       options.find((option) => option.id === selectedAgentId)?.label ?? selectedAgentId;
     return html`
-      <div class="sidebar-agent-filter">
-        <label class="field chat-controls__session chat-controls__agent">
-          <select
-            data-chat-agent-filter="true"
-            aria-label=${t("chat.selectors.agentFilter")}
-            title=${selectedLabel}
-            .value=${selectedAgentId}
-            ?disabled=${!this.connected}
-            @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
-          >
-            ${options.map(
-              (option) =>
-                html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
-                  ${option.label}
-                </option>`,
-            )}
-          </select>
-        </label>
-      </div>
+      <label class="sidebar-agent-scope" title=${selectedLabel}>
+        <select
+          data-chat-agent-filter="true"
+          aria-label=${t("chat.selectors.agentFilter")}
+          .value=${selectedAgentId}
+          ?disabled=${!this.connected}
+          @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
+        >
+          ${options.map(
+            (option) =>
+              html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
+                ${option.label}
+              </option>`,
+          )}
+        </select>
+        <span class="sidebar-agent-scope__chevron" aria-hidden="true">${icons.chevronDown}</span>
+      </label>
     `;
   }
 
@@ -843,6 +814,14 @@ export class AppSidebar extends LitElement {
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
+        <!-- macOS app only (CSS-gated on html.openclaw-native-macos): a compact
+             brand mark in the native titlebar strip next to the traffic lights.
+             Web builds keep the brand in the topbar breadcrumb instead. -->
+        <img
+          class="sidebar-native-brand"
+          src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
+          alt="OpenClaw"
+        />
         <div class="sidebar-shell">
           <div class="sidebar-shell__body">
             ${this.renderSessions()}

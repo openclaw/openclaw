@@ -226,7 +226,6 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
 vi.mock("../../lib/agents/display.ts", () => ({
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
-  agentLogoUrl: () => "/openclaw-logo.svg",
   assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
   resolveChatAvatarRenderUrl: (
     candidate: string | null | undefined,

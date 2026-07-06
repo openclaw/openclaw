@@ -273,8 +273,6 @@ export const th: TranslationMap = {
     activeRun: "การเรียกใช้งานที่ใช้งานอยู่",
     archived: "เก็บถาวรแล้ว",
     pinned: "ปักหมุดแล้ว",
-    renameSession: "เปลี่ยนชื่อเซสชัน",
-    renameSessionPrompt: "เปลี่ยนชื่อเซสชัน",
     pinSession: "ปักหมุดเซสชัน",
     unpinSession: "เลิกปักหมุดเซสชัน",
     archiveSession: "เก็บเซสชันถาวร",
@@ -454,6 +452,7 @@ export const th: TranslationMap = {
   },
   nav: {
     chat: "แชต",
+    chats: "Chats",
     settings: "การตั้งค่า",
     expand: "ขยายแถบด้านข้าง",
     collapse: "ย่อแถบด้านข้าง",
@@ -978,6 +977,7 @@ export const th: TranslationMap = {
         search: "ค้นหา",
         navigation: "การนำทาง",
         skills: "ทักษะ",
+        chats: "Chats",
       },
       items: {
         overview: "ภาพรวม",
@@ -1544,10 +1544,6 @@ export const th: TranslationMap = {
     },
     selectors: {
       agentFilter: "กรองเซสชันตามเอเจนต์",
-      session: "Chat session",
-      sessionSearch: "ค้นหาเซสชัน",
-      clearSessionSearch: "ล้างการค้นหาเซสชัน",
-      loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

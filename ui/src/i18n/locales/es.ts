@@ -276,8 +276,6 @@ export const es: TranslationMap = {
     activeRun: "Ejecución activa",
     archived: "Archivada",
     pinned: "Fijadas",
-    renameSession: "Cambiar nombre de la sesión",
-    renameSessionPrompt: "Cambiar nombre de la sesión",
     pinSession: "Fijar sesión",
     unpinSession: "Desfijar sesión",
     archiveSession: "Archivar sesión",
@@ -457,6 +455,7 @@ export const es: TranslationMap = {
   },
   nav: {
     chat: "Chat",
+    chats: "Chats",
     settings: "Ajustes",
     expand: "Expandir barra lateral",
     collapse: "Contraer barra lateral",
@@ -991,6 +990,7 @@ export const es: TranslationMap = {
         search: "Buscar",
         navigation: "Navegación",
         skills: "Skills",
+        chats: "Chats",
       },
       items: {
         overview: "Resumen",
@@ -1587,10 +1587,6 @@ export const es: TranslationMap = {
     },
     selectors: {
       agentFilter: "Filtrar sesiones por agente",
-      session: "Chat session",
-      sessionSearch: "Buscar sesiones",
-      clearSessionSearch: "Borrar búsqueda de sesiones",
-      loadMoreSessions: "Cargar más sesiones",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
