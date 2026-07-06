@@ -41,6 +41,9 @@
             "input": ["text", "image"],
             "contextWindow": 262144,
             "maxTokens": 262144,
+            "compat": {
+              "sendSessionAffinityHeaders": true
+            },
             "cost": {
               "input": 0.95,
               "output": 4,
@@ -56,7 +59,8 @@
             "contextWindow": 256000,
             "maxTokens": 256000,
             "compat": {
-              "unsupportedToolSchemaKeywords": ["not"]
+              "unsupportedToolSchemaKeywords": ["not"],
+              "sendSessionAffinityHeaders": true
             },
             "cost": {
               "input": 0,
