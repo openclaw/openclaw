@@ -1,84 +1,100 @@
-// edit-diff tests cover not-found candidate hints and error diagnostics.
 import { describe, expect, it } from "vitest";
 import { applyEditsToNormalizedContent, normalizeToLF } from "./edit-diff.js";
 
+function getMismatchMessage(
+  content: string,
+  edits: Array<{ oldText: string; newText: string }>,
+): string {
+  try {
+    applyEditsToNormalizedContent(normalizeToLF(content), edits, "test.ts");
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected edit mismatch");
+}
+
 describe("applyEditsToNormalizedContent", () => {
-  it("includes near-match candidate hints when oldText is not found", () => {
-    const content = normalizeToLF(
-      "line one\n" +
-        "this is a test line\n" +
-        "another line here\n" +
-        "const value = 42;\n" +
-        "final line\n",
+  it("shows the closest matching line with expected, found, and difference marker", () => {
+    const message = getMismatchMessage(
+      "line one\nthis is a test line\nanother line here\nconst value = 42;\nfinal line\n",
+      [{ oldText: "const value = 99;", newText: "" }],
     );
-    expect(() =>
-      applyEditsToNormalizedContent(
-        content,
-        [{ oldText: "const value = 99;", newText: "" }],
-        "test.ts",
-      ),
-    ).toThrow(/near line 4:[\s\S]*const value = 42[\s\S]*\d+% match/);
+
+    expect(message).toMatch(/near line 4 \(\d+% match\)/);
+    expect(message).toContain('expected: "const value = 99;"');
+    expect(message).toContain('found:    "const value = 42;"');
+    expect(message).toMatch(/\^{1,12}/);
   });
 
   it("shows up to 3 best candidates sorted by similarity", () => {
-    const content = normalizeToLF(
-      "function alpha() {}\n" +
-        "function beta() {}\n" +
-        "function gamma() {}\n" +
-        "function delta() {}\n",
+    const message = getMismatchMessage(
+      "function alpha() {}\nfunction beta() {}\nfunction bet() {}\nfunction delta() {}\n",
+      [{ oldText: "function betaa() {}", newText: "" }],
     );
-    expect(() =>
-      applyEditsToNormalizedContent(
-        content,
-        [{ oldText: "function betaa() {}", newText: "" }],
-        "test.ts",
-      ),
-    ).toThrow(/near line 2:[\s\S]*function beta/);
+
+    expect(message.match(/near line/g)).toHaveLength(3);
+    expect(message.indexOf("near line 2")).toBeLessThan(message.indexOf("near line 3"));
   });
 
-  it("omits candidate hints when no line passes the similarity threshold", () => {
-    const content = normalizeToLF("abc\nxyz\n123\n");
-    expect(() =>
-      applyEditsToNormalizedContent(
-        content,
-        [{ oldText: "completely different text here", newText: "" }],
-        "test.ts",
-      ),
-    ).toThrow(/Could not find the exact text/);
-    // The error should NOT contain candidate hint lines
-    expect(() =>
-      applyEditsToNormalizedContent(
-        content,
-        [{ oldText: "completely different text here", newText: "" }],
-        "test.ts",
-      ),
-    ).not.toThrow(/near line/);
+  it("uses the most meaningful oldText line for multiline diagnostics", () => {
+    const message = getMismatchMessage("header\nconst actualValue = 42;\nfooter\n", [
+      { oldText: "x\nconst actualValue = 99;\n", newText: "" },
+    ]);
+
+    expect(message).toContain("near line 2");
+    expect(message).toContain('expected: "const actualValue = 99;"');
   });
 
-  it("caps candidate scanning at MAX_LINES to avoid unbounded work", () => {
-    // Generate content with many similar lines — should not OOM or hang.
-    const lines = Array.from({ length: 5000 }, (_, i) => `line-${i}-const value = ${i}`);
-    const content = normalizeToLF(lines.join("\n"));
-    expect(() =>
-      applyEditsToNormalizedContent(
-        content,
-        [{ oldText: "const value = 99999;", newText: "" }],
-        "large.ts",
-      ),
-    ).toThrow(/Could not find/);
+  it("calls out indentation differences", () => {
+    const message = getMismatchMessage("      const value = 42;\n", [
+      { oldText: "            const value = 42;", newText: "" },
+    ]);
+
+    expect(message).toContain("indentation differs (expected 12 spaces, found 6 spaces)");
+  });
+
+  it("calls out escaping differences", () => {
+    const message = getMismatchMessage('const pattern = "\\bword\\b";\n', [
+      { oldText: 'const pattern = "\\\\bword\\\\b";', newText: "" },
+    ]);
+
+    expect(message).toContain("escaping differs (expected 4 backslashes, found 2)");
+  });
+
+  it("omits candidates below the similarity threshold", () => {
+    const message = getMismatchMessage("abc\nxyz\n123\n", [
+      { oldText: "completely different text here", newText: "" },
+    ]);
+
+    expect(message).toContain("Could not find the exact text");
+    expect(message).not.toContain("Closest matching lines");
+  });
+
+  it("bounds candidate scanning and displayed line length", () => {
+    const content = `${Array.from({ length: 1000 }, () => "unrelated").join("\n")}\n${"x".repeat(
+      200_000,
+    )}const value = 42;`;
+    const message = getMismatchMessage(content, [{ oldText: "const value = 99;", newText: "" }]);
+
+    expect(message).not.toContain("const value = 42");
+    expect(message.length).toBeLessThan(1000);
+  });
+
+  it("does not split surrogate pairs at the displayed line boundary", () => {
+    const message = getMismatchMessage(`${"x".repeat(119)}🙂found\n`, [
+      { oldText: `${"x".repeat(119)}🙂expected`, newText: "" },
+    ]);
+
+    expect(message).toContain("Closest matching lines");
+    expect(message).not.toContain("\\ud83d");
   });
 
   it("includes candidate hints for multi-edit failures", () => {
-    const content = normalizeToLF("alpha\nbeta\ngamma\n");
-    expect(() =>
-      applyEditsToNormalizedContent(
-        content,
-        [
-          { oldText: "alpha", newText: "A" },
-          { oldText: "bta", newText: "B" },
-        ],
-        "test.ts",
-      ),
-    ).toThrow(/Could not find edits\[1\][\s\S]*near line 2:[\s\S]*beta/);
+    const message = getMismatchMessage("alpha\nbeta\ngamma\n", [
+      { oldText: "alpha", newText: "A" },
+      { oldText: "bta", newText: "B" },
+    ]);
+
+    expect(message).toMatch(/Could not find edits\[1\][\s\S]*near line 2/);
   });
 });
