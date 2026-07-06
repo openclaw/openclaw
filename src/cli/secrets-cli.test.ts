@@ -425,4 +425,24 @@ describe("secrets CLI", () => {
       allowExec: true,
     });
   });
+
+  it("prints a friendly error for corrupt plan files instead of a raw SyntaxError", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-cli-corrupt-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    await fs.writeFile(planPath, "not valid json { [", "utf8");
+    try {
+      await createProgram().parseAsync(["secrets", "apply", "--from", planPath], {
+        from: "user",
+      });
+    } catch {
+      // exitOverride may throw on exit(1); the error text is what matters
+    } finally {
+      await fs.rm(planPath, { force: true });
+    }
+    const errorText = runtimeErrors.join("\n");
+    expect(errorText).toContain("malformed JSON");
+    expect(errorText).toContain(planPath);
+  });
 });

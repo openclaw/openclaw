@@ -935,7 +935,9 @@ async function runModelAuthStatus() {
     },
   );
   const raw = captured.find((line) => line.trim().startsWith("{"));
-  if (!raw) return {};
+  if (!raw) {
+    return {};
+  }
   try {
     return JSON.parse(raw) as Record<string, unknown>;
   } catch {

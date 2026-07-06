@@ -3142,6 +3142,21 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Failed to remove saved auth profiles for provider openai.");
   });
 
+  it("returns empty object when model auth status output is unparseable", async () => {
+    mocks.modelsStatusCommand.mockImplementationOnce(
+      async (_opts: unknown, runtime: { log: (...args: unknown[]) => void }) => {
+        runtime.log("unexpected text output with no json");
+      },
+    );
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "auth", "status", "--json"],
+    });
+
+    expect(firstJsonOutput()).toEqual({});
+  });
+
   it("rejects providerless audio model overrides", async () => {
     await expect(
       runRegisteredCli({
