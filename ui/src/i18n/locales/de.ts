@@ -1603,6 +1603,8 @@ export const de: TranslationMap = {
       splitDown: "Nach unten teilen",
       closePane: "Bereich schließen",
       sessionSelect: "Bereichssitzung",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Alle Sitzungen",

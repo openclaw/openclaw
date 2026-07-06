@@ -1597,6 +1597,8 @@ export const tr: TranslationMap = {
       splitDown: "Aşağı böl",
       closePane: "Bölmeyi kapat",
       sessionSelect: "Bölme oturumu",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Tüm oturumlar",

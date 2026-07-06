@@ -1598,6 +1598,8 @@ export const ja_JP: TranslationMap = {
       splitDown: "下に分割",
       closePane: "ペインを閉じる",
       sessionSelect: "ペインのセッション",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "すべてのセッション",

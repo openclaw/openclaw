@@ -1591,6 +1591,8 @@ export const fa: TranslationMap = {
       splitDown: "تقسیم به پایین",
       closePane: "بستن پنل",
       sessionSelect: "نشست پنل",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "همهٔ نشست‌ها",

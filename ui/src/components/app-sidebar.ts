@@ -37,11 +37,18 @@ import {
   renameSessionGroup,
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
+<<<<<<< HEAD
 import {
   groupSidebarSessionRows,
   normalizeSidebarSessionsGrouping,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+||||||| parent of 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
+import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
+=======
+import { writeSessionDragData } from "../lib/sessions/drag.ts";
+import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
+>>>>>>> 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
 import {
   compareSessionRowsByUpdatedAt,
   resolveSessionNavigation,
@@ -148,7 +155,12 @@ export class AppSidebar extends LitElement {
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   @state() private sessionGroupSubmenuOpen = false;
+<<<<<<< HEAD
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
+||||||| parent of 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
+=======
+  @state() private draggingSessionKey: string | null = null;
+>>>>>>> 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
@@ -1207,6 +1219,7 @@ export class AppSidebar extends LitElement {
       session.active ? "sidebar-recent-session--active" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
+      this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -1214,6 +1227,16 @@ export class AppSidebar extends LitElement {
       <div
         class=${rowClass}
         data-session-key=${session.key}
+        draggable="true"
+        @dragstart=${(event: DragEvent) => {
+          if (event.dataTransfer) {
+            writeSessionDragData(event.dataTransfer, session.key);
+            this.draggingSessionKey = session.key;
+          }
+        }}
+        @dragend=${() => {
+          this.draggingSessionKey = null;
+        }}
         @contextmenu=${(event: MouseEvent) => {
           event.preventDefault();
           this.openSessionMenu(session, event.clientX, event.clientY);
@@ -1224,6 +1247,7 @@ export class AppSidebar extends LitElement {
         <a
           href=${session.href}
           class="sidebar-recent-session__link"
+          draggable="false"
           title=${`${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {

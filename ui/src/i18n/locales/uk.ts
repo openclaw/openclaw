@@ -1593,6 +1593,8 @@ export const uk: TranslationMap = {
       splitDown: "Розділити вниз",
       closePane: "Закрити панель",
       sessionSelect: "Сеанс панелі",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Усі сеанси",

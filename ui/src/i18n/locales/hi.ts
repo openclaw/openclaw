@@ -1575,6 +1575,8 @@ export const hi: TranslationMap = {
       splitDown: "नीचे विभाजित करें",
       closePane: "पैन बंद करें",
       sessionSelect: "पैन सत्र",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "सभी सत्र",

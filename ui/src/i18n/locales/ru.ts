@@ -1604,6 +1604,8 @@ export const ru: TranslationMap = {
       splitDown: "Разделить вниз",
       closePane: "Закрыть панель",
       sessionSelect: "Сессия панели",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Все сеансы",

@@ -1582,6 +1582,8 @@ export const vi: TranslationMap = {
       splitDown: "Chia xuống dưới",
       closePane: "Đóng khung",
       sessionSelect: "Phiên trong khung",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Tất cả phiên",

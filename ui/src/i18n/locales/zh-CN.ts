@@ -1552,6 +1552,8 @@ export const zh_CN: TranslationMap = {
       splitDown: "向下拆分",
       closePane: "关闭窗格",
       sessionSelect: "窗格会话",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "所有会话",

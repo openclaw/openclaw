@@ -1593,6 +1593,8 @@ export const pt_BR: TranslationMap = {
       splitDown: "Dividir para baixo",
       closePane: "Fechar painel",
       sessionSelect: "Sessão do painel",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Todas as sessões",

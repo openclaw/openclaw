@@ -1602,6 +1602,8 @@ export const it: TranslationMap = {
       splitDown: "Dividi in basso",
       closePane: "Chiudi riquadro",
       sessionSelect: "Sessione del riquadro",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "Tutte le sessioni",
