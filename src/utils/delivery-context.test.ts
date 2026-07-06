@@ -182,6 +182,42 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("falls back to deliveryContext.to and origin.to when lastTo is missing", () => {
+    expect(
+      deliveryContextFromSession({
+        channel: "demo-channel",
+        deliveryContext: { channel: "whatsapp", to: "+1555" },
+      }),
+    ).toEqual({
+      channel: "demo-channel",
+      to: "+1555",
+      accountId: undefined,
+    });
+
+    expect(
+      deliveryContextFromSession({
+        origin: { provider: "whatsapp", to: "+1555" },
+      }),
+    ).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: undefined,
+    });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "demo-channel",
+        lastTo: "+1000",
+        deliveryContext: { channel: "demo-channel", to: "+2000" },
+        origin: { provider: "demo-channel", to: "+3000" },
+      }),
+    ).toEqual({
+      channel: "demo-channel",
+      to: "+1000",
+      accountId: undefined,
+    });
+  });
+
   it("prefers explicit external delivery context over stale webchat legacy fields", () => {
     expect(
       deliveryContextFromSession({
