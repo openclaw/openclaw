@@ -204,12 +204,16 @@ function resolveEffectivePromptTokens(
 function isPreflightCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
   // Preflight compaction is a guardrail, not a hard dependency. These classes
-  // mean the context engine found nothing useful to compact, so the reply should
-  // continue instead of surfacing a generic user-facing failure.
+  // mean the context engine found nothing useful to compact or the compaction
+  // LLM call hit a transient failure, so the reply should continue instead of
+  // surfacing a generic user-facing failure and permanently locking the session.
   return (
     classification === "below_threshold" ||
     classification === "no_compactable_entries" ||
-    classification === "already_compacted_recently"
+    classification === "already_compacted_recently" ||
+    classification === "timeout" ||
+    classification === "provider_error_4xx" ||
+    classification === "provider_error_5xx"
   );
 }
 

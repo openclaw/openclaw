@@ -55,6 +55,21 @@ describe("classifyCompactionReason", () => {
     ).toBe("guard_blocked");
   });
 
+  it("classifies timeout failures", () => {
+    expect(classifyCompactionReason("Compaction timed out")).toBe("timeout");
+    expect(classifyCompactionReason("request timeout after 30s")).toBe("timeout");
+  });
+
+  it("classifies provider 4xx errors", () => {
+    expect(classifyCompactionReason("HTTP 429 Too Many Requests")).toBe("provider_error_4xx");
+    expect(classifyCompactionReason("401 Unauthorized")).toBe("provider_error_4xx");
+  });
+
+  it("classifies provider 5xx errors", () => {
+    expect(classifyCompactionReason("HTTP 503 Service Unavailable")).toBe("provider_error_5xx");
+    expect(classifyCompactionReason("Internal Server Error 500")).toBe("provider_error_5xx");
+  });
+
   it("keeps unclassified provider errors in the stable unknown bucket", () => {
     expect(classifyCompactionReason("No API provider registered for api: ollama")).toBe("unknown");
   });
