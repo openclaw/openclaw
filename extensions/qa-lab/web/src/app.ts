@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements app behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
@@ -19,33 +20,35 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+const QA_LAB_WEB_JSON_MAX_BYTES = 16 * 1024 * 1024;
+
+export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    const payload = await readProviderJsonResponse<{ error?: string }>(response, "qa-lab web", {
+      maxBytes: QA_LAB_WEB_JSON_MAX_BYTES,
+    }).catch(() => ({}));
+    throw new Error(payload.error || `${response.status} ${response.statusText}`);
   }
-  return (await response.json()) as T;
+  return readProviderJsonResponse<T>(response, "qa-lab web", {
+    maxBytes: QA_LAB_WEB_JSON_MAX_BYTES,
+  });
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  return fetchJson<T>(path);
 }
 
 async function getJsonNoStore<T>(path: string): Promise<T> {
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
+  return fetchJson<T>(path, { cache: "no-store" });
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
+  return fetchJson<T>(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
 }
 
 function countCaptureDimension(
