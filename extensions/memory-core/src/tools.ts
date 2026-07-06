@@ -360,6 +360,32 @@ async function resolveMemoryReadFailureResult(params: {
   return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
 }
 
+function isMissingMemoryReadResult(value: unknown, relPath: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as {
+    text?: unknown;
+    path?: unknown;
+    disabled?: unknown;
+    error?: unknown;
+    from?: unknown;
+    lines?: unknown;
+    truncated?: unknown;
+    nextFrom?: unknown;
+  };
+  return (
+    result.path === relPath &&
+    result.text === "" &&
+    result.disabled === undefined &&
+    result.error === undefined &&
+    result.from === undefined &&
+    result.lines === undefined &&
+    result.truncated === undefined &&
+    result.nextFrom === undefined
+  );
+}
+
 async function executeMemoryReadResult<T>(params: {
   read: () => Promise<T>;
   requestedCorpus?: "memory" | "wiki" | "all";
@@ -369,7 +395,20 @@ async function executeMemoryReadResult<T>(params: {
   agentSessionKey?: string;
 }) {
   try {
-    return jsonResult(await params.read());
+    const result = await params.read();
+    if (params.requestedCorpus === "all" && isMissingMemoryReadResult(result, params.relPath)) {
+      const supplement = await getSupplementMemoryReadResult({
+        relPath: params.relPath,
+        from: params.from,
+        lines: params.lines,
+        agentSessionKey: params.agentSessionKey,
+        corpus: params.requestedCorpus,
+      });
+      if (supplement) {
+        return jsonResult(supplement);
+      }
+    }
+    return jsonResult(result);
   } catch (error) {
     return await resolveMemoryReadFailureResult({
       error,
