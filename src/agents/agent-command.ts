@@ -54,8 +54,8 @@ import {
   repairProviderWrappedModelOverride,
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -957,9 +957,7 @@ async function agentCommandInternal(
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
-        const entry = isSessionRollover
-          ? clearRotatedSessionMetadata(initialEntry)
-          : initialEntry;
+        const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
         currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
           cfg,
           opts,
@@ -1764,27 +1762,27 @@ async function agentCommandInternal(
         lifecycleEnded: false,
       };
       const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
-    const suppressUserTurnPersistence =
-      opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
-    const recorderTranscriptText = transcriptBody || undefined;
-    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-      ...(!suppressUserTurnPersistence && recorderTranscriptText
-        ? { input: { text: recorderTranscriptText } }
-        : {}),
-      target: {
-        transcriptPath: attemptSessionFile,
-        sessionId,
-        agentId: sessionAgentId,
-        ...(sessionKey ? { sessionKey } : {}),
-        cwd: cwd ?? workspaceDir,
-        config: cfg,
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      errorContext: "agent command user turn transcript",
-    });
-    if (suppressUserTurnPersistence) {
-      userTurnTranscriptRecorder.markBlocked();
-    }
+      const suppressUserTurnPersistence =
+        opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
+      const recorderTranscriptText = transcriptBody || undefined;
+      const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        ...(!suppressUserTurnPersistence && recorderTranscriptText
+          ? { input: { text: recorderTranscriptText } }
+          : {}),
+        target: {
+          transcriptPath: attemptSessionFile,
+          sessionId,
+          agentId: sessionAgentId,
+          ...(sessionKey ? { sessionKey } : {}),
+          cwd: cwd ?? workspaceDir,
+          config: cfg,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        errorContext: "agent command user turn transcript",
+      });
+      if (suppressUserTurnPersistence) {
+        userTurnTranscriptRecorder.markBlocked();
+      }
       let lifecycleFinishingEmitted = false;
       const emitLifecycleFinishing = (runResult: AgentAttemptResult) => {
         if (
@@ -1939,7 +1937,7 @@ async function agentCommandInternal(
           });
 
           let fallbackAttemptIndex = 0;
-        const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
+          const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
           attemptLifecycleState.currentTurnUserMessagePersisted = false;
           const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
             cfg,
@@ -2282,6 +2280,9 @@ async function agentCommandInternal(
               opts.bootstrapContextRunKind !== "cron" &&
               !isHeartbeatLifecycleRun &&
               !opts.internalEvents?.length,
+            // Cron output counts as unread-worthy activity; heartbeat and
+            // internal-event turns must not re-flag the session unread.
+            touchActivity: !isHeartbeatLifecycleRun && !opts.internalEvents?.length,
             preserveRuntimeModel:
               fallbackExhausted || isHeartbeatLifecycleRun || preserveUserFacingSessionModelState,
             preserveUserFacingSessionModelState,

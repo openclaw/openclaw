@@ -478,6 +478,9 @@ export type GatewaySessionRow = {
   room?: string;
   space?: string;
   updatedAt: number | null;
+  unread?: boolean;
+  lastReadAt?: number;
+  lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
   pinned?: boolean;

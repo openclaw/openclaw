@@ -44,6 +44,50 @@ struct IOSGatewayChatTransportTests {
         #expect(params["includeGlobal"] as? Bool == true)
         #expect(params["includeUnknown"] as? Bool == false)
         #expect(params["limit"] as? Int == 12)
+        #expect(params["archived"] == nil)
+    }
+
+    @Test func `list sessions params request archived sessions explicitly`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12, archived: true))
+        #expect(params["archived"] as? Bool == true)
+    }
+
+    @Test func `patch session params preserve explicit null clearing`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
+                key: "session-1",
+                label: .some(nil),
+                category: .some(nil),
+                pinned: true,
+                unread: false))
+        #expect(params["key"] as? String == "session-1")
+        #expect(params["label"] is NSNull)
+        #expect(params["category"] is NSNull)
+        #expect(params["pinned"] as? Bool == true)
+        #expect(params["unread"] as? Bool == false)
+        #expect(params["archived"] == nil)
+    }
+
+    @Test func `patch session params include selected global agent`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
+                key: "global",
+                agentId: "reviewer",
+                unread: false))
+        #expect(params["key"] as? String == "global")
+        #expect(params["agentId"] as? String == "reviewer")
+        #expect(params["unread"] as? Bool == false)
+    }
+
+    @Test func `fork session params preserve parent agent`() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeForkSessionParamsJSON(
+                parentKey: "agent:reviewer:telegram:group:1",
+                agentId: "reviewer"))
+        #expect(params["parentSessionKey"] as? String == "agent:reviewer:telegram:group:1")
+        #expect(params["fork"] as? Bool == true)
+        #expect(params["agentId"] as? String == "reviewer")
     }
 
     @Test func `session model patch params include model and selected agent`() throws {

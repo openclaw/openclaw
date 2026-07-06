@@ -710,6 +710,7 @@ class NodeRuntime private constructor(
   private val voiceCaptureOwnershipEpoch = AtomicLong()
   private val talkPttCommandEpoch = AtomicLong()
   private val talkPttOwnership = AtomicReference<TalkPttOwnership?>()
+
   // Keep ownership epochs and their service/capture state transitions atomic.
   // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
   private val voiceCaptureOwnershipLock = Any()
@@ -2650,9 +2651,40 @@ class NodeRuntime private constructor(
     chat.refresh()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    chat.refreshSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    chat.refreshSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    chat.patchSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    chat.deleteSession(key)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = chat.forkSession(parentKey)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)

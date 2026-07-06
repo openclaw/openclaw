@@ -29,6 +29,16 @@ public protocol OpenClawChatTransport: Sendable {
 
     func abortRun(sessionKey: String, runId: String) async throws
     func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse
+    func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    func patchSession(
+        key: String,
+        label: String??,
+        category: String??,
+        pinned: Bool?,
+        archived: Bool?,
+        unread: Bool?) async throws
+    func deleteSession(key: String) async throws
+    func forkSession(parentKey: String) async throws -> String
     func setSessionModel(sessionKey: String, model: String?) async throws
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
 
@@ -86,6 +96,44 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
+    }
+
+    public func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
+        guard !archived else {
+            throw NSError(
+                domain: "OpenClawChatTransport",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "archived sessions.list not supported by this transport"])
+        }
+        return try await self.listSessions(limit: limit)
+    }
+
+    public func patchSession(
+        key _: String,
+        label _: String?? = nil,
+        category _: String?? = nil,
+        pinned _: Bool? = nil,
+        archived _: Bool? = nil,
+        unread _: Bool? = nil) async throws
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.patch not supported by this transport"])
+    }
+
+    public func deleteSession(key _: String) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.delete not supported by this transport"])
+    }
+
+    public func forkSession(parentKey _: String) async throws -> String {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.create fork not supported by this transport"])
     }
 
     public func listModels() async throws -> [OpenClawChatModelChoice] {

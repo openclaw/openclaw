@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2464,
+      "line": 2465,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2466,
+      "line": 2467,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2468,
+      "line": 2469,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -2627,7 +2627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 110,
+      "line": 133,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Sessions",
       "surface": "android",
@@ -2635,7 +2635,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 111,
+      "line": 134,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Search sessions",
       "surface": "android",
@@ -2643,7 +2643,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 112,
+      "line": 135,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Reverse session sort",
       "surface": "android",
@@ -2651,7 +2651,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 118,
+      "line": 141,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Recent",
       "surface": "android",
@@ -2659,15 +2659,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 119,
+      "line": 142,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Current",
       "surface": "android",
       "id": "native.android.9bc0d0b631dca571"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 143,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Archived",
+      "surface": "android",
+      "id": "native.android.78654c0f198c6df2"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 134,
+      "line": 158,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Newest",
       "surface": "android",
@@ -2675,7 +2683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 134,
+      "line": 158,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Oldest",
       "surface": "android",
@@ -2683,7 +2691,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 137,
+      "line": 161,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Toggle session layout",
       "surface": "android",
@@ -2691,7 +2699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 142,
+      "line": 166,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Layout: Compact",
       "surface": "android",
@@ -2699,7 +2707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 142,
+      "line": 166,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Layout: Detailed",
       "surface": "android",
@@ -2707,7 +2715,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 154,
+      "line": 178,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Start Chat",
       "surface": "android",
@@ -2715,7 +2723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 163,
+      "line": 199,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Current session",
       "surface": "android",
@@ -2723,7 +2731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 163,
+      "line": 199,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "OpenClaw session",
       "surface": "android",
@@ -2731,7 +2739,71 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 261,
+      "line": 244,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Rename session",
+      "surface": "android",
+      "id": "native.android.786774c8a76e50d7"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 247,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Rename",
+      "surface": "android",
+      "id": "native.android.f869da474db7cf6e"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 266,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "New group",
+      "surface": "android",
+      "id": "native.android.ddbfb1989d641bd2"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 269,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Create",
+      "surface": "android",
+      "id": "native.android.3208d7c67e225e7f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 283,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Delete session?",
+      "surface": "android",
+      "id": "native.android.4805fb9d6623e8c0"
+    },
+    {
+      "kind": "ui-call",
+      "line": 284,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "This permanently deletes the session and its transcript.",
+      "surface": "android",
+      "id": "native.android.0c3283a2b2445eae"
+    },
+    {
+      "kind": "ui-call",
+      "line": 292,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Delete",
+      "surface": "android",
+      "id": "native.android.807ba5c6699af2f1"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 413,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Pinned",
+      "surface": "android",
+      "id": "native.android.03fd4e5e90f1afe7"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 419,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Workspace",
       "surface": "android",
@@ -2739,7 +2811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 262,
+      "line": 420,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -2747,7 +2819,63 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 317,
+      "line": 470,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Pin",
+      "surface": "android",
+      "id": "native.android.6637da0312da85f9"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 470,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Unpin",
+      "surface": "android",
+      "id": "native.android.fb512b81634fa8c4"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 474,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Mark as read",
+      "surface": "android",
+      "id": "native.android.b75c8710d4537222"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 474,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Mark as unread",
+      "surface": "android",
+      "id": "native.android.a9619e8ed4fd6aa2"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 533,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Group name",
+      "surface": "android",
+      "id": "native.android.54c10a1eec2fa17c"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 533,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Name",
+      "surface": "android",
+      "id": "native.android.91851a0eb519765f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 543,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Cancel",
+      "surface": "android",
+      "id": "native.android.4e1ffc65a44efec5"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 616,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "No sessions yet",
       "surface": "android",
@@ -2755,7 +2883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 318,
+      "line": 617,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "No current session",
       "surface": "android",
@@ -2763,7 +2891,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 324,
+      "line": 618,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "No archived sessions",
+      "surface": "android",
+      "id": "native.android.acbcc9c9ea53d8c0"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 624,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Start a new conversation and it will show up here.",
       "surface": "android",
@@ -2771,7 +2907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 325,
+      "line": 625,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Open Chat to start or resume the current session.",
       "surface": "android",
@@ -2779,11 +2915,11 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 340,
+      "line": 626,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Main session",
+      "source": "Archived sessions will show up here.",
       "surface": "android",
-      "id": "native.android.6ab7c2c111f866ba"
+      "id": "native.android.085515989f8a2022"
     },
     {
       "kind": "ui-named-argument",
@@ -7963,7 +8099,183 @@
     },
     {
       "kind": "ui-call",
-      "line": 99,
+      "line": 144,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Unarchive",
+      "surface": "apple",
+      "id": "native.apple.41afc4a5d600ded5"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 150,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Pin",
+      "surface": "apple",
+      "id": "native.apple.69b8d4842a6b18ca"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 150,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Unpin",
+      "surface": "apple",
+      "id": "native.apple.43b1796d55760cbf"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 156,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Mark as Read",
+      "surface": "apple",
+      "id": "native.apple.48fe0c28f708d02d"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 156,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Mark as Unread",
+      "surface": "apple",
+      "id": "native.apple.b0c19ea32f3b60dc"
+    },
+    {
+      "kind": "ui-call",
+      "line": 161,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Rename…",
+      "surface": "apple",
+      "id": "native.apple.1a700eb0a3a26dd2"
+    },
+    {
+      "kind": "ui-call",
+      "line": 164,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Fork",
+      "surface": "apple",
+      "id": "native.apple.036b0faa4e17f39c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 168,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Archive",
+      "surface": "apple",
+      "id": "native.apple.35e23b306162f6ad"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 180,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Create",
+      "surface": "apple",
+      "id": "native.apple.ef105487ab62349a"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 180,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Save",
+      "surface": "apple",
+      "id": "native.apple.1d017f810676d86b"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 190,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Delete Session?",
+      "surface": "apple",
+      "id": "native.apple.f488b9caf6e51ac3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 198,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Delete Session",
+      "surface": "apple",
+      "id": "native.apple.8634b17be9b111bc"
+    },
+    {
+      "kind": "ui-call",
+      "line": 202,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Cancel",
+      "surface": "apple",
+      "id": "native.apple.9b1aed19568a048e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 206,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "This permanently deletes the session and its transcript.",
+      "surface": "apple",
+      "id": "native.apple.4a9568ac9b18d8d3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 218,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "New Group…",
+      "surface": "apple",
+      "id": "native.apple.0965d8d2429c3b9f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 223,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Remove from Group",
+      "surface": "apple",
+      "id": "native.apple.e6506ceb05d0ab33"
+    },
+    {
+      "kind": "ui-call",
+      "line": 228,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Move to Group",
+      "surface": "apple",
+      "id": "native.apple.6def347a80370aac"
+    },
+    {
+      "kind": "ui-call",
+      "line": 237,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Delete…",
+      "surface": "apple",
+      "id": "native.apple.de18cef702422ac0"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 249,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "New Group",
+      "surface": "apple",
+      "id": "native.apple.6595d3fd006a1a01"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 249,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Rename Session",
+      "surface": "apple",
+      "id": "native.apple.5bccdc23a1640895"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 253,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Group name",
+      "surface": "apple",
+      "id": "native.apple.31424500c53d6c32"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 253,
+      "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
+      "source": "Session name",
+      "surface": "apple",
+      "id": "native.apple.af789b2d2fda0f67"
+    },
+    {
+      "kind": "ui-call",
+      "line": 325,
       "path": "apps/ios/Sources/Design/CommandCenterSupport.swift",
       "source": "View More",
       "surface": "apple",
@@ -7971,7 +8283,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 142,
+      "line": 144,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Gateway settings",
       "surface": "apple",
@@ -7979,7 +8291,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 143,
+      "line": 145,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Opens gateway settings",
       "surface": "apple",
@@ -7987,7 +8299,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 167,
+      "line": 169,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -7995,7 +8307,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 172,
+      "line": 174,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Connection",
       "surface": "apple",
@@ -8003,7 +8315,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 178,
+      "line": 180,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Address",
       "surface": "apple",
@@ -8011,7 +8323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 184,
+      "line": 186,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Agents",
       "surface": "apple",
@@ -8019,7 +8331,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 218,
+      "line": 220,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Agent session",
       "surface": "apple",
@@ -8027,7 +8339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 233,
+      "line": 235,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Recent sessions",
       "surface": "apple",
@@ -8035,71 +8347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 294,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Online",
-      "surface": "apple",
-      "id": "native.apple.e01aac63fda4c147"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 296,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Connecting",
-      "surface": "apple",
-      "id": "native.apple.a857bc74fd053781"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 298,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Attention",
-      "surface": "apple",
-      "id": "native.apple.a36675969878b0d8"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 300,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Offline",
-      "surface": "apple",
-      "id": "native.apple.89989b6d557090e8"
-    },
-    {
-      "kind": "ui-call",
-      "line": 665,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Sessions",
-      "surface": "apple",
-      "id": "native.apple.9f2fd65953013b7c"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 694,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Sessions unavailable",
-      "surface": "apple",
-      "id": "native.apple.b272115c83f7ef58"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 704,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Connect to the gateway.",
-      "surface": "apple",
-      "id": "native.apple.98512bfb25426929"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 704,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Start a chat and it will appear here.",
-      "surface": "apple",
-      "id": "native.apple.bb1a311441d3cf24"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 731,
+      "line": 240,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Gateway offline",
       "surface": "apple",
@@ -8107,11 +8355,123 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 731,
+      "line": 310,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Online",
+      "surface": "apple",
+      "id": "native.apple.e01aac63fda4c147"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 312,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Connecting",
+      "surface": "apple",
+      "id": "native.apple.a857bc74fd053781"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 314,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Attention",
+      "surface": "apple",
+      "id": "native.apple.a36675969878b0d8"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 316,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Offline",
+      "surface": "apple",
+      "id": "native.apple.89989b6d557090e8"
+    },
+    {
+      "kind": "ui-call",
+      "line": 737,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Sessions",
+      "surface": "apple",
+      "id": "native.apple.9f2fd65953013b7c"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 751,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Archived sessions",
+      "surface": "apple",
+      "id": "native.apple.0422818cc95d5071"
+    },
+    {
+      "kind": "ui-call",
+      "line": 760,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Show Archived",
+      "surface": "apple",
+      "id": "native.apple.bc8e64efb095a625"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 774,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Sessions unavailable",
+      "surface": "apple",
+      "id": "native.apple.b272115c83f7ef58"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 784,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Connect to the gateway.",
+      "surface": "apple",
+      "id": "native.apple.79937d7781fb65ae"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 814,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Loading archived sessions",
+      "surface": "apple",
+      "id": "native.apple.54f8260c9b863087"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 814,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Loading recent sessions",
+      "surface": "apple",
+      "id": "native.apple.9b305868873dade2"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 847,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "No archived sessions",
+      "surface": "apple",
+      "id": "native.apple.1f4501a6bf2bae4c"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 847,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "No recent sessions",
       "surface": "apple",
       "id": "native.apple.28c97cf23665ee01"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 851,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Archived sessions will appear here.",
+      "surface": "apple",
+      "id": "native.apple.2a1ba7a5e1979c9e"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 851,
+      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
+      "source": "Start a chat and it will appear here.",
+      "surface": "apple",
+      "id": "native.apple.bb1a311441d3cf24"
     },
     {
       "kind": "ui-named-argument",
@@ -11755,7 +12115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2704,
+      "line": 2757,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -11763,7 +12123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2704,
+      "line": 2757,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -11771,7 +12131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3259,
+      "line": 3312,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -11779,7 +12139,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3259,
+      "line": 3312,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -11787,7 +12147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3263,
+      "line": 3316,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -11795,7 +12155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3263,
+      "line": 3316,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -11803,7 +12163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3551,
+      "line": 3604,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -11811,7 +12171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3551,
+      "line": 3604,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",

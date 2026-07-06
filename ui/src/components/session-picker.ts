@@ -437,6 +437,13 @@ export class SessionPicker extends LitElement {
                       this.onSelectSession?.(row.key);
                     }}
                   >
+                    ${row.unread === true
+                      ? html`<span
+                          class="session-unread-dot chat-session-picker__unread"
+                          role="img"
+                          aria-label=${t("sessionsView.unread")}
+                        ></span>`
+                      : nothing}
                     <span class="chat-session-picker__option-label">${label}</span>
                   </button>
                   <span class="session-row-aside">

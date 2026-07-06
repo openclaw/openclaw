@@ -2276,6 +2276,7 @@ openclaw-chat-page {
 .chat-session-picker__option {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 34px;

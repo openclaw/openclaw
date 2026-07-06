@@ -76,6 +76,7 @@ export type SessionPatch = {
   reasoningLevel?: string | null;
   archived?: boolean;
   pinned?: boolean;
+  unread?: boolean;
 };
 
 export type SessionDeleteOptions = {
