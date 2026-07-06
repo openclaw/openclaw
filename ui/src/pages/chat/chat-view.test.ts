@@ -1900,7 +1900,7 @@ describe("chat voice controls", () => {
     });
 
     const model = container.querySelector<HTMLInputElement>(
-      '.agent-chat__talk-options-primary input[placeholder="Auto"]',
+      `.agent-chat__talk-options-primary input[placeholder="${t("chat.composer.talkModelAuto")}"]`,
     );
     const sensitivitySelect = container.querySelector<HTMLSelectElement>(
       '[data-talk-select="sensitivity"] select',
@@ -1929,8 +1929,8 @@ describe("chat voice controls", () => {
       "0.5",
       "0.35",
     ]);
-    expect(container.textContent).toContain("Sensitivity");
-    expect(container.textContent).toContain("More in Settings");
+    expect(container.textContent).toContain(t("chat.composer.talkSensitivity"));
+    expect(container.textContent).toContain(t("chat.composer.talkMoreInSettings"));
     for (const advancedLabel of [
       "Advanced",
       "Provider",
@@ -1975,7 +1975,9 @@ describe("chat voice controls", () => {
       "disabled advanced Settings link",
     ) as HTMLButtonElement;
     expect(settings.disabled).toBe(true);
-    expect(settings.textContent?.trim()).toBe("Advanced settings require admin");
+    expect(settings.textContent?.trim()).toBe(
+      t("chat.composer.talkAdvancedSettingsRequiresAdmin"),
+    );
     expect(settings.title).toContain("operator.admin");
     settings.click();
     expect(onOpenRealtimeTalkSettings).not.toHaveBeenCalled();
@@ -1984,6 +1986,11 @@ describe("chat voice controls", () => {
   it("renders composer labels from the active locale map", async () => {
     await i18n.setLocale("zh-CN");
     const container = renderChatView();
+    const voiceOptions = renderVoiceOptions({
+      realtimeTalkOptions: { model: "", voice: "", vadThreshold: "" },
+      onRealtimeTalkOptionsChange: () => undefined,
+      onOpenRealtimeTalkSettings: () => undefined,
+    });
     const startTalkLabel = t("chat.composer.startVoiceInput");
 
     const talkButton = requireElement(
@@ -1996,6 +2003,19 @@ describe("chat voice controls", () => {
     expect(tooltip?.localName).toBe("openclaw-tooltip");
     expect(tooltip?.content).toBe(startTalkLabel);
     expect(talkButton.textContent?.trim()).toBe(startTalkLabel);
+    expect(
+      voiceOptions.querySelector('[data-talk-select="voice"] > span')?.textContent?.trim(),
+    ).toBe(t("chat.composer.talkVoice"));
+    expect(
+      voiceOptions.querySelector('[data-talk-select="sensitivity"] > span')?.textContent?.trim(),
+    ).toBe(t("chat.composer.talkSensitivity"));
+    expect(
+      voiceOptions.querySelector<HTMLInputElement>(".agent-chat__talk-options-primary input")
+        ?.placeholder,
+    ).toBe(t("chat.composer.talkModelAuto"));
+    expect(
+      voiceOptions.querySelector(".agent-chat__talk-settings-link")?.textContent?.trim(),
+    ).toBe(t("chat.composer.talkMoreInSettings"));
     requireElement(
       container,
       `[aria-label="${t("chat.composer.addAttachment")}"]`,
@@ -3649,6 +3669,60 @@ describe("chat model controls", () => {
     });
   });
 
+  it("preserves staged settings when a save step fails", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    });
+    const onThinkingSelect = vi.fn().mockResolvedValue(false);
+    const onFastModeSelect = vi.fn();
+    const props = {
+      ...createChatModelControlsProps(state),
+      onFastModeSelect,
+      onThinkingSelect,
+    };
+    const container = document.createElement("div");
+    render(renderChatModelControls(props), container);
+
+    const slider = getThinkingSlider(container);
+    expect(slider).toBeInstanceOf(HTMLInputElement);
+    if (slider) {
+      slider.value = "0";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    render(renderChatModelControls(props), container);
+    const fastButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+    ).find((button) => button.textContent?.trim() === "Fast");
+    fastButton?.click();
+
+    container.querySelector<HTMLButtonElement>(".chat-controls__picker-actions .primary")?.click();
+    await vi.waitFor(() => {
+      expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
+    });
+    expect(onFastModeSelect).not.toHaveBeenCalled();
+
+    render(renderChatModelControls(props), container);
+    expect(getThinkingReasoningValueLabel(container)).toBe("Low");
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"))
+        .find((button) => button.textContent?.trim() === "Fast")
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
   it("clears staged model settings when the active session changes", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -3699,7 +3773,7 @@ describe("chat model controls", () => {
     ).toBe("true");
   });
 
-  it("discards staged model settings when the model save fails", async () => {
+  it("preserves staged model settings when the model save fails", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3728,10 +3802,9 @@ describe("chat model controls", () => {
     });
     await vi.waitFor(() => {
       render(renderChatModelControls(props), container);
-      expect(getChatModelSelect(container).textContent).toContain("GPT-5.5");
       expect(
         container
-          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.5"]')
+          .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.4"]')
           ?.getAttribute("aria-selected"),
       ).toBe("true");
     });

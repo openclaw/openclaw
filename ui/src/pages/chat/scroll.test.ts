@@ -265,7 +265,7 @@ describe("scheduleChatScroll", () => {
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
-  it("does not show new messages when the thread height did not grow", async () => {
+  it("does not show new messages for a resize when the thread height did not grow", async () => {
     const { host } = createScrollHost({
       scrollHeight: 2000,
       scrollTop: 500,
@@ -275,10 +275,26 @@ describe("scheduleChatScroll", () => {
     host.chatHasAutoScrolled = true;
     host.chatLastScrollHeight = 2000;
 
-    scheduleChatScroll(host);
+    scheduleChatScroll(host, false, false, { source: "resize" });
     await host.updateComplete;
 
     expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("shows new messages for content changes that do not increase thread height", async () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatHasAutoScrolled = true;
+    host.chatLastScrollHeight = 2000;
+
+    scheduleChatScroll(host, false, false, { contentChanged: true });
+    await host.updateComplete;
+
+    expect(host.chatNewMessagesBelow).toBe(true);
   });
 
   it("does not re-stick streaming after a user scrolls slightly up near the bottom", async () => {

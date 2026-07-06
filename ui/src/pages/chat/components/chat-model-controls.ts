@@ -1155,15 +1155,20 @@ function renderChatModelReasoningSelect(params: {
                 if (draft.modelValue !== draft.initialModelValue) {
                   const switched = await onModelSelect(draft.modelValue, sessionKey);
                   if (switched === false) {
-                    draftStore.delete();
                     return;
                   }
                 }
                 if (draft.thinkingValue !== draft.initialThinkingValue) {
-                  await onThinkingSelect(draft.thinkingValue, sessionKey);
+                  const switched = await onThinkingSelect(draft.thinkingValue, sessionKey);
+                  if (switched === false) {
+                    return;
+                  }
                 }
                 if (draft.fastModeValue !== draft.initialFastModeValue) {
-                  await onFastModeSelect(draft.fastModeValue, sessionKey);
+                  const switched = await onFastModeSelect(draft.fastModeValue, sessionKey);
+                  if (switched === false) {
+                    return;
+                  }
                 }
                 draftStore.delete();
               } finally {

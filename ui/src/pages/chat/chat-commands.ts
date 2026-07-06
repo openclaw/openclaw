@@ -224,7 +224,9 @@ export async function dispatchChatSlashCommand(
       host,
       `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
     );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+      contentChanged: true,
+    });
     return;
   }
 
@@ -242,7 +244,9 @@ export async function dispatchChatSlashCommand(
   } catch (err) {
     setChatCommandError(host, String(err));
     injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+      contentChanged: true,
+    });
     return;
   }
 
@@ -272,7 +276,9 @@ export async function dispatchChatSlashCommand(
     await host.refreshCurrentChat?.();
   }
 
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+    contentChanged: Boolean(result.content),
+  });
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {
