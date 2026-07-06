@@ -33,6 +33,51 @@ export const SIDEBAR_SECTIONS = [
   { label: "settings", routes: ["config"] },
 ] as const satisfies readonly SidebarSection[];
 
+// The customizable static sidebar excludes chat and settings detail routes,
+// which are handled by the app shell and settings navigation respectively.
+export const SIDEBAR_NAV_ROUTES = [
+  "overview",
+  "activity",
+  "workboard",
+  "worktrees",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "agents",
+  "skills",
+  "skill-workshop",
+  "nodes",
+  "dreams",
+] as const satisfies readonly NavigationRouteId[];
+
+export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "overview",
+] as const satisfies readonly SidebarNavRoute[];
+
+export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const pinned: SidebarNavRoute[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry === "string" &&
+      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
+      !pinned.includes(entry as SidebarNavRoute)
+    ) {
+      pinned.push(entry as SidebarNavRoute);
+    }
+  }
+  return pinned;
+}
+
+export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+}
+
 export const SETTINGS_NAVIGATION_ROUTES = [
   "config",
   "channels",
