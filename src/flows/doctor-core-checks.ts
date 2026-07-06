@@ -656,11 +656,12 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
-const legacyWhatsAppCrontabCheck: HealthCheck = {
+const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false } = {
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
   description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
   source: "doctor",
+  defaultEnabled: false,
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
       await import("../commands/doctor/cron/index.js");
@@ -675,6 +676,19 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
         text: warning,
       }),
     ];
+  },
+};
+
+const legacyCronStoreCheck: SplitHealthCheckInput = {
+  id: "core/doctor/legacy-cron-store",
+  kind: "core",
+  description: "Legacy cron store, run-log, and payload state is normalized.",
+  source: "doctor",
+  defaultEnabled: false,
+  async detect(ctx) {
+    const { collectLegacyCronStoreHealthFindings } =
+      await import("../commands/doctor/cron/index.js");
+    return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
   },
 };
 
@@ -1037,12 +1051,15 @@ const uiProtocolFreshnessCheck: HealthCheck = {
   },
 };
 
-function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createWorkspaceSuggestionsCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/workspace-suggestions",
     kind: "core",
     description:
       "Workspace backup and memory-system suggestions are captured as structured findings.",
+    defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
@@ -1066,6 +1083,7 @@ function createConvertedWorkflowChecks(
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    legacyCronStoreCheck,
     codexSessionRoutesCheck,
     sessionLocksCheck,
     shellCompletionCheck,

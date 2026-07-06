@@ -37,7 +37,7 @@ import {
 } from "../chat-display-projection.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { waitForAgentJob } from "./agent-job.js";
+import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -591,6 +591,74 @@ describe("waitForAgentJob", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("caps agentRunCache at AGENT_RUN_CACHE_MAX_ENTRIES via FIFO drop", () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const overflow = 25;
+    const prefix = `cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (let i = 0; i < max + overflow; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
+  });
+
+  it("does not evict cached terminal snapshots with active fresh waiters", async () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const prefix = `cap-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitedRunId = `${prefix}-waited`;
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
+    });
+    const waitPromise = waitForAgentJob({
+      runId: waitedRunId,
+      timeoutMs: 5_000,
+      ignoreCachedSnapshot: true,
+    });
+
+    for (let i = 0; i < max + 25; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    const cached = await waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 });
+    expectRecordFields(cached, {
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 1_100,
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
+    });
+
+    const waited = await waitPromise;
+    expectRecordFields(waited, {
+      status: "ok",
+      startedAt: 10_000,
+      endedAt: 10_100,
+    });
+    emitAgentEvent({
+      runId: `${prefix}-after-waiter`,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 20_000, endedAt: 20_100 },
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
   });
 });
 
@@ -1733,6 +1801,167 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        idempotencyKey: "channel-final:message-1:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps a channel-final delivery mirror after a filtered user turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-2:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-2" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
+  });
+
+  it("keeps adjacent channel-final delivery mirrors from distinct sends", () => {
+    const deliveryMirror = (sourceMessageId: string, timestamp: number) => ({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Repeated reply" }],
+      idempotencyKey: `channel-final:${sourceMessageId}:0`,
+      openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
+      timestamp,
+    });
+
+    const result = projectRecentChatDisplayMessages([
+      deliveryMirror("message-1", 1),
+      deliveryMirror("message-2", 2),
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after unmarked assistant replies", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-unmarked:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-unmarked" },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Forwarded status" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Forwarded status" }],
+        idempotencyKey: "channel-final:message-forwarded:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-forwarded",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+      }),
+    );
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
+  });
+
   it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
     const result = projectRecentChatDisplayMessages([
       {
@@ -2777,6 +3006,32 @@ describe("exec approval handlers", () => {
       respond: resolveRespond,
       context,
     });
+    await requestPromise;
+  });
+
+  it("escapes unpaired surrogates before broadcasting an exec approval", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "echo \uD83D \uDE00 😀",
+        commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
+    expect(() => encodeURIComponent(String(request.command))).not.toThrow();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({ handlers, id, respond: resolveRespond, context });
     await requestPromise;
   });
 

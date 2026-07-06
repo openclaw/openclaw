@@ -30,6 +30,7 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookHandlerMap,
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
@@ -206,6 +207,7 @@ export type HookRunnerOptions = {
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
+  channel_pairing_requested: 2_000,
   // Defensive default for the compaction lifecycle hooks. Without a budget an
   // unresponsive handler runs fully unbounded, and in the codex agent harness
   // these hooks fire on the serialized notification queue
@@ -1065,6 +1067,17 @@ export function createHookRunner(
   }
 
   /**
+   * Run channel_pairing_requested hook.
+   * Observation-only; slow/failing handlers must not block pairing flow.
+   */
+  async function runChannelPairingRequested(
+    event: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[0],
+    ctx: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[1],
+  ): Promise<void> {
+    return runVoidHook("channel_pairing_requested", event, ctx);
+  }
+
+  /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
    * First handler returning { handled: true } wins.
@@ -1643,6 +1656,7 @@ export function createHookRunner(
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
+    runChannelPairingRequested,
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,

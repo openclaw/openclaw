@@ -1,10 +1,15 @@
 /** Tests command-control detection and authorization trigger heuristics. */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
-import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
+import {
+  hasControlCommand,
+  hasInlineCommandTokens,
+  shouldComputeCommandAuthorized,
+} from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
@@ -12,6 +17,10 @@ import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
+
+afterEach(() => {
+  clearPluginCommands();
+});
 
 describe("resolveCommandAuthorization", () => {
   const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
@@ -1144,9 +1153,30 @@ describe("control command parsing", () => {
   it("detects inline command tokens", () => {
     expect(hasInlineCommandTokens("hello /status")).toBe(true);
     expect(hasInlineCommandTokens("hey /think high")).toBe(true);
+    expect(hasInlineCommandTokens("/ pair qr")).toBe(false);
+    expect(hasInlineCommandTokens("hey / pair qr")).toBe(false);
+    expect(hasInlineCommandTokens("option A / B")).toBe(false);
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
+  });
+
+  it("detects spaced syntax only for active registered plugin commands", () => {
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(false);
+
+    registerPluginCommand("device-pair", {
+      name: "pair",
+      description: "Pair command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(true);
+    expect(shouldComputeCommandAuthorized("@openclaw / pair qr")).toBe(true);
+    expect(shouldComputeCommandAuthorized("hey / pair qr")).toBe(true);
+
+    clearPluginCommands();
+    expect(shouldComputeCommandAuthorized("/ pair qr")).toBe(false);
   });
 
   it("ignores telegram commands addressed to other bots", () => {

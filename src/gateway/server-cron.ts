@@ -15,6 +15,10 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildCronCommandSummary,
+  redactCronCommandSummaryForExternalDelivery,
+} from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
@@ -27,7 +31,7 @@ import {
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -44,6 +48,7 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   normalizeAgentId,
   resolveEventSessionKey,
@@ -51,6 +56,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -60,7 +66,57 @@ export type GatewayCronState = {
   cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
+  reconcileExitWatchers?: () => Promise<void>;
+  stopExitWatchers?: () => void;
 };
+
+function formatOnExitRunSummary(exit: CronExitResult): string {
+  const lines = [
+    "Watched command finished.",
+    `Exit code: ${exit.exitCode ?? "none"}`,
+    `Reason: ${exit.reason}`,
+  ];
+  const output = buildCronCommandSummary({ stdout: exit.stdout, stderr: exit.stderr });
+  return output ? `${lines.join("\n")}\n\nOutput:\n${output}` : lines.join("\n");
+}
+
+function addOnExitRunSummary(payload: CronPayload, exit: CronExitResult): CronPayload {
+  const summary = formatOnExitRunSummary(exit);
+  if (payload.kind === "systemEvent") {
+    return { ...payload, text: `${payload.text}\n\n${summary}` };
+  }
+  if (payload.kind === "agentTurn") {
+    return { ...payload, message: `${payload.message}\n\n${summary}` };
+  }
+  return payload;
+}
+
+/**
+ * On-exit jobs use the normal force-run path so every payload kind records
+ * run state, history, notifications, and delivery outcomes consistently.
+ */
+export async function fireOnExitJob(
+  job: CronJob,
+  exit: CronExitResult,
+  deps: {
+    run: (jobId: string, payload?: CronPayload) => Promise<unknown>;
+  },
+): Promise<void> {
+  const payload = addOnExitRunSummary(job.payload, exit);
+  await deps.run(job.id, payload === job.payload ? undefined : payload);
+}
+
+function reconcileCronExitWatchers(params: {
+  cronEnabled: boolean;
+  exitWatchers: ReturnType<typeof createCronExitWatchers>;
+  jobs: CronJob[];
+}) {
+  if (!params.cronEnabled) {
+    params.exitWatchers.cancelAll();
+    return;
+  }
+  params.exitWatchers.reconcile(params.jobs);
+}
 
 /** Pick only the keys whose values are not `undefined` from an object. */
 function pickDefined<T extends Record<string, unknown>>(
@@ -124,6 +180,10 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
     createdAtMs: job.createdAtMs,
     updatedAtMs: job.updatedAtMs,
   };
+}
+
+function isCommandCronJob(job: CronJob | null | undefined): boolean {
+  return job?.payload?.kind === "command";
 }
 
 /** Build the cron service state used by Gateway startup and lazy cron loading. */
@@ -314,6 +374,27 @@ export function buildGatewayCronService(params: {
     });
   };
 
+  // Built after cron so watcher exit callbacks can call back into the service.
+  const exitWatchersRef: { current: ReturnType<typeof createCronExitWatchers> | undefined } = {
+    current: undefined,
+  };
+  const reconcileExitWatchers = async () => {
+    if (!exitWatchersRef.current) {
+      return;
+    }
+    try {
+      const result = await cron.list({ includeDisabled: true });
+      const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
+      reconcileCronExitWatchers({
+        cronEnabled,
+        exitWatchers: exitWatchersRef.current,
+        jobs,
+      });
+    } catch (err) {
+      cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
+    }
+  };
+
   const cron = new CronService({
     storePath,
     cronEnabled,
@@ -453,7 +534,9 @@ export function buildGatewayCronService(params: {
           delivery: deliveryTrace,
         };
       }
-      const message = result.summary;
+      const message = isCommandCronJob(job)
+        ? redactCronCommandSummaryForExternalDelivery(result.summary)
+        : result.summary;
       if (typeof message !== "string") {
         return {
           ...result,
@@ -582,6 +665,10 @@ export function buildGatewayCronService(params: {
       // when the job is known.
       const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
+      const hookSummary =
+        isCommandCronJob(jobSnapshot) && typeof evt.summary === "string"
+          ? redactCronCommandSummaryForExternalDelivery(evt.summary)
+          : evt.summary;
       const hookEvt: PluginHookCronChangedEvent = {
         action: evt.action,
         jobId: evt.jobId,
@@ -594,7 +681,6 @@ export function buildGatewayCronService(params: {
           "durationMs",
           "status",
           "error",
-          "summary",
           "delivered",
           "deliveryStatus",
           "deliveryError",
@@ -605,8 +691,13 @@ export function buildGatewayCronService(params: {
           "model",
           "provider",
         ]),
+        ...(hookSummary !== undefined ? { summary: hookSummary } : {}),
       };
       runCronChangedHook(hookEvt);
+      // Re-arm / cancel on-exit watchers when the job set changes.
+      if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
+        void reconcileExitWatchers();
+      }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
@@ -655,5 +746,28 @@ export function buildGatewayCronService(params: {
     },
   });
 
-  return { cron, storePath, cronEnabled };
+  exitWatchersRef.current = createCronExitWatchers({
+    getProcessSupervisor,
+    persistCompletion: async (jobId) => {
+      await cron.update(jobId, { enabled: false });
+    },
+    fireOnExit: (job, exit) =>
+      fireOnExitJob(job, exit, {
+        run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+      }),
+    logger: cronLogger,
+  });
+  const stopCron = cron.stop.bind(cron);
+  cron.stop = () => {
+    stopCron();
+    exitWatchersRef.current?.cancelAll();
+  };
+
+  return {
+    cron,
+    storePath,
+    cronEnabled,
+    reconcileExitWatchers,
+    stopExitWatchers: () => exitWatchersRef.current?.cancelAll(),
+  };
 }
