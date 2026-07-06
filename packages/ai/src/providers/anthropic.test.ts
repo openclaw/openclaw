@@ -1966,4 +1966,38 @@ describe("Anthropic provider", () => {
       },
     ]);
   });
+
+  it("returns stream immediately and emits error event asynchronously when apiKey is missing", async () => {
+    let syncError: unknown = null;
+    let stream: any;
+    try {
+      stream = streamSimpleAnthropic(
+        makeAnthropicModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        },
+        {
+          apiKey: "",
+        },
+      );
+    } catch (err) {
+      syncError = err;
+    }
+
+    expect(syncError).toBeNull();
+    expect(stream).toBeDefined();
+
+    const events: any[] = [];
+    try {
+      for await (const event of stream) {
+        events.push(event);
+      }
+    } catch (err) {
+      // Stream itself doesn't throw, it emits 'error' event
+    }
+
+    expect(events.length).toBe(1);
+    expect(events[0].type).toBe("error");
+    expect(events[0].error.errorMessage).toBe("No API key for provider: anthropic");
+  });
 });

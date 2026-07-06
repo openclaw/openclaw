@@ -49,7 +49,15 @@ export const streamSimpleGoogle: StreamFunction<"google-generative-ai", SimpleSt
 ) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
+    const stream = new AssistantMessageEventStream();
+    const output = createGoogleAssistantOutput(model, "google-generative-ai");
+    output.errorMessage = `No API key for provider: ${model.provider}`;
+    output.stopReason = "error";
+    process.nextTick(() => {
+      stream.push({ type: "error", reason: "error", error: output });
+      stream.end();
+    });
+    return stream;
   }
 
   const base = buildBaseOptions(model, options, apiKey);
