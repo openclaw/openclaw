@@ -665,6 +665,13 @@ class MainViewModel(
 
   suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
 
+  suspend fun listWorkspaceFiles(
+    path: String?,
+    offset: Int? = null,
+  ): GatewayWorkspaceListing = ensureRuntime().listWorkspaceFiles(path = path, offset = offset)
+
+  suspend fun fetchWorkspaceFile(path: String): GatewayWorkspaceFile = ensureRuntime().fetchWorkspaceFile(path)
+
   fun setChatThinkingLevel(level: String) {
     ensureRuntime().setChatThinkingLevel(level)
   }

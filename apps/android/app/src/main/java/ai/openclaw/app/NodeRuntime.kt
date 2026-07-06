@@ -2822,6 +2822,36 @@ class NodeRuntime private constructor(
     }
   }
 
+  /** Lists one directory of the active agent's workspace (read-only RPC). */
+  suspend fun listWorkspaceFiles(
+    path: String?,
+    offset: Int? = null,
+  ): GatewayWorkspaceListing {
+    val params =
+      buildJsonObject {
+        put("agentId", JsonPrimitive(workspaceAgentId()))
+        if (!path.isNullOrEmpty()) put("path", JsonPrimitive(path))
+        if (offset != null && offset > 0) put("offset", JsonPrimitive(offset))
+      }
+    val res = operatorSession.request("agents.workspace.list", params.toString())
+    return parseWorkspaceListing(json.parseToJsonElement(res))
+      ?: throw IllegalStateException("agents.workspace.list returned no listing")
+  }
+
+  /** Fetches one workspace file preview (UTF-8 text or base64 image). */
+  suspend fun fetchWorkspaceFile(path: String): GatewayWorkspaceFile {
+    val params =
+      buildJsonObject {
+        put("agentId", JsonPrimitive(workspaceAgentId()))
+        put("path", JsonPrimitive(path))
+      }
+    val res = operatorSession.request("agents.workspace.get", params.toString(), timeoutMs = 30_000)
+    return parseWorkspaceFile(json.parseToJsonElement(res))
+      ?: throw IllegalStateException("agents.workspace.get returned no file")
+  }
+
+  private fun workspaceAgentId(): String = resolveActiveAgentId().ifEmpty { "main" }
+
   private suspend fun refreshAgentsFromGateway() {
     if (!operatorConnected) return
     try {

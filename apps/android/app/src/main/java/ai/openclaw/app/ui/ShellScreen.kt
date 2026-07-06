@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
@@ -116,6 +117,7 @@ internal enum class Tab(
   Sessions(key = "sessions", label = "Sessions", icon = Icons.Outlined.AccessTime),
   Settings(key = "settings", label = "Settings", icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = "Providers", icon = Icons.Outlined.Inventory2),
+  Files(key = "files", label = "Files", icon = Icons.Outlined.Folder),
 }
 
 private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
@@ -234,6 +236,11 @@ fun ShellScreen(
               viewModel = viewModel,
               onOpenCommand = { commandOpen = true },
               onOpenChat = { nav.selectTab(Tab.Chat) },
+            )
+          Tab.Files ->
+            WorkspaceFilesScreen(
+              viewModel = viewModel,
+              onBack = nav::back,
             )
           Tab.Settings ->
             SettingsShellScreen(
@@ -980,6 +987,14 @@ internal fun overviewMetricCardSpecs(
       icon = Icons.Default.Groups,
       status = if (sessionCount > 0) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Sessions,
+    ),
+    OverviewMetricCardSpec(
+      title = "Files",
+      value = if (isConnected) "Browse" else "Offline",
+      subtitle = "Agent workspace files",
+      icon = Icons.Outlined.Folder,
+      status = if (isConnected) ClawStatus.Success else ClawStatus.Neutral,
+      tab = Tab.Files,
     ),
   )
 }
