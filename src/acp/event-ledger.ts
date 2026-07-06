@@ -105,6 +105,7 @@ type MutableLedgerState = {
 };
 
 type SqliteLedgerByteCache = {
+  db?: DatabaseSync;
   dataVersion?: number;
   serializedBytes?: number;
 };
@@ -640,12 +641,20 @@ function readSqliteDataVersion(db: DatabaseSync): number | undefined {
 }
 
 function syncSqliteLedgerByteCache(db: DatabaseSync, state: { byteCache: SqliteLedgerByteCache }) {
+  const connectionChanged = state.byteCache.db !== db;
+  if (connectionChanged) {
+    state.byteCache.serializedBytes = undefined;
+    state.byteCache.dataVersion = undefined;
+    state.byteCache.db = db;
+  }
   const dataVersion = readSqliteDataVersion(db);
   if (dataVersion === undefined) {
     state.byteCache.serializedBytes = undefined;
+    state.byteCache.dataVersion = undefined;
     return;
   }
   if (
+    !connectionChanged &&
     state.byteCache.serializedBytes !== undefined &&
     state.byteCache.dataVersion !== undefined &&
     state.byteCache.dataVersion !== dataVersion
@@ -1031,6 +1040,7 @@ export function createSqliteAcpEventLedger(
     }, dbOptions);
     state.byteCache.serializedBytes = transactionState.byteCache.serializedBytes;
     state.byteCache.dataVersion = transactionState.byteCache.dataVersion;
+    state.byteCache.db = transactionState.byteCache.db;
   };
   const read = <T>(fn: (db: DatabaseSync) => T): T => fn(openOpenClawStateDatabase(dbOptions).db);
 

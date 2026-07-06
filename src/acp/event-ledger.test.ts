@@ -609,6 +609,99 @@ describe("ACP event ledger", () => {
     });
   });
 
+  it("invalidates SQLite byte estimate cache after the shared database handle reopens", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      type SqlitePrepare = DatabaseSync["prepare"];
+      type SqliteStatement = ReturnType<SqlitePrepare>;
+      const prepareDescriptor = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare");
+      if (typeof prepareDescriptor?.value !== "function") {
+        throw new Error("Expected DatabaseSync.prototype.prepare to be patchable");
+      }
+      const originalPrepare = prepareDescriptor.value as SqlitePrepare;
+      let byteEstimateQueries = 0;
+      Object.defineProperty(DatabaseSync.prototype, "prepare", {
+        ...prepareDescriptor,
+        value: function prepareWithStableDataVersion(this: DatabaseSync, sql: string) {
+          const statement = Reflect.apply(originalPrepare, this, [sql]) as SqliteStatement;
+          if (sql.includes("COALESCE(SUM(length(session_id)")) {
+            byteEstimateQueries++;
+          }
+          if (sql !== "PRAGMA data_version") {
+            return statement;
+          }
+          return new Proxy(statement, {
+            get(target, property, receiver) {
+              if (property !== "get") {
+                return Reflect.get(target, property, receiver) as unknown;
+              }
+              return () => ({ data_version: 1 });
+            },
+          });
+        },
+      });
+      try {
+        const databasePath = path.join(dir, "openclaw.sqlite");
+        const ledger = createSqliteAcpEventLedger({
+          path: databasePath,
+          maxSerializedBytes: 1024,
+        });
+        await ledger.startSession({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          cwd: "/work",
+          complete: true,
+        });
+        expect(byteEstimateQueries).toBe(1);
+
+        closeOpenClawStateDatabaseForTest();
+        const externalDb = new DatabaseSync(databasePath);
+        try {
+          externalDb
+            .prepare(
+              `INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              "session-1",
+              1,
+              1001,
+              "agent:main:work",
+              null,
+              JSON.stringify({
+                sessionUpdate: "tool_call_update",
+                toolCallId: "tool-1",
+                status: "completed",
+                rawOutput: { content: "x".repeat(5_000) },
+              }),
+            );
+          externalDb
+            .prepare(
+              "UPDATE acp_replay_sessions SET updated_at = ?, next_seq = ? WHERE session_id = ?",
+            )
+            .run(1001, 2, "session-1");
+        } finally {
+          externalDb.close();
+        }
+
+        await ledger.recordUpdate({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Answer" },
+          },
+        });
+
+        expect(byteEstimateQueries).toBe(2);
+        await expect(
+          ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+        ).resolves.toEqual({ complete: false, events: [] });
+      } finally {
+        Object.defineProperty(DatabaseSync.prototype, "prepare", prepareDescriptor);
+      }
+    });
+  });
+
   it("does not publish SQLite byte estimate deltas from failed writes", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       type SqlitePrepare = DatabaseSync["prepare"];
