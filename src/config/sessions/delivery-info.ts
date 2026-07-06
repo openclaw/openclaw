@@ -9,13 +9,13 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
+import { listSessionEntries } from "./session-accessor.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
   isConfirmedLowercasedLegacyAlias,
   normalizeStoreSessionKey,
 } from "./store-entry.js";
-import { readSessionStoreSnapshot } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
@@ -93,14 +93,18 @@ function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string
   return [...paths];
 }
 
-function asSessionEntry(entry: unknown): SessionEntry | undefined {
-  return entry as SessionEntry | undefined;
+/** Borrowed read-only view keyed by persisted session key; dropped before any await. */
+type DeliverySessionEntries = ReadonlyMap<string, SessionEntry>;
+
+function loadDeliverySessionEntries(storePath: string): DeliverySessionEntries {
+  const entries = new Map<string, SessionEntry>();
+  for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+    entries.set(sessionKey, entry);
+  }
+  return entries;
 }
 
-function findSessionEntryInStore(
-  store: ReturnType<typeof readSessionStoreSnapshot>,
-  keys: readonly string[],
-) {
+function findSessionEntryInStore(store: DeliverySessionEntries, keys: readonly string[]) {
   let normalizedIndex: Map<string, SessionEntry> | undefined;
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
@@ -109,11 +113,10 @@ function findSessionEntryInStore(
   // Preference order: routable delivery context first; then Matrix/tail-preserved
   // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
   // channels keep the previous freshest-routable alias behavior.
-  const acceptCandidate = (candidate: unknown, isExact = false) => {
-    if (!candidate) {
+  const acceptCandidate = (entry: SessionEntry | undefined, isExact = false) => {
+    if (!entry) {
       return;
     }
-    const entry = candidate as SessionEntry;
     const candidateRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
     const candidateUpdatedAt = entry.updatedAt ?? 0;
     if (
@@ -137,22 +140,22 @@ function findSessionEntryInStore(
     const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
     if (
-      Object.hasOwn(store, normalized) &&
-      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[normalized]), normalized)
+      store.has(normalized) &&
+      !hasMismatchedCaseSensitiveDeliveryProof(store.get(normalized), normalized)
     ) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[normalized])),
+        deliveryContextFromSession(store.get(normalized)),
       );
-      acceptCandidate(store[normalized], exactKeyWins);
+      acceptCandidate(store.get(normalized), exactKeyWins);
     }
     for (const foldedLegacyKey of foldedLegacyKeys) {
       if (
-        !Object.hasOwn(store, foldedLegacyKey) ||
-        !isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
+        !store.has(foldedLegacyKey) ||
+        !isConfirmedLowercasedLegacyAlias(store.get(foldedLegacyKey), normalized)
       ) {
         continue;
       }
-      const foldedLegacyEntry = asSessionEntry(store[foldedLegacyKey]);
+      const foldedLegacyEntry = store.get(foldedLegacyKey);
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(foldedLegacyEntry),
       );
@@ -160,13 +163,13 @@ function findSessionEntryInStore(
     }
     if (
       trimmed !== normalized &&
-      Object.hasOwn(store, trimmed) &&
-      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[trimmed]), normalized)
+      store.has(trimmed) &&
+      !hasMismatchedCaseSensitiveDeliveryProof(store.get(trimmed), normalized)
     ) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[trimmed])),
+        deliveryContextFromSession(store.get(trimmed)),
       );
-      acceptCandidate(store[trimmed]);
+      acceptCandidate(store.get(trimmed));
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
       // Build the normalized index only after direct/exact probes fail; large session stores can
@@ -187,12 +190,9 @@ function findSessionEntryInStore(
   return bestEntry;
 }
 
-function buildFreshestSessionEntryIndex(
-  store: Readonly<Record<string, unknown>>,
-): Map<string, SessionEntry> {
+function buildFreshestSessionEntryIndex(store: DeliverySessionEntries): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
-  for (const [key, candidate] of Object.entries(store)) {
-    const entry = asSessionEntry(candidate);
+  for (const [key, entry] of store) {
     if (!entry) {
       continue;
     }
@@ -252,7 +252,7 @@ function loadDeliverySessionEntry(params: {
       }
     | undefined;
   for (const storePath of resolveDeliveryStorePaths(params.cfg, agentId)) {
-    const store = readSessionStoreSnapshot(storePath);
+    const store = loadDeliverySessionEntries(storePath);
     const entry = findSessionEntryInStore(store, sessionKeys);
     const baseEntry = findSessionEntryInStore(store, baseKeys);
     if (!entry && !baseEntry) {

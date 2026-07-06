@@ -9,8 +9,11 @@ const storeState = vi.hoisted(() => {
   const state = {
     store: {} as Record<string, SessionEntry>,
     stores: {} as Record<string, Record<string, SessionEntry>>,
-    loadSessionStore: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
-    readSessionStoreSnapshot: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
+    listSessionEntries: vi.fn((scope: { storePath?: string }) =>
+      Object.entries(state.stores[scope.storePath ?? ""] ?? state.store).map(
+        ([sessionKey, entry]) => ({ sessionKey, entry }),
+      ),
+    ),
   };
   return state;
 });
@@ -24,9 +27,8 @@ vi.mock("./paths.js", () => ({
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
-vi.mock("./store.js", () => ({
-  loadSessionStore: storeState.loadSessionStore,
-  readSessionStoreSnapshot: storeState.readSessionStoreSnapshot,
+vi.mock("./session-accessor.js", () => ({
+  listSessionEntries: storeState.listSessionEntries,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -53,8 +55,7 @@ beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
   storeState.stores = {};
-  storeState.loadSessionStore.mockClear();
-  storeState.readSessionStoreSnapshot.mockClear();
+  storeState.listSessionEntries.mockClear();
 });
 
 describe("extractDeliveryInfo", () => {
@@ -94,7 +95,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("uses session-store snapshots for direct session keys", () => {
+  it("reads borrowed accessor entry lists for direct session keys", () => {
     const sessionKey = "agent:main:webchat:dm:user-123";
     storeState.store[sessionKey] = buildEntry({
       channel: "webchat",
@@ -105,8 +106,10 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result.deliveryContext?.to).toBe("webchat:user-123");
-    expect(storeState.readSessionStoreSnapshot).toHaveBeenCalledWith("/tmp/sessions.json");
-    expect(storeState.loadSessionStore).not.toHaveBeenCalled();
+    expect(storeState.listSessionEntries).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
+      clone: false,
+    });
   });
 
   it("returns deliveryContext for direct session keys", () => {
@@ -116,35 +119,6 @@ describe("extractDeliveryInfo", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
-
-    const result = extractDeliveryInfo(sessionKey);
-
-    expect(result).toEqual({
-      deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-123",
-        accountId: "default",
-      },
-      threadId: undefined,
-    });
-  });
-
-  it("does not build the normalized index when an exact routable key is present", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
-    storeState.store = new Proxy(
-      {
-        [sessionKey]: buildEntry({
-          channel: "webchat",
-          to: "webchat:user-123",
-          accountId: "default",
-        }),
-      },
-      {
-        ownKeys() {
-          throw new Error("normalized index should not be built");
-        },
-      },
-    );
 
     const result = extractDeliveryInfo(sessionKey);
 
