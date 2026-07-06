@@ -138,7 +138,7 @@ jobs:
               repo,
               pull_number: issue.number,
             });
-            const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
+            const candidateMatch = body.match(/\b(?:candidate|head)\s*[:=]\s*`?([^\s`]+)`?/i);
             const rawCandidate = candidateMatch?.[1];
             const candidate =
               rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())

@@ -502,7 +502,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/mantis-web-ui-chat-proof.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/mantis-discord-smoke.yml",
