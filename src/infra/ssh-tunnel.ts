@@ -194,12 +194,9 @@ export async function startSshPortForward(opts: {
   });
 
   const stop = async () => {
-    if (
-      child.killed ||
-      child.exitCode !== null ||
-      child.signalCode !== null ||
-      typeof child.pid !== "number"
-    ) {
+    const hasSpawnedProcess = typeof child.pid === "number";
+    const hasExited = child.exitCode !== null || child.signalCode !== null;
+    if (child.killed || (hasSpawnedProcess && hasExited)) {
       return;
     }
     let signaled: boolean;
