@@ -178,6 +178,11 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
   return failures > 99 ? `${status} (99+x)` : `${status} (${failures}x)`;
 }
 
+function formatCronStatusForDisplay(job: CronJob): string {
+  const state = job.state ?? {};
+  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+}
+
 export function handleCronCliError(err: unknown) {
   defaultRuntime.error(danger(String(err)));
   defaultRuntime.exit(1);
@@ -486,10 +491,7 @@ export function printCronList(
     );
     const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = computeStatus(job);
-    const statusLabel = pad(
-      decorateStatusWithFailures(statusRaw, state.consecutiveErrors),
-      CRON_STATUS_PAD,
-    );
+    const statusLabel = pad(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
     const deliveryText = deliveryPreview
@@ -576,9 +578,7 @@ export function printCronShow(
   runtime.log(`delivery: ${preview.label} (${preview.detail})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(
-    `status: ${decorateStatusWithFailures(computeStatus(job), job.state.consecutiveErrors)}`,
-  );
+  runtime.log(`status: ${formatCronStatusForDisplay(job)}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
   runtime.log(`last error: ${job.state.lastError ?? "-"}`);

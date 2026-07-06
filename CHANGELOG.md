@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 - **Android PTT microphone ownership:** pause realtime relay capture while push-to-talk owns the microphone, then resume only for the same completed capture. (#99986) Thanks @NianJiuZst.
 - **Bundled channel loading:** resolve source-only bundled channel entries from their current registry root and canonicalize active-release aliases before enforcing module boundaries, avoiding false setup-entry warnings in mixed source/dist deployments without admitting paths outside the active package boundary.
+- **Cron CLI diagnostics:** show repeated failure counts and the last error in human `cron list`/`cron show` output while keeping JSON status fields undecorated. (#99602) Thanks @masatohoshino.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.

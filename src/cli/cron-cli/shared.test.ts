@@ -212,15 +212,18 @@ describe("printCronList", () => {
   });
 
   it("keeps the --json status field free of the failure-count decoration", () => {
+    const job = createBaseJob({
+      id: "json-job",
+      state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
+    });
     const enriched = enrichCronJsonWithStatus({
-      jobs: [
-        createBaseJob({
-          id: "json-job",
-          state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
-        }),
-      ],
+      jobs: [job],
     }) as { jobs: Array<{ status?: string }> };
     expect(enriched.jobs[0]?.status).toBe("error");
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({
+      status: "error",
+      state: { consecutiveErrors: 12, lastError: "boom" },
+    });
   });
 
   it("shows last error and failure count in cron show output", () => {
