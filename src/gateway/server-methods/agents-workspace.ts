@@ -2,6 +2,7 @@
 // Deliberately no write/delete/upload surface: mutations need their own
 // reviewed contract; see the allowlisted agents.files.* API for edits.
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
 import {
   ErrorCodes,
   errorShape,
@@ -32,17 +33,27 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_LIST_LIMIT = 250;
 const MAX_LIST_LIMIT = 500;
 
-const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
-  ".avif": "image/avif",
-  ".bmp": "image/bmp",
-  ".gif": "image/gif",
-  ".heic": "image/heic",
-  ".heif": "image/heif",
-  ".jpeg": "image/jpeg",
-  ".jpg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-};
+const IMAGE_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".webp",
+]);
+const SUPPORTED_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 function workspaceError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
@@ -183,8 +194,8 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       respondNotFound();
       return;
     }
-    const imageMime = IMAGE_MIME_BY_EXTENSION[path.extname(browserPath).toLowerCase()];
-    const maxBytes = imageMime ? MAX_IMAGE_BYTES : WORKSPACE_PREVIEW_MAX_BYTES;
+    const expectsImage = IMAGE_EXTENSIONS.has(path.extname(browserPath).toLowerCase());
+    const maxBytes = expectsImage ? MAX_IMAGE_BYTES : WORKSPACE_PREVIEW_MAX_BYTES;
     const read =
       stat.size > maxBytes
         ? "too-large"
@@ -205,8 +216,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       respondNotFound();
       return;
     }
-    const text = imageMime ? undefined : decodeUtf8Strict(read.buffer);
-    if (!imageMime && text === undefined) {
+    const respondUnsupported = () => {
       respond(
         false,
         undefined,
@@ -216,6 +226,34 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
           { path: browserPath },
         ),
       );
+    };
+    // The extension only picks the byte cap; content decides what leaves the
+    // gateway. Magic-byte sniffing (no filename hints) keeps renamed binaries
+    // from riding the image path past the UTF-8 text gate.
+    if (expectsImage) {
+      const sniffedMime = await detectMime({ buffer: read.buffer });
+      if (!sniffedMime || !SUPPORTED_IMAGE_MIME_TYPES.has(sniffedMime)) {
+        respondUnsupported();
+        return;
+      }
+      respond(true, {
+        agentId,
+        workspace: workspaceDir,
+        file: {
+          path: browserPath,
+          name: path.basename(browserPath),
+          size: read.stat.size,
+          updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
+          mimeType: sniffedMime,
+          encoding: "base64" as const,
+          content: read.buffer.toString("base64"),
+        },
+      });
+      return;
+    }
+    const text = decodeUtf8Strict(read.buffer);
+    if (text === undefined) {
+      respondUnsupported();
       return;
     }
     respond(true, {
@@ -226,9 +264,9 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
         name: path.basename(browserPath),
         size: read.stat.size,
         updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
-        mimeType: imageMime ?? "text/plain",
-        encoding: imageMime ? ("base64" as const) : ("utf8" as const),
-        content: imageMime ? read.buffer.toString("base64") : (text as string),
+        mimeType: "text/plain",
+        encoding: "utf8" as const,
+        content: text,
       },
     });
   },

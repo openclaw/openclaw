@@ -272,10 +272,12 @@ describe("agents.workspace RPC handlers", () => {
     expect(Number.isInteger(payload.file.updatedAtMs)).toBe(true);
   });
 
-  it("reads images as base64 with their mime type", async () => {
-    const pngBytes = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-    ]);
+  it("reads images as base64 with their sniffed mime type", async () => {
+    // 1x1 transparent PNG so magic-byte sniffing sees a real image payload.
+    const pngBytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+      "base64",
+    );
     writeWorkspaceFile(workspaceRoot, "shot.png", pngBytes);
 
     const payload = expectOkPayload(
@@ -288,6 +290,25 @@ describe("agents.workspace RPC handlers", () => {
       size: pngBytes.length,
     });
     expect(Buffer.from(payload.file.content, "base64")).toEqual(pngBytes);
+  });
+
+  it("refuses non-image binaries renamed to an image extension", async () => {
+    writeWorkspaceFile(
+      workspaceRoot,
+      "disguised.png",
+      Buffer.concat([Buffer.from("SQLite format 3 "), Buffer.alloc(64, 7)]),
+    );
+
+    const error = expectError(
+      await invokeWorkspaceHandler("agents.workspace.get", {
+        agentId: "main",
+        path: "disguised.png",
+      }),
+    );
+    expect(error.details).toMatchObject({
+      path: "disguised.png",
+      type: "workspace_file_unsupported",
+    });
   });
 
   it("refuses non-image binary files", async () => {
