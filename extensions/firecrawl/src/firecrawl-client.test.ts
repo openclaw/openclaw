@@ -1,6 +1,7 @@
 // Firecrawl tests cover firecrawl client behavior — URL safety,
 // scrape payload parsing, and search-item extraction.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 let firecrawlClient: typeof import("./firecrawl-client.js").testing;
 
@@ -717,5 +718,25 @@ describe("parseFirecrawlScrapePayload", () => {
     });
 
     expect(result.title).toBeUndefined();
+  });
+});
+
+describe("readFirecrawlJsonResponse bounded read", () => {
+  it("cancels oversized JSON body via the 16 MiB provider cap", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+
+    await expect(
+      firecrawlClient.readFirecrawlJsonResponse(streamed.response, "Firecrawl Search"),
+    ).rejects.toThrow("Firecrawl Search: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });
