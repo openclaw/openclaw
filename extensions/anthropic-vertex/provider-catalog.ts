@@ -153,6 +153,10 @@ export function normalizeAnthropicVertexResolvedModel(
     ...nativeThinkingLevelMap,
     ...model.thinkingLevelMap,
   };
+  const nativeThinkingLevelsMatch =
+    model.thinkingLevelMap?.xhigh === "xhigh" &&
+    model.thinkingLevelMap.max === "max" &&
+    (!fable5 || (model.thinkingLevelMap.off === "low" && model.thinkingLevelMap.minimal === "low"));
   const cost = sonnet5
     ? resolveSonnet5Cost(resolveAnthropicVertexClientRegion({ baseUrl: model.baseUrl }))
     : undefined;
@@ -168,9 +172,7 @@ export function normalizeAnthropicVertexResolvedModel(
     model.contextWindow === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
     model.contextTokens === ANTHROPIC_VERTEX_DEFAULT_CONTEXT_WINDOW &&
     (model.maxTokens ?? 0) >= ANTHROPIC_VERTEX_FABLE_MAX_TOKENS &&
-    Object.entries(nativeThinkingLevelMap).every(
-      ([level, value]) => model.thinkingLevelMap?.[level] === value,
-    ) &&
+    nativeThinkingLevelsMatch &&
     costMatches
   ) {
     return undefined;
