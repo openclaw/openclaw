@@ -111,14 +111,22 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
   const args = { ...(input as Record<string, unknown>) };
 
-  // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
+  // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array.
+  // A few models also wrap the array in an object like { edits: [...] }.
   if (typeof args.edits === "string") {
     try {
       const parsed = JSON.parse(args.edits);
       if (Array.isArray(parsed)) {
         args.edits = parsed;
+      } else if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const inner = (parsed as Record<string, unknown>).edits;
+        if (Array.isArray(inner)) {
+          args.edits = inner;
+        }
       }
-    } catch {}
+    } catch {
+      // Malformed JSON — leave as-is so validation surfaces a clear error.
+    }
   }
 
   const legacy = args as LegacyEditToolInput;
@@ -406,7 +414,8 @@ export function createEditToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      const { path, edits: originalEdits } = validateEditInput(input);
+      const normalized = prepareEditArguments(input);
+      const { path, edits: originalEdits } = validateEditInput(normalized);
       const absolutePath = resolveToCwd(path, cwd);
 
       return withFileMutationQueue(absolutePath, async () => {

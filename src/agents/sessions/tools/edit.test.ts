@@ -622,4 +622,45 @@ describe("edit tool", () => {
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
+
+  it("accepts edits sent as a JSON string array (Opus 4.6 / GLM-5.1)", async () => {
+    const filePath = await createTempFile("original text");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-json-array",
+      {
+        path: filePath,
+        edits: JSON.stringify([{ oldText: "original text", newText: "updated text" }]),
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("updated text");
+  });
+
+  it("unwraps edits sent as a JSON object with an edits array", async () => {
+    const filePath = await createTempFile("original text");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-json-object",
+      {
+        path: filePath,
+        edits: JSON.stringify({ edits: [{ oldText: "original text", newText: "unwrapped" }] }),
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unwrapped");
+  });
+
+  it("rejects malformed JSON edits with a clear validation error", async () => {
+    const filePath = await createTempFile("original text");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute("call-malformed", { path: filePath, edits: "{malformed json" }, undefined),
+    ).rejects.toThrow(/edits must contain at least one replacement/);
+  });
 });
