@@ -107,9 +107,10 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
-    const relativeDest = stageIntoSandboxMediaDir || hostWorkspaceStagingDir
-      ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
-      : fileName;
+    const relativeDest =
+      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
+        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
+        : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {
@@ -357,7 +358,11 @@ function rewriteStagedMediaPaths(params: {
   }
 }
 
-async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
+export async function scpFile(
+  remoteHost: string,
+  remotePath: string,
+  localPath: string,
+): Promise<void> {
   const safeRemoteHost = normalizeScpRemoteHost(remoteHost);
   if (!safeRemoteHost) {
     throw new Error("invalid remote host for SCP");
@@ -382,17 +387,31 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
     );
 
     let stderr = "";
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
+
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
       stderr = appendScpStderrTail(stderr, chunk);
     });
+    child.stderr?.on("error", finish);
 
-    child.once("error", reject);
+    child.once("error", finish);
     child.once("exit", (code) => {
       if (code === 0) {
-        resolve();
+        finish();
       } else {
-        reject(new Error(`scp failed (${code}): ${stderr.trim()}`));
+        finish(new Error(`scp failed (${code}): ${stderr.trim()}`));
       }
     });
   });
