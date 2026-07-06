@@ -9,6 +9,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { DiscordError } from "./internal/discord.js";
 import { getGateway } from "./monitor/gateway-registry.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
+import { isRetryableDiscordTransientError } from "./retry.js";
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS = {
   attempts: 3,
@@ -24,10 +25,10 @@ export function isRetryableDiscordDeliveryError(
   if (err instanceof DiscordError) {
     return false;
   }
-  // Sends that fail while the gateway websocket is reconnecting (close codes
-  // 1005/1006) surface as transport errors without an HTTP status. Retrying
-  // rides out the reconnect window instead of dropping the message (#56610).
-  if (opts?.gatewayDisconnected) {
+  // A disconnected gateway extends retry to known transport failures only.
+  // Do not turn unrelated application errors into retries just because the
+  // websocket happens to be reconnecting at the same time.
+  if (opts?.gatewayDisconnected && isRetryableDiscordTransientError(err)) {
     return true;
   }
   const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;

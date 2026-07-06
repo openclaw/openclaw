@@ -230,9 +230,9 @@ function createGatewayStatusObserver(params: {
   let queuedForceStopError: unknown;
   let readyPollId: ReturnType<typeof setInterval> | undefined;
   let readyTimeoutId: ReturnType<typeof setTimeout> | undefined;
-  // Startup recovery already replays queued sends; only post-initial connects
-  // (gateway reconnects) should trigger the delivery drain.
-  let hasConnectedOnce = false;
+  // Startup recovery owns the first READY; later READY/RESUMED transitions
+  // belong to reconnect recovery and may drain queued Discord deliveries.
+  let connectionPhase: "startup" | "ready" = "startup";
 
   const shouldStop = () => params.abortSignal?.aborted || params.isLifecycleStopping();
   const clearReadyWatch = () => {
@@ -271,10 +271,10 @@ function createGatewayStatusObserver(params: {
       }
       clearReadyWatch();
       pushConnectedStatus(Date.now());
-      if (hasConnectedOnce) {
+      if (connectionPhase === "ready") {
         params.onReconnect?.();
       }
-      hasConnectedOnce = true;
+      connectionPhase = "ready";
     };
 
     pollConnected();
@@ -343,10 +343,11 @@ function createGatewayStatusObserver(params: {
   return {
     onGatewayDebug,
     clearReadyWatch,
-    // waitForGatewayReady can observe the initial READY before this observer's
-    // ready watch runs; record it so the next connected transition drains.
-    markInitialReady: () => {
-      hasConnectedOnce = true;
+    // waitForGatewayReady can win the initial READY race. Disarm that socket's
+    // observer before marking startup complete so it cannot become a reconnect.
+    completeInitialReady: () => {
+      clearReadyWatch();
+      connectionPhase = "ready";
     },
     registerForceStop: (handler: (err: unknown) => void) => {
       forceStopHandler = handler;
@@ -590,7 +591,7 @@ export async function runDiscordGatewayLifecycle(params: {
       readyTimeoutMs: gatewayReadyTimeoutMs,
     });
 
-    statusObserver.markInitialReady();
+    statusObserver.completeInitialReady();
 
     if (drainPendingGatewayErrors() === "stop") {
       return;

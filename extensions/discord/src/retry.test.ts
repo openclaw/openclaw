@@ -109,6 +109,14 @@ describe("isRetryableDiscordDeliveryError", () => {
 
     expect(isRetryableDiscordDeliveryError(err, { gatewayDisconnected: true })).toBe(false);
   });
+
+  it("does not retry unrelated statusless errors while the gateway is disconnected", () => {
+    expect(
+      isRetryableDiscordDeliveryError(new Error("invalid delivery payload"), {
+        gatewayDisconnected: true,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("withDiscordDeliveryRetry gateway reconnect window", () => {

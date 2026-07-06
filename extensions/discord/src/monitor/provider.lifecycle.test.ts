@@ -797,6 +797,38 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(drainPendingDeliveriesMock).not.toHaveBeenCalled();
   });
 
+  it("does not treat a pending initial READY watch as a reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      let connectedReadCount = 0;
+      Object.defineProperty(gateway, "isConnected", {
+        get: () => {
+          connectedReadCount += 1;
+          return connectedReadCount >= 3;
+        },
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      const { gatewaySupervisor, lifecycleParams } = createLifecycleHarness({ gateway });
+      gatewaySupervisor.drainPending.mockImplementation(() => {
+        if (gatewaySupervisor.drainPending.mock.calls.length === 1) {
+          emitter.emit("debug", "Gateway websocket opened");
+        }
+        return "continue";
+      });
+
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+      expect(drainPendingDeliveriesMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("force-stops when a runtime reconnect opens but never becomes ready", async () => {
     vi.useFakeTimers();
     try {
