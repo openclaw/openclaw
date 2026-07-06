@@ -88,6 +88,16 @@ public final class OpenClawVoiceNoteRecorder {
         self.state == .requestingPermission
     }
 
+    /// True from permission request until the completed recording is staged.
+    public var ownsPendingChatAttachment: Bool {
+        switch self.state {
+        case .requestingPermission, .recording, .finished:
+            true
+        case .idle, .failed:
+            false
+        }
+    }
+
     /// Installs the app's synchronous microphone-ownership gate. The check and
     /// transition to requesting permission run in one MainActor turn.
     public func setCaptureAdmissionHandler(_ handler: @escaping @MainActor () -> Bool) {

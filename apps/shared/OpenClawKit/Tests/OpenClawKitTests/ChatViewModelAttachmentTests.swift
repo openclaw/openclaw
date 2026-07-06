@@ -46,6 +46,11 @@ private actor AttachmentHealthGate {
     }
 }
 
+@MainActor
+private final class AttachmentOwnerActivity {
+    var isActive = true
+}
+
 private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let capture: AttachmentSendCapture?
     let healthGate: AttachmentHealthGate?
@@ -320,12 +325,43 @@ final class ChatViewModelAttachmentTests: XCTestCase {
             activeAgentId: "work",
             sessionRoutingContract: "per-sender|main|work")
 
+        XCTAssertTrue(viewModel.isAttachmentOwnerPinned)
         XCTAssertEqual(viewModel.sessionKey, "main")
         XCTAssertEqual(viewModel.activeAgentId, "main")
         XCTAssertEqual(viewModel.sessionRoutingContract, "per-sender|main|main")
 
         viewModel.endAttachmentStaging()
 
+        XCTAssertFalse(viewModel.isAttachmentOwnerPinned)
+        XCTAssertEqual(viewModel.sessionKey, "agent:work:main")
+        XCTAssertEqual(viewModel.activeAgentId, "work")
+        XCTAssertEqual(viewModel.sessionRoutingContract, "per-sender|main|work")
+    }
+
+    @MainActor
+    func testRecordingPinsSessionAndIdentityUntilItEnds() {
+        let ownerActivity = AttachmentOwnerActivity()
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: AttachmentProcessingTransport(),
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main",
+            attachmentOwnerIsActive: { ownerActivity.isActive })
+
+        viewModel.syncSession(to: "agent:work:main")
+        viewModel.syncDeliveryIdentity(
+            activeAgentId: "work",
+            sessionRoutingContract: "per-sender|main|work")
+
+        XCTAssertTrue(viewModel.isAttachmentOwnerPinned)
+        XCTAssertEqual(viewModel.sessionKey, "main")
+        XCTAssertEqual(viewModel.activeAgentId, "main")
+        XCTAssertEqual(viewModel.sessionRoutingContract, "per-sender|main|main")
+
+        ownerActivity.isActive = false
+        viewModel.attachmentOwnerActivityChanged()
+
+        XCTAssertFalse(viewModel.isAttachmentOwnerPinned)
         XCTAssertEqual(viewModel.sessionKey, "agent:work:main")
         XCTAssertEqual(viewModel.activeAgentId, "work")
         XCTAssertEqual(viewModel.sessionRoutingContract, "per-sender|main|work")

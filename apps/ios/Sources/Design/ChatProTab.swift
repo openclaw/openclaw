@@ -75,6 +75,14 @@ struct ChatProTab: View {
         .onChange(of: self.appModel.chatSessionRoutingContract) { _, _ in
             self.syncChatViewModel()
         }
+        .onChange(of: self.appModel.voiceNoteRecorder.ownsPendingChatAttachment) { _, _ in
+            self.viewModel?.attachmentOwnerActivityChanged()
+            self.syncChatViewModel()
+        }
+        .onChange(of: self.viewModel?.isAttachmentOwnerPinned) { _, pinned in
+            guard pinned == false else { return }
+            self.syncChatViewModel()
+        }
         .onChange(of: self.appModel.isAppleReviewDemoModeEnabled) { _, _ in
             self.syncChatViewModel()
             self.viewModel?.refresh()
@@ -197,6 +205,9 @@ struct ChatProTab: View {
             currentTransportAgentID: self.viewModelTransportAgentID,
             nextTransportAgentID: transportAgentID)
         {
+            // Keep recording, staging, and delivery on their captured route.
+            // The pin-change observer replays this rebuild with latest state.
+            guard !viewModel.isAttachmentOwnerPinned else { return }
             self.viewModelOwnerID = ownerID
             self.viewModelTransportAgentID = transportAgentID
             self.viewModelRoutingContract = routingContract
@@ -214,6 +225,7 @@ struct ChatProTab: View {
         // One store instance backs both seams so the transcript cache and the
         // offline outbox share a single SQLite connection.
         let offlineStore = self.appModel.makeChatOfflineStore()
+        let voiceNoteRecorder = self.appModel.voiceNoteRecorder
         return OpenClawChatViewModel(
             sessionKey: sessionKey,
             // Bind durable rows and their transport lease to the exact same
@@ -221,6 +233,7 @@ struct ChatProTab: View {
             transport: self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID),
             activeAgentId: self.appModel.chatDeliveryAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract,
+            attachmentOwnerIsActive: { voiceNoteRecorder.ownsPendingChatAttachment },
             transcriptCache: offlineStore,
             outbox: offlineStore,
             onSessionChanged: { sessionKey in

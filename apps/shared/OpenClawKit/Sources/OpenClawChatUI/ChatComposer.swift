@@ -174,13 +174,21 @@ struct OpenClawChatComposer: View {
                     guard recording != nil else { return }
                     self.stageCompletedVoiceNoteIfNeeded()
                 }
+                .onChange(of: self.voiceNoteControl?.recorder.ownsPendingChatAttachment) { _, _ in
+                    self.viewModel.attachmentOwnerActivityChanged()
+                }
                 .onChange(of: self.voiceNoteControl?.recorder.errorMessage) { _, message in
                     if let message {
                         self.viewModel.errorText = message
                     }
                 }
                 .onAppear {
+                    self.viewModel.attachmentOwnerActivityChanged()
                     self.stageCompletedVoiceNoteIfNeeded()
+                }
+                .onDisappear {
+                    self.cancelActiveVoiceNoteIfNeeded()
+                    self.viewModel.attachmentOwnerActivityChanged()
                 }
     }
 

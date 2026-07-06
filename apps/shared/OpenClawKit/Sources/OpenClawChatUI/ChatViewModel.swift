@@ -139,6 +139,7 @@ public final class OpenClawChatViewModel {
     private let onSessionChanged: (@MainActor (String) -> Void)?
     private let onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)?
     private let diagnosticsLog: (@MainActor @Sendable (String) -> Void)?
+    private let attachmentOwnerIsActive: @MainActor () -> Bool
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -259,6 +260,7 @@ public final class OpenClawChatViewModel {
         transport: any OpenClawChatTransport,
         activeAgentId: String? = nil,
         sessionRoutingContract: String? = nil,
+        attachmentOwnerIsActive: @escaping @MainActor () -> Bool = { false },
         haptics: OpenClawChatHaptics = OpenClawChatHaptics(),
         transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
         outbox: (any OpenClawChatCommandOutbox)? = nil,
@@ -291,6 +293,7 @@ public final class OpenClawChatViewModel {
         self.onSessionChanged = onSessionChanged
         self.onThinkingLevelChanged = onThinkingLevelChanged
         self.diagnosticsLog = diagnosticsLog
+        self.attachmentOwnerIsActive = attachmentOwnerIsActive
 
         let transport = self.transport
         self.eventTask = Task { [weak self, transport] in
@@ -562,8 +565,21 @@ public final class OpenClawChatViewModel {
         !self.isSubmittingDraft && !self.isSending && self.hasDraftToSend
     }
 
+    /// True while replacing this model could move an attachment across chats.
+    public var isAttachmentOwnerPinned: Bool {
+        self.blocksAttachmentOwnerChange
+    }
+
     private var blocksAttachmentOwnerChange: Bool {
-        self.isSendingAttachmentDraft || self.attachmentStagingCount > 0 || !self.attachments.isEmpty
+        self.attachmentOwnerIsActive() ||
+            self.isSendingAttachmentDraft ||
+            self.attachmentStagingCount > 0 ||
+            !self.attachments.isEmpty
+    }
+
+    /// Applies external owner changes once recording or staging releases them.
+    public func attachmentOwnerActivityChanged() {
+        self.applyDeferredExternalStateIfReady()
     }
 
     /// File reads and image processing suspend before the attachment exists.
