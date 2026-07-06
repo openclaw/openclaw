@@ -17,7 +17,7 @@ export type RealtimeTalkConversationState = {
   assistantEntryId: string | null;
 };
 
-export type RealtimeTalkTranscriptUpdate = {
+type RealtimeTalkTranscriptUpdate = {
   role: RealtimeTalkConversationRole;
   text: string;
   final: boolean;

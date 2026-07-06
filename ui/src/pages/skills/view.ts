@@ -263,7 +263,7 @@ export function renderSkills(props: SkillsProps) {
         ${agents.length > 0
           ? html`
               <label class="field" style="min-width: 180px;">
-                <span>${t("common.filters.agent")}</span>
+                <span>${t("usage.filters.agent")}</span>
                 <select
                   name="skills-agent"
                   .value=${selectedAgentId}
@@ -283,6 +283,7 @@ export function renderSkills(props: SkillsProps) {
             `
           : nothing}
         <label class="field" style="flex: 1; min-width: 180px;">
+          <span>${t("common.search")}</span>
           <input
             .value=${props.filter}
             @input=${(e: Event) => props.onFilterChange((e.target as HTMLInputElement).value)}

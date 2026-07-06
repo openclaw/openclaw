@@ -11,16 +11,20 @@ import { formatCrestodianOnboardingWelcome } from "./overview.js";
  * On an already-configured install the welcome becomes the channels/handoff
  * guide instead of re-proposing setup.
  */
-export async function buildOnboardingWelcome(params: {
-  engine: CrestodianChatEngine;
-  workspace?: string;
-}): Promise<string> {
-  const overview = await params.engine.loadOverview();
-  // "Configured" must match the app onboarding gate (wizard metadata or
-  // gateway auth), not just a model: a model-only config would otherwise get
-  // the ready-guide welcome while the gate stays locked, stranding the page.
+/**
+ * "Configured" must match the app onboarding gate (wizard metadata or gateway
+ * auth), not just a model: a model-only config would otherwise get the
+ * ready-guide welcome while the gate stays locked, stranding the page.
+ */
+export async function loadAuthoredSetupConfig(params: {
+  configExists: boolean;
+  configValid: boolean;
+}): Promise<{
+  authoredConfig?: import("../config/types.openclaw.js").OpenClawConfig;
+  hasAuthoredSetup: boolean;
+}> {
   const authoredConfig = await (async () => {
-    if (!overview.config.exists || !overview.config.valid) {
+    if (!params.configExists || !params.configValid) {
       return undefined;
     }
     try {
@@ -38,10 +42,21 @@ export async function buildOnboardingWelcome(params: {
     normalizeSecretInputString(auth?.token) !== undefined ||
     isSecretRef(auth?.password) ||
     normalizeSecretInputString(auth?.password) !== undefined;
-  const hasAuthoredSetup =
-    (authoredConfig?.wizard && Object.keys(authoredConfig.wizard).length > 0) ||
-    hasAuthMode ||
-    hasAuthSecret;
+  const hasWizardMetadata =
+    authoredConfig?.wizard !== undefined && Object.keys(authoredConfig.wizard).length > 0;
+  const hasAuthoredSetup = hasWizardMetadata || hasAuthMode || hasAuthSecret;
+  return { ...(authoredConfig ? { authoredConfig } : {}), hasAuthoredSetup };
+}
+
+export async function buildOnboardingWelcome(params: {
+  engine: CrestodianChatEngine;
+  workspace?: string;
+}): Promise<string> {
+  const overview = await params.engine.loadOverview();
+  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
+    configExists: overview.config.exists,
+    configValid: overview.config.valid,
+  });
   if (hasAuthoredSetup && overview.defaultModel) {
     const welcome = formatCrestodianOnboardingWelcome(overview);
     params.engine.noteAssistantMessage(welcome);

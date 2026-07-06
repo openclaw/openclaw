@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Довіряти цьому шлюзу?</string>
     <string name="trust_and_continue">Довіряти й продовжити</string>
     <string name="cancel">Скасувати</string>
+    <string name="new_chat_in_worktree">Новий чат у worktree</string>
     <string name="endpoint">Кінцева точка</string>
     <string name="status">Стан</string>
     <string name="connected_gateway_ready">Ваш шлюз активний і готовий.</string>

@@ -45,6 +45,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",
+    groupBy: "none",
+    knownCategories: [],
     page: 0,
     pageSize: 10,
     selectedKeys: new Set<string>(),
@@ -58,6 +60,9 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onClearFilters: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
+    onGroupByChange: () => undefined,
+    onAssignCategory: () => undefined,
+    onRequestNewCategory: () => undefined,
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
@@ -131,6 +136,110 @@ describe("sessions view", () => {
       includeUnknown: false,
       showArchived: true,
     });
+  });
+
+  it("groups sessions by channel with section headers and no pagination", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
+            { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
+            { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
+          ]),
+        ),
+        groupBy: "channel",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(headers).toEqual(["discord", "telegram"]);
+    const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(counts).toEqual(["2 sessions", "1 session"]);
+    expect(container.querySelector(".data-table-pagination")).toBeNull();
+  });
+
+  it("keeps the filtered empty state when grouping is active", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([{ key: "agent:main:discord:channel:1", kind: "group", updatedAt: 1 }]),
+        ),
+        groupBy: "category",
+        knownCategories: ["Research"],
+        searchQuery: "no-such-session",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".data-table-empty-state")).not.toBeNull();
+    expect(container.querySelector(".session-group-row")).toBeNull();
+  });
+
+  it("assigns custom groups from the group cell and header drop targets", async () => {
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 2 },
+            { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
+          ]),
+        ),
+        groupBy: "category",
+        knownCategories: ["Research"],
+        onAssignCategory,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(headers).toEqual(["Research", "Ungrouped"]);
+
+    // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
+    const select = container.querySelectorAll<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    )[1];
+    if (!select) {
+      throw new Error("Expected group select");
+    }
+    select.value = "Research";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:discord:channel:1", "Research");
+
+    const headerRow = container.querySelector(".session-group-row");
+    if (!headerRow) {
+      throw new Error("Expected group header row");
+    }
+    const dropWithPayload = (types: string[], data: Record<string, string>) => {
+      const drop = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { types, getData: (type: string) => data[type] ?? "" },
+      });
+      headerRow.dispatchEvent(drop);
+    };
+
+    // Generic text drags (e.g. selected page text) must not trigger patches.
+    dropWithPayload(["text/plain"], { "text/plain": "not-a-session" });
+    expect(onAssignCategory).toHaveBeenCalledTimes(1);
+
+    dropWithPayload(["application/x-openclaw-session-key"], {
+      "application/x-openclaw-session-key": "agent:main:main",
+    });
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
   });
 
   it("offers workboard capture for dashboard sessions", async () => {
@@ -1020,7 +1129,8 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const selects = container.querySelectorAll("select");
+    // Scope to row selects; the toolbar also renders a group-by select.
+    const selects = container.querySelectorAll("tbody select");
     const fast = selects[1] as HTMLSelectElement | undefined;
     const verbose = selects[2] as HTMLSelectElement | undefined;
     const reasoning = selects[3] as HTMLSelectElement | undefined;

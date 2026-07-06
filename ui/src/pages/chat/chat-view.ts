@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -38,7 +39,6 @@ import {
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import type { RealtimeTalkCatalogProvider } from "./realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
@@ -72,8 +72,8 @@ export type ChatProps = {
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
+  canOpenRealtimeTalkSettings?: boolean;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -91,6 +91,7 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string | null;
   assistantName: string;
+  sendShortcut?: ChatSendShortcut;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -117,12 +118,14 @@ export type ChatProps = {
   onRealtimeTalkOptionsChange?: (
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
+  onOpenRealtimeTalkSettings?: () => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onGoalCommand?: (command: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -218,6 +221,7 @@ export function renderChat(props: ChatProps) {
     draft: props.draft,
     sessions: props.sessions,
     assistantName: props.assistantName,
+    sendShortcut: props.sendShortcut,
     attachments: props.attachments,
     showNewMessages: props.showNewMessages,
     replyTarget: props.replyTarget,
@@ -227,8 +231,8 @@ export function renderChat(props: ChatProps) {
     realtimeTalkTranscript: props.realtimeTalkTranscript,
     realtimeTalkConversation: props.realtimeTalkConversation,
     realtimeTalkOptionsOpen: props.realtimeTalkOptionsOpen,
-    realtimeTalkCatalogProviders: props.realtimeTalkCatalogProviders,
     realtimeTalkOptions: props.realtimeTalkOptions,
+    canOpenRealtimeTalkSettings: props.canOpenRealtimeTalkSettings,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -240,11 +244,13 @@ export function renderChat(props: ChatProps) {
     onToggleRealtimeTalk: props.onToggleRealtimeTalk,
     onToggleRealtimeTalkOptions: props.onToggleRealtimeTalkOptions,
     onRealtimeTalkOptionsChange: props.onRealtimeTalkOptionsChange,
+    onOpenRealtimeTalkSettings: props.onOpenRealtimeTalkSettings,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
     onAbort: props.onAbort,
     onQueueRemove: props.onQueueRemove,
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
+    onGoalCommand: props.onGoalCommand,
     onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,

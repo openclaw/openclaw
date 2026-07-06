@@ -250,19 +250,46 @@ final class WebChatSwiftUIWindowController {
     var onVisibilityChanged: ((Bool) -> Void)?
 
     convenience init(sessionKey: String, presentation: WebChatPresentation) {
-        self.init(sessionKey: sessionKey, presentation: presentation, transport: MacGatewayChatTransport())
+        // Connection-mode changes tear chat windows down via resetTunnels(),
+        // so binding the cache identity at construction stays correct. One
+        // store instance backs both the transcript cache and the offline
+        // command outbox.
+        let store = MacChatTranscriptCache.make()
+        self.init(
+            sessionKey: sessionKey,
+            presentation: presentation,
+            transport: MacGatewayChatTransport(),
+            transcriptCache: store,
+            outbox: store)
     }
 
-    init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
+    init(
+        sessionKey: String,
+        presentation: WebChatPresentation,
+        transport: any OpenClawChatTransport,
+        transcriptCache: (any OpenClawChatTranscriptCache)? = nil,
+        outbox: (any OpenClawChatCommandOutbox)? = nil)
+    {
         self.sessionKey = sessionKey
         self.presentation = presentation
         let vm = OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
+            transcriptCache: transcriptCache,
+            outbox: outbox,
             initialThinkingLevel: Self.persistedThinkingLevel(),
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
+        Task { @MainActor [weak vm] in
+            let pushes = await GatewayConnection.shared.subscribe()
+            for await push in pushes {
+                guard let vm else { return }
+                guard case .snapshot = push else { continue }
+                let activeAgentId = await GatewayConnection.shared.cachedDefaultAgentId()
+                vm.syncActiveAgentId(activeAgentId)
+            }
+        }
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,

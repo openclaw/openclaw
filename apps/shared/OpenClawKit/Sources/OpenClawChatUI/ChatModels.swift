@@ -338,11 +338,47 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public struct OpenClawChatInFlightRun: Codable, Sendable {
+    public let runId: String
+    public let text: String
+
+    public init(runId: String, text: String) {
+        self.runId = runId
+        self.text = text
+    }
+}
+
+public struct OpenClawChatSessionInfo: Codable, Sendable {
+    public let hasActiveRun: Bool?
+
+    public init(hasActiveRun: Bool?) {
+        self.hasActiveRun = hasActiveRun
+    }
+}
+
 public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let sessionKey: String
     public let sessionId: String?
     public let messages: [AnyCodable]?
     public let thinkingLevel: String?
+    public let sessionInfo: OpenClawChatSessionInfo?
+    public let inFlightRun: OpenClawChatInFlightRun?
+
+    public init(
+        sessionKey: String,
+        sessionId: String?,
+        messages: [AnyCodable]?,
+        thinkingLevel: String?,
+        sessionInfo: OpenClawChatSessionInfo? = nil,
+        inFlightRun: OpenClawChatInFlightRun? = nil)
+    {
+        self.sessionKey = sessionKey
+        self.sessionId = sessionId
+        self.messages = messages
+        self.thinkingLevel = thinkingLevel
+        self.sessionInfo = sessionInfo
+        self.inFlightRun = inFlightRun
+    }
 }
 
 public struct OpenClawSessionPreviewItem: Codable, Hashable, Sendable {
@@ -380,9 +416,26 @@ public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
 public struct OpenClawChatEventPayload: Codable, Sendable {
     public let runId: String?
     public let sessionKey: String?
+    public let agentId: String?
     public let state: String?
     public let message: AnyCodable?
     public let errorMessage: String?
+
+    public init(
+        runId: String?,
+        sessionKey: String?,
+        agentId: String? = nil,
+        state: String?,
+        message: AnyCodable?,
+        errorMessage: String?)
+    {
+        self.runId = runId
+        self.sessionKey = sessionKey
+        self.agentId = agentId
+        self.state = state
+        self.message = message
+        self.errorMessage = errorMessage
+    }
 }
 
 public struct OpenClawSessionMessageEventPayload: Codable, Sendable {

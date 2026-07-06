@@ -58,10 +58,14 @@ export function normalizeLegacyBrowserConfig(
     delete browser.relayBindHost;
     browserChanged = true;
     changes.push(
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
     );
   }
 
+  // driver "extension" is a live driver again (Chrome extension relay v2). Old
+  // relay-era profiles could carry a cdpUrl pointing at the retired gateway
+  // relay endpoint; the new driver owns its endpoint, so drop the stale URL
+  // instead of failing schema validation.
   const rawProfiles = browser.profiles;
   if (isRecord(rawProfiles)) {
     const profiles = { ...rawProfiles };
@@ -71,16 +75,15 @@ export function normalizeLegacyBrowserConfig(
         continue;
       }
       const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
-      if (rawDriver !== "extension") {
+      if (rawDriver !== "extension" || !normalizeOptionalString(rawProfile.cdpUrl)) {
         continue;
       }
-      profiles[profileName] = {
-        ...rawProfile,
-        driver: "existing-session",
-      };
+      const nextProfile = { ...rawProfile };
+      delete nextProfile.cdpUrl;
+      profiles[profileName] = nextProfile;
       profilesChanged = true;
       changes.push(
-        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+        `Removed browser.profiles.${profileName}.cdpUrl (extension driver profiles own their relay endpoint).`,
       );
     }
     if (profilesChanged) {

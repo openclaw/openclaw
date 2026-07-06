@@ -15,6 +15,7 @@ import {
   repairAcpSessionMetaKeyForMigration,
 } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { insideGitCheckout } from "../agents/worktrees/git.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -1279,12 +1280,17 @@ export function listAgentsForGateway(
       resolvedModel.model,
       modelCatalog,
     );
+    const workspace = resolveAgentWorkspaceDir(cfg, id);
+    // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
+    // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
+    const workspaceGit = insideGitCheckout(workspace);
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
-        workspace: resolveAgentWorkspaceDir(cfg, id),
+        workspace,
+        workspaceGit,
         agentRuntime: resolveModelAgentRuntimeMetadata({
           cfg,
           agentId: id,
@@ -2157,6 +2163,7 @@ export function buildGatewaySessionRow(params: {
     subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
+    category: entry?.category,
     displayName,
     derivedTitle,
     lastMessagePreview,

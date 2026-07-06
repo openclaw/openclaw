@@ -251,8 +251,31 @@ export const SessionsCreateParamsSchema = Type.Object(
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
+    worktree: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
+);
+
+export const SessionWorktreeInfoSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    path: NonEmptyString,
+    branch: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Result returned after creating or adopting a session. */
+export const SessionsCreateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    runStarted: Type.Optional(Type.Boolean()),
+    worktree: Type.Optional(SessionWorktreeInfoSchema),
+  },
+  { additionalProperties: true },
 );
 
 /** Sends one message into an existing session. */
@@ -303,6 +326,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    /** User-defined organization bucket ("category", not chat-group); null clears it. */
+    category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     archived: Type.Optional(Type.Boolean()),
     pinned: Type.Optional(Type.Boolean()),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

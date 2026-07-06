@@ -67,6 +67,10 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+} from "../plugin-sdk/provider-stream-shared.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
@@ -3972,7 +3976,7 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 }
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return model.id.toLowerCase().includes("gemini-3");
+  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;

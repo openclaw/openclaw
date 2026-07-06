@@ -315,15 +315,6 @@ export function hasOnlySessionLifecycleMutationKindActive(
   );
 }
 
-export async function waitForSessionLifecycleMutationIdle(
-  scope: string,
-  identities: Iterable<string | undefined>,
-): Promise<void> {
-  await waitForNormalizedSessionLifecycleMutationIdle(
-    normalizeSessionIdentities(scope, identities),
-  );
-}
-
 export function isSessionWorkAdmissionActive(
   scope: string,
   identities: Iterable<string | undefined>,

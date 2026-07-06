@@ -145,6 +145,31 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
   });
 
+  it("parses large clipboard data URL images without full base64 decoding", async () => {
+    const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
+    const base64 = png.toString("base64");
+    const fromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const parsed = await parseMessageWithAttachments(
+        "see screenshot",
+        [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
+        { log: { warn: () => {} } },
+      );
+
+      expectSingleInlinePng(parsed);
+      expect(parsed.images[0]?.data).toBe(base64);
+      expect(
+        fromSpy.mock.calls.some((call) => {
+          const [value, encoding] = call as unknown[];
+          return value === base64 && encoding === "base64";
+        }),
+      ).toBe(false);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    } finally {
+      fromSpy.mockRestore();
+    }
+  });
+
   it("sniffs mime when missing", async () => {
     const { parsed, logs } = await parseWithWarnings("see this", [
       pngAttachment({ mimeType: undefined }),

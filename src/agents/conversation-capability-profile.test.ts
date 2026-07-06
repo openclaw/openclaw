@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -80,6 +83,57 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
     expect(profile.policy.groupPolicy).toEqual({ allow: ["read", "exec"] });
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
+  });
+
+  it("keeps built-in profile grants out of explicit overrides", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          allow: ["pdf"],
+        },
+      },
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+    });
+
+    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
+    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
+  });
+
+  it("keeps inherited subagent grants out of explicit overrides", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-capability-profile-inherited-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:subagent:limited": {
+          sessionId: "limited-session",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolAllow: ["image_generate"],
+        },
+      }),
+    );
+
+    try {
+      const profile = resolveConversationCapabilityProfile({
+        config: { session: { store: storePath } },
+        sessionKey: "agent:main:subagent:limited",
+        agentId: "main",
+        modelProvider: "ollama",
+        modelId: "qwen3.5:9b",
+      });
+
+      expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
+      expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+    } finally {
+      fs.rmSync(storePath, { force: true });
+    }
   });
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {

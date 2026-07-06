@@ -20,6 +20,7 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
 export {
   buildGatewayReloadPlan,
@@ -90,11 +91,6 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
   );
 }
 
-// Hot-reload stays "active" while a watcher is live. It flips to "disabled" only
-// after watcher re-creation fails past the retry budget, so operators/callers
-// can detect silent degradation instead of assuming reloads still fire.
-export type GatewayHotReloadStatus = "active" | "disabled";
-
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
   hotReloadStatus: () => GatewayHotReloadStatus;
@@ -117,6 +113,7 @@ export function startGatewayConfigReloader(opts: {
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onNoopConfigCommit: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
@@ -287,6 +284,9 @@ export function startGatewayConfigReloader(opts: {
     }
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       await opts.onConfigChange?.(plan, nextConfig);
+      // No-op plans still change the runtime config snapshot. Commit before
+      // marking applied so getRuntimeConfig() readers do not stay stale until restart.
+      await opts.onNoopConfigCommit(plan, nextConfig);
       await opts.onConfigApplied?.(plan, nextConfig);
       return;
     }

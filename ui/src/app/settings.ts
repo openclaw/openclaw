@@ -27,6 +27,11 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
+import {
+  DEFAULT_SIDEBAR_PINNED_ROUTES,
+  normalizeSidebarPinnedRoutes,
+  type SidebarNavRoute,
+} from "../app-navigation.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -52,6 +57,15 @@ export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode 
   return CHAT_AUTO_SCROLL_MODES.includes(value as ChatAutoScrollMode)
     ? (value as ChatAutoScrollMode)
     : "near-bottom";
+}
+
+export const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
+export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
+
+export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
+  return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
+    ? (value as ChatSendShortcut)
+    : "enter";
 }
 
 function snapBorderRadius(value: number): BorderRadiusStop {
@@ -94,11 +108,12 @@ export type UiSettings = {
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
   chatAutoScroll?: ChatAutoScrollMode;
+  chatSendShortcut?: ChatSendShortcut;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
-  recentSessionsCollapsed?: boolean; // Collapse recent sessions list in sidebar
+  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
+  sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
   borderRadius: number; // Corner roundness (0–100, default 50)
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -132,7 +147,7 @@ type NativeControlAuth = {
   password?: string | null;
 };
 
-export type ApplicationStartupSettings = {
+type ApplicationStartupSettings = {
   settings: UiSettings;
   password: string | null;
   pendingGatewayUrl: string | null;
@@ -456,11 +471,12 @@ export function loadSettings(): UiSettings {
     chatShowToolCalls: true,
     chatPersistCommentary: false,
     chatAutoScroll: "near-bottom",
+    chatSendShortcut: "enter",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
-    navGroupsCollapsed: {},
-    recentSessionsCollapsed: false,
+    sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
+    sidebarMoreExpanded: false,
     borderRadius: 50,
     textScale: 100,
   };
@@ -505,6 +521,7 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
+      chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -517,14 +534,12 @@ export function loadSettings(): UiSettings {
         typeof parsed.navWidth === "number" && parsed.navWidth >= 200 && parsed.navWidth <= 400
           ? parsed.navWidth
           : defaults.navWidth,
-      navGroupsCollapsed:
-        typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
-          ? parsed.navGroupsCollapsed
-          : defaults.navGroupsCollapsed,
-      recentSessionsCollapsed:
-        typeof parsed.recentSessionsCollapsed === "boolean"
-          ? parsed.recentSessionsCollapsed
-          : defaults.recentSessionsCollapsed,
+      sidebarPinnedRoutes:
+        normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
+      sidebarMoreExpanded:
+        typeof parsed.sidebarMoreExpanded === "boolean"
+          ? parsed.sidebarMoreExpanded
+          : defaults.sidebarMoreExpanded,
       borderRadius:
         typeof parsed.borderRadius === "number" &&
         parsed.borderRadius >= 0 &&
@@ -623,11 +638,14 @@ function persistSettings(next: UiSettings) {
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? false,
     chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
+    ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
+      ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
-    navGroupsCollapsed: next.navGroupsCollapsed,
-    recentSessionsCollapsed: next.recentSessionsCollapsed ?? false,
+    sidebarPinnedRoutes: next.sidebarPinnedRoutes,
+    sidebarMoreExpanded: next.sidebarMoreExpanded,
     borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),

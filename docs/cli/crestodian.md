@@ -113,8 +113,11 @@ When no model is configured, setup picks the first usable backend in this order 
 3. `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
 4. Claude Code CLI -> `claude-cli/claude-opus-4-8`
 5. Codex -> `openai/gpt-5.5` through the Codex app-server harness
+6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
 
-If none are available, setup still writes the default workspace and leaves the model unset. Install or log into Codex/Claude Code, or expose `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, then run setup again.
+If none are available, setup still writes the default workspace and leaves the model unset. Install or log into Codex/Claude Code/Gemini CLI, or expose `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, then run setup again.
+
+The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual API-key step (Anthropic, OpenAI, or Google) that is verified the same way before it is saved.
 
 ## Model-assisted planner
 

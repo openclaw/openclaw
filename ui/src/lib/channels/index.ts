@@ -48,9 +48,7 @@ export type ChannelCapability = {
   dispose: () => void;
 };
 
-export function createInitialChannelsState(
-  snapshot: Partial<ChannelGatewaySnapshot> = {},
-): ChannelsState {
+function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,

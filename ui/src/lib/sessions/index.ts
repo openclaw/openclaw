@@ -68,6 +68,7 @@ export type SessionRefreshOptions = SessionListOptions & {
 
 export type SessionPatch = {
   label?: string | null;
+  category?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
@@ -272,7 +273,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   return params;
 }
 
-export async function requestSessionList(
+async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
@@ -283,7 +284,7 @@ export async function requestSessionList(
   return result ?? null;
 }
 
-export function requestSessionPatch(
+function requestSessionPatch(
   client: SessionRequestClient,
   key: string,
   patch: SessionPatch,
@@ -306,7 +307,7 @@ export function requestSessionDelete(
   });
 }
 
-export function requestSessionReset(
+function requestSessionReset(
   client: SessionRequestClient,
   key: string,
   options: SessionResetOptions = {},
@@ -318,7 +319,7 @@ export function requestSessionReset(
     .then(() => undefined);
 }
 
-export function requestSessionCompact(
+function requestSessionCompact(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -328,7 +329,7 @@ export function requestSessionCompact(
   });
 }
 
-export function requestSessionSteer(
+function requestSessionSteer(
   client: SessionRequestClient,
   key: string,
   message: string,
@@ -340,7 +341,7 @@ export function requestSessionSteer(
   });
 }
 
-export function requestSessionFilesList(
+function requestSessionFilesList(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null; path?: string; search?: string } = {},
@@ -353,7 +354,7 @@ export function requestSessionFilesList(
   });
 }
 
-export function requestSessionFile(
+function requestSessionFile(
   client: SessionRequestClient,
   key: string,
   path: string,
@@ -366,11 +367,11 @@ export function requestSessionFile(
   });
 }
 
-export function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
+function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
 
-export async function subscribeSessionMessages(
+async function subscribeSessionMessages(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -400,7 +401,7 @@ export function unsubscribeSessionMessages(
     .then(() => undefined);
 }
 
-export async function listSessionCheckpoints(
+async function listSessionCheckpoints(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -411,7 +412,7 @@ export async function listSessionCheckpoints(
   );
 }
 
-export function branchSessionCheckpoint(
+function branchSessionCheckpoint(
   client: SessionRequestClient,
   key: string,
   checkpointId: string,
@@ -423,7 +424,7 @@ export function branchSessionCheckpoint(
   });
 }
 
-export function restoreSessionCheckpoint(
+function restoreSessionCheckpoint(
   client: SessionRequestClient,
   key: string,
   checkpointId: string,

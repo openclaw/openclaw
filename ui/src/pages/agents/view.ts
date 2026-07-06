@@ -63,7 +63,7 @@ export type AgentSkillsState = {
   filter: string;
 };
 
-export type ToolsCatalogState = {
+type ToolsCatalogState = {
   loading: boolean;
   error: string | null;
   result: ToolsCatalogResult | null;

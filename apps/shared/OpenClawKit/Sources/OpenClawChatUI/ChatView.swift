@@ -32,6 +32,20 @@ func chatReaderHasNewerContent(
     return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
 }
 
+/// The view's own one-shot positioning always runs in a nil-animation transaction, so
+/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
+/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
+    switch phase {
+    case .interacting, .animating:
+        true
+    case .idle, .tracking, .decelerating:
+        false
+    @unknown default:
+        false
+    }
+}
+
 @MainActor
 public struct OpenClawChatView: View {
     public enum Style {
@@ -252,7 +266,7 @@ public struct OpenClawChatView: View {
             }
             .onScrollPhaseChange { _, phase in
                 guard self.hasPerformedInitialScroll else { return }
-                if phase == .interacting {
+                if chatReaderScrollReleasesFollow(phase) {
                     self.isUserScrolling = true
                     self.followTarget = nil
                 } else if phase == .idle, self.isUserScrolling {
@@ -330,20 +344,7 @@ public struct OpenClawChatView: View {
         }
 
         ForEach(self.visibleMessages) { msg in
-            ChatMessageBubble(
-                message: msg,
-                style: self.style,
-                markdownVariant: self.markdownVariant,
-                userAccent: self.userAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean)
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
+            self.messageRow(for: msg)
         }
 
         if self.viewModel.pendingRunCount > 0 {
@@ -378,6 +379,65 @@ public struct OpenClawChatView: View {
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func messageRow(for msg: OpenClawChatMessage) -> some View {
+        let bubble = ChatMessageBubble(
+            message: msg,
+            style: self.style,
+            markdownVariant: self.markdownVariant,
+            userAccent: self.userAccent,
+            showsAssistantTrace: self.showsAssistantTrace,
+            assistantName: self.assistantName,
+            assistantAvatarText: self.assistantAvatarText,
+            assistantAvatarTint: self.assistantAvatarTint,
+            showsAssistantAvatar: self.showsAssistantAvatars,
+            isClean: self.composerChrome == .clean)
+            .frame(
+                maxWidth: .infinity,
+                alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
+        if let outboxState = self.viewModel.outboxState(for: msg.id) {
+            // Offline-queued send: show the durable state under the bubble
+            // and offer retry/delete through the row's context menu.
+            VStack(alignment: .trailing, spacing: 3) {
+                bubble
+                ChatOutboxStatusLabel(state: outboxState)
+                    .padding(.trailing, 8)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .contextMenu {
+                if outboxState.isFailed {
+                    Button {
+                        self.viewModel.retryOutboxMessage(msg.id)
+                    } label: {
+                        Label {
+                            Text("Retry Send")
+                                .font(OpenClawChatTypography.body)
+                        } icon: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                }
+                // No Delete while `.sending`: the transport call is already
+                // in flight and cannot be prevented, so removing the bubble
+                // would hide a message that may still reach the gateway.
+                if outboxState != .sending {
+                    Button(role: .destructive) {
+                        self.viewModel.deleteOutboxMessage(msg.id)
+                    } label: {
+                        Label {
+                            Text("Delete")
+                                .font(OpenClawChatTypography.body)
+                        } icon: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
+            }
+        } else {
+            bubble
         }
     }
 

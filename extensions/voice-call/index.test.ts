@@ -86,6 +86,7 @@ function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
       endCall: vi.fn(async () => ({ success: true })),
       getCall: vi.fn((id: string) => (id === callId ? call : undefined)),
       getCallByProviderCallId: vi.fn(() => undefined),
+      getCallFromMemoryOrStore: vi.fn(async (id: string) => (id === callId ? call : undefined)),
       getActiveCalls: vi.fn(() => [call]),
       getCallHistory: vi.fn(async () => []),
     } as unknown as VoiceCallRuntime["manager"],
@@ -621,7 +622,7 @@ describe("voice-call plugin", () => {
   it("reports ended call history when speaking to a stale call", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
-    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () =>
       createCallRecord({
         callId: "call-1",
         providerCallId: "CA123",
@@ -629,7 +630,7 @@ describe("voice-call plugin", () => {
         endReason: "completed",
         endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
       }),
-    ]);
+    );
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.speak") as
       | ((ctx: {
@@ -652,7 +653,7 @@ describe("voice-call plugin", () => {
   it("reports stale call history with invalid ended timestamps", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
-    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () =>
       createCallRecord({
         callId: "call-1",
         providerCallId: "CA123",
@@ -660,7 +661,7 @@ describe("voice-call plugin", () => {
         endReason: "completed",
         endedAt: Number.POSITIVE_INFINITY,
       }),
-    ]);
+    );
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.speak") as
       | ((ctx: {
@@ -739,6 +740,41 @@ describe("voice-call plugin", () => {
     })) as { details: { found?: boolean; call?: unknown } };
     expect(result.details.found).toBe(true);
     expectRedactedVoiceCallStatus(result.details.call);
+  });
+
+  it("tool get_status uses the manager's persisted fallback", async () => {
+    const completed = createCallRecord({
+      callId: "call-1",
+      providerCallId: "CA123",
+      state: "completed",
+      endReason: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
+    });
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => completed);
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "get_status",
+      callId: "call-1",
+    })) as { details: { found?: boolean; call?: { state?: string } } };
+    expect(runtimeStub.manager["getCallFromMemoryOrStore"]).toHaveBeenCalledWith("call-1");
+    expect(result.details.found).toBe(true);
+    expect(result.details.call?.state).toBe("completed");
+  });
+
+  it("tool get_status reports found:false when the call is neither active nor persisted", async () => {
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => undefined);
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "get_status",
+      callId: "call-1",
+    })) as { details: { found?: boolean } };
+    expect(result.details.found).toBe(false);
   });
 
   it("tool send_dtmf returns json payload", async () => {

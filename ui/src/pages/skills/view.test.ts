@@ -137,7 +137,11 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     const selector = container.querySelector<HTMLSelectElement>('select[name="skills-agent"]');
+    const filter = container.querySelector<HTMLInputElement>('input[name="skills-filter"]');
     expect(selector).toBeInstanceOf(HTMLSelectElement);
+    expect(filter).toBeInstanceOf(HTMLInputElement);
+    expect(normalizeText(selector!.closest("label")!)).toContain("Agent");
+    expect(normalizeText(filter!.closest("label")!)).toContain("Search");
     expect(selector?.value).toBe("research");
     expect(Array.from(selector!.options).map((option) => option.textContent?.trim())).toEqual([
       "Main (default)",

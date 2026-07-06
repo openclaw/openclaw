@@ -27,6 +27,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import {
   detectAndLoadPromptImages,
@@ -145,6 +146,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
+  bootstrapMode?: BootstrapMode;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -203,6 +205,7 @@ export function buildCliAgentSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
+    bootstrapMode: params.bootstrapMode,
   });
 }
 

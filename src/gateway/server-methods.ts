@@ -74,6 +74,10 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadAuditHandlers = lazyHandlerModule(
+  () => import("./server-methods/audit.js"),
+  (module) => module.auditHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -98,6 +102,10 @@ const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
   (module) => module.connectHandlers,
 );
+const loadControlUiHandlers = lazyHandlerModule(
+  () => import("./server-methods/control-ui.js"),
+  (module) => module.controlUiHandlers,
+);
 const loadCronHandlers = lazyHandlerModule(
   () => import("./server-methods/cron.js"),
   (module) => module.cronHandlers,
@@ -121,6 +129,10 @@ const loadDoctorHandlers = lazyHandlerModule(
 const loadEnvironmentsHandlers = lazyHandlerModule(
   () => import("./server-methods/environments.js"),
   (module) => module.environmentsHandlers,
+);
+const loadWorktreesHandlers = lazyHandlerModule(
+  () => import("./server-methods/worktrees.js"),
+  (module) => module.worktreesHandlers,
 );
 const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
@@ -373,6 +385,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["controlUi.githubPreview"],
+    loadHandlers: loadControlUiHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "doctor.memory.status",
       "doctor.memory.dreamDiary",
@@ -388,6 +404,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["environments.list", "environments.status"],
     loadHandlers: loadEnvironmentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "worktrees.list",
+      "worktrees.create",
+      "worktrees.remove",
+      "worktrees.restore",
+      "worktrees.gc",
+    ],
+    loadHandlers: loadWorktreesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -435,7 +461,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["crestodian.chat"],
+    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
     loadHandlers: loadCrestodianHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -459,6 +485,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.mode",
     ],
     loadHandlers: loadTalkHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["audit.list"],
+    loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
@@ -548,6 +578,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "last-heartbeat",
       "set-heartbeats",
       "system-presence",
+      "system.info",
       "system-event",
     ],
     loadHandlers: loadSystemHandlers,

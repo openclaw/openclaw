@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">信任此网关？</string>
     <string name="trust_and_continue">信任并继续</string>
     <string name="cancel">取消</string>
+    <string name="new_chat_in_worktree">在 worktree 中新建聊天</string>
     <string name="endpoint">端点</string>
     <string name="status">状态</string>
     <string name="connected_gateway_ready">你的网关已激活并准备就绪。</string>
