@@ -17,6 +17,7 @@ const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
+const MAX_DISCORD_GATEWAY_METADATA_BYTES = 1 * 1024 * 1024;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
@@ -32,6 +33,23 @@ export type DiscordGatewayMetadataFetchOptions = {
 };
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
+
+function checkDiscordGatewayContentLength(raw: string | null): void {
+  if (!raw) return;
+  if (!/^\d+$/.test(raw)) {
+    throw createGatewayMetadataError({
+      detail: "Discord API /gateway/bot response has invalid content-length",
+      transient: false,
+    });
+  }
+  const size = Number(raw);
+  if (!Number.isSafeInteger(size) || size > MAX_DISCORD_GATEWAY_METADATA_BYTES) {
+    throw createGatewayMetadataError({
+      detail: `Discord API /gateway/bot response exceeds size limit (${size} bytes)`,
+      transient: false,
+    });
+  }
+}
 
 const discordGatewayBotInfoSchema = Type.Object({
   url: Type.String({ minLength: 1 }),
@@ -186,8 +204,15 @@ export async function fetchDiscordGatewayInfo(params: {
   }
 
   let body: string;
+  checkDiscordGatewayContentLength(response.headers.get("content-length"));
   try {
     body = await response.text();
+    if (new TextEncoder().encode(body).byteLength > MAX_DISCORD_GATEWAY_METADATA_BYTES) {
+      throw createGatewayMetadataError({
+        detail: "Discord API /gateway/bot response exceeds size limit after reading",
+        transient: false,
+      });
+    }
   } catch (error) {
     throw createGatewayMetadataError({
       detail: formatErrorMessage(error),
