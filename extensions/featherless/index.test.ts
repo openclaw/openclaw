@@ -115,6 +115,29 @@ describe("featherless provider plugin", () => {
     });
   });
 
+  it("applies provider compat to configured models without overriding explicit values", async () => {
+    const provider = await registerSingleProviderPlugin(featherlessPlugin);
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "featherless",
+      modelId: "google/gemma-3-27b-it",
+      model: {
+        ...createDefaultRuntimeModel(),
+        id: "google/gemma-3-27b-it",
+        name: "Gemma 3 27B",
+        compat: {
+          supportsStore: true,
+          thinkingFormat: "deepseek",
+        },
+      },
+    });
+
+    expect(normalized?.compat).toMatchObject({
+      ...FEATHERLESS_DYNAMIC_COMPAT,
+      supportsStore: true,
+      thinkingFormat: "deepseek",
+    });
+  });
+
   it("defers the curated model to static catalog resolution", async () => {
     const provider = await registerSingleProviderPlugin(featherlessPlugin);
     const resolved = provider.resolveDynamicModel?.(

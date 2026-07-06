@@ -1,5 +1,8 @@
 // Featherless plugin entrypoint registers its OpenClaw integration.
-import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -58,6 +61,16 @@ function resolveFeatherlessDynamicModel(ctx: ProviderResolveDynamicModelContext)
   );
 }
 
+function normalizeFeatherlessResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  return {
+    ...model,
+    compat: {
+      ...FEATHERLESS_DYNAMIC_COMPAT,
+      ...model.compat,
+    },
+  };
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Featherless AI Provider",
@@ -94,6 +107,7 @@ export default defineSingleProviderPluginEntry({
         config,
         providerId: PROVIDER_ID,
       }),
+    normalizeResolvedModel: ({ model }) => normalizeFeatherlessResolvedModel(model),
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       dropReasoningFromHistory: false,

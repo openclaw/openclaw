@@ -1,6 +1,9 @@
 // Featherless model catalog helpers derive their values from the plugin manifest.
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelCompatConfig,
+  ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const FEATHERLESS_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
@@ -26,10 +29,10 @@ const FEATHERLESS_DEFAULT_MODEL = requireFeatherlessManifestModel(FEATHERLESS_DE
 
 export const FEATHERLESS_DEFAULT_CONTEXT_WINDOW = FEATHERLESS_DEFAULT_MODEL.contextWindow;
 export const FEATHERLESS_DEFAULT_MAX_TOKENS = FEATHERLESS_DEFAULT_MODEL.maxTokens;
-export const FEATHERLESS_DYNAMIC_COMPAT = {
+export const FEATHERLESS_DYNAMIC_COMPAT: ModelCompatConfig = {
   ...FEATHERLESS_DEFAULT_MODEL.compat,
   thinkingFormat: "openai",
-} as const;
+};
 
 export function isFeatherlessCatalogModelId(modelId: string): boolean {
   return FEATHERLESS_MANIFEST_PROVIDER.models.some((model) => model.id === modelId);

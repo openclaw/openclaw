@@ -27,6 +27,7 @@
       "provider": "featherless",
       "method": "api-key",
       "choiceId": "featherless-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Featherless AI API key",
       "choiceHint": "OpenAI-compatible access to open models",
       "groupId": "featherless",

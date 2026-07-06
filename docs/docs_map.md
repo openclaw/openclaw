@@ -6062,6 +6062,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/featherless.md
+
+- Route: /plugins/reference/featherless
+- Headings:
+  - H1: Featherless plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/feishu.md
 
 - Route: /plugins/reference/feishu
@@ -7434,6 +7443,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Image generation
   - H2: Video generation
   - H2: Music generation
+  - H2: Related
+
+## providers/featherless.md
+
+- Route: /providers/featherless
+- Headings:
+  - H2: Setup
+  - H2: Default model
+  - H2: Other Featherless models
+  - H2: Troubleshooting
   - H2: Related
 
 ## providers/fireworks.md
