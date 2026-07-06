@@ -169,10 +169,7 @@ import {
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
-import {
-  isDashboardSessionTitleCandidate,
-  maybeGenerateDashboardSessionTitle,
-} from "../dashboard-session-title.js";
+import { isSessionTitleCandidate, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
@@ -4289,7 +4286,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
       const titleSource = stripInlineDirectiveTagsForDisplay(rawMessage).text;
-      if (isDashboardSessionTitleCandidate({ sessionKey, userMessage: titleSource })) {
+      const autoTitleEnabled = cfg.session?.autoTitle !== false;
+      const isFirstTurn = !entry || entry.sessionId !== admittedSessionId || !entry.systemSent;
+      if (
+        isSessionTitleCandidate({
+          sessionKey,
+          userMessage: titleSource,
+          isNewSession: isFirstTurn,
+          autoTitleEnabled,
+        })
+      ) {
         void (async () => {
           const titleEntry =
             entry?.sessionId === admittedSessionId
@@ -4299,7 +4305,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!titleSessionId) {
             return;
           }
-          const updated = await maybeGenerateDashboardSessionTitle({
+          const updated = await maybeGenerateSessionTitle({
             cfg,
             agentId,
             entry: titleEntry,
@@ -4307,6 +4313,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionKey,
             storePath,
             userMessage: titleSource,
+            autoTitleEnabled,
           });
           if (updated) {
             emitSessionsChanged(context, {
@@ -4316,9 +4323,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           }
         })().catch((err: unknown) => {
-          context.logGateway.warn(
-            `dashboard session title generation failed: ${formatForLog(err)}`,
-          );
+          context.logGateway.warn(`session title generation failed: ${formatForLog(err)}`);
         });
       }
       const persistedImagesPromise = persistChatSendImages({
