@@ -293,10 +293,3 @@ export function extractDurableInstructionProposals(params: {
     maxProposals: params.maxProposals,
   });
 }
-
-/** Extracts a single candidate durable instruction; kept for callers that want one proposal. */
-export function extractDurableInstructionProposal(params: {
-  messages: unknown[];
-}): DurableInstruction | undefined {
-  return extractDurableInstructionProposals({ ...params, maxProposals: 1 }).at(-1);
-}

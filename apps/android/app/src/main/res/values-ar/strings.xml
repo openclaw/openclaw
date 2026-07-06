@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">هل تثق بهذه البوابة؟</string>
     <string name="trust_and_continue">الثقة والمتابعة</string>
     <string name="cancel">إلغاء</string>
+    <string name="new_chat_in_worktree">دردشة جديدة في worktree</string>
     <string name="endpoint">نقطة النهاية</string>
     <string name="status">الحالة</string>
     <string name="connected_gateway_ready">بوابتك نشطة وجاهزة.</string>

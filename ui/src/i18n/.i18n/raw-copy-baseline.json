@@ -1970,6 +1970,34 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Clear goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Edit goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Pause goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Resume goal"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-message.ts",

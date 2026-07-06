@@ -148,6 +148,7 @@ export type TelegramNetworkErrorContext =
   | "delete"
   | "react"
   | "edit"
+  | "action"
   | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;

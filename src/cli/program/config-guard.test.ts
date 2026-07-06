@@ -353,7 +353,7 @@ describe("ensureConfigReady", () => {
       "",
       `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
       `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+      "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -388,6 +388,9 @@ describe("ensureConfigReady", () => {
     });
     const statusRuntime = await runEnsureConfigReady(["status"]);
     expect(statusRuntime.exit).not.toHaveBeenCalled();
+
+    const auditRuntime = await runEnsureConfigReady(["audit"]);
+    expect(auditRuntime.exit).not.toHaveBeenCalled();
 
     const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
     expect(bareGatewayRuntime.exit).not.toHaveBeenCalled();

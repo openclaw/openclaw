@@ -28,7 +28,6 @@ class CameraHandler(
   private val camera: CameraCaptureManager,
   private val externalAudioCaptureActive: MutableStateFlow<Boolean>,
   private val showCameraHud: (message: String, kind: CameraHudKind, autoHideMs: Long?) -> Unit,
-  private val triggerCameraFlash: () -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
@@ -76,8 +75,6 @@ class CameraHandler(
       camLog("starting, params=$paramsJson")
       camLog("calling showCameraHud")
       showCameraHud("Taking photo…", CameraHudKind.Photo, null)
-      camLog("calling triggerCameraFlash")
-      triggerCameraFlash()
       val res =
         try {
           camLog("calling camera.snap()")

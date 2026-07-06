@@ -688,7 +688,7 @@ export function createGatewayCloseHandler(
     dedupeCleanup: ReturnType<typeof setInterval>;
     mediaCleanup: ReturnType<typeof setInterval> | null;
     worktreeCleanup: ReturnType<typeof setInterval> | null;
-    agentUnsub: (() => void) | null;
+    agentUnsub: (() => Promise<void> | void) | null;
     heartbeatUnsub: (() => void) | null;
     transcriptUnsub: (() => void) | null;
     lifecycleUnsub: (() => void) | null;

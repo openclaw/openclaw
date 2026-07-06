@@ -80,6 +80,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     expect(loadSettings().chatAutoScroll).toBe("near-bottom");
+    expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
   it("infers base path from nested pathname when configured base path is not set", () => {
@@ -384,6 +385,33 @@ describe("loadSettings default gateway URL derivation", () => {
       }),
     );
     expect(loadSettings().chatAutoScroll).toBe("near-bottom");
+  });
+
+  it("persists only the non-default chat send shortcut", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    saveSettings({ ...loadSettings(), chatSendShortcut: "modifier-enter" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatSendShortcut).toBe(
+      "modifier-enter",
+    );
+    expect(loadSettings().chatSendShortcut).toBe("modifier-enter");
+
+    saveSettings({ ...loadSettings(), chatSendShortcut: "enter" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "chatSendShortcut",
+    );
+
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({ gatewayUrl: gwUrl, chatSendShortcut: "unsupported" }),
+    );
+    expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
   it("clears the current-tab token when saving an empty token", () => {

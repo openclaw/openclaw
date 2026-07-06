@@ -34,6 +34,7 @@ import {
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
+  resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -1471,6 +1472,40 @@ describe("runWithModelFallback", () => {
     );
     expect(error.attempts[0]?.error).toBe("LLM request timed out.");
     expect(error.attempts[0]?.error).not.toBe(rawError);
+  });
+
+  it("preserves structured timeout attribution after fallback exhaustion", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("CLI produced no output", {
+        reason: "timeout",
+      }),
+    );
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          run,
+        }),
+      ),
+    );
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+    });
   });
 
   it("carries request attribution through exhausted fallback summaries", async () => {

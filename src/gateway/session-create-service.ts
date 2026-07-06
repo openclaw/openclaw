@@ -158,6 +158,8 @@ export async function createGatewaySession(params: {
   label?: string;
   model?: string;
   parentSessionKey?: string;
+  spawnedCwd?: string;
+  clearSpawnedCwd?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
@@ -261,6 +263,7 @@ export async function createGatewaySession(params: {
     const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
     if (canonicalParentSessionKey === parentMainKey) {
       const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
+      const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
         ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
@@ -268,6 +271,8 @@ export async function createGatewaySession(params: {
           : {}),
         reason: "new",
         commandSource: params.commandSource,
+        ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
       });
       if (!resetResult.ok) {
         return resetResult;
@@ -386,6 +391,13 @@ export async function createGatewaySession(params: {
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
         });
+        const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
+        if (patched.ok && spawnedCwd) {
+          // Session worktrees adopt cwd only during admin-gated creation; public patching stays
+          // restricted to spawned subagent and ACP lineage.
+          patched.entry.spawnedCwd = spawnedCwd;
+          sessionEntries[target.canonicalKey] = patched.entry;
+        }
         if (!patched.ok || !canonicalParentSessionKey) {
           return patched;
         }

@@ -596,6 +596,7 @@ function createChatProps(
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
     assistantName: "Val",
+    sendShortcut: "enter",
     assistantAvatar: null,
     userName: null,
     userAvatar: null,
@@ -2033,10 +2034,12 @@ describe("chat slash menu accessibility", () => {
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  function keydownComposer(container: HTMLElement, key: string) {
+  function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
+    textarea!.dispatchEvent(event);
+    return event;
   }
 
   it("requests slash command hydration only after slash intent", () => {
@@ -2327,6 +2330,46 @@ describe("chat slash menu accessibility", () => {
 
     expect(onDraftChange).toHaveBeenCalledWith("send from enter");
     expect(onSend).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe("Enter");
+  });
+
+  it("requires Ctrl or Meta to send in modifier mode", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({
+      onDraftChange,
+      onSend,
+      sendShortcut: "modifier-enter",
+    });
+
+    inputDraft(container, "compose across lines");
+    const plainEnter = keydownComposer(container, "Enter");
+    const shiftedEnter = keydownComposer(container, "Enter", { ctrlKey: true, shiftKey: true });
+
+    expect(plainEnter.defaultPrevented).toBe(false);
+    expect(shiftedEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+
+    keydownComposer(container, "Enter", { ctrlKey: true });
+    keydownComposer(container, "Enter", { metaKey: true });
+
+    expect(onDraftChange).toHaveBeenCalledWith("compose across lines");
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe(
+      "Control+Enter Meta+Enter",
+    );
+  });
+
+  it("does not send a modifier shortcut during IME composition", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({ onSend, sendShortcut: "modifier-enter" });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    keydownComposer(container, "Enter", { ctrlKey: true });
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("commits local draft input on blur", () => {

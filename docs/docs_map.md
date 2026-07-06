@@ -1241,6 +1241,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/attach
 - Headings: none
 
+## cli/audit.md
+
+- Route: /cli/audit
+- Headings:
+  - H1: openclaw audit
+  - H2: Filters
+  - H2: Recorded events
+  - H2: Gateway RPC
+  - H2: Related
+
 ## cli/backup.md
 
 - Route: /cli/backup
@@ -2361,6 +2371,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Layout and names
   - H2: Provision ignored files
   - H2: Run repository setup
+  - H2: Session worktrees
   - H2: Snapshots, cleanup, and restore
   - H2: CLI
   - H2: Gateway methods
@@ -2913,6 +2924,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What it is
   - H2: Where it shows up
+  - H2: Anthropic and OpenAI cost history
   - H2: Default usage footer mode
   - H3: Three distinct session states
   - H3: Precedence
@@ -3221,6 +3233,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Secret providers config
   - H2: Auth storage
   - H3: auth.cooldowns
+  - H2: Audit
   - H2: Logging
   - H2: Diagnostics
   - H2: Update
@@ -3585,6 +3598,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: RPC method families
   - H3: Common event families
   - H3: Node helper methods
+  - H2: Audit ledger RPC
   - H2: Task ledger RPCs
   - H2: Operator helper methods
   - H3: models.list views
@@ -6907,6 +6921,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
+  - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends
   - H2: Compatibility dispatch
@@ -7198,6 +7213,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/anthropic
 - Headings:
+  - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
@@ -7654,6 +7670,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /providers/openai
 - Headings:
+  - H2: Usage and cost tracking
   - H2: Quick choice
   - H2: Naming map
   - H2: GPT-5.6 limited preview

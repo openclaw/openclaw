@@ -1092,6 +1092,25 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
+.chat-settings-popover__preference {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-settings-popover__preference select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 74%, transparent);
+  color: var(--text);
+  font: inherit;
+}
+
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
