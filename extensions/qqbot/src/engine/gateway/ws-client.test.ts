@@ -77,6 +77,7 @@ describe("createQQWSClient", () => {
       "wss://qq.example.test/ws",
       {
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        maxPayload: 16 * 1024 * 1024,
       },
     ]);
   });
@@ -96,6 +97,7 @@ describe("createQQWSClient", () => {
       {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        maxPayload: 16 * 1024 * 1024,
       },
     ]);
   });
@@ -115,6 +117,7 @@ describe("createQQWSClient", () => {
       {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        maxPayload: 16 * 1024 * 1024,
       },
     ]);
   });
@@ -134,6 +137,7 @@ describe("createQQWSClient", () => {
       {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
+        maxPayload: 16 * 1024 * 1024,
       },
     ]);
   });
