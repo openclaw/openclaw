@@ -916,6 +916,10 @@ export function installPromptSubmissionLockRelease(params: {
       }
       return await originalStreamFn(...args);
     } finally {
+      // Drain queued session events (e.g. a compaction_end that advances the takeover
+      // fence to the rewritten transcript) BEFORE reacquiring, so an auto-compaction that
+      // ran during this released-prompt window is recognized as ours, not an external edit.
+      await params.waitForSessionEvents(params.session);
       await params.reacquireAfterPrompt();
     }
   };

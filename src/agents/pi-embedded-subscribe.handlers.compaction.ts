@@ -89,6 +89,10 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
   const hasResult = evt.result != null;
   const wasAborted = Boolean(evt.aborted);
   if (hasResult && !wasAborted) {
+    // Compaction has rewritten the session transcript on disk. Tell the embedded-attempt
+    // takeover fence this rewrite was ours, or the next lock reacquire mistakes the
+    // dropped-history rewrite for an external edit and throws (session-lock takeover).
+    ctx.params.onCompactionRewritePersisted?.();
     ctx.incrementCompactionCount();
     const tokensAfter =
       typeof evt.result === "object" && evt.result

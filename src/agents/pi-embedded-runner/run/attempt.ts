@@ -3476,6 +3476,11 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          // Pi-internal auto-compaction rewrites the transcript outside our per-message
+          // persistence + write-lock paths, so advance the takeover fence to the rewritten
+          // file on compaction_end — mirrors onMessagePersisted above (attempt.ts:2342).
+          onCompactionRewritePersisted: () =>
+            sessionLockController.refreshAfterOwnedSessionWrite(),
           onHeartbeatToolResponse:
             params.trigger === "heartbeat"
               ? () => {

@@ -493,6 +493,61 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
+  // Threshold auto-compaction (Pi-internal) rewrites the transcript in BULK — dropping history
+  // for a summary — outside our per-message persistence + write-lock paths. That is neither an
+  // append nor a linear migration, so the fence rejects it as an external takeover. This is the
+  // failure that killed long runs; the two tests below pin the bug and its fix.
+  async function seedMultiLineSession(sessionFile: string): Promise<void> {
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"m1"}\n{"type":"message","id":"m2"}\n{"type":"message","id":"m3"}\n',
+      "utf8",
+    );
+  }
+  // A compaction-shaped rewrite: fewer lines, earlier history replaced by a summary line.
+  const COMPACTED_TRANSCRIPT =
+    '{"type":"session"}\n{"type":"message","id":"summary"}\n{"type":"message","id":"m3"}\n';
+
+  it("rejects a bulk compaction rewrite during a released prompt without a fence refresh", async () => {
+    const sessionFile = await createTempSessionFile();
+    await seedMultiLineSession(sessionFile);
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // auto-compaction rewrites the transcript, but nothing tells the fence it was ours
+    await fs.writeFile(sessionFile, COMPACTED_TRANSCRIPT, "utf8");
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("trusts a bulk compaction rewrite after refreshAfterOwnedSessionWrite", async () => {
+    const sessionFile = await createTempSessionFile();
+    await seedMultiLineSession(sessionFile);
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.writeFile(sessionFile, COMPACTED_TRANSCRIPT, "utf8");
+    // handleCompactionEnd -> onCompactionRewritePersisted -> refreshAfterOwnedSessionWrite
+    controller.refreshAfterOwnedSessionWrite();
+
+    await expect(controller.reacquireAfterPrompt()).resolves.toBeUndefined();
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
   it("allows post-prompt writes after the prompt context publishes an owned transcript write", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
@@ -833,7 +888,9 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releaseForPrompt).toHaveBeenCalledTimes(1);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(1);
     expect(streamFn).toHaveBeenCalledWith("model", "context");
-    expect(events).toEqual(["drain", "release", "stream", "reacquire"]);
+    // Second drain before reacquire: a compaction_end queued during the stream must be
+    // processed (advancing the takeover fence) before the fence is re-checked on reacquire.
+    expect(events).toEqual(["drain", "release", "stream", "drain", "reacquire"]);
   });
 
   it("rewraps provider stream submission after the stream function is rebuilt", async () => {
@@ -880,17 +937,20 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(firstStreamFn).toHaveBeenCalledTimes(1);
     expect(secondStreamFn).toHaveBeenCalledTimes(1);
-    expect(waitForSessionEvents).toHaveBeenCalledTimes(2);
+    // Two drains per stream (before release + before reacquire) across two invocations.
+    expect(waitForSessionEvents).toHaveBeenCalledTimes(4);
     expect(releaseForPrompt).toHaveBeenCalledTimes(2);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
     expect(events).toEqual([
       "drain",
       "release",
       "first-stream",
+      "drain",
       "reacquire",
       "drain",
       "release",
       "second-stream",
+      "drain",
       "reacquire",
     ]);
   });

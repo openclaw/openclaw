@@ -57,6 +57,16 @@ export type SubscribeEmbeddedPiSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  /**
+   * Invoked after a threshold/overflow auto-compaction rewrites the session
+   * transcript. Pi-internal compaction rewrites the session file in bulk —
+   * bypassing both `onMessagePersisted` and `withSessionWriteLock` — so the
+   * embedded-attempt takeover fence never learns the rewrite was ours and
+   * throws `EmbeddedAttemptSessionTakeoverError` on the next lock reacquire.
+   * attempt.ts wires this to `refreshAfterOwnedSessionWrite()` so the fence is
+   * advanced to the post-compaction fingerprint. See attempt.session-lock.ts.
+   */
+  onCompactionRewritePersisted?: () => void;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
