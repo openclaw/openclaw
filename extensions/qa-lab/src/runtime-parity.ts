@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements runtime parity behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -132,6 +133,7 @@ type RuntimeParityPendingToolCall = RuntimeParityToolCall & {
 };
 
 const DEFAULT_AGENT_ID = "qa";
+const RUNTIME_PARITY_MOCK_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
@@ -992,7 +994,9 @@ async function loadRuntimeParityMockToolCalls(
       if (!response.ok) {
         return null;
       }
-      payload = await response.json();
+      payload = await readProviderJsonResponse(response, "qa-lab runtime parity mock tool calls", {
+        maxBytes: RUNTIME_PARITY_MOCK_RESPONSE_MAX_BYTES,
+      });
     } finally {
       await release();
     }
@@ -1084,6 +1088,7 @@ export async function runRuntimeParityScenario(params: {
 export const testing = {
   classifyRuntimeParityCells,
   filterMockRequestsForParentPrompt,
+  loadRuntimeParityMockToolCalls,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };

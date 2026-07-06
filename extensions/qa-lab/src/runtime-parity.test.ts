@@ -1,5 +1,5 @@
 // Qa Lab tests cover runtime parity classification behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   isRuntimeParityResultPass,
@@ -8,6 +8,10 @@ import {
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function makeRuntimeParityCell(
   runtime: RuntimeId,
@@ -162,6 +166,21 @@ describe("runtime parity", () => {
         resultHash: "async-started",
       },
     ]);
+  });
+
+  it("ignores oversized mock debug responses instead of buffering them unbounded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(`[${"x".repeat(20 * 1024 * 1024)}]`)),
+    );
+
+    const result = await __testing.loadRuntimeParityMockToolCalls(
+      "http://127.0.0.1:9999",
+      "parent prompt",
+    );
+
+    expect(result).toBeNull();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("scopes process-global mock requests to the parent session prompt", () => {
