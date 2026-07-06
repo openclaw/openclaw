@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
+
+Third-party Android builds can now opt into Always location through Android settings, with requested background checks disclosed in the persistent node notification while Play builds remain foreground-only. (#68581) Thanks @ioridev.
+
 Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
 
 Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.

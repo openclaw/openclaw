@@ -1545,9 +1545,19 @@ export const zh_TW: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "關閉更新橫幅",
     switchedSession: "已切換至 {session}",
+    splitView: {
+      open: "開啟分割檢視",
+      splitRight: "向右分割",
+      splitDown: "向下分割",
+      closePane: "關閉窗格",
+      sessionSelect: "窗格工作階段",
+    },
     sidebar: {
       allSessions: "所有工作階段",
       openSessionMenu: "Open session menu",
+      sortCreated: "建立時間",
+      sortSessions: "排序工作階段",
+      sortUpdated: "最近更新",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

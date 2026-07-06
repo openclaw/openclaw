@@ -20,6 +20,7 @@ import { renderChatModelControls, type ChatModelControlsProps } from "./chat-mod
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
 export type ChatControlsProps = {
+  paneId: string;
   agentsList: AgentsListResult | null;
   connected: boolean;
   hideCronSessions: boolean;
@@ -45,6 +46,7 @@ export type ChatControlsProps = {
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
   ) => void;
   onToggleCronSessions?: () => void;
+  onOpenSplitView?: () => void;
 };
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -202,6 +204,7 @@ export function renderChatControls(props: ChatControlsProps) {
     : t("chat.hideCronSessions");
   const settingsOpen = props.settingsOpen;
   const settingsTitle = t("chat.settings");
+  const settingsPopoverId = `chat-composer-settings-popover-${encodeURIComponent(props.paneId)}`;
 
   return html`
     <div class="chat-settings-popover-wrapper">
@@ -211,7 +214,7 @@ export function renderChatControls(props: ChatControlsProps) {
           type="button"
           aria-label=${settingsTitle}
           aria-expanded=${settingsOpen}
-          aria-controls="chat-composer-settings-popover"
+          aria-controls=${settingsPopoverId}
           @click=${(event: Event) => {
             event.stopPropagation();
             (event.currentTarget as HTMLElement)
@@ -227,7 +230,7 @@ export function renderChatControls(props: ChatControlsProps) {
         </button>
       </openclaw-tooltip>
       <div
-        id="chat-composer-settings-popover"
+        id=${settingsPopoverId}
         class="chat-settings-popover ${settingsOpen ? "chat-settings-popover--open" : ""}"
         role="dialog"
         aria-label=${settingsTitle}
@@ -355,5 +358,19 @@ export function renderChatControls(props: ChatControlsProps) {
     >
       ${renderChatModelControls(props.model)}
     </div>
+    ${props.onOpenSplitView
+      ? html`
+          <openclaw-tooltip .content=${t("chat.splitView.open")}>
+            <button
+              class="btn btn--sm btn--icon chat-open-split-view"
+              type="button"
+              aria-label=${t("chat.splitView.open")}
+              @click=${props.onOpenSplitView}
+            >
+              ${icons.panelRightOpen}
+            </button>
+          </openclaw-tooltip>
+        `
+      : ""}
   `;
 }

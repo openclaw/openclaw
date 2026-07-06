@@ -33,6 +33,7 @@ function createSettings(): UiSettings {
 
 function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps {
   return {
+    paneId: "test-pane",
     agentsList: null,
     connected: true,
     hideCronSessions: true,
@@ -77,7 +78,9 @@ describe("chat composer settings", () => {
     const container = document.createElement("div");
     render(renderChatControls(createProps()), container);
 
-    expect(container.querySelectorAll(`button[aria-label="${t("chat.settings")}"]`)).toHaveLength(1);
+    expect(container.querySelectorAll(`button[aria-label="${t("chat.settings")}"]`)).toHaveLength(
+      1,
+    );
     expect(container.querySelector('[aria-label="Talk settings"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll(".chat-settings-popover__label")).map((node) =>

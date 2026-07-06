@@ -19,12 +19,20 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let name: String
     public let provider: String
     public let contextWindow: Int?
+    public let reasoning: Bool?
 
-    public init(modelID: String, name: String, provider: String, contextWindow: Int?) {
+    public init(
+        modelID: String,
+        name: String,
+        provider: String,
+        contextWindow: Int?,
+        reasoning: Bool? = nil)
+    {
         self.modelID = modelID
         self.name = name
         self.provider = provider
         self.contextWindow = contextWindow
+        self.reasoning = reasoning
     }
 
     /// Provider-qualified model ref used for picker identity and selection tags.

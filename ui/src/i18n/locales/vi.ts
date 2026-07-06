@@ -1573,9 +1573,19 @@ export const vi: TranslationMap = {
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
+    splitView: {
+      open: "Mở chế độ xem chia đôi",
+      splitRight: "Chia sang phải",
+      splitDown: "Chia xuống dưới",
+      closePane: "Đóng khung",
+      sessionSelect: "Phiên trong khung",
+    },
     sidebar: {
       allSessions: "Tất cả phiên",
       openSessionMenu: "Open session menu",
+      sortCreated: "Đã tạo",
+      sortSessions: "Sắp xếp phiên",
+      sortUpdated: "Cập nhật lần cuối",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

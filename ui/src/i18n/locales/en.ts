@@ -1022,7 +1022,7 @@ export const en: TranslationMap = {
       terminal: "Terminal",
     },
     palette: {
-      placeholder: "Type a command…",
+      placeholder: "Search chats and commands…",
       noResults: "No results",
       categories: {
         search: "Search",
@@ -1570,9 +1570,19 @@ export const en: TranslationMap = {
     updateNow: "Update now",
     dismissUpdateBanner: "Dismiss update banner",
     switchedSession: "Switched to {session}",
+    splitView: {
+      open: "Open split view",
+      splitRight: "Split right",
+      splitDown: "Split down",
+      closePane: "Close pane",
+      sessionSelect: "Pane session",
+    },
     sidebar: {
       allSessions: "All sessions",
       openSessionMenu: "Open session menu",
+      sortCreated: "Created",
+      sortSessions: "Sort sessions",
+      sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

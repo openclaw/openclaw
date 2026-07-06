@@ -1584,9 +1584,19 @@ export const uk: TranslationMap = {
     updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
+    splitView: {
+      open: "Відкрити розділений перегляд",
+      splitRight: "Розділити праворуч",
+      splitDown: "Розділити вниз",
+      closePane: "Закрити панель",
+      sessionSelect: "Сеанс панелі",
+    },
     sidebar: {
       allSessions: "Усі сеанси",
       openSessionMenu: "Open session menu",
+      sortCreated: "Створено",
+      sortSessions: "Сортувати сеанси",
+      sortUpdated: "Останнє оновлення",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

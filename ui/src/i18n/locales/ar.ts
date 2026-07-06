@@ -1564,9 +1564,19 @@ export const ar: TranslationMap = {
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
+    splitView: {
+      open: "فتح العرض المقسّم",
+      splitRight: "تقسيم إلى اليمين",
+      splitDown: "تقسيم إلى الأسفل",
+      closePane: "إغلاق الجزء",
+      sessionSelect: "جلسة الجزء",
+    },
     sidebar: {
       allSessions: "كل الجلسات",
       openSessionMenu: "Open session menu",
+      sortCreated: "تاريخ الإنشاء",
+      sortSessions: "ترتيب الجلسات",
+      sortUpdated: "آخر تحديث",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

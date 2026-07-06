@@ -13,7 +13,23 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class SecurePrefsTest {
   @Test
-  fun loadLocationMode_migratesLegacyAlwaysValue() {
+  fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
+    assertEquals(
+      LocationMode.Always,
+      locationModeAfterBackgroundSettings(LocationMode.Off, foregroundGranted = true, backgroundGranted = true),
+    )
+    assertEquals(
+      LocationMode.Off,
+      locationModeAfterBackgroundSettings(LocationMode.Off, foregroundGranted = true, backgroundGranted = false),
+    )
+    assertEquals(
+      LocationMode.WhileUsing,
+      locationModeAfterBackgroundSettings(LocationMode.Always, foregroundGranted = true, backgroundGranted = false),
+    )
+  }
+
+  @Test
+  fun loadLocationMode_enforcesFlavorAvailabilityForAlwaysValue() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs
@@ -24,8 +40,10 @@ class SecurePrefsTest {
 
     val prefs = SecurePrefs(context)
 
-    assertEquals(LocationMode.WhileUsing, prefs.locationMode.value)
-    assertEquals("whileUsing", plainPrefs.getString("location.enabledMode", null))
+    val expected =
+      if (SensitiveFeatureConfig.backgroundLocationEnabled) LocationMode.Always else LocationMode.WhileUsing
+    assertEquals(expected, prefs.locationMode.value)
+    assertEquals(expected.rawValue, plainPrefs.getString("location.enabledMode", null))
   }
 
   @Test
@@ -166,5 +184,49 @@ class SecurePrefsTest {
     assertNull(prefs.loadGatewayToken())
     assertNull(prefs.loadGatewayBootstrapToken())
     assertNull(prefs.loadGatewayPassword())
+  }
+
+  @Test
+  fun modelFavorites_togglePersistsPinOrder() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    prefs.toggleModelFavorite(" anthropic/claude-opus-4 ")
+    prefs.toggleModelFavorite("openai/gpt-5")
+    prefs.toggleModelFavorite("anthropic/claude-opus-4")
+    prefs.toggleModelFavorite("anthropic/claude-opus-4")
+    prefs.toggleModelFavorite("  ")
+
+    assertEquals(
+      listOf("openai/gpt-5", "anthropic/claude-opus-4"),
+      prefs.modelFavorites.value,
+    )
+    assertEquals(prefs.modelFavorites.value, SecurePrefs(context).modelFavorites.value)
+  }
+
+  @Test
+  fun modelRecents_dedupesToFrontAndCapsAtFive() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    (1..6).forEach { index -> prefs.recordModelRecent("provider/model-$index") }
+    prefs.recordModelRecent(" provider/model-3 ")
+    prefs.recordModelRecent(" ")
+
+    assertEquals(
+      listOf(
+        "provider/model-3",
+        "provider/model-6",
+        "provider/model-5",
+        "provider/model-4",
+        "provider/model-2",
+      ),
+      prefs.modelRecents.value,
+    )
+    assertEquals(prefs.modelRecents.value, SecurePrefs(context).modelRecents.value)
   }
 }

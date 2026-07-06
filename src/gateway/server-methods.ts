@@ -70,6 +70,10 @@ const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
 );
+const loadAgentsWorkspaceHandlers = lazyHandlerModule(
+  () => import("./server-methods/agents-workspace.js"),
+  (module) => module.agentsWorkspaceHandlers,
+);
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
@@ -654,6 +658,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.files.set",
     ],
     loadHandlers: loadAgentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["agents.workspace.list", "agents.workspace.get"],
+    loadHandlers: loadAgentsWorkspaceHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],

@@ -91,7 +91,14 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     mode: GATEWAY_CLIENT_MODES.CLI,
     caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
-      void agent?.handleGatewayEvent(evt);
+      // Gateway delivery stays non-blocking, but translator failures must not
+      // escape this callback as unhandled process rejections.
+      void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
+        process.stderr.write(`openclaw acp: gateway event ${evt.event} failed\n`);
+        if (opts.verbose) {
+          process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}\n`);
+        }
+      });
     },
     onHelloOk: () => {
       resolveGatewayReady();

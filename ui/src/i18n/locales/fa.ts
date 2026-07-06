@@ -1582,9 +1582,19 @@ export const fa: TranslationMap = {
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
+    splitView: {
+      open: "باز کردن نمای تقسیم‌شده",
+      splitRight: "تقسیم به راست",
+      splitDown: "تقسیم به پایین",
+      closePane: "بستن پنل",
+      sessionSelect: "نشست پنل",
+    },
     sidebar: {
       allSessions: "همهٔ نشست‌ها",
       openSessionMenu: "Open session menu",
+      sortCreated: "تاریخ ایجاد",
+      sortSessions: "مرتب‌سازی نشست‌ها",
+      sortUpdated: "آخرین به‌روزرسانی",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

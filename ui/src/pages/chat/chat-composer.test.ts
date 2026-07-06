@@ -554,7 +554,7 @@ describe("context notice", () => {
     expect(
       container.querySelector(".context-usage__popover")?.textContent?.replace(/\s+/gu, " ").trim(),
     ).toBe(
-      "Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output — Est. cost $0.0077 Cost by Type Input $0.0012 Output $0.0060 Cache Read $0.0005 Cache Write $0.00 Provider openai Model gpt-5.5",
+      "Context window 46k / 200k · 23% Latest run tokens Input 757.3k Output — Est. cost $0.0077 Cost by Type Input $0.0012 Output $0.0060 Cache Read $0.0005 Cache Write $0.00 Provider: openai Model: gpt-5.5",
     );
     expect(
       container.querySelectorAll(".context-usage__stats:not(.context-usage__stats--cost) > div"),

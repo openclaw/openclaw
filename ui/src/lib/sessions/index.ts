@@ -184,6 +184,7 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
 };
@@ -497,6 +498,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   const listeners = new Set<(next: SessionState) => void>();
+  const createdListeners = new Set<(key: string) => void>();
 
   const requestList = async (
     options: SessionListOptions = {},
@@ -649,6 +651,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return null;
       }
       await refresh({ agentId: params.agentId, force: true });
+      // Creation can originate outside the sidebar. Notify presentation owners
+      // after refresh so they can reconcile the new row without guessing from list churn.
+      for (const listener of createdListeners) {
+        listener(key);
+      }
       return key;
     } catch (error) {
       publish({ ...state, error: String(error) });
@@ -1040,6 +1047,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    subscribeCreated(listener) {
+      createdListeners.add(listener);
+      return () => createdListeners.delete(listener);
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1048,6 +1059,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       disposed = true;
       stopGateway();
       stopEvents();
+      createdListeners.clear();
       listeners.clear();
       inFlight = null;
       queuedRefresh = null;

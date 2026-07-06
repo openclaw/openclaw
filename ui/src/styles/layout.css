@@ -262,36 +262,6 @@
   font-size: 13px;
 }
 
-.topbar-search {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 38px;
-  padding: 0 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
-  color: var(--muted);
-  font-size: 13px;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-  min-width: 200px;
-}
-
-.topbar-search:hover {
-  border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.topbar-search:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .topbar-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -330,25 +300,6 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.topbar-search__label {
-  flex: 1;
-  text-align: left;
-}
-
-.topbar-search__kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: 12px; /* was 11px */
-  line-height: 1;
-  color: var(--muted);
 }
 
 .topbar-theme-mode {
@@ -426,6 +377,7 @@
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -466,6 +418,30 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+
+/* macOS app only: the native window hides its titlebar and injects
+   html.openclaw-native-macos plus --openclaw-native-titlebar-height (see
+   DashboardWindowController.installNativeChromeScript), leaving an empty
+   strip next to the traffic lights. The brand mark sits there instead of
+   spending a sidebar row; web builds never show it (breadcrumb has the name). */
+.sidebar-native-brand {
+  display: none;
+}
+
+@media (min-width: 700px) {
+  html.openclaw-native-macos .sidebar:not(.sidebar--collapsed) .sidebar-native-brand {
+    /* 84px clears the native traffic-light cluster (drag region starts at 78px). */
+    position: absolute;
+    top: 0;
+    left: 84px;
+    display: block;
+    width: 22px;
+    height: 22px;
+    margin-top: calc((var(--openclaw-native-titlebar-height, 50px) - 22px) / 2);
+    border-radius: 6px;
+    box-shadow: 0 4px 10px color-mix(in srgb, black 12%, transparent);
+  }
 }
 
 .sidebar-shell__footer {
@@ -583,57 +559,26 @@
   min-height: 0;
 }
 
-/* Anchors the session-picker popover to the full header width. */
 .sidebar-recent-sessions__head {
-  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   min-height: 24px;
   padding: 0 10px;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
 }
 
-.sidebar-recent-sessions__head .chat-session-picker {
-  width: 100%;
-  max-width: 100%;
-  max-height: min(480px, calc(100vh - 160px));
-}
-
-.sidebar-session-search {
-  display: contents;
-}
-
-.sidebar-agent-filter {
-  padding: 0 8px 2px;
-}
-
-.sidebar-agent-filter .chat-controls__agent {
-  width: 100%;
-}
-
-.sidebar-agent-filter select {
-  width: 100%;
-  min-height: 30px;
-  padding: 4px 26px 4px 9px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-md);
-  background-color: transparent;
-  color: var(--text);
-  font-size: 12px;
-}
-
-.sidebar-session-search__button {
+.sidebar-session-sort {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 26px;
   flex: 0 0 auto;
-  margin-right: 4px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -644,22 +589,76 @@
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-search__button:hover:not(:disabled) {
+.sidebar-session-sort:hover,
+.sidebar-session-sort[aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
 }
 
-.sidebar-session-search__button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.sidebar-session-search__button svg {
+.sidebar-session-sort svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.6px;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Agent scope chip: a borderless select in the Sessions group header, sized
+   as metadata rather than a form control. */
+.sidebar-agent-scope {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 55%;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.sidebar-agent-scope select {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 14px 2px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-agent-scope select:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-agent-scope select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sidebar-agent-scope__chevron {
+  position: absolute;
+  right: 2px;
+  display: inline-flex;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.sidebar-agent-scope__chevron svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -771,7 +770,7 @@
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-strong);
 }
 
@@ -1003,7 +1002,20 @@
   box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
 }
 
-.sidebar-session-menu__item {
+.sidebar-session-sort-menu {
+  position: fixed;
+  z-index: 121;
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+.sidebar-session-menu__item,
+.sidebar-session-sort-menu__item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1021,7 +1033,9 @@
 }
 
 .sidebar-session-menu__item:hover:not(:disabled),
-.sidebar-session-menu__item:focus-visible {
+.sidebar-session-menu__item:focus-visible,
+.sidebar-session-sort-menu__item:hover,
+.sidebar-session-sort-menu__item:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 

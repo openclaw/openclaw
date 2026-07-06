@@ -1571,9 +1571,19 @@ export const ko: TranslationMap = {
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
     switchedSession: "{session}(으)로 전환됨",
+    splitView: {
+      open: "분할 보기 열기",
+      splitRight: "오른쪽으로 분할",
+      splitDown: "아래쪽으로 분할",
+      closePane: "창 닫기",
+      sessionSelect: "창 세션",
+    },
     sidebar: {
       allSessions: "모든 세션",
       openSessionMenu: "Open session menu",
+      sortCreated: "생성일",
+      sortSessions: "세션 정렬",
+      sortUpdated: "마지막 업데이트",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

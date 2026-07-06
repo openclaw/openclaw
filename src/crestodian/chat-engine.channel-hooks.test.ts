@@ -53,7 +53,35 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 
 describe("Crestodian chat channel setup", () => {
   it("runs collected channel hooks after writing config", async () => {
-    const engine = new CrestodianChatEngine({ yes: true });
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: async () =>
+          ({
+            config: {
+              path: "/tmp/openclaw.json",
+              exists: true,
+              valid: true,
+              issues: [],
+              hash: "h",
+            },
+            agents: [],
+            defaultAgentId: "main",
+            tools: {
+              codex: { command: "codex", found: false },
+              claude: { command: "claude", found: false },
+              gemini: { command: "gemini", found: false },
+              apiKeys: { openai: false, anthropic: false },
+            },
+            gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },
+            references: {
+              docsUrl: "https://docs.openclaw.ai",
+              sourceUrl: "https://github.com/openclaw/openclaw",
+            },
+          }) as never,
+      },
+    });
 
     const reply = await engine.handle("connect matrix");
 

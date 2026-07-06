@@ -492,7 +492,7 @@ export async function applyConfig(state: ConfigState): Promise<boolean> {
   });
 }
 
-export async function patchConfig(
+async function patchConfig(
   state: ConfigGatewayState,
   options: ConfigPatchOptions,
 ): Promise<boolean> {

@@ -1548,9 +1548,19 @@ export const th: TranslationMap = {
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
+    splitView: {
+      open: "เปิดมุมมองแบบแบ่ง",
+      splitRight: "แบ่งไปทางขวา",
+      splitDown: "แบ่งลงด้านล่าง",
+      closePane: "ปิดบานหน้าต่าง",
+      sessionSelect: "เซสชันของบานหน้าต่าง",
+    },
     sidebar: {
       allSessions: "เซสชันทั้งหมด",
       openSessionMenu: "Open session menu",
+      sortCreated: "สร้างเมื่อ",
+      sortSessions: "จัดเรียงเซสชัน",
+      sortUpdated: "อัปเดตล่าสุด",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

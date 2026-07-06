@@ -1588,9 +1588,19 @@ export const ja_JP: TranslationMap = {
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
+    splitView: {
+      open: "分割ビューを開く",
+      splitRight: "右に分割",
+      splitDown: "下に分割",
+      closePane: "ペインを閉じる",
+      sessionSelect: "ペインのセッション",
+    },
     sidebar: {
       allSessions: "すべてのセッション",
       openSessionMenu: "Open session menu",
+      sortCreated: "作成日時",
+      sortSessions: "セッションを並べ替え",
+      sortUpdated: "最終更新",
       sessionMenu: "Actions for {session}",
     },
     welcome: {

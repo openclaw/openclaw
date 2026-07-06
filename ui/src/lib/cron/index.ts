@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object");
 }
 
-export function isCronPayload(value: unknown): value is CronPayload {
+function isCronPayload(value: unknown): value is CronPayload {
   if (!isRecord(value)) {
     return false;
   }

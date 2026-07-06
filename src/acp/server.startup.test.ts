@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayClientCallbacks = {
+  onEvent?: (evt: { event: string; payload?: unknown }) => void;
   onHelloOk?: () => void;
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
@@ -33,6 +34,7 @@ const mockState = vi.hoisted(() => ({
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
   agentSideConnectionCtor: vi.fn(),
+  agentHandleGatewayEvent: vi.fn(async (_evt: unknown) => {}),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
   startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
@@ -69,6 +71,10 @@ class MockGatewayClient {
 
   emitConnectError(message: string): void {
     this.callbacks.onConnectError?.(new Error(message));
+  }
+
+  emitEvent(event: { event: string; payload?: unknown }): void {
+    this.callbacks.onEvent?.(event);
   }
 }
 
@@ -171,7 +177,9 @@ vi.mock("./translator.js", () => ({
 
     handleGatewayDisconnect(): void {}
 
-    async handleGatewayEvent(): Promise<void> {}
+    async handleGatewayEvent(event: unknown): Promise<void> {
+      await mockState.agentHandleGatewayEvent(event);
+    }
   },
 }));
 
@@ -283,6 +291,7 @@ describe("serveAcpGateway startup", () => {
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
+    mockState.agentHandleGatewayEvent.mockReset();
     mockState.agentStart.mockReset();
     mockState.routeLogsToStderr.mockReset();
     mockState.startProxy.mockReset();
@@ -326,6 +335,47 @@ describe("serveAcpGateway startup", () => {
 
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      name: "default logging",
+      opts: {},
+      expected: ["openclaw acp: gateway event chat failed\n"],
+    },
+    {
+      name: "verbose logging",
+      opts: { verbose: true },
+      expected: [
+        "openclaw acp: gateway event chat failed\n",
+        "openclaw acp: gateway event chat error: Error: handler boom\n",
+      ],
+    },
+  ])("contains rejected gateway event handling with $name", async ({ opts, expected }) => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    mockState.agentHandleGatewayEvent.mockRejectedValueOnce(new Error("handler boom"));
+
+    try {
+      const servePromise = serveAcpGateway(opts);
+      await emitHelloAndWaitForAgentSideConnection();
+
+      getMockGateway().emitEvent({ event: "chat" });
+      await vi.waitFor(() => {
+        expect(writes).toEqual(expected);
+      });
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      writeSpy.mockRestore();
       onceSpy.mockRestore();
     }
   });

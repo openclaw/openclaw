@@ -275,11 +275,6 @@
     flex-wrap: nowrap;
   }
 
-  .topbar-search {
-    min-width: 0;
-    flex: 1;
-  }
-
   .topbar-theme-mode {
     display: none;
   }
@@ -438,30 +433,6 @@
     min-height: 44px;
     padding: 10px 12px;
     font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
-    position: static;
-    width: 100%;
-    max-height: min(52vh, 420px);
-    margin-top: 8px;
-    box-shadow: none;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
-    min-height: 44px;
-    font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-session-picker
-    .chat-session-picker__icon-button.btn--icon {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {

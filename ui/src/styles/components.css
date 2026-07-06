@@ -7031,6 +7031,23 @@ details[open] > .ov-expandable-toggle::after {
   opacity: 0;
 }
 
+/* Sidebar rows are now the direct management surface after removing the
+   duplicate picker; touch users need pin/menu controls without hover. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session .session-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-recent-session .session-action:disabled {
+    opacity: 0.35;
+  }
+
+  .sidebar-recent-session .session-row-trail {
+    opacity: 0;
+  }
+}
+
 /* Pinned badge: accent pin visible without hover. A live run wins the
    trailing slot, so the badge only holds it while the session is idle;
    both indicators share one grid cell and would overlap otherwise. */

@@ -111,9 +111,14 @@ struct IOSGatewayChatTransportTests {
         #expect(params["model"] is NSNull)
     }
 
-    @Test func `models list response decodes choices and falls back blank names`() throws {
+    @Test func `models list response decodes choices reasoning and blank names`() throws {
         let data = Data(
-            #"{"models":[{"id":"claude-opus-4","name":"Claude Opus 4","provider":"anthropic","contextWindow":200000,"reasoning":true},{"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"}]}"#.utf8)
+            #"""
+            {"models":[
+              {"id":"claude-opus-4","name":"Claude Opus 4","provider":"anthropic","contextWindow":200000,"reasoning":true},
+              {"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"}
+            ]}
+            """#.utf8)
         let choices = try IOSGatewayChatTransport.decodeModelChoices(data)
 
         #expect(choices.count == 2)
@@ -121,10 +126,12 @@ struct IOSGatewayChatTransportTests {
         #expect(choices[0].name == "Claude Opus 4")
         #expect(choices[0].provider == "anthropic")
         #expect(choices[0].contextWindow == 200_000)
+        #expect(choices[0].reasoning == true)
         #expect(choices[1].modelID == "gpt-5")
         #expect(choices[1].name == "gpt-5")
         #expect(choices[1].provider == "openai")
         #expect(choices[1].contextWindow == nil)
+        #expect(choices[1].reasoning == nil)
     }
 
     @Test func `commands list params request text scope with args`() throws {

@@ -5339,6 +5339,170 @@ public struct AgentsFilesSetResult: Codable, Sendable {
     }
 }
 
+public struct AgentsWorkspaceEntry: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let kind: AnyCodable
+    public let size: Int?
+    public let updatedatms: Int?
+
+    public init(
+        path: String,
+        name: String,
+        kind: AnyCodable,
+        size: Int?,
+        updatedatms: Int?)
+    {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.size = size
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case kind
+        case size
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct AgentsWorkspaceFile: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let size: Int
+    public let updatedatms: Int
+    public let mimetype: String
+    public let encoding: AnyCodable
+    public let content: String
+
+    public init(
+        path: String,
+        name: String,
+        size: Int,
+        updatedatms: Int,
+        mimetype: String,
+        encoding: AnyCodable,
+        content: String)
+    {
+        self.path = path
+        self.name = name
+        self.size = size
+        self.updatedatms = updatedatms
+        self.mimetype = mimetype
+        self.encoding = encoding
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case size
+        case updatedatms = "updatedAtMs"
+        case mimetype = "mimeType"
+        case encoding
+        case content
+    }
+}
+
+public struct AgentsWorkspaceListParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String?
+    public let offset: Int?
+    public let limit: Int?
+
+    public init(
+        agentid: String,
+        path: String?,
+        offset: Int?,
+        limit: Int?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.offset = offset
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case offset
+        case limit
+    }
+}
+
+public struct AgentsWorkspaceListResult: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+    public let parentpath: String?
+    public let entries: [AgentsWorkspaceEntry]
+    public let totalentries: Int
+    public let offset: Int
+
+    public init(
+        agentid: String,
+        path: String,
+        parentpath: String?,
+        entries: [AgentsWorkspaceEntry],
+        totalentries: Int,
+        offset: Int)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.parentpath = parentpath
+        self.entries = entries
+        self.totalentries = totalentries
+        self.offset = offset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case parentpath = "parentPath"
+        case entries
+        case totalentries = "totalEntries"
+        case offset
+    }
+}
+
+public struct AgentsWorkspaceGetParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+
+    public init(
+        agentid: String,
+        path: String)
+    {
+        self.agentid = agentid
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+    }
+}
+
+public struct AgentsWorkspaceGetResult: Codable, Sendable {
+    public let agentid: String
+    public let file: AgentsWorkspaceFile
+
+    public init(
+        agentid: String,
+        file: AgentsWorkspaceFile)
+    {
+        self.agentid = agentid
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case file
+    }
+}
+
 public struct ArtifactSummary: Codable, Sendable {
     public let id: String
     public let type: String

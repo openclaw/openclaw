@@ -22,7 +22,7 @@ export type TaskSummary = {
   error?: string;
 };
 
-export type TaskEventPayload =
+type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
@@ -169,7 +169,7 @@ export function mergeTaskLists(...lists: readonly (readonly TaskSummary[])[]): T
   return sortTasks([...byId.values()]);
 }
 
-export type TasksCancelResult = {
+type TasksCancelResult = {
   found: boolean;
   cancelled: boolean;
   reason?: string;

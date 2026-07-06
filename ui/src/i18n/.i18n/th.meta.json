@@ -1,16 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.composer.addAttachment",
-    "chat.composer.attachFileOption",
-    "chat.composer.attachPhoto",
-    "chat.modelPicker.useDefaultModel"
-  ],
-  "generatedAt": "2026-07-06T16:12:41.215Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-06T16:20:39.493Z",
   "locale": "th",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "be3a93b296ae9c45f2820e3b96076de5563188b9f311a0195ea3fd5afb3350ac",
-  "totalKeys": 1630,
-  "translatedKeys": 1626,
+  "sourceHash": "26b9ebd86f2bcaadaaa931e707cdb175f4b3f6839b92da659a5d3f3d2ba94a70",
+  "totalKeys": 1638,
+  "translatedKeys": 1638,
   "workflow": 1
 }

@@ -6,7 +6,6 @@ import {
   resolveChatAvatarRenderUrl,
 } from "../avatar.ts";
 import {
-  agentLogoUrl,
   assistantAvatarFallbackUrl,
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
@@ -105,17 +104,6 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
-  });
-});
-
-describe("agentLogoUrl", () => {
-  it("keeps base-mounted control UI logo paths absolute to the mount", () => {
-    expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");
-    expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
-  });
-
-  it("uses a root-relative fallback when no basePath is configured", () => {
-    expect(agentLogoUrl("")).toBe("/favicon.svg");
   });
 });
 

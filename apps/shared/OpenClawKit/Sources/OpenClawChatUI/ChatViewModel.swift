@@ -18,6 +18,8 @@ public final class OpenClawChatViewModel {
     public private(set) var thinkingLevel: String
     /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
+    /// Setter is module-internal for the thinking-level extension only.
+    public internal(set) var showsThinkingPicker = true
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
     private var modelPickerFavorites: [String]
@@ -1092,7 +1094,7 @@ public final class OpenClawChatViewModel {
         self.errorText = nil
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
-        let thinkingLevel = self.thinkingLevel
+        let storedThinkingLevel = self.thinkingLevel
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.logDiagnostic(
@@ -1158,6 +1160,7 @@ public final class OpenClawChatViewModel {
             self.logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
                     + "localRunId=\(runId)")
+            let thinkingLevel = self.effectiveThinkingLevelForSend(storedThinkingLevel)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 message: messageText,
@@ -1237,7 +1240,7 @@ public final class OpenClawChatViewModel {
                 let requeued = await self.requeueFailedLiveSend(
                     runId: runId,
                     text: messageText,
-                    thinking: thinkingLevel,
+                    thinking: self.effectiveThinkingLevelForSend(storedThinkingLevel),
                     messageID: userMessageID,
                     session: sessionSnapshot)
                 if requeued {
@@ -1301,6 +1304,7 @@ public final class OpenClawChatViewModel {
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.modelChoices = modelChoices
             self.syncSelectedModel()
+            self.syncThinkingLevelOptions()
         } catch {
             // Best-effort.
         }
@@ -1471,6 +1475,7 @@ public final class OpenClawChatViewModel {
         self.latestModelSelectionIDsBySession[sessionKey] = next
         self.beginModelPatch(for: sessionKey)
         self.modelSelectionID = next
+        self.syncThinkingLevelOptions()
         self.errorText = nil
         defer { self.endModelPatch(for: sessionKey) }
 
@@ -1503,6 +1508,7 @@ public final class OpenClawChatViewModel {
             }
             guard sessionKey == self.sessionKey else { return }
             self.modelSelectionID = previous
+            self.syncThinkingLevelOptions()
             self.errorText = error.localizedDescription
             chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
         }
@@ -1661,7 +1667,11 @@ public final class OpenClawChatViewModel {
     }
 
     private static func normalizedProvider(_ provider: String?) -> String? {
-        let trimmed = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.normalizedModelIdentityComponent(provider)
+    }
+
+    private static func normalizedModelIdentityComponent(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let trimmed, !trimmed.isEmpty else { return nil }
         return trimmed
     }
@@ -1717,6 +1727,12 @@ public final class OpenClawChatViewModel {
     {
         if let index = sessions.firstIndex(where: { $0.key == sessionKey }) {
             let current = self.sessions[index]
+            let preservesThinkingMetadata =
+                Self.normalizedModelIdentityComponent(current.model) ==
+                Self.normalizedModelIdentityComponent(modelID) &&
+                Self.normalizedModelIdentityComponent(current.modelProvider) ==
+                Self.normalizedModelIdentityComponent(modelProvider)
+            // Thinking metadata follows model identity; stale options must not survive a model change.
             self.sessions[index] = OpenClawChatSessionEntry(
                 key: current.key,
                 kind: current.kind,
@@ -1737,6 +1753,9 @@ public final class OpenClawChatViewModel {
                 modelProvider: modelProvider,
                 model: modelID,
                 contextTokens: current.contextTokens,
+                thinkingLevels: preservesThinkingMetadata ? current.thinkingLevels : nil,
+                thinkingOptions: preservesThinkingMetadata ? current.thinkingOptions : nil,
+                thinkingDefault: preservesThinkingMetadata ? current.thinkingDefault : nil,
                 label: current.label,
                 category: current.category,
                 pinned: current.pinned,

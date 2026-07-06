@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "../string-coerce.ts";
 
-export type ParsedAgentSessionKey = {
+type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
 };

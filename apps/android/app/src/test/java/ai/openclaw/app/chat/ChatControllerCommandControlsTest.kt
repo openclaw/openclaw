@@ -61,7 +61,7 @@ class ChatControllerCommandControlsTest {
           requestGateway = { method, paramsJson ->
             requests += method to paramsJson
             when (method) {
-              "commands.list" ->
+              "chat.metadata" ->
                 """
                 {
                   "commands": [
@@ -99,7 +99,7 @@ class ChatControllerCommandControlsTest {
           .single()
           .textAliases,
       )
-      assertEquals(2, requests.count { it.first == "commands.list" })
+      assertEquals(2, requests.count { it.first == "chat.metadata" })
     }
 
   @OptIn(ExperimentalCoroutinesApi::class)
@@ -114,7 +114,7 @@ class ChatControllerCommandControlsTest {
           requestGateway = { method, paramsJson ->
             requests += method to paramsJson
             when (method) {
-              "commands.list" ->
+              "chat.metadata" ->
                 if (paramsJson.orEmpty().contains("\"agentId\":\"ops\"")) {
                   """
                   {
@@ -167,7 +167,7 @@ class ChatControllerCommandControlsTest {
           .textAliases,
       )
 
-      val commandRequests = requests.filter { it.first == "commands.list" }
+      val commandRequests = requests.filter { it.first == "chat.metadata" }
       assertTrue(commandRequests.any { it.second.orEmpty().contains("\"agentId\":\"main\"") })
       assertTrue(commandRequests.any { it.second.orEmpty().contains("\"agentId\":\"ops\"") })
     }

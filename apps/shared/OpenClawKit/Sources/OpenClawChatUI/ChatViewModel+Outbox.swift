@@ -69,7 +69,7 @@ extension OpenClawChatViewModel {
             id: UUID().uuidString,
             sessionKey: session.key,
             text: text,
-            thinking: self.thinkingLevel,
+            thinking: self.effectiveThinkingLevelForSend,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
             retryCount: 0,
@@ -311,9 +311,11 @@ extension OpenClawChatViewModel {
                 let response = try await self.transport.sendMessage(
                     sessionKey: next.sessionKey,
                     message: next.text,
-                    // Thinking level captured at enqueue time, never the
-                    // visible session's current setting.
-                    thinking: next.thinking,
+                    // Preserve the queued level when supported, but never send
+                    // an explicit unsupported level after the gate changes.
+                    thinking: self.effectiveThinkingLevelForSend(
+                        next.thinking,
+                        sessionKey: next.sessionKey),
                     idempotencyKey: next.id,
                     attachments: [])
                 if response.status == "error" || response.status == "timeout" {

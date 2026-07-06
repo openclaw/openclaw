@@ -1566,9 +1566,19 @@ export const hi: TranslationMap = {
     updateNow: "अभी अपडेट करें",
     dismissUpdateBanner: "अपडेट बैनर हटाएँ",
     switchedSession: "{session} पर स्विच किया गया",
+    splitView: {
+      open: "स्प्लिट व्यू खोलें",
+      splitRight: "दाईं ओर विभाजित करें",
+      splitDown: "नीचे विभाजित करें",
+      closePane: "पैन बंद करें",
+      sessionSelect: "पैन सत्र",
+    },
     sidebar: {
       allSessions: "सभी सत्र",
       openSessionMenu: "Open session menu",
+      sortCreated: "बनाया गया",
+      sortSessions: "सत्र क्रमबद्ध करें",
+      sortUpdated: "अंतिम अपडेट",
       sessionMenu: "Actions for {session}",
     },
     welcome: {
