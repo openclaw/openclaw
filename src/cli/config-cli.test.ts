@@ -1193,8 +1193,7 @@ describe("config cli", () => {
           issues: [
             {
               path: "update.channel",
-              message:
-                'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+              message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
               allowedValues: ["stable", "extended-stable", "beta", "dev"],
               allowedValuesHiddenCount: 0,
             },
@@ -3407,6 +3406,23 @@ describe("config cli", () => {
       expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
         "Run openclaw config get <path>",
       );
+
+      setSnapshot(resolved, runtimeMerged);
+      await expect(
+        runConfigCommand(["config", "unset", aliasPath, "--dry-run", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        errors: [
+          {
+            kind: "missing-path",
+            message: expect.stringContaining(
+              `Config path not found in authored config: ${aliasPath}.`,
+            ),
+          },
+        ],
+      });
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 

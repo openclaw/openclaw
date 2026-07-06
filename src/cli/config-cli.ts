@@ -2496,7 +2496,7 @@ export async function runConfigUnset(opts: {
     );
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
-      const runtimeOnly = getAtPath(snapshot.config, parsedPath).found;
+      const runtimeOnly = getAtPath(snapshot.runtimeConfig, parsedPath).found;
       const missingPathMessage = formatConfigUnsetMissingPathMessage({
         path: opts.path,
         runtimeOnly,
