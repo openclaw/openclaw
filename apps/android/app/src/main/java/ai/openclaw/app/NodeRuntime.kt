@@ -637,6 +637,9 @@ class NodeRuntime private constructor(
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
   private val _cronErrorText = MutableStateFlow<String?>(null)
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
+  val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
+  private val cronJobDetailRequestGuard = CronJobDetailRequestGuard()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -749,6 +752,9 @@ class NodeRuntime private constructor(
         _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
+        cronJobDetailRequestGuard.cancel {
+          _cronJobDetailState.value = GatewayCronJobDetailState.Idle
+        }
         _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
         _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
         _nodesDevicesSummary.value =
@@ -1191,6 +1197,20 @@ class NodeRuntime private constructor(
   fun refreshCronJobs() {
     scope.launch {
       refreshCronFromGateway()
+    }
+  }
+
+  fun loadCronJobDetail(id: String) {
+    val request = cronJobDetailRequestGuard.begin(id) ?: return
+    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
+    scope.launch {
+      loadCronJobDetailFromGateway(request)
+    }
+  }
+
+  fun clearCronJobDetail() {
+    cronJobDetailRequestGuard.cancel {
+      _cronJobDetailState.value = GatewayCronJobDetailState.Idle
     }
   }
 
@@ -2640,6 +2660,28 @@ class NodeRuntime private constructor(
     }
   }
 
+  private suspend fun loadCronJobDetailFromGateway(request: CronJobDetailRequest) {
+    if (!operatorConnected) {
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Connect the gateway to inspect cron jobs.")
+      }
+      return
+    }
+    try {
+      val res = operatorSession.request("cron.get", cronJobGetParams(request.id))
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value =
+          parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
+            ?: GatewayCronJobDetailState.Error(request.id, "Gateway returned an invalid cron job.")
+      }
+    } catch (_: Throwable) {
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+      }
+    }
+  }
+
   private suspend fun refreshUsageFromGateway() {
     _usageRefreshing.value = true
     _usageErrorText.value = null
@@ -3448,7 +3490,7 @@ class NodeRuntime private constructor(
   private fun cronScheduleLabel(schedule: JsonObject?): String =
     when (schedule?.get("kind").asStringOrNull()) {
       "at" -> "One time"
-      "every" -> schedule.long("everyMs")?.let(::formatEverySchedule) ?: "Repeating"
+      "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
       "cron" ->
         schedule
           ?.get("expr")
@@ -3466,18 +3508,6 @@ class NodeRuntime private constructor(
         else -> null
       }
     return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
-  }
-
-  private fun formatEverySchedule(everyMs: Long): String {
-    val minutes = everyMs / 60_000L
-    val hours = minutes / 60L
-    val days = hours / 24L
-    return when {
-      days >= 1 && hours % 24L == 0L -> "Every ${days}d"
-      hours >= 1 && minutes % 60L == 0L -> "Every ${hours}h"
-      minutes >= 1 -> "Every ${minutes}m"
-      else -> "Repeating"
-    }
   }
 
   private fun updateHomeCanvasState() {
