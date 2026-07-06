@@ -11,8 +11,8 @@ import {
 } from "../sessions/input-provenance.js";
 import {
   attachRuntimeUserTurnTranscriptRecorder,
-  mergePreparedUserTurnOpenClawMetaForRuntime,
   mergePreparedUserTurnMessageForRuntime,
+  restorePreparedUserTurnOperationalMetaForRuntime,
   takeRuntimeUserTurnTranscriptContext,
   takeRuntimeUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -85,7 +85,7 @@ export function guardSessionManager(
         return result;
       }
       if (result?.message) {
-        message = mergePreparedUserTurnOpenClawMetaForRuntime({
+        message = restorePreparedUserTurnOperationalMetaForRuntime({
           runtimeMessage: result.message,
           ...(event.message.role === "user" ? { preparedMessage: event.message } : {}),
         });

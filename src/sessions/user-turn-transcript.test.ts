@@ -541,8 +541,6 @@ describe("user turn transcript persistence", () => {
           __openclaw: {
             hookOwned: true,
             senderIsOwner: true,
-            senderId: "user-42",
-            senderName: "Ada",
           },
         }),
       ]);

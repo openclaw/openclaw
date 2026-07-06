@@ -159,7 +159,7 @@ describe("guardSessionManager integration", () => {
     expect(messages[1]).toEqual({ role: "user", content: "follow-up" });
   });
 
-  it("preserves prepared sender metadata after a write hook replaces the user message", () => {
+  it("lets a write hook remove sender identity while preserving auth state", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -175,19 +175,16 @@ describe("guardSessionManager integration", () => {
         },
       ]),
     );
-    const config = {
-      logging: {
-        redactSensitive: "tools",
-        redactPatterns: [String.raw`secret-[a-z]+`],
-      },
-    } satisfies OpenClawConfig;
     const sm = guardSessionManager(SessionManager.inMemory(), {
-      config,
       preparedUserTurnMessage: {
         role: "user",
         content: "private group prompt",
         timestamp: 123,
-        __openclaw: { senderId: "secret-user", senderName: "secret-name" },
+        __openclaw: {
+          senderIsOwner: true,
+          senderId: "secret-user",
+          senderName: "secret-name",
+        },
       } as Extract<AgentMessage, { role: "user" }>,
     });
 
@@ -201,8 +198,7 @@ describe("guardSessionManager integration", () => {
       content: "[redacted by hook]",
       __openclaw: {
         hookOwned: true,
-        senderId: expect.any(String),
-        senderName: expect.any(String),
+        senderIsOwner: true,
       },
     });
     expect(JSON.stringify(message?.message)).not.toContain("secret-user");
