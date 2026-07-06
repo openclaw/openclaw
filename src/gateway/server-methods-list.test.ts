@@ -46,14 +46,14 @@ describe("listGatewayMethods", () => {
       "doctor.memory.dreamDiary",
       "doctor.memory.backfillDreamDiary",
     ]);
-    // tts.speak sits before this block, shifting the legacy window by one.
-    expect(methods.slice(33, 38)).toEqual([
+    expect(methods.slice(32, 37)).toEqual([
       "exec.approvals.get",
       "exec.approvals.set",
       "exec.approvals.node.get",
       "exec.approvals.node.set",
       "exec.approval.get",
     ]);
+    expect(methods).toContain("tts.speak");
   });
 
   it("advertises the versioned Talk session RPCs", () => {

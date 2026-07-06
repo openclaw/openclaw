@@ -43,7 +43,6 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tts.enable", scope: "operator.write" },
   { name: "tts.disable", scope: "operator.write" },
   { name: "tts.convert", scope: "operator.write" },
-  { name: "tts.speak", scope: "operator.write" },
   { name: "tts.setProvider", scope: "operator.write" },
   { name: "tts.setPersona", scope: "operator.write" },
   { name: "config.get", scope: "operator.read" },
@@ -259,6 +258,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // reads. Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
+  { name: "tts.speak", scope: "operator.write" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
