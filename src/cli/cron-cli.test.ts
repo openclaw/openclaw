@@ -1192,6 +1192,12 @@ describe("cron cli", () => {
             ],
           };
         }
+        if (method === "cron.get") {
+          return {
+            ...createCronJob("job-1", "Command"),
+            payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          };
+        }
         return { ok: true, params };
       },
     );
@@ -1584,116 +1590,6 @@ describe("cron cli", () => {
       tz: "UTC",
       staggerMs: 0,
     });
-  });
-
-  it("paginates cron edit existing-job schedule lookups", async () => {
-    resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.list") {
-          const offset = (params as { offset?: number }).offset ?? 0;
-          if (offset === 0) {
-            return {
-              jobs: [
-                {
-                  ...createCronJob("first-page", "First Page"),
-                  schedule: { kind: "cron", expr: "0 * * * *" },
-                },
-              ],
-              hasMore: true,
-              nextOffset: 200,
-            };
-          }
-          return {
-            jobs: [
-              {
-                ...createCronJob("job-1", "Target Job"),
-                schedule: { kind: "cron", expr: "0 */2 * * *", staggerMs: 300_000 },
-              },
-            ],
-            hasMore: false,
-            nextOffset: null,
-          };
-        }
-        return { ok: true, params };
-      },
-    );
-
-    const program = buildProgram();
-    await program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" });
-
-    const listParams = callGatewayFromCli.mock.calls
-      .filter((call) => call[0] === "cron.list")
-      .map((call) => call[2]);
-    expect(listParams).toEqual([
-      { includeDisabled: true, limit: 200, offset: 0 },
-      { includeDisabled: true, limit: 200, offset: 200 },
-    ]);
-
-    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
-    expect(patch?.patch?.schedule).toEqual({
-      kind: "cron",
-      expr: "0 */2 * * *",
-      staggerMs: 0,
-    });
-  });
-
-  it("rejects non-advancing cron edit lookup pagination", async () => {
-    resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.list") {
-          return {
-            jobs: [],
-            hasMore: true,
-            nextOffset: (params as { offset?: number }).offset ?? 0,
-          };
-        }
-        return { ok: true, params };
-      },
-    );
-
-    const program = buildProgram();
-    await expect(
-      program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    expectRuntimeErrorContaining("cron.list pagination did not advance");
-  });
-
-  it("rejects excessive cron edit lookup pagination", async () => {
-    resetGatewayMock();
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "cron.status") {
-          return { enabled: true };
-        }
-        if (method === "cron.list") {
-          const offset = (params as { offset?: number }).offset ?? 0;
-          return {
-            jobs: [],
-            hasMore: true,
-            nextOffset: offset + 200,
-          };
-        }
-        return { ok: true, params };
-      },
-    );
-
-    const program = buildProgram();
-    await expect(
-      program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
-    expect(listCalls).toHaveLength(50);
-    expectRuntimeErrorContaining("cron.list pagination exceeded maximum pages");
   });
 
   it("rejects --exact on edit when existing job is not cron", async () => {
