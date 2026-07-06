@@ -1,4 +1,5 @@
 import Observation
+import OpenClawChatUI
 import SwiftUI
 
 enum AppAppearancePreference: String, CaseIterable, Identifiable {
@@ -211,27 +212,14 @@ struct OpenClawActivationGlyph: View {
     let size: CGFloat
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: self.size * 0.28, style: .continuous)
-                .fill(OpenClawBrand.activationPrimaryGradient)
-                .shadow(
-                    color: OpenClawBrand.activationGlow.opacity(0.14),
-                    radius: self.size * 0.12,
-                    x: 0,
-                    y: self.size * 0.05)
-
-            RoundedRectangle(cornerRadius: self.size * 0.28, style: .continuous)
-                .stroke(Color.white.opacity(0.34), lineWidth: max(1, self.size * 0.018))
-                .blendMode(.plusLighter)
-
-            Text("OC")
-                .font(OpenClawType.avatar(size: max(13, self.size * 0.34)))
-                .foregroundStyle(OpenClawBrand.activationPrimaryActionText)
-                .minimumScaleFactor(0.72)
-                .lineLimit(1)
-        }
-        .frame(width: self.size, height: self.size)
-        .accessibilityHidden(true)
+        OpenClawMascotView(floats: false)
+            .frame(width: self.size, height: self.size)
+            .shadow(
+                color: OpenClawBrand.activationGlow.opacity(0.18),
+                radius: self.size * 0.12,
+                x: 0,
+                y: self.size * 0.05)
+            .accessibilityHidden(true)
     }
 }
 
