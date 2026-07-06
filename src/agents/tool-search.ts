@@ -2164,7 +2164,7 @@ function runCodeModeChild(params: {
       }
       const rejectOnExit = () => {
         const suffix = stderrTail.trim();
-        const detail = suffix ? `: ${suffix.slice(0, 500)}` : "";
+        const detail = suffix ? `: ${suffix.slice(-500)}` : "";
         settle(() =>
           reject(
             new Error(
