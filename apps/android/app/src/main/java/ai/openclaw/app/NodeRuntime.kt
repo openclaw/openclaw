@@ -648,6 +648,10 @@ class NodeRuntime private constructor(
   private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
   private val cronJobDetailRequestGuard = CronJobDetailRequestGuard()
+  private val _workspaceFilesState = MutableStateFlow<GatewayWorkspaceFilesState>(GatewayWorkspaceFilesState.Idle)
+  val workspaceFilesState: StateFlow<GatewayWorkspaceFilesState> = _workspaceFilesState.asStateFlow()
+  private val _workspaceFilePreviewState = MutableStateFlow<GatewayWorkspaceFilePreviewState>(GatewayWorkspaceFilePreviewState.Idle)
+  val workspaceFilePreviewState: StateFlow<GatewayWorkspaceFilePreviewState> = _workspaceFilePreviewState.asStateFlow()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -1248,6 +1252,24 @@ class NodeRuntime private constructor(
     cronJobDetailRequestGuard.cancel {
       _cronJobDetailState.value = GatewayCronJobDetailState.Idle
     }
+  }
+
+  fun loadWorkspaceFiles(path: String) {
+    _workspaceFilesState.value = GatewayWorkspaceFilesState.Loading(path)
+    scope.launch {
+      loadWorkspaceFilesFromGateway(path)
+    }
+  }
+
+  fun loadWorkspaceFilePreview(path: String) {
+    _workspaceFilePreviewState.value = GatewayWorkspaceFilePreviewState.Loading(path)
+    scope.launch {
+      loadWorkspaceFilePreviewFromGateway(path)
+    }
+  }
+
+  fun clearWorkspaceFilePreview() {
+    _workspaceFilePreviewState.value = GatewayWorkspaceFilePreviewState.Idle
   }
 
   fun refreshUsage() {
@@ -2893,6 +2915,38 @@ class NodeRuntime private constructor(
       cronJobDetailRequestGuard.publishIfCurrent(request) {
         _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
       }
+    }
+  }
+
+  private suspend fun loadWorkspaceFilesFromGateway(path: String) {
+    if (!operatorConnected) {
+      _workspaceFilesState.value = GatewayWorkspaceFilesState.Error(path, "Connect the gateway to browse workspace files.")
+      return
+    }
+    try {
+      val res = operatorSession.request("agents.workspace.list", workspaceListParams(resolveActiveAgentId(), path))
+      val listing = parseGatewayWorkspaceListing(json.parseToJsonElement(res).asObjectOrNull())
+      _workspaceFilesState.value =
+        listing?.let(GatewayWorkspaceFilesState::Loaded)
+          ?: GatewayWorkspaceFilesState.Error(path, "Gateway returned an invalid listing.")
+    } catch (_: Throwable) {
+      _workspaceFilesState.value = GatewayWorkspaceFilesState.Error(path, "Could not load workspace files.")
+    }
+  }
+
+  private suspend fun loadWorkspaceFilePreviewFromGateway(path: String) {
+    if (!operatorConnected) {
+      _workspaceFilePreviewState.value = GatewayWorkspaceFilePreviewState.Error(path, "Connect the gateway to preview files.")
+      return
+    }
+    try {
+      val res = operatorSession.request("agents.workspace.read", workspaceReadParams(resolveActiveAgentId(), path))
+      val file = parseGatewayWorkspaceFilePreview(json.parseToJsonElement(res).asObjectOrNull())
+      _workspaceFilePreviewState.value =
+        file?.let(GatewayWorkspaceFilePreviewState::Loaded)
+          ?: GatewayWorkspaceFilePreviewState.Error(path, "Gateway returned an invalid file.")
+    } catch (_: Throwable) {
+      _workspaceFilePreviewState.value = GatewayWorkspaceFilePreviewState.Error(path, "This file cannot be previewed.")
     }
   }
 

@@ -34,6 +34,7 @@ const sharedSwiftFiles = [
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+TranscriptCache.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
   "../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
+  "../shared/OpenClawKit/Sources/OpenClawChatUI/WorkspaceFileBrowser.swift",
   "../shared/OpenClawKit/Sources/OpenClawKit/AnyCodable.swift",
   "../shared/OpenClawKit/Sources/OpenClawKit/BonjourEscapes.swift",
   "../shared/OpenClawKit/Sources/OpenClawKit/BonjourTypes.swift",

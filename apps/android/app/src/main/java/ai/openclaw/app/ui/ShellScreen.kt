@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
@@ -1427,6 +1428,7 @@ private fun SettingsShellScreen(
           SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
           SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
           SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+          SettingsRow("Workspace Files", "Read-only", Icons.Outlined.Folder, status = isConnected, route = SettingsRoute.WorkspaceFiles),
           SettingsRow(
             "Providers & Models",
             if (readyProviderCount > 0) "$readyProviderCount ready" else "Review readiness",
@@ -1640,6 +1642,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     -> "Connection"
 
     SettingsRoute.Agents,
+    SettingsRoute.WorkspaceFiles,
     SettingsRoute.ProvidersModels,
     SettingsRoute.Approvals,
     SettingsRoute.CronJobs,

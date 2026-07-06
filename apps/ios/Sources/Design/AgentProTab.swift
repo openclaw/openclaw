@@ -39,6 +39,8 @@ struct AgentProTab: View {
         case cron
         case usage
         case dreaming
+        case files(path: String)
+        case filePreview(path: String)
     }
 
     enum SkillStatusFilter: String, CaseIterable, Identifiable {
@@ -163,6 +165,7 @@ struct AgentProTab: View {
                         self.agentFilters
                         self.agentsSection
                         self.operationsSection
+                        self.workspaceFilesSection
                         self.dreamingSection
                         self.cronSection
                     }

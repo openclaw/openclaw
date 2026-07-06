@@ -236,6 +236,74 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** One file or folder in the agent workspace browser. */
+export const AgentsWorkspaceEntrySchema = Type.Object(
+  {
+    path: NonEmptyString,
+    name: NonEmptyString,
+    kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
+    size: Type.Optional(Type.Integer({ minimum: 0 })),
+    updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+/** Lists one directory under the agent workspace root (read-only browser). */
+export const AgentsWorkspaceListParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    path: Type.Optional(Type.String()),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+/** Bounded directory listing rooted at the agent workspace. */
+export const AgentsWorkspaceListResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    workspace: NonEmptyString,
+    path: Type.String(),
+    parentPath: Type.Optional(Type.String()),
+    entries: Type.Array(AgentsWorkspaceEntrySchema),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Reads one in-root workspace file (read-only, size-capped, type-gated). */
+export const AgentsWorkspaceReadParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    path: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Read-only workspace file content: UTF-8 text inline, images base64. */
+export const AgentsWorkspaceFileSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    name: NonEmptyString,
+    size: Type.Integer({ minimum: 0 }),
+    updatedAtMs: Type.Integer({ minimum: 0 }),
+    encoding: Type.Union([Type.Literal("utf8"), Type.Literal("base64")]),
+    mimeType: Type.Optional(NonEmptyString),
+    content: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+/** Result for reading one workspace file. */
+export const AgentsWorkspaceReadResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    workspace: NonEmptyString,
+    file: AgentsWorkspaceFileSchema,
+  },
+  { additionalProperties: false },
+);
+
 /** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = Type.Object(
   {

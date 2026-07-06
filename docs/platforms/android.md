@@ -315,6 +315,10 @@ Android can forward device notifications to the gateway as `node.event` items. T
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
 
+## Workspace files
+
+Settings includes a read-only **Workspace Files** browser for the active agent: drill into folders, preview text and image files, and export a file through the Android share sheet. It is backed by the `agents.workspace.list` / `agents.workspace.read` gateway RPCs, which confine reads to the agent workspace root with size caps (256 KB text, 5 MB images). There are no write operations.
+
 ## Related
 
 - [iOS app](/platforms/ios)

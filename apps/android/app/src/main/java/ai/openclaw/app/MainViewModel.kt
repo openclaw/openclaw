@@ -140,6 +140,8 @@ class MainViewModel(
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = runtimeState(initial = GatewayCronJobDetailState.Idle) { it.cronJobDetailState }
+  val workspaceFilesState: StateFlow<GatewayWorkspaceFilesState> = runtimeState(initial = GatewayWorkspaceFilesState.Idle) { it.workspaceFilesState }
+  val workspaceFilePreviewState: StateFlow<GatewayWorkspaceFilePreviewState> = runtimeState(initial = GatewayWorkspaceFilePreviewState.Idle) { it.workspaceFilePreviewState }
   val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
   val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
   val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
@@ -568,6 +570,18 @@ class MainViewModel(
 
   fun clearCronJobDetail() {
     ensureRuntime().clearCronJobDetail()
+  }
+
+  fun loadWorkspaceFiles(path: String) {
+    ensureRuntime().loadWorkspaceFiles(path)
+  }
+
+  fun loadWorkspaceFilePreview(path: String) {
+    ensureRuntime().loadWorkspaceFilePreview(path)
+  }
+
+  fun clearWorkspaceFilePreview() {
+    ensureRuntime().clearWorkspaceFilePreview()
   }
 
   fun refreshUsage() {

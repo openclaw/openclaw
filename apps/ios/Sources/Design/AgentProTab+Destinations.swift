@@ -18,6 +18,10 @@ extension AgentProTab {
             self.usageDestination
         case .dreaming:
             self.dreamingDestination
+        case let .files(path):
+            self.filesDestination(path: path)
+        case let .filePreview(path):
+            self.filePreviewDestination(path: path)
         }
     }
 

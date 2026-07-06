@@ -5129,6 +5129,170 @@ public struct AgentsFilesSetResult: Codable, Sendable {
     }
 }
 
+public struct AgentsWorkspaceEntry: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let kind: AnyCodable
+    public let size: Int?
+    public let updatedatms: Int?
+
+    public init(
+        path: String,
+        name: String,
+        kind: AnyCodable,
+        size: Int?,
+        updatedatms: Int?)
+    {
+        self.path = path
+        self.name = name
+        self.kind = kind
+        self.size = size
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case kind
+        case size
+        case updatedatms = "updatedAtMs"
+    }
+}
+
+public struct AgentsWorkspaceFile: Codable, Sendable {
+    public let path: String
+    public let name: String
+    public let size: Int
+    public let updatedatms: Int
+    public let encoding: AnyCodable
+    public let mimetype: String?
+    public let content: String
+
+    public init(
+        path: String,
+        name: String,
+        size: Int,
+        updatedatms: Int,
+        encoding: AnyCodable,
+        mimetype: String?,
+        content: String)
+    {
+        self.path = path
+        self.name = name
+        self.size = size
+        self.updatedatms = updatedatms
+        self.encoding = encoding
+        self.mimetype = mimetype
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case name
+        case size
+        case updatedatms = "updatedAtMs"
+        case encoding
+        case mimetype = "mimeType"
+        case content
+    }
+}
+
+public struct AgentsWorkspaceListParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String?
+    public let offset: Int?
+
+    public init(
+        agentid: String,
+        path: String?,
+        offset: Int?)
+    {
+        self.agentid = agentid
+        self.path = path
+        self.offset = offset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+        case offset
+    }
+}
+
+public struct AgentsWorkspaceListResult: Codable, Sendable {
+    public let agentid: String
+    public let workspace: String
+    public let path: String
+    public let parentpath: String?
+    public let entries: [AgentsWorkspaceEntry]
+    public let truncated: Bool?
+
+    public init(
+        agentid: String,
+        workspace: String,
+        path: String,
+        parentpath: String?,
+        entries: [AgentsWorkspaceEntry],
+        truncated: Bool?)
+    {
+        self.agentid = agentid
+        self.workspace = workspace
+        self.path = path
+        self.parentpath = parentpath
+        self.entries = entries
+        self.truncated = truncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case workspace
+        case path
+        case parentpath = "parentPath"
+        case entries
+        case truncated
+    }
+}
+
+public struct AgentsWorkspaceReadParams: Codable, Sendable {
+    public let agentid: String
+    public let path: String
+
+    public init(
+        agentid: String,
+        path: String)
+    {
+        self.agentid = agentid
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case path
+    }
+}
+
+public struct AgentsWorkspaceReadResult: Codable, Sendable {
+    public let agentid: String
+    public let workspace: String
+    public let file: AgentsWorkspaceFile
+
+    public init(
+        agentid: String,
+        workspace: String,
+        file: AgentsWorkspaceFile)
+    {
+        self.agentid = agentid
+        self.workspace = workspace
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case workspace
+        case file
+    }
+}
+
 public struct ArtifactSummary: Codable, Sendable {
     public let id: String
     public let type: String
