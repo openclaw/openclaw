@@ -1,5 +1,5 @@
 // Discord plugin module implements message handler.process behavior.
-import { MessageFlags } from "discord-api-types/v10";
+import { AllowedMentionsTypes, MessageFlags } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -44,6 +44,7 @@ import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
+import { discordTextHasBroadcastMention } from "../mentions.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
@@ -883,6 +884,8 @@ async function processDiscordMessageInner(
             id: draftStream.messageId,
           },
           buildFinalEdit: (): DiscordMessageEdit | undefined => {
+            // Final replies need MESSAGE_CREATE so Discord advances unread state.
+            // Editing the preview only emits MESSAGE_UPDATE and can stay unnoticed.
             return undefined;
           },
           editFinal: async (previewMessageId, edit) => {
@@ -917,6 +920,11 @@ async function processDiscordMessageInner(
             !deliverablePayload.text?.trim()
               ? { ...deliverablePayload, text: ttsSupplement.spokenText }
               : deliverablePayload;
+          // Fresh bot messages parse broadcasts by default. Preserve intended
+          // user/role pings without escalating @everyone or @here.
+          const allowedMentions = discordTextHasBroadcastMention(fallbackPayload.text ?? "")
+            ? { parse: [AllowedMentionsTypes.User, AllowedMentionsTypes.Role] }
+            : undefined;
           const replyToId = replyReference.use();
           notifyFinalReplyStart();
           await deliverDiscordReply({
@@ -936,6 +944,7 @@ async function processDiscordMessageInner(
             sessionKey: ctxPayload.SessionKey,
             threadBindings,
             mediaLocalRoots,
+            allowedMentions,
             kind: info.kind,
           });
           return true;

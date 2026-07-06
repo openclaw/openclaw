@@ -2084,7 +2084,9 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      allowedMentions: { parse: ["users", "roles"] },
+    });
   });
 
   it("sends a fresh final message when a targeted mention is mixed with @everyone", async () => {
@@ -2103,7 +2105,9 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      allowedMentions: { parse: ["users", "roles"] },
+    });
   });
 
   it("accepts streaming=true alias for partial preview mode", async () => {
