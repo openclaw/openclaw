@@ -585,6 +585,46 @@ describe("config io write", () => {
     });
   });
 
+  it("dedupes validation warnings across writes and reloads until config becomes clean", async () => {
+    await withSuiteHome(async (home) => {
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { HOME: home, OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+      const staleConfig = {
+        plugins: { entries: { demo: { enabled: true } } },
+      };
+
+      await io.writeConfigFile(staleConfig);
+      await io.writeConfigFile(staleConfig);
+      io.loadConfig();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await expect(
+        io.writeConfigFile(
+          {},
+          {
+            preCommitRuntimePreflight: async () => {
+              throw new Error("blocked");
+            },
+          },
+        ),
+      ).rejects.toThrow("blocked");
+      io.loadConfig();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await io.writeConfigFile(staleConfig, { skipPluginValidation: true });
+      io.loadConfig();
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      await io.writeConfigFile({});
+      await io.writeConfigFile(staleConfig);
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("keeps shipped plugin install index migration when config write fails", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -2514,9 +2554,21 @@ describe("config io write", () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialConfig = {
+        gateway: { mode: "local", port: 18789 },
+        plugins: { entries: { "google-antigravity-auth": { enabled: false } } },
+      } satisfies OpenClawConfig;
       const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
       await fs.writeFile(configPath, initialRaw, "utf-8");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        configPath,
+        env: { HOME: home } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+      io.loadConfig();
+      expect(warn).toHaveBeenCalledTimes(1);
 
       try {
         await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
@@ -2527,10 +2579,15 @@ describe("config io write", () => {
           });
 
           await expect(
-            writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
+            writeConfigFile({
+              gateway: { mode: "local", port: 19001 },
+              plugins: { entries: { "google-gemini-cli-auth": { enabled: false } } },
+            }),
           ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
 
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+          io.loadConfig();
+          expect(warn).toHaveBeenCalledTimes(1);
         });
       } finally {
         setRuntimeConfigSnapshotRefreshHandler(null);
