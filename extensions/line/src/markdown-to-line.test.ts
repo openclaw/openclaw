@@ -586,6 +586,18 @@ print("done")
     expect(result.flexMessages).toHaveLength(0);
   });
 
+  it("preserves user-intentional double pipes inside text", () => {
+    const result = processLineMessage("Condition: if (ready || forced) continue");
+    expect(result.text).toContain("ready || forced");
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("preserves user-intentional edge pipes inside text", () => {
+    const result = processLineMessage("| grep foo |");
+    expect(result.text).toBe("| grep foo |");
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
   it("includes dynamic altText with row and column count for tables", () => {
     const text = `| A | B |
 |---|---|---|

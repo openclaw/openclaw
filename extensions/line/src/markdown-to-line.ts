@@ -410,8 +410,7 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   processedText = stripMarkdown(processedText);
 
   return {
-    // Only remove pipe remnants at line edges (table artifacts), preserving user-intentional pipes like "cat file | grep foo"
-    text: processedText.replace(/^\|+|\|+$/gm, "").replace(/\|{2,}/g, ""),
+    text: processedText,
     flexMessages,
   };
 }

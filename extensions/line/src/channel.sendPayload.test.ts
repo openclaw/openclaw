@@ -206,6 +206,26 @@ describe("line outbound sendPayload", () => {
     );
   });
 
+  it("preserves literal double pipes for direct sendText", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const text = "Condition: if (ready || forced) continue";
+
+    await lineOutboundAdapter.sendText!({
+      to: "line:group:1",
+      text,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", text, {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
   it("reports each platform result for text and media payloads", async () => {
     const { runtime } = createRuntime();
     setLineRuntime(runtime);
