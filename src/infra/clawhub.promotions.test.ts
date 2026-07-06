@@ -70,6 +70,16 @@ describe("parseClawHubPromotion", () => {
     expect(() => parseClawHubPromotion({ ...validPromotion, endsAt: "soon" })).toThrow(/endsAt/);
   });
 
+  it("rejects inverted promotion windows", () => {
+    expect(() =>
+      parseClawHubPromotion({
+        ...validPromotion,
+        startsAt: 200,
+        endsAt: 200,
+      }),
+    ).toThrow(/window/);
+  });
+
   it("rejects plugin values that are not package names", () => {
     expect(() =>
       parseClawHubPromotion({
@@ -139,6 +149,12 @@ describe("parseClawHubPromotionsFeed", () => {
         entries: [{ type: "advert", ...feedEntryFields }],
       }),
     ).toThrow(/entry type/);
+    expect(() =>
+      parseClawHubPromotionsFeed({
+        ...validFeed,
+        expiresAt: "2026-07-04T00:00:00.000Z",
+      }),
+    ).toThrow(/expiresAt/);
   });
 
   it("holds feed entries to the promotion payload contracts", () => {

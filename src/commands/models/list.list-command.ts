@@ -248,7 +248,7 @@ export async function modelsListCommand(
 
   // Promotion decorations are best-effort: claim tags come from local
   // provenance, and the discovery section reads a cadence-gated feed cache.
-  // Neither may break or slow the core listing.
+  // Neither may break the core listing; stale refreshes have a short timeout.
   const promotionsModule = await promotionsModuleLoader.load();
   try {
     promotionsModule.applyPromotionClaimTags(rows);
