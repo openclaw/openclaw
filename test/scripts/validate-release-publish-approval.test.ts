@@ -1,11 +1,12 @@
 // Validate release publish approval tests cover the stdin/env CLI contract.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/validate-release-publish-approval.mjs";
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function runApprovalScript(
   run: Record<string, unknown>,
@@ -37,7 +38,7 @@ function runApprovalScript(
 }
 
 function writeApproval(overrides: Record<string, unknown> = {}) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-release-approval-"));
+  const tempRoot = tempRoots.make("openclaw-release-approval-");
   const approvalPath = path.join(tempRoot, "approval.json");
   fs.writeFileSync(
     approvalPath,
@@ -105,7 +106,6 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    fs.rmSync(path.dirname(approvalPath), { recursive: true, force: true });
   });
 
   it.each([
@@ -122,7 +122,6 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.stderr).toContain(
       "Attested Android release approval does not match this run request.",
     );
-    fs.rmSync(path.dirname(approvalPath), { recursive: true, force: true });
   });
 
   it("accepts completed success or failure runs for direct recovery", () => {

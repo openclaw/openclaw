@@ -1,13 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "apps/android/scripts/build-release-artifacts.ts";
 const APK_CERTIFICATE_SHA256 = "80dbc62315ea216dd6e8a7060735a866ddc464a48ed50fef29ff0550468b9a63";
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function run(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync(process.execPath, ["--import", "tsx", SCRIPT, ...args], {
@@ -18,8 +18,7 @@ function run(args: string[], env: NodeJS.ProcessEnv = {}) {
 }
 
 function fakeApkSigner(certificateSha256: string, signerCount = 1) {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-apksigner-"));
-  tempRoots.push(tempRoot);
+  const tempRoot = tempRoots.make("openclaw-apksigner-");
   const buildToolsDir = path.join(tempRoot, "build-tools", "36.0.0");
   fs.mkdirSync(buildToolsDir, { recursive: true });
   const apkSignerPath = path.join(buildToolsDir, "apksigner");
@@ -36,12 +35,6 @@ function fakeApkSigner(certificateSha256: string, signerCount = 1) {
   fs.writeFileSync(apkPath, "fake apk bytes");
   return { apkPath, sdkRoot: tempRoot };
 }
-
-afterEach(() => {
-  for (const tempRoot of tempRoots.splice(0)) {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
 
 describe("Android release artifacts", () => {
   it("selects only the signed third-party APK for GitHub distribution", () => {
@@ -63,7 +56,10 @@ describe("Android release artifacts", () => {
   it("accepts the pinned standalone APK signing certificate", () => {
     const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256);
 
-    const result = run(["--verify-apk", apkPath], { ANDROID_SDK_ROOT: sdkRoot });
+    const result = run(["--verify-apk", apkPath], {
+      ANDROID_HOME: sdkRoot,
+      ANDROID_SDK_ROOT: sdkRoot,
+    });
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Verified pinned APK signing certificate");
@@ -72,7 +68,10 @@ describe("Android release artifacts", () => {
   it("rejects an APK signed by another certificate", () => {
     const { apkPath, sdkRoot } = fakeApkSigner("a".repeat(64));
 
-    const result = run(["--verify-apk", apkPath], { ANDROID_SDK_ROOT: sdkRoot });
+    const result = run(["--verify-apk", apkPath], {
+      ANDROID_HOME: sdkRoot,
+      ANDROID_SDK_ROOT: sdkRoot,
+    });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("APK signing certificate mismatch");
@@ -81,7 +80,10 @@ describe("Android release artifacts", () => {
   it("rejects APKs with multiple signers", () => {
     const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256, 2);
 
-    const result = run(["--verify-apk", apkPath], { ANDROID_SDK_ROOT: sdkRoot });
+    const result = run(["--verify-apk", apkPath], {
+      ANDROID_HOME: sdkRoot,
+      ANDROID_SDK_ROOT: sdkRoot,
+    });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Expected exactly one SHA-256 signing certificate");
