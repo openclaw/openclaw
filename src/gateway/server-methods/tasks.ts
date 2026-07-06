@@ -15,7 +15,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
 import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { mapTaskSummary } from "./task-summary.js";
+import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
@@ -109,12 +109,25 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    const filtered = listTaskRecords().filter((task) => {
-      if (statusFilter && !statusFilter.has(task.status)) {
-        return false;
-      }
-      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
-    });
+    // The registry lists newest-created first; the ledger view pages by last
+    // activity so an old long-running task that just finished still surfaces
+    // on the first page instead of hiding behind newer-created records.
+    const filtered = listTaskRecords()
+      .filter((task) => {
+        if (statusFilter && !statusFilter.has(task.status)) {
+          return false;
+        }
+        return (
+          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
+        );
+      })
+      .toSorted((left, right) => {
+        const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+        if (updatedDiff !== 0) {
+          return updatedDiff;
+        }
+        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+      });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
     respond(true, {

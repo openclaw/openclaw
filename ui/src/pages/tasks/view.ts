@@ -9,6 +9,7 @@ import { partitionTasks, taskTimestampMs, type TaskStatus, type TaskSummary } fr
 export type TasksProps = {
   basePath: string;
   connected: boolean;
+  canCancel: boolean;
   loading: boolean;
   error: string | null;
   tasks: TaskSummary[];
@@ -129,7 +130,7 @@ function renderTask(task: TaskSummary, props: TasksProps) {
           ? html`<span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
           : html`<span>${t("common.na")}</span>`}
         ${renderSessionLink(task, props)}
-        ${active
+        ${active && props.canCancel
           ? html`<button
               class="btn"
               type="button"

@@ -348,9 +348,12 @@ export function startGatewayEventSubscriptions(params: {
   void taskObserverRuntimePromise.catch((error: unknown) => {
     params.log.warn("Task registry observer registration failed", { error });
   });
+  // Return the cleanup promise so shutdown awaits it: the observer slot is a
+  // process-wide singleton, and a replacement gateway registering before this
+  // deferred clear runs would have its observer wiped by the stale cleanup.
   const taskUnsub = () => {
     taskObserverDisposed = true;
-    void taskObserverRuntimePromise
+    return taskObserverRuntimePromise
       .then((configureTaskRegistryRuntime) => {
         configureTaskRegistryRuntime({ observers: null });
       })

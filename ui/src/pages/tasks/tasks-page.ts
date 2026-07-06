@@ -4,6 +4,7 @@ import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import {
@@ -168,6 +169,8 @@ export class TasksPage extends LitElement {
       ${renderTasks({
         basePath: this.context.basePath,
         connected: this.connected,
+        // tasks.cancel needs operator.write; read-only operators get no button.
+        canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
         loading: this.loading,
         error: this.error,
         tasks: this.tasks,
