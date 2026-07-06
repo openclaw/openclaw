@@ -1,6 +1,5 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="new_chat_in_worktree">Nowy czat w worktree</string>
     <string name="gateway_connection">Połączenie z bramą</string>
     <string name="connect_gateway">Połącz z bramą</string>
     <string name="disconnect">Rozłącz</string>
